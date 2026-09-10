@@ -103,7 +103,8 @@ async fn prehosted_with_catalog(
     });
     registry
         .host(HostedSession {
-            project_root: std::path::PathBuf::from("/tmp/muta-test-project"),
+            grouping: muta_contracts::SessionGrouping::workspace("/tmp/muta-test-project"),
+            workspace_root: Some(std::path::PathBuf::from("/tmp/muta-test-project")),
             human_channel: std::sync::Arc::new(
                 muta_contracts::human_request::HumanChannelAccountant::new(),
             ),
@@ -272,7 +273,8 @@ async fn host_with_project(registry: &SessionRegistry, project: std::path::PathB
     )));
     registry
         .host(HostedSession {
-            project_root: project,
+            grouping: muta_contracts::SessionGrouping::workspace(project.to_string_lossy().into_owned()),
+            workspace_root: Some(project),
             human_channel: std::sync::Arc::new(
                 muta_contracts::human_request::HumanChannelAccountant::new(),
             ),
@@ -1259,7 +1261,13 @@ async fn host_bare(
     let id = session.id().await;
     registry
         .host(HostedSession {
-            project_root: std::env::temp_dir().join("muta-reaper-project"),
+            grouping: muta_contracts::SessionGrouping::workspace(
+                std::env::temp_dir()
+                    .join("muta-reaper-project")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            workspace_root: Some(std::env::temp_dir().join("muta-reaper-project")),
             human_channel: std::sync::Arc::new(
                 muta_contracts::human_request::HumanChannelAccountant::new(),
             ),
@@ -1815,7 +1823,10 @@ async fn control_suspend_session_parks_a_contentful_session() {
     )));
     registry
         .host(HostedSession {
-            project_root: tmp.path().to_path_buf(),
+            grouping: muta_contracts::SessionGrouping::workspace(
+                tmp.path().to_string_lossy().into_owned(),
+            ),
+            workspace_root: Some(tmp.path().to_path_buf()),
             human_channel: std::sync::Arc::new(
                 muta_contracts::human_request::HumanChannelAccountant::new(),
             ),
@@ -1887,7 +1898,10 @@ async fn attach_trust_workspace(
     )));
     registry
         .host(HostedSession {
-            project_root: tmp.path().to_path_buf(),
+            grouping: muta_contracts::SessionGrouping::workspace(
+                tmp.path().to_string_lossy().into_owned(),
+            ),
+            workspace_root: Some(tmp.path().to_path_buf()),
             human_channel: std::sync::Arc::new(
                 muta_contracts::human_request::HumanChannelAccountant::new(),
             ),
@@ -1958,7 +1972,10 @@ async fn unconfigured_workspace_pushes_security_snapshot_on_attach() {
     )));
     registry
         .host(HostedSession {
-            project_root: tmp.path().to_path_buf(),
+            grouping: muta_contracts::SessionGrouping::workspace(
+                tmp.path().to_string_lossy().into_owned(),
+            ),
+            workspace_root: Some(tmp.path().to_path_buf()),
             human_channel: std::sync::Arc::new(
                 muta_contracts::human_request::HumanChannelAccountant::new(),
             ),

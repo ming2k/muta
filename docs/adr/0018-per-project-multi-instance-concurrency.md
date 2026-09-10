@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-24
+- **Partially superseded by:** [ADR-0219](0219-session-scope-and-optional-workspace-binding.md) — the per-project session partition key becomes a typed `SessionScope`; per-project concurrency itself is retained.
 
 ## Context
 

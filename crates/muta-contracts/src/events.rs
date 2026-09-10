@@ -2049,9 +2049,8 @@ pub struct PermissionRequest {
     pub description: String,
     pub arguments: String,
     pub scope: String,
-    /// Whether this call is **outside** the agent's granted `OperationScope`
-    /// — an elevation the user, not a builtin limit, is being asked to grant
-    /// (the soft scope-gate, ADR-0028). The TUI renders such prompts with a
+    /// Whether this call is an elevation the user, not a builtin limit, is
+    /// being asked to grant (ADR-0028). The TUI renders such prompts with a
     /// distinct ⚠ treatment so the operator understands they are authorising
     /// access *beyond* the configured boundary, not a routine in-scope call.
     /// `false` for ordinary broker prompts and bash-policy confirms.

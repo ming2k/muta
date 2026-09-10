@@ -216,7 +216,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             // the available roles.
             match parts.get(1) {
                 None | Some(&"") => {
-                    let roles: Vec<&'static str> = muta_contracts::AgentPresetId::ALL
+                    let roles: Vec<&'static str> = muta_contracts::AgentPersonaId::ALL
                         .iter()
                         .map(|r| r.as_str())
                         .collect();
@@ -263,7 +263,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             format!(
                                 "Unknown agent role `{}`. Available roles: {}.",
                                 role,
-                                muta_contracts::AgentPresetId::ALL
+                                muta_contracts::AgentPersonaId::ALL
                                     .iter()
                                     .map(|r| r.as_str())
                                     .collect::<Vec<_>>()
@@ -872,6 +872,17 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             }
         }
         Some(BuiltinCmd::Trust) | Some(BuiltinCmd::Untrust) => {
+            let Some(project_root_for_side) = project_root_for_side else {
+                record_error(
+                    session,
+                    resp_tx,
+                    name,
+                    args,
+                    "project asset trust is unavailable in a workspace-free session".to_string(),
+                )
+                .await;
+                return;
+            };
             let route = match trust_route(name, &parts) {
                 Ok(route) => route,
                 Err(error) => {
@@ -1213,8 +1224,18 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         None => None,
                     };
                     let enabled = next.unwrap_or_else(|| !agent.provider.debug_capture_enabled());
-                    let dir =
-                        muta_persistence::paths::get().project_network_dir(project_root_for_side);
+                    let Some(debug_root) = project_root_for_side else {
+                        record_error(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            "`/debug trace` requires a workspace".to_string(),
+                        )
+                        .await;
+                        return;
+                    };
+                    let dir = muta_persistence::paths::get().project_network_dir(debug_root);
                     agent.provider.set_debug_capture(enabled, dir.clone());
                     record_command(
                         session,
@@ -1274,8 +1295,18 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
 
                     // Persist the full record (raw messages + tool schemas)
                     // for offline inspection.
-                    let dir =
-                        muta_persistence::paths::get().project_debug_dir(project_root_for_side);
+                    let Some(debug_root) = project_root_for_side else {
+                        record_error(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            "`/debug preview` requires a workspace".to_string(),
+                        )
+                        .await;
+                        return;
+                    };
+                    let dir = muta_persistence::paths::get().project_debug_dir(debug_root);
                     let stamp = timestamp.format("%Y%m%d-%H%M%S%.3f");
                     let file = dir.join(format!("{stamp}_preview.json"));
                     let record = serde_json::json!({

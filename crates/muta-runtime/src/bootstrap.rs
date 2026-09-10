@@ -10,7 +10,7 @@
 //! the original `main` did, with the same background spawns.
 //!
 //! The crate stays application-neutral (ADR-0054): the caller supplies the
-//! [`AgentIdentity`], the [`AgentPreset`], and the [`UiBridge`] as
+//! [`AgentIdentity`], the [`AgentPersona`], and the [`UiBridge`] as
 //! parameters. Nothing here names a product.
 //!
 //! `SessionStart::Version`, `SessionStart::Doctor`, `SessionStart::Attach`, and
@@ -20,7 +20,7 @@
 
 use muta_agent::catalog;
 use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
-use muta_agent::{Agent, AgentIdentity, AgentPreset, RoundLifecycle, SubagentTool};
+use muta_agent::{Agent, AgentIdentity, AgentPersona, RoundLifecycle, SubagentTool};
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, Message, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, Provider, RoundEvent, SUBAGENT_EXPLORE, ToolContextBuilder, ToolSet,
@@ -51,7 +51,7 @@ pub struct BootstrapParams {
     pub identity: AgentIdentity,
     /// The declarative agent preset profile (ADR-0053), applied after
     /// construction and before the `[agent]` config overlay.
-    pub preset: AgentPreset,
+    pub preset: AgentPersona,
     /// The frontend's clipboard/UI bridge (used by `/export`).
     pub ui: Arc<dyn UiBridge>,
     /// How the session begins (ADR-0116: only the assembly-relevant
@@ -59,6 +59,9 @@ pub struct BootstrapParams {
     pub startup: SessionStart,
     /// `--project` override; when `None`, the current directory is used.
     pub project_root: Option<PathBuf>,
+    /// Explicit conversation scope (ADR-0219/0220): a persona lane whose
+    /// workspace is `project_root`. `None` = the default workspace scope.
+    pub session_grouping: Option<muta_contracts::SessionGrouping>,
     /// `--unattended` at start (unattended execution): auto-approve tool permissions.
     pub unattended: bool,
     /// Workspace filesystem confinement (default true). False (`--no-confinement`) bypasses confinement.
@@ -157,6 +160,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ui,
         startup,
         project_root: project_override,
+        session_grouping,
         unattended: unattended_at_start,
         confined: confined_at_start,
         human_channel,
@@ -239,12 +243,29 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // transient outage never degrades the catalog.
     muta_agent::dynamic::spawn_refresh(muta_models_dev::DynamicModelsDev);
 
-    // Resolve the project root early: it feeds the per-project lock, the
-    // session store, and the embedding index. CLI parsing happened in the
-    // caller (showcase/doctor already returned there).
-    let project_root = project_override.clone().unwrap_or_else(|| {
-        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    // Resolve the binding (ADR-0219/0220). An explicit scope (persona/
+    // ephemeral) may be workspace-free (`project_root = None`); otherwise the
+    // session is a workspace scope rooted at the project override or cwd.
+    let explicit_grouping = session_grouping;
+    let workspace_root: Option<PathBuf> = if explicit_grouping.is_some() {
+        project_override.clone()
+    } else {
+        Some(project_override.clone().unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        }))
+    };
+    let grouping = explicit_grouping.unwrap_or_else(|| {
+        muta_contracts::SessionGrouping::workspace(
+            workspace_root
+                .as_ref()
+                .map(|root| root.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        )
     });
+    let workspace = workspace_root
+        .as_ref()
+        .map(muta_contracts::WorkspaceBinding::new);
+    let grouping_label = grouping.label();
 
     // Initialize Agent logic. The provider is resolved through the model
     // catalog (`build_provider_for`), the single source of truth for the
@@ -264,7 +285,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // `?`) rather than a silent fresh-session fallback, so the operator knows
     // the attach never happened. `mutx attach` (no id) opens the sessions
     // picker overlay instead of guessing.
-    let session = Arc::new(SessionStore::load_for_project(project_root.clone()));
+    let session = Arc::new(SessionStore::for_grouping(grouping, workspace));
     let open_picker_on_start = match &startup {
         SessionStart::Fresh | SessionStart::FreshWithPrompt(_) => false,
         SessionStart::Picker => true,
@@ -334,7 +355,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // session's project — not the daemon process's cwd, which under the
     // unified daemon (ADR-0096) belongs to whichever client first spawned it.
     let mut skills_config = config.skills.clone();
-    skills_config.project_root = Some(project_root.clone());
+    skills_config.project_root = workspace_root.clone();
     let skills_registry = Arc::new(SkillRegistry::empty_with_config(&skills_config));
     // A content-admitted `.muta/skills/<name>/SKILL.md` wins over a same-named
     // user or remote skill by priority. Surface every newly observed shadow so
@@ -379,13 +400,24 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // they are not part of this static capability set.
     // Spatial admission resolves global and trusted project-declared roots.
     let workspace_security = Arc::new(WorkspaceSecurityStore::load());
-    let security_snapshot = workspace_security.snapshot(&project_root);
-    if security_snapshot.ex_workspace.is_trusted() {
-        config.merge_project_additional_roots(Config::load_project_additional_roots(&project_root));
-    }
-    let resolved_additional = config
-        .resolve_workspace_additional_roots_detailed(&project_root)
-        .unwrap_or_default();
+    let security_snapshot = match &workspace_root {
+        Some(root) => workspace_security.snapshot(root),
+        None => muta_contracts::WorkspaceSecuritySnapshot::new(grouping_label),
+    };
+    let mut additional_roots: Vec<std::path::PathBuf> = Vec::new();
+    let resolved_additional = match &workspace_root {
+        Some(root) => {
+            if security_snapshot.ex_workspace.is_trusted() {
+                config.merge_project_additional_roots(Config::load_project_additional_roots(root));
+            }
+            let resolved = config
+                .resolve_workspace_additional_roots_detailed(root)
+                .unwrap_or_default();
+            additional_roots = resolved.admitted.clone();
+            resolved
+        }
+        None => muta_persistence::config::ResolvedAdditionalRoots::default(),
+    };
     for (raw, reason) in &resolved_additional.skipped {
         tracing::warn!(
             root = %raw,
@@ -393,7 +425,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             "additional workspace root skipped"
         );
     }
-    let additional_roots: Vec<std::path::PathBuf> = resolved_additional.admitted;
     // Hot-updatable `[web]` handle: the web tools receive the same handle via
     // the tool context, and `UpdateWebSearchConfig` atomically replaces its
     // resolved snapshot. Changes reach the next call without a toolset rebuild.
@@ -402,18 +433,38 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         &muta_persistence::config::Credentials::load(),
     );
     let websearch_shared = muta_contracts::SharedWebConfig::new(resolved_web.runtime);
-    let execution_env = Arc::new(
-        muta_agent::execution::WorkspaceExecutionEnvironment::with_additional_roots(
-            project_root.clone(),
-            additional_roots.clone(),
+    let (execution_env, shared_additional_roots, shared_confinement): (
+        Arc<dyn muta_contracts::ExecutionEnvironment>,
+        muta_contracts::SharedAdditionalRoots,
+        muta_contracts::SharedConfinement,
+    ) = match &workspace_root {
+        Some(root) => {
+            let env = Arc::new(
+                muta_agent::execution::WorkspaceExecutionEnvironment::with_additional_roots(
+                    root.clone(),
+                    additional_roots.clone(),
+                ),
+            );
+            let additional = env.shared_additional_roots();
+            let confinement = env.shared_confinement();
+            (
+                env as Arc<dyn muta_contracts::ExecutionEnvironment>,
+                additional,
+                confinement,
+            )
+        }
+        None => (
+            Arc::new(muta_agent::execution::InMemoryExecutionEnvironment::new(
+                std::path::PathBuf::new(),
+            )),
+            muta_contracts::SharedAdditionalRoots::empty(),
+            muta_contracts::SharedConfinement::new(true),
         ),
-    );
-    let shared_additional_roots = execution_env.shared_additional_roots();
-    let shared_confinement = execution_env.shared_confinement();
+    };
     let background_jobs = crate::background_jobs::BackgroundJobManager::new();
     let session_job_service = crate::background_jobs::SessionJobService::new(
         background_jobs.clone(),
-        execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>,
+        execution_env.clone(),
     );
     // ADR-0190 D5: bind the owning session so every task this service
     // spawns is stamped with it (snapshots + ledger rows).
@@ -426,7 +477,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         builder.provide(websearch_shared.get());
         builder.provide(skills_registry.clone());
         builder.provide(session.clone());
-        builder.provide(execution_env.clone() as Arc<dyn muta_contracts::ExecutionEnvironment>);
+        builder.provide(execution_env.clone());
         builder.provide(job_service);
         // The session's workspace root: every workspace-relative tool
         // operation (bash cwd, relative path resolution, search bases)
@@ -435,11 +486,15 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         // projects, so the process cwd is whichever directory the first
         // client spawned it from — correct only by coincidence. This is the
         // fix for "launched in project A, session edits project B".
-        builder.provide(muta_contracts::WorkspaceRoot(project_root.clone()));
-        builder.provide(muta_contracts::WorkspaceRoots::new(
-            project_root.clone(),
-            additional_roots.clone(),
-        ));
+        // A workspace-free session (ADR-0220) provides no root, so
+        // workspace-relative tools are not admitted against a directory.
+        if let Some(root) = &workspace_root {
+            builder.provide(muta_contracts::WorkspaceRoot(root.clone()));
+            builder.provide(muta_contracts::WorkspaceRoots::new(
+                root.clone(),
+                additional_roots.clone(),
+            ));
+        }
         builder.provide(shared_additional_roots.clone());
         builder.provide(shared_confinement.clone());
         builder.build()
@@ -465,7 +520,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     ));
     // Subagents resolve relative write-grants against the session's project
     // root, not the daemon process's cwd (ADR-0096).
-    subagent_tool.set_workspace_root(Some(project_root.clone()));
+    subagent_tool.set_workspace_root(workspace_root.clone());
     // Subagents inherit the session's connection retry configuration.
     subagent_tool.bind_retry_policy(
         config.connection_retry_max_attempts,
@@ -511,7 +566,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // Wire the per-project "always allow" allowlist so prior `Always`
     // approvals survive across sessions in this project. Best-effort: a
     // missing or unreadable permissions.json just means we re-prompt.
-    agent.set_project_root(Some(project_root.clone()));
+    agent.set_project_root(workspace_root.clone());
     // Seed declarative permission rules from `[permissions]` config so default
     // policies are data-driven. Runtime "Always" decisions still write to
     // permissions.json; these config rules re-apply on every start.
@@ -531,18 +586,20 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // explicitly trusted. Global config is user-authored and trusted
     // unconditionally.
     agent.set_workspace_security(security_snapshot.clone());
-    let project_mcp = Config::load_project_mcp(&project_root);
-    let project_hooks = Config::load_project_hooks(&project_root);
-    if security_snapshot.mcp.is_trusted() && !project_mcp.is_empty() {
-        config.merge_project_mcp(project_mcp);
-    }
-    if security_snapshot.hooks.is_trusted() && !project_hooks.is_empty() {
-        config.merge_project_hooks(project_hooks);
-    }
-    if security_snapshot.instructions.is_trusted() {
-        match crate::project::load_project_rules(&project_root) {
-            Ok(rules) => agent.set_project_rules(rules),
-            Err(error) => tracing::warn!(%error, "trusted project rules could not be loaded"),
+    if let Some(root) = &workspace_root {
+        let project_mcp = Config::load_project_mcp(root);
+        let project_hooks = Config::load_project_hooks(root);
+        if security_snapshot.mcp.is_trusted() && !project_mcp.is_empty() {
+            config.merge_project_mcp(project_mcp);
+        }
+        if security_snapshot.hooks.is_trusted() && !project_hooks.is_empty() {
+            config.merge_project_hooks(project_hooks);
+        }
+        if security_snapshot.instructions.is_trusted() {
+            match crate::project::load_project_rules(root) {
+                Ok(rules) => agent.set_project_rules(rules),
+                Err(error) => tracing::warn!(%error, "trusted project rules could not be loaded"),
+            }
         }
     }
     let gated = [
@@ -827,7 +884,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     let side: Arc<AsyncRwLock<crate::side::SideRegistry>> =
         Arc::new(AsyncRwLock::new(crate::side::SideRegistry::new()));
     let base_tools_for_side = base_tools.clone();
-    let project_root_for_side = project_root.clone();
+    let project_root_for_side = workspace_root.clone();
 
     // Initial values for the frontend
     let initial_provider_name = catalog::default_provider_id(&config).to_string();
@@ -848,7 +905,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     token_ledger.install_usage_sink(Arc::new(
         muta_persistence::usage_stats::UsageStatsStore::new(),
     ));
-    token_ledger.set_usage_project(muta_persistence::paths::project_bucket_name(&project_root));
+    if let Some(root) = &workspace_root {
+        token_ledger.set_usage_project(muta_persistence::paths::project_bucket_name(root));
+    }
     subagent_tool_handle.bind_accounting(
         token_ledger.clone(),
         agent.thread_id_handle(),

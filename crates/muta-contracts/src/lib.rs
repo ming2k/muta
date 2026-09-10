@@ -101,22 +101,21 @@ pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
 pub mod agent_kind;
-pub mod agent_preset;
+pub mod agent_persona;
 pub mod aspects;
 pub mod cognitive;
 pub mod execution_policy;
-pub mod facet;
+pub mod extension;
+pub use extension::{Extension, HookPhase, ToolExtension};
 pub mod hazard;
-pub use facet::HarnessFacet;
 pub use hazard::*;
 pub mod job;
 pub mod mesh;
 pub mod subagent;
 pub use agent_kind::{AgentKind, MeshStation};
-pub use agent_preset::{
-    AGENT_CODE_ANALYST, AGENT_DEVELOPER, AgentPreset, AgentPresetDelegation, AgentPresetId,
-    AgentRole, AgentRoleDelegation, AgentRoleId, AgentRuntimeConfig, DelegationPolicy,
-    PRESET_CODE_ANALYST, PRESET_DEVELOPER,
+pub use agent_persona::{
+    AGENT_CODE_ANALYST, AGENT_DEVELOPER, AgentPersona, AgentPersonaDelegation, AgentPersonaId,
+    AgentRuntimeConfig, DelegationPolicy, PRESET_CODE_ANALYST, PRESET_DEVELOPER,
 };
 pub use aspects::{AspectHook, AspectPhase, AspectVerdict};
 pub use cognitive::{
@@ -158,6 +157,9 @@ pub use execution::{
 };
 pub use security::{TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState};
 
+pub mod grouping;
+pub use grouping::{SessionGrouping, WorkspaceBinding};
+
 pub mod session_title;
 
 pub mod session_tree;
@@ -169,9 +171,8 @@ pub use shared_roots::{SharedAdditionalRoots, SharedConfinement};
 pub mod tool_registry;
 pub mod web_config;
 pub use capability::{
-    CommandScope, ModelRequest, OperationScope, Provider, ProviderEventStream, ProviderPromptHints,
-    ProviderStreamEvent, ProviderTextStream, ScopeTarget, Tool, ToolSpec, VariantSelection,
-    empty_variant_selection,
+    ModelRequest, Provider, ProviderEventStream, ProviderPromptHints, ProviderStreamEvent,
+    ProviderTextStream, ScopeTarget, Tool, ToolSpec, VariantSelection, empty_variant_selection,
 };
 pub use catalog::{
     AnthropicMessagesDialect, Channel, GoogleGeminiDialect, GoogleGenerateContentDialect,

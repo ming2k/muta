@@ -139,6 +139,10 @@ pub struct SessionInitOptions {
     /// Whether workspace filesystem confinement is enforced (default true).
     #[serde(default = "default_confined")]
     pub confined: bool,
+    /// Persona id to staff this session with (ADR-0220). `None` = the default
+    /// workspace-scoped coding principal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
 }
 
 const fn default_confined() -> bool {
@@ -150,6 +154,7 @@ impl Default for SessionInitOptions {
         Self {
             unattended: false,
             confined: true,
+            persona: None,
         }
     }
 }
@@ -159,11 +164,17 @@ impl SessionInitOptions {
         Self {
             unattended,
             confined,
+            persona: None,
         }
     }
 
+    pub fn with_persona(mut self, persona: Option<String>) -> Self {
+        self.persona = persona;
+        self
+    }
+
     pub fn is_default(&self) -> bool {
-        !self.unattended && self.confined
+        !self.unattended && self.confined && self.persona.is_none()
     }
 }
 
@@ -310,6 +321,7 @@ mod tests {
         let opts = SessionInitOptions {
             unattended: true,
             confined: false,
+            ..Default::default()
         };
         let with_opts = serde_json::to_string(&AttachAction::New(Some(opts.clone()))).unwrap();
         assert_eq!(with_opts, r#"{"new":{"unattended":true,"confined":false}}"#);

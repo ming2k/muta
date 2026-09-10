@@ -160,10 +160,10 @@ mod tool_manager;
 mod tool_scheduler;
 pub mod tools;
 
-pub mod facet;
+pub mod extension;
 pub mod syntax;
 pub(crate) mod sync;
-pub use facet::CodeIntelligenceFacet;
+pub use extension::CodeIntelligenceExtension;
 
 pub use context_projection::ContextProjectionGate;
 pub use model_request::system_prompt::{

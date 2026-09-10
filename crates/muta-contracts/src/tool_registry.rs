@@ -248,9 +248,9 @@ fn debug_assert_unique_identities(tools: &[Arc<dyn Tool>]) {
 /// #8 — Safety contract: a tool that declares a **mutating** `accesses()`
 /// (a `Write`/`ReadWrite`/`All`) **must** override `scope_target` to return a
 /// non-`Unspecified` target for the inputs it mutates. Otherwise the call
-/// bypasses the scope-gate (gate 4), bash-policy (gate 5), and broker (gate 7)
-/// — the three gates that key off `ScopeTarget::Unspecified` as the shared
-/// "no locatable target / auto-admit" switch — so a write would run with zero
+/// bypasses the bash-policy and permission broker — the gates that key off
+/// `ScopeTarget::Unspecified` as the shared "no locatable target / auto-admit"
+/// switch — so a write would run with zero
 /// permission checks.
 ///
 /// This cannot be enforced perfectly by sampling one input: a tool may take a
@@ -295,8 +295,8 @@ fn debug_assert_safe_targets(tools: &[Arc<dyn Tool>]) {
                 !matches!(target, crate::ScopeTarget::Unspecified),
                 "tool {:?} declares a mutating access (writes) for input {:?} but \
                  returns ScopeTarget::Unspecified — the write would bypass the \
-                 scope-gate, bash-policy, and permission broker. Override \
-                 `scope_target` to return the Path/Command the call touches.",
+                 bash-policy and permission broker. Override `scope_target` to \
+                 return the Path/Command the call touches.",
                 tool.name(),
                 sample,
             );

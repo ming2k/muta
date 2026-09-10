@@ -71,7 +71,7 @@ pub struct SlashContext<'a> {
     pub provider_usage: &'a mut ConnectionUsage,
     pub skills_registry: &'a Arc<SkillRegistry>,
     pub req_tx: &'a mpsc::Sender<AgentRequest>,
-    pub project_root: &'a Path,
+    pub project_root: Option<&'a Path>,
     pub startup: &'a SessionStart,
     pub ui: &'a dyn UiBridge,
 }

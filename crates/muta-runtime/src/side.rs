@@ -66,7 +66,7 @@ impl SideSession {
         base_tools: &[Arc<dyn Tool>],
         provider_holder: &Arc<RwLock<Arc<dyn Provider>>>,
         skills: SkillRegistry,
-        project_root: &std::path::Path,
+        project_root: Option<&std::path::Path>,
         identity: AgentIdentity,
         workspace_security: Arc<std::sync::Mutex<muta_contracts::WorkspaceSecuritySnapshot>>,
     ) -> Result<Self, String> {
@@ -97,7 +97,7 @@ impl SideSession {
         agent.bind_workspace_security_handle(workspace_security);
         let agent = Arc::new(agent);
         agent.set_thread_id(&side_id);
-        agent.set_project_root(Some(project_root.to_path_buf()));
+        agent.set_project_root(project_root.map(std::path::Path::to_path_buf));
         // An aside is a quick aside; run it unattended — without human
         // intervention — so it never raises a permission modal whose reply
         // could not be routed back to the side `Agent` through the shared

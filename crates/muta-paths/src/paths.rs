@@ -117,6 +117,13 @@ impl Dirs {
         self.config_dir.join("config.toml")
     }
 
+    /// User-authored persistent personas (`$XDG_CONFIG_HOME/muta/personas.toml`,
+    /// ADR-0220). A user-global registry of named conversation identities, kept
+    /// beside `config.toml` as user-edited config (never program state).
+    pub fn personas_file(&self) -> PathBuf {
+        self.config_dir.join("personas.toml")
+    }
+
     /// User-declared model provider customizations
     /// (`$XDG_CONFIG_HOME/muta/model_providers.toml`, ADR-0199, ADR-0201).
     pub fn model_providers_file(&self) -> PathBuf {
@@ -241,6 +248,18 @@ impl Dirs {
     /// mutable file. Replaces the legacy single project-root `session.json`.
     pub fn project_sessions_dir(&self, project_root: &Path) -> PathBuf {
         self.project_dir(project_root).join("sessions")
+    }
+
+    /// Directory bucket for a non-workspace session grouping (ADR-0226):
+    /// `projects/<hash>`. Personal and named-space groupings have no workspace
+    /// path, so their stable bucket derives from the grouping key.
+    pub fn grouping_dir(&self, bucket_key: &str) -> PathBuf {
+        self.projects_dir().join(grouping_bucket_name(bucket_key))
+    }
+
+    /// Per-grouping sessions directory for a non-workspace grouping.
+    pub fn grouping_sessions_dir(&self, bucket_key: &str) -> PathBuf {
+        self.grouping_dir(bucket_key).join("sessions")
     }
 
     /// Per-project `/debug trace` capture directory: `projects/<bucket>/network`.
@@ -610,6 +629,21 @@ pub fn project_bucket_name(project_root: &Path) -> String {
     let normalised = normalise_project_root(project_root);
     let mut hasher = Sha256::new();
     hasher.update(normalised.as_bytes());
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(16);
+    for byte in digest.iter().take(8) {
+        out.push_str(&format!("{:02x}", byte));
+    }
+    out
+}
+
+/// Map a non-workspace scope key to a stable, ASCII-safe bucket name. Mirrors
+/// [`project_bucket_name`] (first 16 hex chars of SHA-256) so a persona or
+/// ephemeral scope has one reproducible on-disk bucket.
+pub fn grouping_bucket_name(bucket_key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bucket_key.as_bytes());
     let digest = hasher.finalize();
     let mut out = String::with_capacity(16);
     for byte in digest.iter().take(8) {

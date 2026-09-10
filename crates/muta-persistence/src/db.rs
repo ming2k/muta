@@ -15,14 +15,14 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{info, warn};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 11;
+pub const CURRENT_DB_VERSION: u32 = 13;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "cc88bc00f1401b975e4a8b53c73fe4ac30f3b6c6ce3404e4400fca7856d22d9b";
+    "4d20a128170ec7b26b6b74afb81f32f36849a7b34695cf5aec15e9b093c57b3d";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -56,10 +56,19 @@ pub fn initialize_in_memory_db() -> Result<Connection> {
 
 /// Standard connection configurations applied to every connection (reader & writer).
 fn configure_connection(conn: &mut Connection) -> Result<()> {
-    conn.pragma_update(None, "journal_mode", "WAL")?;
+    // busy_timeout first: every later lock attempt (including the migration
+    // transaction) must wait rather than fail immediately.
+    conn.pragma_update(None, "busy_timeout", 5000)?;
+    // `PRAGMA journal_mode=WAL` does not invoke the busy handler. Under
+    // concurrent first-open — parallel test processes sharing one database —
+    // a writer mid-migration makes it return SQLITE_BUSY immediately.
+    // Best-effort: the winning process sets WAL and every later connection
+    // observes it, so a transient refusal here is harmless.
+    if let Err(error) = conn.pragma_update(None, "journal_mode", "WAL") {
+        warn!(%error, "could not set WAL journal mode; continuing");
+    }
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.pragma_update(None, "busy_timeout", 5000)?;
     conn.pragma_update(None, "journal_size_limit", 16777216)?; // 16MB WAL recycling
     conn.pragma_update(None, "wal_autocheckpoint", 1000)?; // 1000 pages (~4MB)
     conn.pragma_update(None, "temp_store", "MEMORY")?;
@@ -415,6 +424,24 @@ const MIGRATIONS: &[Migration] = &[
             ON request_projections(session_id, created_at_ms DESC);
         "#,
     },
+    Migration {
+        // Session scope (ADR-0219): the mandatory `project_root` partition key
+        // becomes a typed `SessionScope` (`scope_kind` + namespaced `scope_key`)
+        // orthogonal to an optional `workspace_root` binding. The rebuild
+        // enforces the NOT NULL constraints ALTER cannot add; every existing row
+        // backfills losslessly as a workspace scope keyed by its old
+        // project_root. The DDL is dispatched to `apply_session_scope_schema`.
+        version: 12,
+        sql: "",
+    },
+    Migration {
+        // Grouping is derived (ADR-0226): the stored `scope_kind`/`scope_key`
+        // partition key is retired for the concrete `space` column; workspace
+        // sessions keep grouping by `workspace_root`, non-workspace rows
+        // migrate to the Personal grouping (`space IS NULL`).
+        version: 13,
+        sql: "",
+    },
 ];
 
 /// Working-state columns the final ADR-0186 `sessions` rebuild must carry,
@@ -455,7 +482,9 @@ const SESSIONS_IDENTITY_COLUMNS: &[&str] = &[
     "title",
     "created_at_s",
     "updated_at_s",
-    "project_root",
+    "workspace_root",
+    "space",
+    "additional_roots",
     "msg_count",
     "last_user_prompt",
     "digest",
@@ -518,12 +547,19 @@ fn apply_persistence_v2_schema(tx: &rusqlite::Transaction) -> Result<()> {
     if existing.contains("updated_at_ms") {
         tx.execute_batch("ALTER TABLE sessions RENAME COLUMN updated_at_ms TO updated_at_s;")?;
     }
-    // Restore the listing indexes the v5 table rebuild dropped.
+    // Restore the listing indexes the v5 table rebuild dropped. The
+    // project-root indexes exist only while `project_root` is still a column:
+    // a schema already migrated to ADR-0219 `scope_key` (an artificial
+    // re-stamp) must not fail here.
     tx.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_root);
-         CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at_s DESC);
-         CREATE INDEX IF NOT EXISTS idx_sessions_project_updated ON sessions(project_root, updated_at_s DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at_s DESC);",
     )?;
+    if sessions_columns(tx)?.contains("project_root") {
+        tx.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_root);
+             CREATE INDEX IF NOT EXISTS idx_sessions_project_updated ON sessions(project_root, updated_at_s DESC);",
+        )?;
+    }
     // Working state that v5 lost on the floor (ADR-0186 regressions).
     if !existing.contains("digest_anchor") {
         tx.execute_batch("ALTER TABLE sessions ADD COLUMN digest_anchor INTEGER;")?;
@@ -721,6 +757,106 @@ fn apply_entries_integrity_schema(tx: &rusqlite::Transaction) -> Result<()> {
         CREATE TRIGGER trg_entries_ad AFTER DELETE ON entries BEGIN
             DELETE FROM fts_entries WHERE entry_id = old.id;
         END;",
+    )?;
+    Ok(())
+}
+
+/// Session-scope rebuild (ADR-0219), applied by migration 12. Rebuilds
+/// `sessions` so the partition key becomes `scope_kind` + namespaced
+/// `scope_key` with an optional `workspace_root`, enforcing the NOT NULL
+/// constraints `ALTER TABLE` cannot add. Existing rows backfill as workspace
+/// scopes (`scope_key = 'ws:' || project_root`) with the same root bound as
+/// their workspace, losslessly. Foreign-key enforcement is disabled by the
+/// migration driver for the table swap; the post-commit integrity gate
+/// re-verifies every declared reference.
+fn apply_session_scope_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    let existing = sessions_columns(tx)?;
+    if !existing.contains("project_root") {
+        return Ok(());
+    }
+    tx.execute_batch(
+        r#"
+        CREATE TABLE sessions_new (
+            id                    TEXT PRIMARY KEY,
+            parent_id             TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+            fork_kind             TEXT NOT NULL DEFAULT 'trunk'
+                                  CHECK (fork_kind IN ('trunk','fork','aside','subagent')),
+            title                 TEXT,
+            created_at_s          INTEGER NOT NULL,
+            updated_at_s          INTEGER NOT NULL,
+            scope_kind            TEXT NOT NULL
+                                  CHECK (scope_kind IN ('workspace','persona','ephemeral')),
+            scope_key             TEXT NOT NULL,
+            workspace_root        TEXT,
+            additional_roots      TEXT NOT NULL DEFAULT '[]',
+            msg_count             INTEGER NOT NULL DEFAULT 0,
+            last_user_prompt      TEXT,
+            digest                TEXT,
+            digest_anchor         INTEGER,
+            tree                  TEXT NOT NULL DEFAULT '{}',
+            transcript_generation TEXT,
+            provider_connection   TEXT,
+            round_counter         INTEGER NOT NULL DEFAULT 0,
+            unattended            INTEGER NOT NULL DEFAULT 0,
+            disabled_tools        TEXT NOT NULL DEFAULT '[]',
+            commands              TEXT NOT NULL DEFAULT '[]',
+            round_interrupts      TEXT NOT NULL DEFAULT '[]',
+            retry_resolutions     TEXT NOT NULL DEFAULT '[]',
+            retry_pending         TEXT,
+            checksum              INTEGER,
+            schema_version        INTEGER NOT NULL DEFAULT 14
+        );
+        INSERT INTO sessions_new (
+            id, parent_id, fork_kind, title, created_at_s, updated_at_s,
+            scope_kind, scope_key, workspace_root, additional_roots,
+            msg_count, last_user_prompt, digest, digest_anchor, tree,
+            transcript_generation, provider_connection, round_counter, unattended,
+            disabled_tools, commands, round_interrupts, retry_resolutions,
+            retry_pending, checksum, schema_version
+        )
+            SELECT
+                id, parent_id, fork_kind, title, created_at_s, updated_at_s,
+                'workspace', 'ws:' || project_root, project_root, '[]',
+                msg_count, last_user_prompt, digest, digest_anchor, tree,
+                transcript_generation, provider_connection, round_counter, unattended,
+                disabled_tools, commands, round_interrupts, retry_resolutions,
+                retry_pending, checksum, schema_version
+            FROM sessions;
+        DROP TABLE sessions;
+        ALTER TABLE sessions_new RENAME TO sessions;
+        CREATE INDEX idx_sessions_scope ON sessions(scope_key, updated_at_s DESC);
+        CREATE INDEX idx_sessions_updated ON sessions(updated_at_s DESC);
+        "#,
+    )?;
+    Ok(())
+}
+
+/// Grouping rebuild (ADR-0226), applied by migration 13. Adds `space`, drops
+/// `scope_kind`/`scope_key`, and re-indexes on the concrete grouping columns.
+/// Conditional so a database already at the derived-grouping schema passes
+/// through unchanged.
+fn apply_session_grouping_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    let existing = sessions_columns(tx)?;
+    if existing.contains("space") && !existing.contains("scope_key") {
+        return Ok(());
+    }
+    if !existing.contains("space") {
+        tx.execute_batch("ALTER TABLE sessions ADD COLUMN space TEXT;")?;
+    }
+    tx.execute_batch(
+        "DROP INDEX IF EXISTS idx_sessions_scope;
+         DROP INDEX IF EXISTS idx_sessions_project;
+         DROP INDEX IF EXISTS idx_sessions_project_updated;",
+    )?;
+    if existing.contains("scope_kind") {
+        tx.execute_batch("ALTER TABLE sessions DROP COLUMN scope_kind;")?;
+    }
+    if existing.contains("scope_key") {
+        tx.execute_batch("ALTER TABLE sessions DROP COLUMN scope_key;")?;
+    }
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_root, updated_at_s DESC);
+         CREATE INDEX IF NOT EXISTS idx_sessions_space ON sessions(space, updated_at_s DESC);",
     )?;
     Ok(())
 }
@@ -954,6 +1090,12 @@ fn apply_migrations(conn: &mut Connection, observed_version: u32) -> Result<()> 
                 if migration.version == 10 {
                     apply_entries_integrity_schema(&tx)?;
                 }
+                if migration.version == 12 {
+                    apply_session_scope_schema(&tx)?;
+                }
+                if migration.version == 13 {
+                    apply_session_grouping_schema(&tx)?;
+                }
             }
         }
 
@@ -1008,7 +1150,8 @@ pub struct SessionRecord {
     pub title: Option<String>,
     pub created_at_s: i64,
     pub updated_at_s: i64,
-    pub project_root: String,
+    pub workspace_root: Option<String>,
+    pub space: Option<String>,
     #[serde(default)]
     pub msg_count: i64,
     #[serde(default)]
@@ -1022,7 +1165,8 @@ pub struct SessionRecord {
 pub struct HistorySearchResult {
     pub entry_id: String,
     pub session_id: String,
-    pub project_root: String,
+    pub workspace_root: Option<String>,
+    pub space: Option<String>,
     /// Stored AI/manual title of the owning session, when one exists
     /// (joined from `sessions.title`, ADR-0208).
     pub session_title: Option<String>,
@@ -1038,7 +1182,8 @@ pub struct SessionTranscriptView {
     pub id: String,
     pub title: Option<String>,
     pub digest: Option<muta_contracts::SessionDigest>,
-    pub project_root: String,
+    pub workspace_root: Option<String>,
+    pub space: Option<String>,
     pub message_count: usize,
     pub messages: Vec<SessionMessageView>,
 }
@@ -1112,22 +1257,96 @@ fn map_session_row(row: &Row) -> Result<SessionRecord> {
         title: row.get(3)?,
         created_at_s: row.get(4)?,
         updated_at_s: row.get(5)?,
-        project_root: row.get(6)?,
-        msg_count: row.get(7)?,
-        last_user_prompt: row.get(8)?,
-        digest: row.get(9)?,
+        workspace_root: row.get(6)?,
+        space: row.get(7)?,
+        msg_count: row.get(8)?,
+        last_user_prompt: row.get(9)?,
+        digest: row.get(10)?,
     })
+}
+
+type SummaryRow = (
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    i64,
+    i64,
+    i64,
+    Option<String>,
+    Option<String>,
+);
+
+fn map_summary_row(row: &Row) -> Result<SummaryRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+        row.get(8)?,
+    ))
+}
+
+fn push_summary(
+    summaries: &mut Vec<crate::session::SessionSummary>,
+    item: SummaryRow,
+    active_id: &str,
+) {
+    let (
+        id,
+        parent_id,
+        fork_str,
+        title,
+        created_at_s,
+        updated_at_s,
+        msg_count,
+        last_user_prompt,
+        digest_json,
+    ) = item;
+    let fork_kind = match fork_str.as_str() {
+        "fork" => muta_contracts::SessionForkKind::Fork,
+        "aside" => muta_contracts::SessionForkKind::Aside,
+        _ => muta_contracts::SessionForkKind::Trunk,
+    };
+    let final_msg_count = msg_count.max(0) as usize;
+    if final_msg_count == 0 && id != active_id {
+        return;
+    }
+    let overview = if let Some(t) = title.as_deref().filter(|t| !t.trim().is_empty()) {
+        crate::session::truncate_preview(t, 64)
+    } else if let Some(prompt) = last_user_prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+        crate::session::truncate_preview(prompt, 64)
+    } else {
+        "(empty session)".to_string()
+    };
+    let digest = digest_json.and_then(|raw| serde_json::from_str(&raw).ok());
+    summaries.push(crate::session::SessionSummary {
+        id: id.clone(),
+        parent_id,
+        fork_kind,
+        message_count: final_msg_count,
+        updated_at: updated_at_s.max(0) as u64,
+        created_at: created_at_s.max(0) as u64,
+        overview,
+        active: id == active_id,
+        digest,
+    });
 }
 
 fn map_search_row(row: &Row) -> Result<HistorySearchResult> {
     Ok(HistorySearchResult {
         entry_id: row.get(0)?,
         session_id: row.get(1)?,
-        project_root: row.get(2)?,
-        session_title: row.get(3)?,
-        role: row.get(4)?,
-        snippet: row.get(5)?,
-        score: row.get(6)?,
+        workspace_root: row.get(2)?,
+        space: row.get(3)?,
+        session_title: row.get(4)?,
+        role: row.get(5)?,
+        snippet: row.get(6)?,
+        score: row.get(7)?,
     })
 }
 
@@ -1264,14 +1483,15 @@ impl DatabaseEngine {
     pub fn upsert_session(&self, session: &SessionRecord) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, space, msg_count, last_user_prompt, digest)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 parent_id = excluded.parent_id,
                 fork_kind = excluded.fork_kind,
                 title = excluded.title,
                 updated_at_s = excluded.updated_at_s,
-                project_root = excluded.project_root,
+                workspace_root = excluded.workspace_root,
+                space = excluded.space,
                 msg_count = excluded.msg_count,
                 last_user_prompt = excluded.last_user_prompt,
                 digest = excluded.digest;
@@ -1283,7 +1503,8 @@ impl DatabaseEngine {
                 session.title,
                 session.created_at_s,
                 session.updated_at_s,
-                session.project_root,
+                session.workspace_root,
+                session.space,
                 session.msg_count,
                 session.last_user_prompt,
                 session.digest,
@@ -1296,28 +1517,33 @@ impl DatabaseEngine {
     pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
         self.conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, space, msg_count, last_user_prompt, digest FROM sessions WHERE id = ?1",
                 params![session_id],
                 map_session_row,
             )
             .optional()
     }
 
-    /// List sessions, optionally filtered by `project_root`, sorted by `updated_at_ms` descending.
-    pub fn list_sessions(&self, project_root: Option<&str>) -> Result<Vec<SessionRecord>> {
+    /// List sessions, optionally filtered by a derived grouping (ADR-0226),
+    /// sorted by `updated_at_s` descending.
+    pub fn list_sessions(
+        &self,
+        grouping: Option<&muta_contracts::SessionGrouping>,
+    ) -> Result<Vec<SessionRecord>> {
         let mut sessions = Vec::new();
-        if let Some(root) = project_root {
+        if let Some(grouping) = grouping {
+            let (workspace, space) = grouping.query_parts();
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest \
-                 FROM sessions WHERE project_root = ?1 ORDER BY updated_at_s DESC",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, space, msg_count, last_user_prompt, digest \
+                 FROM sessions WHERE workspace_root IS ?1 AND space IS ?2 ORDER BY updated_at_s DESC",
             )?;
-            let rows = stmt.query_map(params![root], map_session_row)?;
+            let rows = stmt.query_map(params![workspace, space], map_session_row)?;
             for session in rows {
                 sessions.push(session?);
             }
         } else {
             let mut stmt = self.conn.prepare(
-                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest \
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, space, msg_count, last_user_prompt, digest \
                  FROM sessions ORDER BY updated_at_s DESC",
             )?;
             let rows = stmt.query_map([], map_session_row)?;
@@ -1414,16 +1640,29 @@ impl DatabaseEngine {
             // generation column existed) also forces the full rewrite.
             let full = force_full || stored_generation.as_deref() != Some(data.generation.as_str());
 
+            let space = data.space.clone();
+            let workspace_root = data
+                .workspace
+                .as_ref()
+                .map(|w| w.root.to_string_lossy().into_owned());
+            let additional_roots = match data.workspace.as_ref() {
+                Some(w) => serde_json::to_string(&w.additional_roots),
+                None => Ok("[]".to_string()),
+            }
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
             self.conn.execute(
                 r#"
-                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, space, additional_roots, msg_count, last_user_prompt, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
                 ON CONFLICT(id) DO UPDATE SET
                     parent_id = excluded.parent_id,
                     fork_kind = excluded.fork_kind,
                     title = excluded.title,
                     updated_at_s = excluded.updated_at_s,
-                    project_root = excluded.project_root,
+                    workspace_root = excluded.workspace_root,
+                    space = excluded.space,
+                    additional_roots = excluded.additional_roots,
                     msg_count = excluded.msg_count,
                     last_user_prompt = excluded.last_user_prompt,
                     digest = excluded.digest,
@@ -1448,7 +1687,9 @@ impl DatabaseEngine {
                     data.title,
                     data.created_at as i64,
                     data.updated_at as i64,
-                    data.project_root.to_string_lossy(),
+                    workspace_root,
+                    space,
+                    additional_roots,
                     msg_count,
                     last_prompt,
                     digest_str,
@@ -1757,7 +1998,7 @@ impl DatabaseEngine {
         let row = self
             .conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, space, additional_roots, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version FROM sessions WHERE id = ?1",
                 params![session_id],
                 |row| {
                     Ok((
@@ -1767,21 +2008,23 @@ impl DatabaseEngine {
                         row.get::<_, Option<String>>(3)?,
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
-                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(6)?,
                         row.get::<_, Option<String>>(7)?,
-                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, String>(8)?,
                         row.get::<_, Option<String>>(9)?,
-                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<i64>>(10)?,
                         row.get::<_, Option<String>>(11)?,
-                        row.get::<_, i64>(12)?,
-                        row.get::<_, i64>(13)?,
-                        row.get::<_, String>(14)?,
-                        row.get::<_, String>(15)?,
+                        row.get::<_, Option<String>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, i64>(14)?,
+                        row.get::<_, i64>(15)?,
                         row.get::<_, String>(16)?,
                         row.get::<_, String>(17)?,
-                        row.get::<_, Option<String>>(18)?,
-                        row.get::<_, Option<i64>>(19)?,
-                        row.get::<_, i64>(20)?,
+                        row.get::<_, String>(18)?,
+                        row.get::<_, String>(19)?,
+                        row.get::<_, Option<String>>(20)?,
+                        row.get::<_, Option<i64>>(21)?,
+                        row.get::<_, i64>(22)?,
                     ))
                 },
             )
@@ -1793,7 +2036,9 @@ impl DatabaseEngine {
             title,
             created_at_s,
             updated_at_s,
-            project_root,
+            workspace_root,
+            space,
+            additional_roots,
             digest,
             digest_anchor,
             tree,
@@ -1983,7 +2228,14 @@ impl DatabaseEngine {
             title,
             created_at: created_at_s.max(0) as u64,
             updated_at: updated_at_s.max(0) as u64,
-            project_root: PathBuf::from(project_root),
+            space,
+            workspace: workspace_root.map(|root| muta_contracts::WorkspaceBinding {
+                root: PathBuf::from(root),
+                additional_roots: serde_json::from_str(&additional_roots).unwrap_or_else(|error| {
+                    tracing::warn!(session = %session_id, error = %error, "additional_roots column undecodable; treated as empty");
+                    Vec::new()
+                }),
+            }),
             schema_version: if schema_version > 0 { schema_version as u32 } else { crate::session::CURRENT_SCHEMA_VERSION },
             checksum: checksum.map(|c| c as u32),
             generation: generation.unwrap_or_default(),
@@ -2051,7 +2303,11 @@ impl DatabaseEngine {
             id: data.id.clone(),
             title: data.title.clone(),
             digest: data.digest.clone(),
-            project_root: data.project_root.to_string_lossy().into_owned(),
+            workspace_root: data
+                .workspace
+                .as_ref()
+                .map(|w| w.root.to_string_lossy().into_owned()),
+            space: data.space.clone(),
             message_count: total,
             messages: projected[start..]
                 .iter()
@@ -2068,15 +2324,16 @@ impl DatabaseEngine {
     pub fn resolve_session_prefix(
         &self,
         prefix: &str,
-        project_root: Option<&str>,
+        grouping: Option<&muta_contracts::SessionGrouping>,
     ) -> Result<Vec<String>> {
         let pattern = format!("{prefix}%");
         let mut matches = Vec::new();
-        if let Some(root) = project_root {
+        if let Some(grouping) = grouping {
+            let (workspace, space) = grouping.query_parts();
             let mut stmt = self.conn.prepare(
-                "SELECT id FROM sessions WHERE id LIKE ?1 AND project_root = ?2 ORDER BY updated_at_s DESC",
+                "SELECT id FROM sessions WHERE id LIKE ?1 AND workspace_root IS ?2 AND space IS ?3 ORDER BY updated_at_s DESC",
             )?;
-            let rows = stmt.query_map(params![pattern, root], |row| row.get(0))?;
+            let rows = stmt.query_map(params![pattern, workspace, space], |row| row.get(0))?;
             for id in rows {
                 matches.push(id?);
             }
@@ -2092,104 +2349,87 @@ impl DatabaseEngine {
         Ok(matches)
     }
 
-    /// List session summaries for a project, sorted by `updated_at_ms` descending.
+    /// Resolve a session's durable grouping plus optional workspace by exact
+    /// id, regardless of the caller's grouping (ADR-0226). Used to lazily
+    /// resume a workspace-free space from any client.
+    #[allow(clippy::type_complexity)]
+    pub fn lookup_session_grouping(
+        &self,
+        session_id: &str,
+    ) -> Result<
+        Option<(
+            muta_contracts::SessionGrouping,
+            Option<muta_contracts::WorkspaceBinding>,
+        )>,
+    > {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT workspace_root, space, additional_roots FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((workspace_root, space, additional_roots)) = row else {
+            return Ok(None);
+        };
+        let grouping = muta_contracts::SessionGrouping {
+            workspace: workspace_root.map(PathBuf::from),
+            space,
+        };
+        let workspace = grouping
+            .workspace
+            .clone()
+            .map(|root| muta_contracts::WorkspaceBinding {
+                root,
+                additional_roots: serde_json::from_str(&additional_roots).unwrap_or_default(),
+            });
+        Ok(Some((grouping, workspace)))
+    }
+
+    /// List session summaries for a derived grouping, sorted by `updated_at_s`
+    /// descending.
     pub fn list_session_summaries(
         &self,
-        project_root: Option<&str>,
+        grouping: Option<&muta_contracts::SessionGrouping>,
         active_id: &str,
     ) -> Result<Vec<crate::session::SessionSummary>> {
-        let sql = r#"
-            SELECT
-                id,
-                parent_id,
-                fork_kind,
-                title,
-                created_at_s,
-                updated_at_s,
-                msg_count,
-                last_user_prompt,
-                digest
-            FROM sessions
-            WHERE (?1 IS NULL OR project_root = ?1)
-              AND fork_kind <> 'subagent'
-            ORDER BY updated_at_s DESC;
-        "#;
-
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map(params![project_root], |row| {
-            let id: String = row.get(0)?;
-            let parent_id: Option<String> = row.get(1)?;
-            let fork_str: String = row.get(2)?;
-            let title: Option<String> = row.get(3)?;
-            let created_at_ms: i64 = row.get(4)?;
-            let updated_at_ms: i64 = row.get(5)?;
-            let msg_count: i64 = row.get(6)?;
-            let last_user_prompt: Option<String> = row.get(7)?;
-            let digest_json: Option<String> = row.get(8)?;
-            Ok((
-                id,
-                parent_id,
-                fork_str,
-                title,
-                created_at_ms,
-                updated_at_ms,
-                msg_count,
-                last_user_prompt,
-                digest_json,
-            ))
-        })?;
-
         let mut summaries = Vec::new();
-        for item in rows {
-            let (
-                id,
-                parent_id,
-                fork_str,
-                title,
-                created_at_ms,
-                updated_at_ms,
-                msg_count,
-                last_user_prompt,
-                digest_json,
-            ) = item?;
-
-            let fork_kind = match fork_str.as_str() {
-                "fork" => muta_contracts::SessionForkKind::Fork,
-                "aside" => muta_contracts::SessionForkKind::Aside,
-                _ => muta_contracts::SessionForkKind::Trunk,
-            };
-
-            let final_msg_count = msg_count.max(0) as usize;
-            if final_msg_count == 0 && id != active_id {
-                continue;
+        match grouping {
+            Some(grouping) => {
+                let (workspace, space) = grouping.query_parts();
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, \
+                            msg_count, last_user_prompt, digest \
+                     FROM sessions \
+                     WHERE workspace_root IS ?1 AND space IS ?2 AND fork_kind <> 'subagent' \
+                     ORDER BY updated_at_s DESC;",
+                )?;
+                let rows = stmt.query_map(params![workspace, space], map_summary_row)?;
+                for item in rows {
+                    push_summary(&mut summaries, item?, active_id);
+                }
             }
-
-            let overview = if let Some(t) = title.as_deref().filter(|t| !t.trim().is_empty()) {
-                crate::session::truncate_preview(t, 64)
-            } else if let Some(prompt) =
-                last_user_prompt.as_deref().filter(|p| !p.trim().is_empty())
-            {
-                crate::session::truncate_preview(prompt, 64)
-            } else {
-                "(empty session)".to_string()
-            };
-
-            let digest = digest_json.and_then(|raw| serde_json::from_str(&raw).ok());
-            let active = id == active_id;
-
-            summaries.push(crate::session::SessionSummary {
-                id,
-                parent_id,
-                fork_kind,
-                message_count: final_msg_count,
-                updated_at: updated_at_ms as u64,
-                created_at: created_at_ms as u64,
-                overview,
-                active,
-                digest,
-            });
+            None => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, \
+                            msg_count, last_user_prompt, digest \
+                     FROM sessions \
+                     WHERE fork_kind <> 'subagent' \
+                     ORDER BY updated_at_s DESC;",
+                )?;
+                let rows = stmt.query_map([], map_summary_row)?;
+                for item in rows {
+                    push_summary(&mut summaries, item?, active_id);
+                }
+            }
         }
-
         summaries.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
         Ok(summaries)
     }
@@ -2398,10 +2638,10 @@ impl DatabaseEngine {
     pub fn search_history(
         &self,
         query: &str,
-        project_root: Option<&str>,
+        grouping: Option<&muta_contracts::SessionGrouping>,
         limit: usize,
     ) -> Result<Vec<HistorySearchResult>> {
-        self.search_history_inner(query, project_root, limit, false)
+        self.search_history_inner(query, grouping, limit, false)
     }
 
     /// [`Self::search_history`] with the recall widened: the sanitized words
@@ -2414,16 +2654,16 @@ impl DatabaseEngine {
     pub fn search_history_relaxed(
         &self,
         query: &str,
-        project_root: Option<&str>,
+        grouping: Option<&muta_contracts::SessionGrouping>,
         limit: usize,
     ) -> Result<Vec<HistorySearchResult>> {
-        self.search_history_inner(query, project_root, limit, true)
+        self.search_history_inner(query, grouping, limit, true)
     }
 
     fn search_history_inner(
         &self,
         query: &str,
-        project_root: Option<&str>,
+        grouping: Option<&muta_contracts::SessionGrouping>,
         limit: usize,
         match_any: bool,
     ) -> Result<Vec<HistorySearchResult>> {
@@ -2433,23 +2673,28 @@ impl DatabaseEngine {
         }
 
         let mut results = Vec::new();
-        if let Some(root) = project_root {
+        if let Some(grouping) = grouping {
+            let (workspace, space) = grouping.query_parts();
             let sql = r#"
                 SELECT
                     f.entry_id,
                     f.session_id,
-                    s.project_root,
+                    s.workspace_root,
+                    s.space,
                     s.title,
                     f.role,
                     snippet(fts_entries, 3, '<b>', '</b>', '...', 16) AS snippet,
                     bm25(fts_entries) AS score
                 FROM fts_entries f
                 JOIN sessions s ON f.session_id = s.id
-                WHERE fts_entries MATCH ?1 AND s.project_root = ?2
-                ORDER BY score ASC LIMIT ?3;
+                WHERE fts_entries MATCH ?1 AND s.workspace_root IS ?2 AND s.space IS ?3
+                ORDER BY score ASC LIMIT ?4;
             "#;
             let mut stmt = self.conn.prepare(sql)?;
-            let rows = stmt.query_map(params![clean_query, root, limit as i64], map_search_row)?;
+            let rows = stmt.query_map(
+                params![clean_query, workspace, space, limit as i64],
+                map_search_row,
+            )?;
             for item in rows {
                 results.push(item?);
             }
@@ -2458,7 +2703,8 @@ impl DatabaseEngine {
                 SELECT
                     f.entry_id,
                     f.session_id,
-                    s.project_root,
+                    s.workspace_root,
+                    s.space,
                     s.title,
                     f.role,
                     snippet(fts_entries, 3, '<b>', '</b>', '...', 16) AS snippet,
@@ -3902,10 +4148,8 @@ mod tests {
     fn schema_guard_rejects_missing_columns() {
         let mut conn = Connection::open_in_memory().unwrap();
         configure_connection(&mut conn).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE sessions (id TEXT PRIMARY KEY, project_root TEXT NOT NULL);",
-        )
-        .unwrap();
+        conn.execute_batch("CREATE TABLE sessions (id TEXT PRIMARY KEY, space TEXT NOT NULL);")
+            .unwrap();
         let err = verify_sessions_schema(&conn).unwrap_err();
         assert!(err.to_string().contains("missing column(s)"), "{err}");
     }
@@ -4176,7 +4420,7 @@ mod tests {
         engine
             .conn
             .execute(
-                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', NULL, 1, 1, '/tmp', 0, NULL, NULL)",
+                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, space, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', NULL, 1, 1, '/tmp', NULL, 0, NULL, NULL)",
                 [],
             )
             .unwrap();
@@ -4312,7 +4556,7 @@ mod tests {
         engine
             .conn
             .execute(
-                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, project_root, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', 'T', 1, 1, '/tmp', 0, NULL, NULL)",
+                "INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, space, msg_count, last_user_prompt, digest) VALUES ('s1', NULL, 'trunk', 'T', 1, 1, '/tmp', NULL, 0, NULL, NULL)",
                 [],
             )
             .unwrap();
@@ -4495,7 +4739,7 @@ mod tests {
 
             let engine = DatabaseEngine::open_in_memory().unwrap();
             let mut data = crate::session::SessionData {
-                project_root: std::path::PathBuf::from("/tmp/proj-a"),
+                workspace: Some(muta_contracts::WorkspaceBinding::new("/tmp/proj-a")),
                 title: Some("Retry loop debugging".into()),
                 ..Default::default()
             };
@@ -4515,20 +4759,28 @@ mod tests {
                 hits[0].session_title.as_deref(),
                 Some("Retry loop debugging")
             );
-            assert_eq!(hits[0].project_root, "/tmp/proj-a");
+            assert_eq!(hits[0].workspace_root.as_deref(), Some("/tmp/proj-a"));
             assert!(hits[0].snippet.contains("retry"), "{:?}", hits[0].snippet);
 
             // A workspace filter that does not match returns nothing; one
             // that matches returns the hit.
             assert!(
                 engine
-                    .search_history("retry", Some("/tmp/other"), 20)
+                    .search_history(
+                        "retry",
+                        Some(&muta_contracts::SessionGrouping::workspace("/tmp/other")),
+                        20,
+                    )
                     .unwrap()
                     .is_empty()
             );
             assert_eq!(
                 engine
-                    .search_history("retry", Some("/tmp/proj-a"), 20)
+                    .search_history(
+                        "retry",
+                        Some(&muta_contracts::SessionGrouping::workspace("/tmp/proj-a")),
+                        20,
+                    )
                     .unwrap()
                     .len(),
                 1
@@ -4560,7 +4812,7 @@ mod tests {
             ] {
                 let mut data = crate::session::SessionData {
                     id: id.to_string(),
-                    project_root: std::path::PathBuf::from("/tmp/proj-r"),
+                        workspace: Some(muta_contracts::WorkspaceBinding::new("/tmp/proj-r")),
                     title: Some(id.to_string()),
                     ..Default::default()
                 };

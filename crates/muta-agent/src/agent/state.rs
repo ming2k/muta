@@ -85,7 +85,7 @@ impl Agent {
         // overrides the static registry's vision flag — a fitted relay model
         // the baseline does not know would otherwise lose its vision-gated
         // tools at seed time.
-        let agent_selection = muta_contracts::ToolSelection::unrestricted();
+        let tools = muta_contracts::ToolSelection::unrestricted();
         let capabilities = provider.model_capabilities();
         let seed_model = muta_contracts::Model {
             vision: capabilities.vision,
@@ -93,21 +93,19 @@ impl Agent {
         };
         let resolved_tools = Arc::new(std::sync::RwLock::new(toolset.resolve_for(
             &seed_model,
-            &agent_selection,
+            &tools,
             &muta_contracts::ToolSelection::unrestricted(),
         )));
         let dynamic_tools = Arc::new(crate::dynamic_tools::DynamicToolRegistry::default());
         let disabled_tools = Arc::new(std::sync::Mutex::new(HashSet::new()));
         let scoped_disabled_tools = Arc::new(std::sync::Mutex::new(ScopedToolDisable::default()));
-        // The unified ToolManager view (kimi-code port) owns the single
-        // authority for classification, per-turn schema, and dispatch lookup.
-        // It shares the storage Arcs with the agent so both reach the same
-        // live state. The `user` bucket (empty today) has no other owner:
-        // the manager is its sole authority. See `tool_manager`.
+        // The unified ToolManager view owns the single authority for
+        // classification, per-turn schema, and dispatch lookup. It shares the
+        // storage Arcs with the agent so both reach the same live state. See
+        // `tool_manager`.
         let tool_manager = crate::tool_manager::ToolManager::new(
             Arc::clone(&resolved_tools),
             Arc::clone(&dynamic_tools),
-            Arc::new(std::sync::RwLock::new(Vec::new())),
             Arc::clone(&disabled_tools),
             Arc::clone(&scoped_disabled_tools),
         );
@@ -153,7 +151,6 @@ impl Agent {
             human_broker: crate::human_broker::HumanRequestBroker::new(),
             bash_policy: std::sync::RwLock::new(crate::bash_policy::BashPolicy::default()),
 
-            operation_scope: std::sync::Mutex::new(muta_contracts::OperationScope::unrestricted()),
             hooks: crate::hook_runner::HookRunner::new(),
             inbox_tx: std::sync::Mutex::new(None),
             inbox_rx: std::sync::Mutex::new(None),
@@ -169,12 +166,12 @@ impl Agent {
             variant_selection: Arc::new(std::sync::Mutex::new(
                 muta_contracts::VariantSelection::new(),
             )),
-            agent_selection: std::sync::Mutex::new(agent_selection),
+            tools: std::sync::Mutex::new(tools),
             token_ledger: std::sync::Mutex::new(None),
             token_weights: std::sync::Arc::new(muta_contracts::MessageTokenWeights::new()),
             tool_schema_weights: std::sync::Arc::new(muta_contracts::ToolSchemaWeights::new()),
-            facets: Arc::new(std::sync::RwLock::new(vec![Arc::new(
-                crate::facet::CodeIntelligenceFacet::default(),
+            extensions: Arc::new(std::sync::RwLock::new(vec![Arc::new(
+                crate::extension::CodeIntelligenceExtension::default(),
             )])),
         }
     }
@@ -208,11 +205,8 @@ impl Agent {
     /// unrestricted by default; this narrows it (e.g. confining a role-bound
     /// master to a capability subset). The current per-model variant
     /// selection is preserved and re-composed.
-    pub fn set_agent_selection(&self, selection: muta_contracts::ToolSelection) {
-        *self
-            .agent_selection
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = selection;
+    pub fn set_tools(&self, selection: muta_contracts::ToolSelection) {
+        *self.tools.lock().unwrap_or_else(|e| e.into_inner()) = selection;
         let model_variants = self
             .variant_selection
             .lock()
@@ -239,26 +233,21 @@ impl Agent {
             vision: capabilities.vision,
             ..muta_contracts::resolve_model(&self.provider.model())
         };
-        let agent_selection = self
-            .agent_selection
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let tools = self.tools.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let model_selection =
             muta_contracts::ToolSelection::unrestricted().with_variants(model_variants.clone());
         *self
             .resolved_tools
             .write()
             .unwrap_or_else(|e| e.into_inner()) =
-            self.toolset
-                .resolve_for(&model, &agent_selection, &model_selection);
+            self.toolset.resolve_for(&model, &tools, &model_selection);
     }
 
     /// Every currently installed tool, including dynamic sources. Static
     /// capabilities win name collisions; dynamic source order is deterministic.
     pub fn installed_tools(&self) -> Vec<Arc<dyn Tool>> {
         // Delegate to the unified ToolManager — the single authority for the
-        // three-bucket classification (builtin/user/mcp) and name-clash priority.
+        // two-bucket classification (builtin/mcp) and name-clash priority.
         self.tool_manager
             .installed()
             .into_iter()
@@ -347,15 +336,23 @@ impl Agent {
         // is never committed to the durable transcript.
         let mut temporary_context: Vec<Message> = Vec::new();
         let ws_root = self.workspace_root();
-        for facet in self.facets() {
-            if let Some(projection) = facet.project_temporary_context(ws_root.as_deref()) {
-                if projection.is_empty() {
-                    continue;
+        let hook_ctx =
+            muta_contracts::extension::HookContext::temporary_context(ws_root.as_deref());
+        for extension in self.extensions() {
+            match extension.run(
+                muta_contracts::HookPhase::ProjectTemporaryContext,
+                &hook_ctx,
+            ) {
+                muta_contracts::extension::HookOutcome::TemporaryContext(projection) => {
+                    if projection.is_empty() {
+                        continue;
+                    }
+                    temporary_context.push(crate::conversation_context::hidden_user(
+                        muta_contracts::InjectionKind::SystemReminder,
+                        bound_temporary_context(projection),
+                    ));
                 }
-                temporary_context.push(crate::conversation_context::hidden_user(
-                    muta_contracts::InjectionKind::SystemReminder,
-                    bound_temporary_context(projection),
-                ));
+                _ => {}
             }
         }
 
@@ -910,20 +907,20 @@ impl Agent {
         crate::aspects::AspectEngine::new(self.harness_tasks())
     }
 
-    /// Access the ambient harness facets bound to this agent (ADR-0211).
-    pub fn facets(&self) -> Vec<Arc<dyn muta_contracts::HarnessFacet>> {
-        self.facets
+    /// Access the atomic extensions bound to this agent (ADR-0224).
+    pub fn extensions(&self) -> Vec<Arc<dyn muta_contracts::Extension>> {
+        self.extensions
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
-    /// Add an ambient harness facet to this agent.
-    pub fn add_facet(&self, facet: Arc<dyn muta_contracts::HarnessFacet>) {
-        self.facets
+    /// Add an atomic extension to this agent (ADR-0224).
+    pub fn add_extension(&self, extension: Arc<dyn muta_contracts::Extension>) {
+        self.extensions
             .write()
             .unwrap_or_else(|e| e.into_inner())
-            .push(facet);
+            .push(extension);
     }
 }
 

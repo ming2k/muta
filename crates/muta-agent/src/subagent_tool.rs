@@ -178,7 +178,7 @@ pub struct SubagentTool {
     /// `request_cancel` for a finished call degrades to a no-op.
     active_cancels: std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
     /// Agent preset delegation policy gating which subagent presets may be dispatched.
-    parent_delegation: std::sync::Mutex<Option<muta_contracts::AgentPresetDelegation>>,
+    parent_delegation: std::sync::Mutex<Option<muta_contracts::AgentPersonaDelegation>>,
     /// Parent execution policy enforcing recursion limits and depth bounds (ADR-0183).
     parent_execution_policy: std::sync::Mutex<Option<muta_contracts::ExecutionPolicy>>,
     /// Live source of MCP tools published to the parent's dynamic sink (ADR-0138).
@@ -188,9 +188,9 @@ pub struct SubagentTool {
     /// *current* toolset, not a stale bootstrap-time copy.
     mcp_tool_source: std::sync::Mutex<Option<Arc<dyn muta_contracts::DynamicToolSource>>>,
     /// The session's workspace root, captured at bootstrap so the child's
-    /// operation scope resolves relative `write_paths` against the session's
-    /// project — not the daemon process's cwd (ADR-0096). `None` falls back
-    /// to the process cwd (tests, single-project processes).
+    /// tools resolve relative paths against the session's project — not the
+    /// daemon process's cwd (ADR-0096). `None` falls back to the process cwd
+    /// (tests, single-project processes).
     workspace_root: std::sync::Mutex<Option<std::path::PathBuf>>,
     retry_config: std::sync::Mutex<SubagentRetryConfig>,
 }
@@ -320,7 +320,7 @@ impl SubagentTool {
     }
 
     /// Bind the agent preset delegation policy to enforce allowed subagent profiles.
-    pub fn bind_delegation(&self, delegation: muta_contracts::AgentPresetDelegation) {
+    pub fn bind_delegation(&self, delegation: muta_contracts::AgentPersonaDelegation) {
         *self
             .parent_delegation
             .lock()
@@ -349,9 +349,9 @@ impl SubagentTool {
     }
 
     /// Pin the session's workspace root so spawned subagents resolve relative
-    /// `write_paths` (ADR-0028) against the session's project rather than the
-    /// daemon process's cwd (ADR-0096). Called by the bootstrap right after
-    /// construction; `None` (the default) keeps the process-cwd fallback.
+    /// paths against the session's project rather than the daemon process's
+    /// cwd (ADR-0096). Called by the bootstrap right after construction;
+    /// `None` (the default) keeps the process-cwd fallback.
     pub fn set_workspace_root(&self, root: Option<std::path::PathBuf>) {
         self.workspace_root
             .lock()
@@ -724,16 +724,16 @@ impl SubagentTool {
         let mut subagent = Agent::new(self.provider.clone(), sub_tools, identity);
         subagent.set_kind(muta_contracts::AgentKind::Subagent);
 
-        // ADR-0211: Bind instance-scoped HarnessFacets according to the child's mission
+        // ADR-0224: bind instance-scoped extensions according to the child's mission.
         match profile.name {
             "explore" => {
-                subagent.add_facet(std::sync::Arc::new(
-                    crate::facet::CodeIntelligenceFacet::read_only(),
+                subagent.add_extension(std::sync::Arc::new(
+                    crate::extension::CodeIntelligenceExtension::read_only(),
                 ));
             }
             "code" => {
-                subagent.add_facet(std::sync::Arc::new(
-                    crate::facet::CodeIntelligenceFacet::new(),
+                subagent.add_extension(std::sync::Arc::new(
+                    crate::extension::CodeIntelligenceExtension::new(),
                 ));
             }
             _ => {}
@@ -827,19 +827,6 @@ impl SubagentTool {
         if let Some(accountant) = self.parent_human_channel() {
             subagent.set_human_channel_accountant(accountant);
         }
-        // Resolve the bound profile's write grant (ADR-0028) against the
-        // session's workspace root (falling back to the process cwd when no
-        // root was captured) and set it on the child. All built-in presets
-        // (SUBAGENT_EXPLORE/SUBAGENT_TITLE: empty `write_paths`) resolve to an
-        // empty `OperationScope`, consistent with their admission (no write
-        // tools admitted anyway).
-        let cwd = self
-            .workspace_root
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        subagent.set_operation_scope(profile.resolve_operation_scope(&cwd));
         // Subagents are short-lived and read-only by profile, and session
         // review is on-demand (`/review`) with no automatic firing — so a
         // research subagent never pays for a diagnostic and review can never

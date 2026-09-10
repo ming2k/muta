@@ -86,17 +86,18 @@ pub fn search_history(
     const DEFAULT_LIMIT: usize = 20;
     const MAX_LIMIT: usize = 100;
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let grouping = workspace.map(muta_contracts::SessionGrouping::workspace);
     let hits = muta_persistence::db::DatabaseEngine::open(&paths::get().db_file(), None)
         .map_err(|e| format!("could not open sqlite db: {e}"))
         .and_then(|engine| {
             let strict = engine
-                .search_history(query, workspace, limit)
+                .search_history(query, grouping.as_ref(), limit)
                 .map_err(|e| format!("history search failed: {e}"))?;
             if !strict.is_empty() {
                 return Ok(strict);
             }
             engine
-                .search_history_relaxed(query, workspace, limit)
+                .search_history_relaxed(query, grouping.as_ref(), limit)
                 .map_err(|e| format!("history search failed: {e}"))
         })
         .unwrap_or_else(|error| {
@@ -105,14 +106,21 @@ pub fn search_history(
         });
     let hits = hits
         .into_iter()
-        .map(|hit| muta_contracts::HistorySearchHit {
-            entry_id: hit.entry_id,
-            session_id: hit.session_id,
-            workspace: hit.project_root,
-            session_title: hit.session_title,
-            role: hit.role,
-            snippet: hit.snippet,
-            score: hit.score,
+        .map(|hit| {
+            let workspace = hit
+                .workspace_root
+                .clone()
+                .or_else(|| hit.space.clone())
+                .unwrap_or_else(|| "Personal".to_string());
+            muta_contracts::HistorySearchHit {
+                entry_id: hit.entry_id,
+                session_id: hit.session_id,
+                workspace,
+                session_title: hit.session_title,
+                role: hit.role,
+                snippet: hit.snippet,
+                score: hit.score,
+            }
         })
         .collect();
     let _ = resp_tx.send(AgentResponse::HistorySearch(hits));

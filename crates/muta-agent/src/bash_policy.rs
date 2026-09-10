@@ -37,9 +37,8 @@
 //! `$(...)`, interpreters (`python -c "os.system('...')"`), env-var tricks, or
 //! any tool that itself shells out. The gate catches *routine* destructive
 //! commands a model reaches for directly (`rm -rf /`, `git reset --hard`); it
-//! is **not** a capability boundary. `OperationScope` is the declarative
-//! authority boundary; `WorkspaceExecutionEnvironment` is the physical
-//! filesystem/process boundary. Both are applied independently of command
+//! is **not** a capability boundary. `WorkspaceExecutionEnvironment` is the
+//! physical filesystem/process boundary, applied independently of command
 //! text. Treat the bash policy as a lint, not a wall.
 
 use muta_persistence::config::{

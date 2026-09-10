@@ -38,25 +38,16 @@ async fn save_retrying(
 }
 
 impl SessionStore {
-    /// Open a per-project store pinned to a **fresh** session file.
+    /// Open a store pinned to the **workspace** grouping.
     ///
     /// Under ADR-0168 all session state is stored authoritatively in SQLite (`muta.db`).
     pub fn load_for_project(project_root: PathBuf) -> Self {
-        // Establish one physical identity at the persistence boundary.
         let project_root = project_root.canonicalize().unwrap_or(project_root);
-        let dirs = paths::get();
-        let sessions_dir = dirs.project_sessions_dir(&project_root);
-        if let Err(e) = std::fs::create_dir_all(&sessions_dir) {
-            tracing::warn!(error = %e, "could not create project sessions dir");
-        }
-        let db_path = dirs.db_file();
-        if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let blob_store = BlobStore::new(dirs.blobs_dir());
-
-        // ADR-0168: All session state is stored authoritatively in SQLite (muta.db)
-        Self::pin_fresh(project_root, sessions_dir, db_path, blob_store)
+        let workspace = Some(muta_contracts::WorkspaceBinding::new(project_root.clone()));
+        Self::for_grouping(
+            muta_contracts::SessionGrouping::workspace(project_root),
+            workspace,
+        )
     }
 
     /// Backwards-compatible alias for [`Self::load_for_project`] using the
@@ -66,6 +57,29 @@ impl SessionStore {
         Self::load_for_project(project_root)
     }
 
+    /// Open a `SessionStore` pinned to a derived
+    /// [`muta_contracts::SessionGrouping`] and optional workspace binding
+    /// (ADR-0226).
+    pub fn for_grouping(
+        grouping: muta_contracts::SessionGrouping,
+        workspace: Option<muta_contracts::WorkspaceBinding>,
+    ) -> Self {
+        let dirs = paths::get();
+        let sessions_dir = match &grouping.workspace {
+            Some(root) => dirs.project_sessions_dir(root),
+            None => dirs.grouping_sessions_dir(&grouping.bucket_key()),
+        };
+        if let Err(e) = std::fs::create_dir_all(&sessions_dir) {
+            tracing::warn!(error = %e, "could not create sessions dir");
+        }
+        let db_path = dirs.db_file();
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let blob_store = BlobStore::new(dirs.blobs_dir());
+        Self::pin_fresh(grouping, workspace, sessions_dir, db_path, blob_store)
+    }
+
     /// Open a `SessionStore` pinned to an explicit snapshot `path`.
     /// In the unified SQLite architecture, `sessions_dir` hosts `muta.db`.
     pub fn for_path(path: PathBuf) -> Self {
@@ -73,14 +87,22 @@ impl SessionStore {
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
-        let project_root = sessions_dir.clone();
+        let grouping = muta_contracts::SessionGrouping::workspace(sessions_dir.clone());
+        let workspace = Some(muta_contracts::WorkspaceBinding::new(sessions_dir.clone()));
         let db_path = sessions_dir.join("muta.db");
         let blob_store = BlobStore::new(sessions_dir.join("blobs"));
         let id_stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("default");
-        let data = load_or_seed(&db_path, id_stem, &blob_store, &project_root, Some(&path));
+        let data = load_or_seed(
+            &db_path,
+            id_stem,
+            &blob_store,
+            &grouping,
+            workspace.as_ref(),
+            Some(&path),
+        );
         let defer_persist = !path.exists() && data.is_user_facing_empty();
         let writer = if db_path == paths::get().db_file() {
             crate::db::get_persistence_handle()
@@ -88,7 +110,8 @@ impl SessionStore {
             crate::db::PersistenceHandle::spawn(db_path.clone(), Some(blob_store.clone()))
         };
         Self {
-            project_root,
+            grouping,
+            workspace,
             sessions_dir,
             db_path,
             blob_store,
@@ -103,7 +126,8 @@ impl SessionStore {
     /// real content, so a `muta` that starts and exits without a round
     /// leaves no empty-file litter behind.
     fn pin_fresh(
-        project_root: PathBuf,
+        grouping: muta_contracts::SessionGrouping,
+        workspace: Option<muta_contracts::WorkspaceBinding>,
         sessions_dir: PathBuf,
         db_path: PathBuf,
         blob_store: BlobStore,
@@ -112,7 +136,8 @@ impl SessionStore {
         let path = sessions_dir.join(format!("{id}.json"));
         let data = SessionData {
             id,
-            project_root: project_root.clone(),
+            space: grouping.space.clone(),
+            workspace: workspace.clone(),
             ..Default::default()
         };
         let writer = if db_path == paths::get().db_file() {
@@ -121,7 +146,8 @@ impl SessionStore {
             crate::db::PersistenceHandle::spawn(db_path.clone(), Some(blob_store.clone()))
         };
         Self {
-            project_root,
+            grouping,
+            workspace,
             sessions_dir,
             db_path,
             blob_store,
@@ -131,9 +157,19 @@ impl SessionStore {
         }
     }
 
-    /// Project root this store is bound to.
-    pub fn project_root(&self) -> &std::path::Path {
-        &self.project_root
+    /// The derived grouping this store is bound to (ADR-0226).
+    pub fn grouping(&self) -> &muta_contracts::SessionGrouping {
+        &self.grouping
+    }
+
+    /// The optional workspace binding this store carries.
+    pub fn workspace(&self) -> Option<&muta_contracts::WorkspaceBinding> {
+        self.workspace.as_ref()
+    }
+
+    /// The workspace root, when one is bound. `None` for a workspace-free scope.
+    pub fn workspace_root(&self) -> Option<&std::path::Path> {
+        self.workspace.as_ref().map(|w| w.root.as_path())
     }
 
     pub async fn id(&self) -> String {
@@ -172,14 +208,16 @@ impl SessionStore {
 
     /// Start a brand-new session and repoint this store at it.
     pub async fn reset(&self) -> Result<String, String> {
-        let project_root = self.project_root.clone();
+        let grouping = self.grouping.clone();
+        let workspace = self.workspace.clone();
         let mut state = self.state.lock().await;
         let sessions_dir = self.sessions_dir.clone();
         let id = uuid::Uuid::new_v4().to_string();
         let path = sessions_dir.join(format!("{id}.json"));
         let data = SessionData {
             id: id.clone(),
-            project_root,
+            space: grouping.space.clone(),
+            workspace,
             ..Default::default()
         };
         state.path = path;
@@ -216,7 +254,8 @@ impl SessionStore {
             return Ok(());
         }
         let db_path = self.db_path.clone();
-        let project_root = self.project_root.clone();
+        let grouping = self.grouping.clone();
+        let workspace = self.workspace.clone();
         let blob_store = self.blob_store.clone();
         let load_path = path.clone();
         let resolved_id = resolved.clone();
@@ -225,7 +264,8 @@ impl SessionStore {
                 &db_path,
                 &resolved_id,
                 &blob_store,
-                &project_root,
+                &grouping,
+                workspace.as_ref(),
                 Some(&load_path),
             )
         })
@@ -321,12 +361,12 @@ impl SessionStore {
     pub async fn list(&self) -> Result<Vec<SessionSummary>, String> {
         let active_id = self.state.lock().await.data.id.clone();
         let db_path = self.db_path.clone();
-        let project_root_str = self.project_root.to_string_lossy().into_owned();
+        let grouping = self.grouping.clone();
         tokio::task::spawn_blocking(move || {
             let engine =
                 crate::db::DatabaseEngine::open(&db_path, None).map_err(|e| e.to_string())?;
             engine
-                .list_session_summaries(Some(&project_root_str), &active_id)
+                .list_session_summaries(Some(&grouping), &active_id)
                 .map_err(|e| e.to_string())
         })
         .await
@@ -426,8 +466,8 @@ impl SessionStore {
 
         // Query SQLite database
         if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path, None) {
-            let project_root_str = self.project_root.to_string_lossy();
-            if let Ok(found) = engine.resolve_session_prefix(input, Some(&project_root_str)) {
+            let grouping = self.grouping.clone();
+            if let Ok(found) = engine.resolve_session_prefix(input, Some(&grouping)) {
                 for id in found {
                     if !matches.iter().any(|(m_id, _)| m_id == &id) {
                         let path = self.sessions_dir.join(format!("{id}.json"));

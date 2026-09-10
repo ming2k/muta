@@ -3,6 +3,7 @@
 - **Status:** Accepted; persistence-mechanics claims (event ledger, replay,
   `applied_seq`) are superseded by [ADR-0187](0187-persistence-v2-incremental-append-and-blob-reference-ledger.md)
 - **Date:** 2026-09-06
+- **Partially superseded by:** [ADR-0219](0219-session-scope-and-optional-workspace-binding.md) — the mandatory `sessions.project_root` partition key becomes a typed `SessionScope`; the single-transcript model is retained.
 - **Supersedes (persistence data model only):** ADR-0040 (vocabulary survives; the
   `model_window` / `archived_transcript` dual-array storage it named is replaced),
   the `SessionData` snapshot schema introduced by ADR-0016/0048 evolutions, and

@@ -28,10 +28,11 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
     BootstrapParams {
         human_channel: None,
         identity: identity.clone(),
-        preset: muta_contracts::AgentPreset::with_identity("probe", identity),
+        preset: muta_contracts::AgentPersona::with_identity("probe", identity),
         ui: Arc::new(HeadlessProbe),
         startup,
         project_root: Some(project_root),
+        session_grouping: None,
         unattended: false,
         confined: true,
         teardown_token: None,
@@ -109,4 +110,39 @@ async fn retry_point_survives_process_death_and_projects_accurate_harness_state(
         }
         other => panic!("unexpected event: {:?}", other),
     }
+}
+
+/// ADR-0219/0220: a workspace-free explicit scope assembles without binding a
+/// filesystem workspace. The session store is pinned to the `persona:` lane
+/// and carries no workspace binding, so no workspace tool root is provided.
+#[tokio::test]
+async fn workspace_free_scope_assembles_without_a_workspace() {
+    sandbox_once();
+    let identity = muta_contracts::AgentIdentity::new("practice", "a language practice partner");
+    let boot = bootstrap::assemble(BootstrapParams {
+        human_channel: None,
+        identity: identity.clone(),
+        preset: muta_contracts::AgentPersona::with_identity("practice", identity),
+        ui: Arc::new(HeadlessProbe),
+        startup: SessionStart::Fresh,
+        project_root: None,
+        session_grouping: Some(muta_contracts::SessionGrouping::named("english-practice")),
+        unattended: false,
+        confined: true,
+        teardown_token: None,
+        shared_config: None,
+        shared_provider_usage: None,
+    })
+    .await
+    .expect("workspace-free assemble succeeds");
+
+    assert_eq!(
+        boot.session.grouping().label(),
+        "english-practice",
+        "the session must live in its persona lane"
+    );
+    assert!(
+        boot.session.workspace().is_none(),
+        "no workspace binding may be invented for a workspace-free scope"
+    );
 }

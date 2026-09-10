@@ -1,9 +1,10 @@
-//! Unified, three-bucket view of every tool the agent can dispatch.
+//! Unified, two-bucket view of every tool the agent can dispatch.
 //!
-//! Ports kimi-code's `ToolManager` concept: tools are classified at runtime
-//! into three sources — `builtin` (collected from the registry + agent-owned
-//! instances like todo), `user` (RPC/SDK-injected tools, future), and `mcp`
-//! (dynamic tools published through [`muta_contracts::DynamicToolSink`], today only MCP).
+//! Tools are classified at runtime into two sources — `builtin` (collected
+//! from the registry + agent-owned instances like todo) and `mcp` (dynamic
+//! tools published through [`muta_contracts::DynamicToolSink`], today only MCP
+//! servers). There is deliberately no third, config-driven source; see
+//! ADR-0221 and ADR-0222.
 //!
 //! ### Why this exists
 //!
@@ -18,15 +19,15 @@
 //! could drift (a tool in the schema but un-dispatchable, or vice versa). This
 //! struct is the **single authority**: all three choke points ask the same
 //! [`ToolManager`] for the schema list and for tool lookup, and the
-//! classification (`builtin`/`user`/`mcp`) is derived once, here.
+//! classification (`builtin`/`mcp`) is derived once, here.
 //!
 //! ### What it is *not*
 //!
 //! Not a replacement for [`muta_contracts::ToolSet`] (the capability-pool resolver) or
 //! [`DynamicToolRegistry`] (the sink). Those remain the storage; this is a
-//! read-side view over them plus the new `user` bucket. The storage layers
-//! keep their existing invariants (static > dynamic on name clash; dynamic
-//! source-keyed groups; disable is name-level and uniform across sources).
+//! read-side view over them. The storage layers keep their existing
+//! invariants (static > dynamic on name clash; dynamic source-keyed groups;
+//! disable is name-level and uniform across sources).
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, RwLock};
@@ -43,10 +44,6 @@ pub enum ToolSource {
     /// Collected from the registry (`collect_toolset`) plus agent-owned
     /// instances (todo, subagent). Resolved per active model/variant.
     Builtin,
-    /// SDK/RPC-injected tool. Future capability — the bucket exists so the
-    /// classification and name-clash policy are stable from day one, even
-    /// though nothing populates it yet.
-    User,
     /// Published through [`muta_contracts::DynamicToolSink`] — today only MCP servers. Named
     /// `mcp__<server>__<tool>` by convention (enforced at the publisher, not
     /// here).
@@ -60,11 +57,11 @@ pub struct SourcedTool {
     pub tool: Arc<dyn Tool>,
 }
 
-/// The unified three-bucket tool view.
+/// The unified two-bucket tool view.
 ///
 /// Holds references to the existing storage (`resolved_tools`, `dynamic_tools`,
-/// the disable masks) plus the new `user_tools` map. Constructed once per
-/// agent and borrowed for the lifetime of dispatch.
+/// the disable masks). Constructed once per agent and borrowed for the lifetime
+/// of dispatch.
 pub(crate) struct ToolManager {
     /// The per-model resolved static tools (read from the agent's
     /// `resolved_tools`). Wrapped here so all reads funnel through one place.
@@ -72,9 +69,6 @@ pub(crate) struct ToolManager {
     /// Dynamic tools (MCP today). Wrapped so `find` / `loop_tools` share one
     /// snapshot per call.
     dynamic: Arc<DynamicToolRegistry>,
-    /// The new user-tool bucket. Keyed by tool name; the Arc is shared so an
-    /// injected tool can carry its own state. Empty until SDK tools land.
-    user: Arc<RwLock<Vec<Arc<dyn Tool>>>>,
     /// Persisted user disable mask (session-level). Name-level, uniform
     /// across all sources.
     disabled: Arc<Mutex<HashSet<String>>>,
@@ -89,14 +83,12 @@ impl ToolManager {
     pub(crate) fn new(
         resolved: Arc<RwLock<Vec<Arc<dyn Tool>>>>,
         dynamic: Arc<DynamicToolRegistry>,
-        user: Arc<RwLock<Vec<Arc<dyn Tool>>>>,
         disabled: Arc<Mutex<HashSet<String>>>,
         scoped_disabled: Arc<Mutex<crate::agent::ScopedToolDisable>>,
     ) -> Self {
         Self {
             resolved,
             dynamic,
-            user,
             disabled,
             scoped_disabled,
         }
@@ -104,12 +96,10 @@ impl ToolManager {
 
     /// Every installed tool, classified — the schema and dispatch authority.
     ///
-    /// Order: `builtin` first (in resolved order), then `user` (registration
-    /// order), then `mcp` (dynamic snapshot, source-sorted internally). Name
-    /// clashes are resolved **builtin > user > mcp**: a static tool named `x`
-    /// shadows a user/mcp tool named `x`, and a user tool shadows an mcp one.
-    /// This preserves the harness's existing "static > dynamic" invariant and
-    /// extends it with user in between.
+    /// Order: `builtin` first (in resolved order), then `mcp` (dynamic
+    /// snapshot, source-sorted internally). Name clashes are resolved
+    /// **builtin > mcp**: a static tool named `x` shadows an mcp tool named
+    /// `x`. This preserves the harness's existing "static > dynamic" invariant.
     pub(crate) fn installed(&self) -> Vec<SourcedTool> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<SourcedTool> = Vec::new();
@@ -130,23 +120,7 @@ impl ToolManager {
             }
         }
 
-        // 2. user (SDK-injected).
-        for tool in self
-            .user
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .cloned()
-        {
-            if seen.insert(tool.name().to_string()) {
-                out.push(SourcedTool {
-                    source: ToolSource::User,
-                    tool,
-                });
-            }
-        }
-
-        // 3. mcp (dynamic snapshot).
+        // 2. mcp (dynamic snapshot).
         for entry in self.dynamic.snapshot() {
             if seen.insert(entry.tool.name().to_string()) {
                 out.push(SourcedTool {
@@ -178,8 +152,8 @@ impl ToolManager {
     }
 
     /// Look up a tool by name for dispatch. Returns the tool and its source.
-    /// Mirrors the historical "resolved first, dynamic fallback" lookup, now
-    /// extended with the user bucket in between (builtin > user > mcp).
+    /// Mirrors the historical "resolved first, dynamic fallback" lookup
+    /// (builtin > mcp).
     pub(crate) fn find(&self, name: &str) -> Option<SourcedTool> {
         self.installed()
             .into_iter()
@@ -261,25 +235,22 @@ mod tests {
     fn manager(
         resolved: Vec<Arc<dyn Tool>>,
         dynamic_tools: Vec<Arc<dyn Tool>>,
-        user: Vec<Arc<dyn Tool>>,
         disabled: Vec<&str>,
     ) -> ToolManager {
         let resolved = Arc::new(RwLock::new(resolved));
         let dynamic = Arc::new(DynamicToolRegistry::default());
-        let user = Arc::new(RwLock::new(user));
         // Publish dynamic tools under a synthetic MCP source.
         dynamic.replace("mcp:test", dynamic_tools);
         let disabled = Arc::new(Mutex::new(disabled.iter().map(|s| s.to_string()).collect()));
         let scoped = Arc::new(Mutex::new(crate::agent::ScopedToolDisable::default()));
-        ToolManager::new(resolved, dynamic, user, disabled, scoped)
+        ToolManager::new(resolved, dynamic, disabled, scoped)
     }
 
     #[test]
-    fn classifies_three_buckets_in_order() {
+    fn classifies_two_buckets_in_order() {
         let m = manager(
             vec![StubTool::new("execute_command"), StubTool::new("read_text")],
             vec![StubTool::new("mcp__srv__x")],
-            vec![StubTool::new("my_rpc")],
             vec![],
         );
         let installed = m.installed();
@@ -292,44 +263,24 @@ mod tests {
             vec![
                 (ToolSource::Builtin, "execute_command"),
                 (ToolSource::Builtin, "read_text"),
-                (ToolSource::User, "my_rpc"),
                 (ToolSource::Mcp, "mcp__srv__x"),
             ]
         );
     }
 
     #[test]
-    fn static_shadows_user_and_mcp_on_name_clash() {
-        // Same name in all three buckets — builtin wins.
-        let m = manager(
-            vec![StubTool::new("dup")],
-            vec![StubTool::new("dup")],
-            vec![StubTool::new("dup")],
-            vec![],
-        );
+    fn static_shadows_mcp_on_name_clash() {
+        // Same name in both buckets — builtin wins.
+        let m = manager(vec![StubTool::new("dup")], vec![StubTool::new("dup")], vec![]);
         let installed = m.installed();
         assert_eq!(installed.len(), 1, "name clash collapses to one");
         assert_eq!(installed[0].source, ToolSource::Builtin);
     }
 
     #[test]
-    fn user_shadows_mcp_on_name_clash() {
-        let m = manager(
-            vec![],
-            vec![StubTool::new("dup")],
-            vec![StubTool::new("dup")],
-            vec![],
-        );
-        let installed = m.installed();
-        assert_eq!(installed.len(), 1);
-        assert_eq!(installed[0].source, ToolSource::User);
-    }
-
-    #[test]
     fn loop_tools_filters_disabled_and_preserves_stable_schema() {
         let m = manager(
             vec![StubTool::new("execute_command"), StubTool::new("ask_user")],
-            vec![],
             vec![],
             vec!["execute_command"],
         );
@@ -353,7 +304,6 @@ mod tests {
             vec![StubTool::new("execute_command")],
             vec![StubTool::new("mcp__s__t")],
             vec![],
-            vec![],
         );
         assert_eq!(
             m.find("execute_command").unwrap().source,
@@ -374,7 +324,6 @@ mod tests {
                 StubTool::new("mcp__srv__active"),
                 StubTool::unavailable("mcp__srv__inactive"),
             ],
-            vec![],
             vec![],
         );
         let live = m.loop_tools(false);

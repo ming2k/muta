@@ -1104,7 +1104,7 @@ async fn handle_wire_stream(
             round_counter: bound.session.round_counter().await,
             unattended: bound.session.unattended().await,
             confined: bound.shared_confinement.is_confined(),
-            workspace_security: bound.security.snapshot(bound.project_root()),
+            workspace_security: bound.security_snapshot(),
             retry_pending: bound.session.retry_pending().await.is_some(),
         };
         let frame = Wire::Response {
@@ -1170,7 +1170,7 @@ async fn handle_wire_stream(
     // - `Changed` (previously trusted content mutated, e.g. via git pull):
     //   there is nothing to gate on — the user already made a trust
     //   decision for this workspace — so a banner is the honest escalation.
-    let snap = bound.security.snapshot(bound.project_root());
+    let snap = bound.security_snapshot();
     if matches!(
         snap.aggregate(),
         muta_contracts::WorkspaceTrustState::Changed

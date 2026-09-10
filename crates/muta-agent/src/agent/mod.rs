@@ -202,13 +202,10 @@ pub struct Agent {
     /// reaches the session store. Auto-restored at the configured
     /// [`muta_contracts::RestorePoint`]. See [`ScopedToolDisable`].
     scoped_disabled_tools: Arc<std::sync::Mutex<ScopedToolDisable>>,
-    /// The unified three-bucket tool manager (kimi-code port). The single
-    /// authority for classification, per-turn schema (`loop_tools`), and
-    /// dispatch lookup. Shares storage Arcs with the agent's own fields so
-    /// both see the same live state; it also solely owns the `user` bucket
-    /// (SDK/RPC-injected tools — empty today, wired so the classification
-    /// and name-clash policy are stable from day one). See
-    /// [`crate::tool_manager`].
+    /// The unified two-bucket tool manager. The single authority for
+    /// classification, per-turn schema (`loop_tools`), and dispatch lookup.
+    /// Shares storage Arcs with the agent's own fields so both see the same
+    /// live state. See [`crate::tool_manager`].
     tool_manager: crate::tool_manager::ToolManager,
     /// Unified task list, the single source of truth for "what is left to
     /// do." Drives the sticky panel and persists across restarts. Shared
@@ -269,14 +266,6 @@ pub struct Agent {
     /// permission broker so broad approvals such as `bash *` cannot silently
     /// authorize destructive commands like `git reset --hard`.
     bash_policy: std::sync::RwLock<crate::bash_policy::BashPolicy>,
-    /// Runtime operation boundary for this agent (ADR-0028). The main agent is
-    /// unrestricted ([`muta_contracts::OperationScope::unrestricted`]); a subagent
-    /// carries the scope resolved from its profile's `write_paths` and
-    /// `command_allowlist` grants. Enforced at the `execute_tool` funnel for
-    /// every admitted tool whose [`muta_contracts::ScopeTarget`] falls outside the
-    /// granted scope, before the permission broker — a hard boundary, not a
-    /// prompt.
-    operation_scope: std::sync::Mutex<muta_contracts::OperationScope>,
     /// Lifecycle event hooks (ADR-0025). Installed once at startup from the
     /// `[hooks]` config by the CLI; empty by default (subagents, tests). Read
     /// at the PreToolUse / PostToolUse / Stop insertion points. Held as a
@@ -366,7 +355,7 @@ pub struct Agent {
     /// selection by [`muta_contracts::ToolSet::resolve_for`] every time the toolset
     /// is re-resolved: scope by intersection, variants by agent-over-model
     /// precedence, model capability limits applied hard.
-    agent_selection: std::sync::Mutex<muta_contracts::ToolSelection>,
+    tools: std::sync::Mutex<muta_contracts::ToolSelection>,
     /// Token-source accounting: running tally of how many tokens each
     /// provider+model reported authoritatively (upstream `usage`) vs. how many
     /// were filled in by the local estimator. Shared with the TUI so the
@@ -385,8 +374,8 @@ pub struct Agent {
     /// Content-addressed per-tool-spec BPE weights: a toolset is stable across
     /// turns, so its schema cost is tokenized once, not per estimate pass.
     tool_schema_weights: std::sync::Arc<muta_contracts::ToolSchemaWeights>,
-    /// Ambient harness facets bound to this agent instance (ADR-0211).
-    pub(crate) facets: Arc<std::sync::RwLock<Vec<Arc<dyn muta_contracts::HarnessFacet>>>>,
+    /// Atomic extensions bound to this agent instance (ADR-0224).
+    pub(crate) extensions: Arc<std::sync::RwLock<Vec<Arc<dyn muta_contracts::Extension>>>>,
 }
 
 /// Capability handle for steering a running agent from the outside — the
@@ -1008,7 +997,7 @@ pub struct AgentBuilder {
     skills_registry: skills::SkillRegistry,
     identity: AgentIdentity,
     model_request_assembler: crate::model_request::ModelRequestAssembler,
-    facets: Vec<Arc<dyn muta_contracts::HarnessFacet>>,
+    extensions: Vec<Arc<dyn muta_contracts::Extension>>,
 }
 
 impl AgentBuilder {
@@ -1025,23 +1014,23 @@ impl AgentBuilder {
             model_request_assembler: crate::model_request::ModelRequestAssembler::new(
                 crate::model_request::default_system_prompt_registry(),
             ),
-            facets: Vec::new(),
+            extensions: Vec::new(),
         }
     }
 
     /// Add an ambient harness facet to this agent (ADR-0211).
-    pub fn with_facet(mut self, facet: Arc<dyn muta_contracts::HarnessFacet>) -> Self {
-        self.facets.push(facet);
+    pub fn with_extension(mut self, extension: Arc<dyn muta_contracts::Extension>) -> Self {
+        self.extensions.push(extension);
         self
     }
 
-    /// Add ambient harness facets to this agent (ADR-0211).
-    pub fn with_facets(
+    /// Add atomic extensions to this agent (ADR-0224).
+    pub fn with_extensions(
         mut self,
-        facets: impl IntoIterator<Item = Arc<dyn muta_contracts::HarnessFacet>>,
+        extensions: impl IntoIterator<Item = Arc<dyn muta_contracts::Extension>>,
     ) -> Self {
-        for facet in facets {
-            self.facets.push(facet);
+        for extension in extensions {
+            self.extensions.push(extension);
         }
         self
     }
@@ -1129,8 +1118,8 @@ impl AgentBuilder {
             self.identity,
             self.model_request_assembler,
         );
-        if !self.facets.is_empty() {
-            *agent.facets.write().unwrap_or_else(|e| e.into_inner()) = self.facets;
+        if !self.extensions.is_empty() {
+            *agent.extensions.write().unwrap_or_else(|e| e.into_inner()) = self.extensions;
         }
         agent
     }
@@ -1640,7 +1629,7 @@ mod tests {
     fn apply_preset_seeds_skip_interactive_input() {
         let agent = stdin_test_agent();
         assert!(!agent.skip_interactive_input(), "default off");
-        let profile = muta_contracts::AgentPreset::with_identity(
+        let profile = muta_contracts::AgentPersona::with_identity(
             "code",
             muta_contracts::AgentIdentity::default(),
         )

@@ -110,8 +110,8 @@ impl ToolAccesses {
     /// `ReadWrite` file operation or a global-exclusive `All`. Used by the
     /// toolset-collection safety check (see `debug_assert_safe_targets`):
     /// a tool that declares a write but leaves its `scope_target` at the
-    /// default `Unspecified` would bypass the scope-gate, bash-policy, and
-    /// broker entirely — a load-bearing safety hole. Read-only declarations
+    /// default `Unspecified` would bypass the bash-policy and broker entirely
+    /// — a load-bearing safety hole. Read-only declarations
     /// (`Read`/`Search`/`none()`) return `false`.
     #[inline]
     pub fn declares_write(&self) -> bool {

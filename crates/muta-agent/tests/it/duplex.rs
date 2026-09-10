@@ -272,8 +272,6 @@ const INTERACTIVE: SubagentPreset = SubagentPreset {
     tool_policy: ToolPolicy {
         allowed_tools: None,
         allow_user_interaction: false,
-        write_paths: &[],
-        command_allowlist: &[],
     },
     variant_pins: &[],
     unattended: false,

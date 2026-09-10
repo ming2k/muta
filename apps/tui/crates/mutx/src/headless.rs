@@ -20,6 +20,7 @@ pub async fn run_headless(
     project_override: Option<PathBuf>,
     unattended: bool,
     confined: bool,
+    persona: Option<String>,
     remote: Option<String>,
     token: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -69,7 +70,8 @@ pub async fn run_headless(
             muta_contracts::human_request::HumanChannelPosture::Autonomous
         });
     }
-    let init_options = muta_contracts::SessionInitOptions::new(unattended, confined);
+    let init_options =
+        muta_contracts::SessionInitOptions::new(unattended, confined).with_persona(persona);
     let action = AttachAction::New(if init_options.is_default() {
         None
     } else {

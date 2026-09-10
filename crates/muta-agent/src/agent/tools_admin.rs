@@ -198,12 +198,11 @@ impl Agent {
     /// pane. `enabled` reflects the disabled mask; `source` classifies origin
     /// (`builtin`, `subagent`, or the publisher-provided dynamic source id).
     pub fn snapshot_tools(&self) -> Vec<muta_contracts::ToolInfo> {
-        // Classification delegates to the ToolManager's three-bucket
-        // authority for the builtin (with subagent broken out for display) and
-        // user buckets; the mcp bucket keeps the publisher-provided dynamic
-        // source id as its label. The source label is display-only; dispatch
-        // treats all three buckets uniformly via name-clash priority
-        // (builtin > user > mcp).
+        // Classification delegates to the ToolManager's two-bucket authority
+        // for the builtin bucket (with subagent broken out for display); the
+        // mcp bucket keeps the publisher-provided dynamic source id as its
+        // label. The source label is display-only; dispatch treats both
+        // buckets uniformly via name-clash priority (builtin > mcp).
         let disabled = self
             .disabled_tools
             .lock()
@@ -212,15 +211,14 @@ impl Agent {
         let mut seen: HashSet<String> = HashSet::new();
         let mut sourced_tools: Vec<(String, Arc<dyn Tool>)> = Vec::new();
 
-        // 1+2. builtin (with subagent broken out) and user, from the manager.
+        // 1. builtin (with subagent broken out), from the manager.
         for sourced in self.tool_manager.installed() {
             let label = match sourced.source {
                 crate::tool_manager::ToolSource::Builtin if sourced.tool.spawns_subagent() => {
                     "subagent"
                 }
                 crate::tool_manager::ToolSource::Builtin => "builtin",
-                crate::tool_manager::ToolSource::User => "user",
-                // Bucket 3 labels by dynamic source id — handled below.
+                // Bucket 2 labels by dynamic source id — handled below.
                 crate::tool_manager::ToolSource::Mcp => continue,
             };
             if seen.insert(sourced.tool.name().to_string()) {
@@ -228,7 +226,7 @@ impl Agent {
             }
         }
 
-        // 3. mcp (dynamic snapshot), labeled by the publisher's source id.
+        // 2. mcp (dynamic snapshot), labeled by the publisher's source id.
         for entry in self.dynamic_tools.snapshot() {
             if seen.insert(entry.tool.name().to_string()) {
                 sourced_tools.push((entry.source, entry.tool));

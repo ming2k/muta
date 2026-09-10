@@ -35,11 +35,10 @@
 //! so a future interactive role could opt in once the plumbing surfaces the
 //! request; the built-in [`SUBAGENT_EXPLORE`] profile leaves it off.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use crate::model::Model;
-use crate::{CommandScope, OperationScope, Tool, ToolScope, ToolSelection, ToolSet};
+use crate::{Tool, ToolScope, ToolSelection, ToolSet};
 
 /// Ceiling on what a subagent may do. There is no capability ladder — a tool is
 /// admitted purely by name. [`Tool::spawns_subagent`] and
@@ -55,20 +54,6 @@ pub struct ToolPolicy {
     pub allowed_tools: Option<&'static [&'static str]>,
     /// Whether tools that block on a human ([`Tool::requires_user`]) may run.
     pub allow_user_interaction: bool,
-    /// Declarative write grant: directory specs (relative or absolute) a
-    /// subagent under this policy may write to. Empty (the default) leaves write
-    /// paths unconstrained; set to e.g. `&["./src"]` to confine writes there. At
-    /// spawn, [`SubagentPreset::resolve_operation_scope`] canonicalizes these
-    /// against the cwd into a runtime path constraint the agent enforces. See
-    /// ADR-0028.
-    pub write_paths: &'static [&'static str],
-    /// Declarative command grant: program-name prefixes a subagent under this
-    /// policy may run via `execute_command`. Empty (the default) means "no command
-    /// constraint" — any command is allowed up to the broker. Set to e.g.
-    /// `&["git", "cargo"]` to restrict the subagent to those programs. Resolved
-    /// at spawn by [`SubagentPreset::resolve_operation_scope`] into a
-    /// [`CommandScope`].
-    pub command_allowlist: &'static [&'static str],
 }
 
 impl ToolPolicy {
@@ -194,52 +179,6 @@ impl SubagentPreset {
             .filter(|tool| self.tool_policy.admits_runtime(tool.as_ref()))
             .collect()
     }
-
-    /// Resolve this profile's declarative `write_paths` and `command_allowlist`
-    /// grants into a runtime [`OperationScope`] against `cwd`.
-    ///
-    /// - Each `write_paths` spec (relative or absolute) is joined to `cwd` and
-    ///   canonicalized best-effort (a not-yet-existing dir falls back to the
-    ///   joined path). An empty `write_paths` leaves the path dimension
-    ///   unconstrained (`None`), not "no paths".
-    /// - `command_allowlist` becomes a [`CommandScope`]. An empty allowlist
-    ///   leaves the command dimension unconstrained (`None`) — distinct from an
-    ///   allowlist of `["*"]`, which means "any command".
-    ///
-    /// The resulting scope is what the spawned agent enforces on every admitted
-    /// tool via [`OperationScope::allows`]. See ADR-0028.
-    pub fn resolve_operation_scope(&self, cwd: &Path) -> OperationScope {
-        let paths = if self.tool_policy.write_paths.is_empty() {
-            None
-        } else {
-            Some(
-                self.tool_policy
-                    .write_paths
-                    .iter()
-                    .map(|spec| {
-                        let p = std::path::Path::new(spec);
-                        let joined = if p.is_absolute() {
-                            std::path::PathBuf::from(spec)
-                        } else {
-                            cwd.join(spec)
-                        };
-                        joined.canonicalize().unwrap_or(joined)
-                    })
-                    .collect(),
-            )
-        };
-        let commands = if self.tool_policy.command_allowlist.is_empty() {
-            None
-        } else {
-            Some(CommandScope::new(
-                self.tool_policy
-                    .command_allowlist
-                    .iter()
-                    .map(|s| s.to_string()),
-            ))
-        };
-        OperationScope { paths, commands }
-    }
 }
 
 /// Tools a read-only subagent (SUBAGENT_EXPLORE / REVIEW / SUBAGENT_TITLE) may use: pure
@@ -276,8 +215,6 @@ handful of turns, then answer.",
     tool_policy: ToolPolicy {
         allowed_tools: Some(READ_ONLY_TOOLS),
         allow_user_interaction: false,
-        write_paths: &[],
-        command_allowlist: &[],
     },
     variant_pins: &[],
     unattended: true,
@@ -303,8 +240,6 @@ the title in the same language as the conversation.",
     tool_policy: ToolPolicy {
         allowed_tools: Some(READ_ONLY_TOOLS),
         allow_user_interaction: false,
-        write_paths: &[],
-        command_allowlist: &[],
     },
     variant_pins: &[],
     unattended: true,
@@ -385,8 +320,6 @@ of turns, then answer.",
     tool_policy: ToolPolicy {
         allowed_tools: Some(CODING_TOOLS),
         allow_user_interaction: true,
-        write_paths: &[],
-        command_allowlist: &[],
     },
     variant_pins: &[],
     unattended: true,
@@ -405,8 +338,6 @@ to the principal agent. Never output giant raw payloads if a clear summary answe
     tool_policy: ToolPolicy {
         allowed_tools: None, // Admits full dynamic/MCP toolset
         allow_user_interaction: false,
-        write_paths: &[],
-        command_allowlist: &[],
     },
     variant_pins: &[],
     unattended: true,
@@ -432,8 +363,6 @@ questions of the user; focus strictly on skill discovery and instruction synthes
     tool_policy: ToolPolicy {
         allowed_tools: Some(READ_ONLY_TOOLS),
         allow_user_interaction: false,
-        write_paths: &[],
-        command_allowlist: &[],
     },
     variant_pins: &[],
     unattended: true,
@@ -478,7 +407,7 @@ impl SubagentPresetPool {
 
     /// Filter subagent presets admitted by an agent delegation policy.
     pub fn admitted_for_delegation(
-        delegation: &crate::AgentPresetDelegation,
+        delegation: &crate::AgentPersonaDelegation,
     ) -> Vec<&'static SubagentPreset> {
         Self::ALL
             .iter()
@@ -611,8 +540,6 @@ mod tests {
         let permissive = ToolPolicy {
             allowed_tools: None,
             allow_user_interaction: true,
-            write_paths: &[],
-            command_allowlist: &[],
         };
         assert!(!permissive.admits(&with_spawn(make("read_text"))));
         assert!(permissive.admits(&make("execute_command")));
@@ -623,8 +550,6 @@ mod tests {
         let permissive = ToolPolicy {
             allowed_tools: None,
             allow_user_interaction: true,
-            write_paths: &[],
-            command_allowlist: &[],
         };
         assert!(!permissive.admits(&make_control()));
     }
@@ -667,8 +592,6 @@ mod tests {
         let open = ToolPolicy {
             allowed_tools: None,
             allow_user_interaction: false,
-            write_paths: &[],
-            command_allowlist: &[],
         };
         assert!(open.admits(&make("read_text")));
         assert!(open.admits(&make("execute_command")));

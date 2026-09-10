@@ -23,16 +23,16 @@
 //!
 //! A `/role` switch is the one place a framing line earns its
 //! tokens: the focused roles install an imperative role directive
-//! (see [`AgentPreset::for_role`]).
+//! (see [`AgentPersona::from_preset`]).
 
-use muta_contracts::{AgentIdentity, AgentPreset};
+use muta_contracts::{AgentIdentity, AgentPersona};
 
 /// The built-in **coding agent** profile (ADR-0183): the declarative
 /// form of the role this binary historically assembled inline. Its identity
 /// is empty — see the module docs for why the shipped agent describes no
 /// product.
-pub fn agent_code() -> AgentPreset {
-    AgentPreset::with_identity("code", AgentIdentity::default())
+pub fn agent_code() -> AgentPersona {
+    AgentPersona::with_identity("code", AgentIdentity::default())
 }
 
 /// The daemon has no terminal or browser clipboard of its own. Clipboard
@@ -52,6 +52,6 @@ impl muta_runtime::UiBridge for DaemonUiBridge {
 
 // Role presets (`architect`, `reviewer`, `security`) and the
 // `/role` (alias `/master`) / `@role:` switching mechanism are declared in
-// `muta-contracts` as shared vocabulary (`AgentPresetId`,
-// `AgentPreset::for_role`) and applied via `Agent::apply_role`,
+// `muta-contracts` as shared vocabulary (`AgentPersonaId`,
+// `AgentPersona::from_preset`) and applied via `Agent::apply_role`,
 // so this binary does not need its own role registry — both frontends share one.

@@ -71,6 +71,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         mode,
         project: project_override,
         unattended: unattended_at_start,
+        persona,
         no_confinement,
         interactive,
         prompt,
@@ -116,6 +117,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 project_override,
                 unattended_at_start,
                 confined_at_start,
+                persona.clone(),
                 mutx::StartupOverlay::Settings { category: cat },
                 prompt,
             )
@@ -130,6 +132,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 project_override,
                 unattended_at_start,
                 confined_at_start,
+                persona.clone(),
                 overlay,
                 None,
             )
@@ -146,6 +149,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     project_override,
                     unattended_at_start,
                     confined_at_start,
+                    persona.clone(),
                     overlay,
                     Some(prompt),
                 )
@@ -157,6 +161,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     project_override,
                     unattended_at_start,
                     confined_at_start,
+                    persona.clone(),
                     remote,
                     token,
                 )
@@ -172,6 +177,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 project_override,
                 unattended_at_start,
                 confined_at_start,
+                persona.clone(),
                 overlay,
                 prompt,
             )
@@ -240,6 +246,7 @@ async fn run_dashboard(
         project_override,
         unattended_at_start,
         confined_at_start,
+        None,
         mutx::StartupOverlay::Dashboard,
         None,
     )
@@ -257,6 +264,7 @@ async fn run_attached(
     project_override: Option<PathBuf>,
     unattended_at_start: bool,
     confined_at_start: bool,
+    persona: Option<String>,
     initial_overlay: mutx::StartupOverlay,
     mut initial_prompt: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -283,7 +291,8 @@ async fn run_attached(
     // conversation view (the overlay does not re-arm).
     let mut startup_overlay_pending = initial_overlay;
     let init_options =
-        muta_contracts::SessionInitOptions::new(unattended_at_start, confined_at_start);
+        muta_contracts::SessionInitOptions::new(unattended_at_start, confined_at_start)
+            .with_persona(persona.clone());
     // Re-attach loop: returning from the TUI with a `/host` switch target
     // re-connects to that session instead of exiting (ADR-0096).
     loop {

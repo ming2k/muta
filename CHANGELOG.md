@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-09-10
+
+### Added
+
+- **Persistent personas (ADR-0220, ADR-0225).** A named, user-authored
+  principal in `~/.config/muta/personas.toml` is now a first-class identity:
+  stable id, `AgentIdentity`, a bound capability preset, an optional workspace
+  policy, and an optional default conversation space. `mutx --persona <id>`
+  starts a persona's conversation; `mutx attach <id>` reopens it from anywhere.
+- **Workspace-free sessions (ADR-0219, ADR-0226).** A session's history
+  partition is derived from concrete fields — an optional workspace and an
+  optional user-named space — instead of a workspace path. A workspace-free
+  persona never loads project MCP/hooks/rules/skills, never prompts for
+  workspace trust, and never receives filesystem or command tools.
+- **Atomic harness extensions (ADR-0224).** Tools and harness facets unify under
+  one `Extension` primitive (an optional model-callable surface plus declared,
+  harness-owned hook phases); `CodeIntelligenceFacet` becomes the hook-only
+  `CodeIntelligenceExtension`.
+- **On-demand code structure context (ADR-0214)** via the `get_outline` tool;
+  no automatic per-request repository map.
+- **Derived request components and wire cache plan (ADR-0213, ADR-0217)** and a
+  durable request-projection archive (ADR-0218) for forensic request snapshots.
+
+### Changed
+
+- **Session persistence schema v13.** The stored `scope_kind`/`scope_key`
+  partition key is replaced by the concrete `workspace_root` + `space` columns.
+  Existing sessions migrate losslessly on first open: workspace grouping is
+  preserved, while former persona/ephemeral lanes become the `Personal` space.
+- **Capability is the admitted tool set (ADR-0223).** The agent-role capability
+  surface is retired: `OperationScope`/`CommandScope` and the operation
+  scope-gate are removed, the workspace requirement is derived from the
+  execution environment, and the role's tool selection is now simply `tools`.
+- **`AgentRole`/`AgentPreset` renamed `AgentPersona`** (ADR-0225); `personas.toml`
+  entries use `preset` (formerly `role`).
+
+### Removed
+
+- `AgentRole` / `AgentRoleId` / `AgentPreset` (→ `AgentPersona` / `AgentPersonaId`).
+- `OperationScope`, `CommandScope`, `ScopeGatePolicy`, and `WorkspaceRequirement`.
+- `HarnessFacet` and `SessionScope`/`ScopeKind` (superseded by `Extension` and
+  derived grouping).
+- Configured external tools: `ToolSource::User` and the `[tool.*]` reservation
+  (ADR-0221, ADR-0222). MCP and skills are the only extension surfaces.
+
 ## [0.44.0] - 2026-09-10
 
 ### Added
@@ -6700,7 +6745,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.38.12...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/ming2k/muta/compare/v0.44.0...v0.45.0
 [0.38.12]: https://github.com/ming2k/muta/compare/v0.38.11...v0.38.12
 [0.38.11]: https://github.com/ming2k/muta/compare/v0.38.10...v0.38.11
 [0.38.10]: https://github.com/ming2k/muta/compare/v0.38.9...v0.38.10

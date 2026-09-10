@@ -193,8 +193,9 @@ pub struct SessionDriver {
     /// Cached base toolset snapshot for side-session construction
     /// (`base_tools_for_side`).
     pub base_tools: Arc<Vec<Arc<dyn Tool>>>,
-    /// Project root for side-session pinning (`project_root_for_side`).
-    pub project_root: PathBuf,
+    /// Workspace root for side-session pinning; `None` for a workspace-free
+    /// scope (ADR-0220).
+    pub project_root: Option<PathBuf>,
     /// Startup mode of the session.
     pub startup: SessionStart,
     /// Whether the sessions picker should open on launch (`mutx attach`
@@ -266,7 +267,7 @@ impl SessionDriver {
         agent.install_token_ledger(token_ledger.clone());
         let completion_engine = crate::input_completion::InputCompletionEngine::new(
             command_catalog,
-            project_root_for_side.clone(),
+            project_root_for_side.clone().unwrap_or_default(),
         )
         .with_skills((*skills_registry).clone());
 
@@ -1119,7 +1120,7 @@ impl SessionDriver {
                             provider_usage: &mut provider_usage,
                             skills_registry: &skills_registry,
                             req_tx_for_commands: &req_tx_for_commands,
-                            project_root_for_side: &project_root_for_side,
+                            project_root_for_side: project_root_for_side.as_deref(),
                             startup: &startup,
                             ui: &*ui,
                             extra_commands: &extra_commands,
@@ -1135,50 +1136,57 @@ impl SessionDriver {
                     } else {
                         domains
                     };
-                    if let Err(error) =
-                        workspace_security.trust_domains(&project_root_for_side, &domains_to_trust)
-                    {
-                        tracing::error!(?error, "failed to persist workspace trust");
-                    }
-                    let snapshot = workspace_security.snapshot(&project_root_for_side);
-                    agent.set_workspace_security(snapshot.clone());
+                    let effective = if let Some(root) = &project_root_for_side {
+                        if let Err(error) =
+                            workspace_security.trust_domains(root, &domains_to_trust)
+                        {
+                            tracing::error!(?error, "failed to persist workspace trust");
+                        }
+                        let snapshot = workspace_security.snapshot(root);
+                        agent.set_workspace_security(snapshot.clone());
 
-                    // Fast path: load in-memory configs, rules, hooks, roots immediately
-                    let mut effective = muta_persistence::config::Config::load();
-                    if snapshot.mcp.is_trusted() {
-                        effective.merge_project_mcp(
-                            muta_persistence::config::Config::load_project_mcp(
-                                &project_root_for_side,
-                            ),
+                        // Fast path: load in-memory configs, rules, hooks, roots immediately
+                        let mut effective = muta_persistence::config::Config::load();
+                        if snapshot.mcp.is_trusted() {
+                            effective.merge_project_mcp(
+                                muta_persistence::config::Config::load_project_mcp(root),
+                            );
+                        }
+                        if snapshot.hooks.is_trusted() {
+                            effective.merge_project_hooks(
+                                muta_persistence::config::Config::load_project_hooks(root),
+                            );
+                        }
+                        if snapshot.ex_workspace.is_trusted() {
+                            effective.merge_project_additional_roots(
+                                muta_persistence::config::Config::load_project_additional_roots(
+                                    root,
+                                ),
+                            );
+                        }
+                        crate::handlers_slash::session_ops::apply_additional_roots(
+                            &shared_additional_roots,
+                            &effective,
+                            root,
                         );
-                    }
-                    if snapshot.hooks.is_trusted() {
-                        effective.merge_project_hooks(
-                            muta_persistence::config::Config::load_project_hooks(
-                                &project_root_for_side,
-                            ),
-                        );
-                    }
-                    if snapshot.ex_workspace.is_trusted() {
-                        effective.merge_project_additional_roots(
-                            muta_persistence::config::Config::load_project_additional_roots(
-                                &project_root_for_side,
-                            ),
-                        );
-                    }
-                    crate::handlers_slash::session_ops::apply_additional_roots(
-                        &shared_additional_roots,
-                        &effective,
-                        &project_root_for_side,
-                    );
-                    let rules = if snapshot.instructions.is_trusted() {
-                        crate::project::load_project_rules(&project_root_for_side)
-                            .unwrap_or_default()
+                        let rules = if snapshot.instructions.is_trusted() {
+                            crate::project::load_project_rules(root).unwrap_or_default()
+                        } else {
+                            String::new()
+                        };
+                        agent.set_project_rules(rules);
+                        agent
+                            .set_hooks(crate::hooks::build_hook_registry(&effective.hooks, &agent));
+                        effective
                     } else {
-                        String::new()
+                        // Workspace-free scope: there are no project assets to trust.
+                        agent.set_workspace_security(
+                            muta_contracts::WorkspaceSecuritySnapshot::new(
+                                session.grouping().label(),
+                            ),
+                        );
+                        muta_persistence::config::Config::load()
                     };
-                    agent.set_project_rules(rules);
-                    agent.set_hooks(crate::hooks::build_hook_registry(&effective.hooks, &agent));
 
                     // Immediately broadcast Trusted HarnessState so the client unblocks instantly
                     send_harness_state_for_session(

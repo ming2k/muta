@@ -135,27 +135,16 @@ impl Agent {
         self.workspace_security = handle;
     }
 
-    /// Set this agent's operation boundary (ADR-0028). The main agent leaves it
-    /// unrestricted; `SubagentTool` sets the scope resolved from the bound
-    /// subagent profile on the child before it runs.
-    pub fn set_operation_scope(&self, scope: muta_contracts::OperationScope) {
-        *self
-            .operation_scope
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = scope;
-    }
-
     /// Apply a declarative agent preset (ADR-0053) — set every knob an
-    /// [`muta_contracts::AgentPreset`] declares in one call.
+    /// [`muta_contracts::AgentPersona`] declares in one call.
     ///
-    /// Sets: the capability scope ([`Self::set_agent_selection`]), the
-    /// write/command boundary ([`Self::set_operation_scope`]), and the runtime
+    /// Sets: the capability scope ([`Self::set_tools`]) and the runtime
     /// execution knobs (`hard_stop` / doom guard / model-stdin /
     /// attended flag). The preset's [`muta_contracts::AgentIdentity`] is **not**
     /// re-applied here — identity is immutable past construction (it feeds the
     /// system-prompt preamble), so the embedding supplies it to `Agent::new` /
     /// `from_toolset`. A role whose identity should differ per instance composes
-    /// [`muta_contracts::AgentPreset::with_identity`] before construction.
+    /// [`muta_contracts::AgentPersona::with_identity`] before construction.
     ///
     /// The archetype / kind of this agent, derived purely from its [`ExecutionPolicy`] (ADR-0183).
     pub fn kind(&self) -> muta_contracts::AgentKind {
@@ -225,26 +214,26 @@ impl Agent {
 
     /// Apply an agent delegation policy (ADR-0183) to adjust declared tool availability.
     pub fn apply_delegation(&self, delegation: &muta_contracts::DelegationPolicy) {
-        self.set_agent_selection(delegation.selection());
+        self.set_tools(delegation.selection());
     }
 
     /// Apply a declarative agent preset (ADR-0183).
-    pub fn apply_preset(&self, preset: &muta_contracts::AgentPreset) {
+    pub fn apply_preset(&self, preset: &muta_contracts::AgentPersona) {
         self.apply_profile(preset);
     }
 
-    /// Idempotent over defaults: applies an [`muta_contracts::AgentRole`] (ADR-0183 / ADR-0211).
-    pub fn apply_profile(&self, profile: &muta_contracts::AgentRole) {
+    /// Idempotent over defaults: applies an [`muta_contracts::AgentPersona`] (ADR-0183 / ADR-0211).
+    pub fn apply_profile(&self, profile: &muta_contracts::AgentPersona) {
         self.set_identity(profile.identity.clone());
-        self.set_agent_selection(profile.agent_selection.clone());
-        self.set_operation_scope(profile.operation_scope.clone());
+        self.set_tools(profile.tools.clone());
         self.set_hard_stop_turns(profile.config.hard_stop_turns);
         self.set_doom_guard_config(profile.config.nudge);
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_unattended(profile.unattended);
-        if !profile.facets.is_empty() {
-            *self.facets.write().unwrap_or_else(|e| e.into_inner()) = profile.facets.clone();
+        if !profile.extensions.is_empty() {
+            *self.extensions.write().unwrap_or_else(|e| e.into_inner()) =
+                profile.extensions.clone();
         }
     }
 
@@ -256,40 +245,32 @@ impl Agent {
     }
 
     /// Switch the live agent into a named role (ADR-0183 / ADR-0211).
-    pub fn apply_role(&self, role: &str) -> Option<muta_contracts::AgentRoleId> {
-        let resolved = muta_contracts::AgentRoleId::parse(role)?;
+    pub fn apply_role(&self, role: &str) -> Option<muta_contracts::AgentPersonaId> {
+        let resolved = muta_contracts::AgentPersonaId::parse(role)?;
         let base = self.identity();
-        let mut profile = muta_contracts::AgentRole::for_role(resolved, &base);
+        let mut profile = muta_contracts::AgentPersona::from_preset(resolved, &base);
 
-        // ADR-0211: Staff the role with appropriate instance-bound HarnessFacets
+        // ADR-0224: equip the persona with atomic extensions.
         match resolved {
-            muta_contracts::AgentRoleId::Code => {
+            muta_contracts::AgentPersonaId::Code => {
                 profile
-                    .facets
-                    .push(Arc::new(crate::facet::CodeIntelligenceFacet::new()));
+                    .extensions
+                    .push(Arc::new(crate::extension::CodeIntelligenceExtension::new()));
             }
-            muta_contracts::AgentRoleId::CodeAnalyst
-            | muta_contracts::AgentRoleId::Reviewer
-            | muta_contracts::AgentRoleId::Architect => {
-                profile
-                    .facets
-                    .push(Arc::new(crate::facet::CodeIntelligenceFacet::read_only()));
+            muta_contracts::AgentPersonaId::CodeAnalyst
+            | muta_contracts::AgentPersonaId::Reviewer
+            | muta_contracts::AgentPersonaId::Architect => {
+                profile.extensions.push(Arc::new(
+                    crate::extension::CodeIntelligenceExtension::read_only(),
+                ));
             }
-            muta_contracts::AgentRoleId::Security => {}
+            muta_contracts::AgentPersonaId::Security => {}
+            muta_contracts::AgentPersonaId::Conversational => {}
         }
         self.apply_profile(&profile);
-        *self.facets.write().unwrap_or_else(|e| e.into_inner()) = profile.facets;
+        *self.extensions.write().unwrap_or_else(|e| e.into_inner()) = profile.extensions;
 
         Some(resolved)
-    }
-
-    /// Snapshot of this agent's operation boundary. Used by the `execute_tool`
-    /// funnel to gate tools whose target falls outside the granted scope.
-    pub(super) fn operation_scope(&self) -> muta_contracts::OperationScope {
-        self.operation_scope
-            .lock()
-            .map(|guard| guard.clone())
-            .unwrap_or_else(|_| muta_contracts::OperationScope::unrestricted())
     }
 
     /// A snapshot of this agent's identity (name + mission, or a persona
@@ -783,7 +764,7 @@ mod tests {
     use crate::NoProvider;
 
     #[test]
-    fn apply_role_switches_facets_appropriately() {
+    fn apply_role_switches_extensions_appropriately() {
         let provider = Arc::new(NoProvider);
         let agent = Agent::new(
             provider,
@@ -791,18 +772,18 @@ mod tests {
             crate::AgentIdentity::new("test", "test agent"),
         );
 
-        // Applying developer role equips code intelligence facet
+        // Applying developer persona equips code intelligence.
         assert!(agent.apply_role("developer").is_some());
-        assert_eq!(agent.facets().len(), 1);
-        assert_eq!(agent.facets()[0].name(), "code_intelligence");
+        assert_eq!(agent.extensions().len(), 1);
+        assert_eq!(agent.extensions()[0].id(), "code_intelligence");
 
-        // Applying security role drops code intelligence facet (0 overhead)
+        // Applying security persona drops code intelligence (0 overhead).
         assert!(agent.apply_role("security").is_some());
-        assert_eq!(agent.facets().len(), 0);
+        assert_eq!(agent.extensions().len(), 0);
 
-        // Applying code_analyst equips read-only code intelligence facet
+        // Applying code_analyst equips read-only code intelligence.
         assert!(agent.apply_role("code_analyst").is_some());
-        assert_eq!(agent.facets().len(), 1);
-        assert_eq!(agent.facets()[0].name(), "code_intelligence");
+        assert_eq!(agent.extensions().len(), 1);
+        assert_eq!(agent.extensions()[0].id(), "code_intelligence");
     }
 }

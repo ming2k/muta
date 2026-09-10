@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use muta_contracts::{AgentPreset, AgentPresetDelegation, MeshAddress};
+use muta_contracts::{AgentPersona, AgentPersonaDelegation, MeshAddress};
 
 use crate::agent::Agent;
 use crate::mesh::MeshTracker;
@@ -16,8 +16,8 @@ use crate::subagent_tool::SubagentRegistry;
 /// and transcript/word-source leaks.
 pub struct AgentSlot {
     agent: Arc<Agent>,
-    preset: AgentPreset,
-    delegation: AgentPresetDelegation,
+    preset: AgentPersona,
+    delegation: AgentPersonaDelegation,
     session_id: String,
     tracker: Option<Arc<MeshTracker>>,
     subagent_registry: Option<Arc<SubagentRegistry>>,
@@ -28,8 +28,8 @@ impl AgentSlot {
     /// Create a new AgentSlot for a session.
     pub fn new(
         agent: Arc<Agent>,
-        preset: AgentPreset,
-        delegation: AgentPresetDelegation,
+        preset: AgentPersona,
+        delegation: AgentPersonaDelegation,
         session_id: impl Into<String>,
     ) -> Self {
         Self {
@@ -60,12 +60,12 @@ impl AgentSlot {
     }
 
     /// The active agent preset.
-    pub fn preset(&self) -> &AgentPreset {
+    pub fn preset(&self) -> &AgentPersona {
         &self.preset
     }
 
     /// The active preset delegation policy.
-    pub fn delegation(&self) -> &AgentPresetDelegation {
+    pub fn delegation(&self) -> &AgentPersonaDelegation {
         &self.delegation
     }
 
@@ -121,8 +121,8 @@ impl AgentSlot {
     pub fn replace(
         &mut self,
         new_agent: Arc<Agent>,
-        new_preset: AgentPreset,
-        new_delegation: AgentPresetDelegation,
+        new_preset: AgentPersona,
+        new_delegation: AgentPersonaDelegation,
     ) -> usize {
         let drained = self.drain_subagents();
         self.agent = new_agent;
@@ -175,7 +175,7 @@ mod tests {
 
         let mut slot = AgentSlot::new(
             agent1,
-            AgentPreset::developer(),
+            AgentPersona::developer(),
             AGENT_DEVELOPER,
             "session-xyz",
         )
@@ -205,7 +205,7 @@ mod tests {
 
         // Replace preset with code analyst
         let agent2 = make_agent("agent-2");
-        let drained = slot.replace(agent2, AgentPreset::code_analyst(), AGENT_CODE_ANALYST);
+        let drained = slot.replace(agent2, AgentPersona::code_analyst(), AGENT_CODE_ANALYST);
 
         assert_eq!(drained, 2);
         assert!(mailbox1.token().is_cancelled());

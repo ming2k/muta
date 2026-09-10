@@ -31,8 +31,8 @@ use crate::Tool;
 ///
 /// Connector runtimes publish complete per-source replacements instead of
 /// mutating an agent-owned lock. This keeps synchronization and collision
-/// policy inside the consumer while allowing MCP, plugins, or other discovery
-/// mechanisms to depend only on the core capability contract.
+/// policy inside the consumer while allowing MCP (and other connector
+/// runtimes) to depend only on the core capability contract.
 pub trait DynamicToolSink: Send + Sync {
     /// Replace every tool currently published by `source`.
     fn replace(&self, source: &str, tools: Vec<Arc<dyn Tool>>);

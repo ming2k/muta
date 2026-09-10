@@ -55,6 +55,8 @@ pub struct CliArgs {
     pub project: Option<PathBuf>,
     /// `--unattended`: run unattended without interactive human confirmations.
     pub unattended: bool,
+    /// `--persona <id>`: staff the new session with a persistent persona (ADR-0220).
+    pub persona: Option<String>,
     /// `--no-confinement`: run with workspace filesystem confinement disabled.
     pub no_confinement: bool,
     /// `--interactive` / `-i`: force the TUI when headless would apply.
@@ -152,6 +154,7 @@ fn flag_value<'a, I: Iterator<Item = &'a String>>(
 pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let mut project = None;
     let mut unattended = false;
+    let mut persona = None;
     let mut no_confinement = false;
     let mut interactive = false;
     let mut prompt = None;
@@ -181,6 +184,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 ));
             }
             "--unattended" => unattended = true,
+            "--persona" => persona = Some(flag_value("--persona", inline, &mut iter)?),
             "--no-confinement" => no_confinement = true,
             "--interactive" | "-i" => interactive = true,
             "--json" | "-j" => json = true,
@@ -214,6 +218,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         mode,
         project: project.clone(),
         unattended,
+        persona: persona.clone(),
         no_confinement,
         interactive,
         prompt: prompt.clone(),

@@ -484,7 +484,7 @@ impl Agent {
         // Snapshot the disable masks and scope *before* the chain runs, then
         // drop the guards — the chain is async and MutexGuards are not Send, so
         // they must not live across the `.await`.
-        let (disabled_snapshot, scoped_snapshot, operation_scope) = {
+        let (disabled_snapshot, scoped_snapshot) = {
             let disabled = self
                 .disabled_tools
                 .lock()
@@ -495,15 +495,13 @@ impl Agent {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
-            let scope = self.operation_scope();
-            (disabled, scoped, scope)
+            (disabled, scoped)
         };
         let pctx = crate::permission_policy::PolicyContext {
             tool: &tool,
             call_name: call.name.as_str(),
             arguments: &call.arguments,
             scope_target: target.clone(),
-            operation_scope,
             disabled: disabled_snapshot,
             scoped_disabled: scoped_snapshot,
             unattended: self.unattended(),

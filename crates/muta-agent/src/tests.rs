@@ -490,8 +490,8 @@ fn apply_preset_switches_identity_into_the_system_prompt() {
         baseline[0].content
     );
 
-    let architect = muta_contracts::AgentPreset::for_role(
-        muta_contracts::AgentPresetId::Architect,
+    let architect = muta_contracts::AgentPersona::from_preset(
+        muta_contracts::AgentPersonaId::Architect,
         &crate::AgentIdentity::default(),
     );
     agent.apply_preset(&architect);

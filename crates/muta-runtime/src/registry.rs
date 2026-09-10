@@ -2,7 +2,7 @@ use crate::UiBridge;
 use crate::bootstrap::{self, BootstrapParams};
 use crate::monitor::MonitorTracker;
 use crate::serve::{AttachAction, AttachSyncBuffer, is_attach_sync_event};
-use muta_agent::{Agent, AgentIdentity, AgentPreset};
+use muta_agent::{Agent, AgentIdentity, AgentPersona};
 use muta_contracts::{
     AgentRequest, AgentResponse, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession,
     PermissionDecision, SessionHosting, SessionOverview, SessionStatus,
@@ -27,13 +27,15 @@ pub(crate) fn unix_epoch_ms() -> u64 {
 #[derive(Clone)]
 pub struct HostParams {
     pub identity: AgentIdentity,
-    pub preset: AgentPreset,
+    pub preset: AgentPersona,
     pub ui: Arc<dyn UiBridge>,
 }
 pub struct HostedSession {
-    /// The project this session belongs to (ADR-0096 two-level indexing:
-    /// sessions are queryable per project, hosted by one global daemon).
-    pub project_root: PathBuf,
+    /// The derived conversation grouping this session belongs to (ADR-0226).
+    pub grouping: muta_contracts::SessionGrouping,
+    /// The workspace root, when one is bound (ADR-0220: a workspace-free
+    /// persona has none).
+    pub workspace_root: Option<PathBuf>,
     /// ADR-0141: channel accounting shared with the assembled agent.
     pub human_channel: Arc<muta_contracts::human_request::HumanChannelAccountant>,
     pub session: Arc<SessionStore>,
@@ -95,7 +97,8 @@ pub struct HostedSession {
 }
 #[derive(Clone)]
 pub struct BoundSession {
-    pub project_root: std::path::PathBuf,
+    pub grouping: muta_contracts::SessionGrouping,
+    pub workspace_root: Option<std::path::PathBuf>,
     /// ADR-0141: the human-channel accountant for this hosted session.
     /// The WS attach layer ORs each client's declared posture in (attach /
     /// detach); the assembled agent's posture gate reads the effective
@@ -123,9 +126,43 @@ pub struct BoundSession {
 }
 
 impl BoundSession {
-    /// The canonical project root this session is bound to (ADR-0096).
-    pub fn project_root(&self) -> &std::path::Path {
-        &self.project_root
+    /// The derived conversation grouping this session belongs to (ADR-0226).
+    pub fn grouping(&self) -> &muta_contracts::SessionGrouping {
+        &self.grouping
+    }
+
+    /// The workspace root this session is bound to, when any.
+    pub fn workspace_root(&self) -> Option<&std::path::Path> {
+        self.workspace_root.as_deref()
+    }
+
+    /// Current project-asset trust snapshot. A workspace-free scope has no
+    /// project assets, so every domain is `Absent`.
+    pub fn security_snapshot(&self) -> muta_contracts::WorkspaceSecuritySnapshot {
+        match self.workspace_root() {
+            Some(root) => self.security.snapshot(root),
+            None => muta_contracts::WorkspaceSecuritySnapshot::new(self.grouping.label()),
+        }
+    }
+}
+
+/// A resolved session binding: the derived grouping plus an optional workspace.
+#[derive(Clone)]
+pub struct SessionBinding {
+    pub grouping: muta_contracts::SessionGrouping,
+    pub workspace: Option<muta_contracts::WorkspaceBinding>,
+}
+
+impl SessionBinding {
+    pub fn workspace(root: PathBuf) -> Self {
+        Self {
+            grouping: muta_contracts::SessionGrouping::workspace(root.clone()),
+            workspace: Some(muta_contracts::WorkspaceBinding::new(root)),
+        }
+    }
+
+    pub fn workspace_root(&self) -> Option<PathBuf> {
+        self.workspace.as_ref().map(|binding| binding.root.clone())
     }
 }
 pub enum ResolveOutcome {
@@ -597,7 +634,7 @@ impl SessionRegistry {
             AttachAction::Picker => self
                 .assemble_hosted(
                     crate::startup::SessionStart::Picker,
-                    caller_project.to_path_buf(),
+                    SessionBinding::workspace(caller_project.to_path_buf()),
                     muta_contracts::SessionInitOptions::default(),
                 )
                 .await
@@ -635,7 +672,11 @@ impl SessionRegistry {
         options: muta_contracts::SessionInitOptions,
     ) -> Result<String, String> {
         let bound = self
-            .assemble_hosted(crate::startup::SessionStart::Fresh, project, options)
+            .assemble_hosted(
+                crate::startup::SessionStart::Fresh,
+                SessionBinding::workspace(project),
+                options,
+            )
             .await
             .map_err(|e| match e {
                 AssembleErr::NoHost => "this host cannot create sessions".to_string(),
@@ -650,7 +691,11 @@ impl SessionRegistry {
         options: muta_contracts::SessionInitOptions,
     ) -> ResolveOutcome {
         match self
-            .assemble_hosted(crate::startup::SessionStart::Fresh, project, options)
+            .assemble_hosted(
+                crate::startup::SessionStart::Fresh,
+                SessionBinding::workspace(project),
+                options,
+            )
             .await
         {
             Ok(b) => ResolveOutcome::Welcome(b),
@@ -1169,7 +1214,8 @@ impl SessionRegistry {
     pub async fn host(&self, entry: HostedSession) -> BoundSession {
         let id = entry.session.id().await;
         let b = BoundSession {
-            project_root: entry.project_root.clone(),
+            grouping: entry.grouping.clone(),
+            workspace_root: entry.workspace_root.clone(),
             human_channel: entry.human_channel.clone(),
             session: entry.session.clone(),
             shared_confinement: entry.shared_confinement.clone(),
@@ -1195,9 +1241,10 @@ impl SessionRegistry {
         // has none do we consider the global set, and only a single global
         // session auto-binds (otherwise the client must choose).
         let map = self.sessions.lock().await;
+        let caller_grouping = muta_contracts::SessionGrouping::workspace(caller_project);
         let mine: Vec<&Arc<HostedSession>> = map
             .values()
-            .filter(|e| e.project_root == caller_project)
+            .filter(|e| e.grouping == caller_grouping)
             .collect();
         match mine.len() {
             1 => return ResolveOutcome::Welcome(self.bound_from(mine[0])),
@@ -1244,7 +1291,7 @@ impl SessionRegistry {
             },
         }
     }
-    async fn resolve_id(&self, id: &str, caller_project: &std::path::Path) -> ResolveOutcome {
+    async fn resolve_id(&self, id: &str, _caller_project: &std::path::Path) -> ResolveOutcome {
         {
             let map = self.sessions.lock().await;
             if let Some(e) = map.get(id) {
@@ -1254,15 +1301,16 @@ impl SessionRegistry {
         if self.params.is_none() {
             return ResolveOutcome::Error(format!("session '{id}' is not hosted on this server"));
         }
-        // Lazy resume searches the caller's project first, then every other
-        // project the daemon knows about on disk.
-        if !session_exists_on_disk(caller_project, id).await {
+        // Lazy resume resolves the session's own durable binding (scope +
+        // workspace) so a persona/ephemeral lane is reachable from any caller
+        // (ADR-0219/0220), not only the caller's workspace.
+        let Some(binding) = lookup_session_grouping(id) else {
             return ResolveOutcome::Error(format!("unknown session id '{id}'"));
-        }
+        };
         match self
             .assemble_hosted(
                 crate::startup::SessionStart::Resume(id.to_string()),
-                caller_project.to_path_buf(),
+                binding,
                 muta_contracts::SessionInitOptions::default(),
             )
             .await
@@ -1280,7 +1328,7 @@ impl SessionRegistry {
     async fn assemble_hosted(
         &self,
         startup: crate::startup::SessionStart,
-        project_root: PathBuf,
+        binding: SessionBinding,
         init_options: muta_contracts::SessionInitOptions,
     ) -> Result<BoundSession, AssembleErr> {
         let HostParams {
@@ -1288,6 +1336,44 @@ impl SessionRegistry {
             preset,
             ui,
         } = self.params.as_ref().ok_or(AssembleErr::NoHost)?.clone();
+        // ADR-0220: a persona overrides the daemon's fixed identity/preset and
+        // owns a `persona:<id>` conversation lane. Its workspace policy selects
+        // the binding: `none` is workspace-free, `inherit` keeps the caller's,
+        // and a fixed path rebinds.
+        let mut identity = identity;
+        let mut preset = preset;
+        let mut grouping = binding.grouping;
+        let mut workspace = binding.workspace;
+        if let Some(persona_id) = init_options.persona.as_deref() {
+            let personas = muta_persistence::personas::PersonasConfig::load();
+            let persona = personas.get(persona_id).ok_or_else(|| {
+                AssembleErr::AssembleFailed(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("unknown persona '{persona_id}'"),
+                )))
+            })?;
+            workspace = match persona.resolved_workspace() {
+                muta_persistence::personas::PersonaWorkspace::None => None,
+                muta_persistence::personas::PersonaWorkspace::Inherit => workspace,
+                muta_persistence::personas::PersonaWorkspace::Fixed(root) => {
+                    Some(muta_contracts::WorkspaceBinding::new(root))
+                }
+            };
+            let persona_identity = persona.identity();
+            let mut role =
+                muta_contracts::AgentPersona::from_preset(persona.preset_id(), &persona_identity);
+            role.identity = persona_identity.clone();
+            identity = persona_identity;
+            preset = role;
+            grouping = match &workspace {
+                Some(binding) => muta_contracts::SessionGrouping::workspace(binding.root.clone()),
+                None => match persona.resolved_space() {
+                    Some(space) => muta_contracts::SessionGrouping::named(space),
+                    None => muta_contracts::SessionGrouping::personal(),
+                },
+            };
+        }
+        let workspace_root = workspace.as_ref().map(|binding| binding.root.clone());
         // The session's lifetime token (ADR-0125): shared by the driver
         // select below and the background `/schedule` scheduler inside the
         // assemble, so one cancel stops the harness *and* its tick loop.
@@ -1302,7 +1388,8 @@ impl SessionRegistry {
             preset,
             ui,
             startup,
-            project_root: Some(project_root.clone()),
+            project_root: workspace_root.clone(),
+            session_grouping: Some(grouping.clone()),
             unattended: init_options.unattended,
             confined: init_options.confined,
             human_channel: Some(Arc::clone(&human_channel)),
@@ -1332,7 +1419,7 @@ impl SessionRegistry {
         // catches up from the live stream.
         let base = overview_of(&session, true).await;
         let tracker = Arc::new(Mutex::new(MonitorTracker::bootstrap(
-            base_row(base, &project_root),
+            base_row(base, workspace_root.as_deref(), &grouping),
             SessionStatus::Idle,
         )));
         let tracker_for_tap = tracker.clone();
@@ -1447,7 +1534,8 @@ impl SessionRegistry {
         });
         let id = session.id().await;
         let bound = BoundSession {
-            project_root: project_root.clone(),
+            grouping: grouping.clone(),
+            workspace_root: workspace_root.clone(),
             human_channel: human_channel.clone(),
             session: session.clone(),
             shared_confinement: boot.shared_confinement.clone(),
@@ -1459,7 +1547,8 @@ impl SessionRegistry {
             security: boot.security.clone(),
         };
         let hosted = Arc::new(HostedSession {
-            project_root,
+            grouping,
+            workspace_root,
             human_channel,
             security: boot.security.clone(),
             session,
@@ -1489,7 +1578,8 @@ impl SessionRegistry {
     }
     fn bound_from(&self, e: &Arc<HostedSession>) -> BoundSession {
         BoundSession {
-            project_root: e.project_root.clone(),
+            grouping: e.grouping.clone(),
+            workspace_root: e.workspace_root.clone(),
             human_channel: e.human_channel.clone(),
             session: e.session.clone(),
             shared_confinement: e.shared_confinement.clone(),
@@ -1603,7 +1693,11 @@ impl std::fmt::Debug for AssembleErr {
 /// live event stream by the [`MonitorTracker`]. `project_root` rides along
 /// from the registry's two-level index so clients can name the workspace
 /// without a second lookup.
-fn base_row(overview: SessionOverview, project_root: &std::path::Path) -> MonitoredSession {
+fn base_row(
+    overview: SessionOverview,
+    workspace_root: Option<&std::path::Path>,
+    grouping: &muta_contracts::SessionGrouping,
+) -> MonitoredSession {
     MonitoredSession {
         id: overview.id,
         overview: overview.overview,
@@ -1620,7 +1714,9 @@ fn base_row(overview: SessionOverview, project_root: &std::path::Path) -> Monito
         activity: None,
         context_tokens: None,
         note: None,
-        project_root: project_root.display().to_string(),
+        project_root: workspace_root
+            .map(|root| root.display().to_string())
+            .unwrap_or_else(|| grouping.label()),
         // Lineage rides from the overview (ADR-0103 fork surfacing).
         parent_id: overview.parent_id,
         fork_kind: overview.fork_kind,
@@ -1661,12 +1757,17 @@ async fn overview_of(session: &SessionStore, active: bool) -> SessionOverview {
         digest,
     }
 }
-async fn session_exists_on_disk(project_root: &std::path::Path, id: &str) -> bool {
-    SessionStore::load_for_project(project_root.to_path_buf())
-        .list()
-        .await
-        .map(|items| items.iter().any(|i| i.id == id))
-        .unwrap_or(false)
+/// Resolve a session's durable binding (scope + workspace) by exact id,
+/// independent of the caller's workspace (ADR-0219/0220).
+fn lookup_session_grouping(id: &str) -> Option<SessionBinding> {
+    let engine =
+        muta_persistence::db::DatabaseEngine::open(&muta_persistence::paths::get().db_file(), None)
+            .ok()?;
+    let (grouping, workspace) = engine.lookup_session_grouping(id).ok().flatten()?;
+    Some(SessionBinding {
+        grouping,
+        workspace,
+    })
 }
 
 #[cfg(test)]

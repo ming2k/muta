@@ -29,9 +29,8 @@
 //!
 //! 1. **Order is load-bearing** (see [`default_chain`]): schema validation
 //!    comes *after* the hook (so hooks observe every call, including malformed
-//!    ones); the scope gate precedes the broker.
-//! 2. **`ScopeTarget` is the shared switch** for scope-gate / bash-policy /
-//!    broker: `Unspecified` skips all three.
+//! 2. **`ScopeTarget` is the shared switch** for bash-policy / broker:
+//!    `Unspecified` skips both.
 //! 3. **`Reject` is collective** — one reject rejects the whole pending batch
 //!    (owned by the permission store's `reply`, keyed on a reject decision).
 //! 4. **The delegated flag is not authority.** Scope, bash, and broker decisions are
@@ -146,7 +145,6 @@ pub struct PolicyContext<'a> {
     pub call_name: &'a str,
     pub arguments: &'a str,
     pub scope_target: ScopeTarget,
-    pub operation_scope: muta_contracts::OperationScope,
     pub disabled: std::collections::HashSet<String>,
     pub scoped_disabled: ScopedToolDisable,
     /// When true (unattended execution mode), all permissions are auto-approved.
@@ -210,7 +208,6 @@ pub fn default_chain() -> Vec<Box<dyn PermissionPolicy>> {
         Box::new(HookPolicy),
         Box::new(DisabledPolicy),
         Box::new(SchemaPolicy),
-        Box::new(ScopeGatePolicy),
         Box::new(BashPolicy),
         Box::new(BrokerPolicy),
     ]
@@ -292,65 +289,6 @@ impl PermissionPolicy for SchemaPolicy {
                     detail: None,
                 },
             },
-        }
-    }
-}
-
-/// Gate 4: operation-scope gate. The authority result is independent of
-/// whether a human is currently reachable.
-///
-/// An out-of-scope target with no explicit rule yields `MissingAuthority` in
-/// both postures. A target inside scope, or one with no locatable target,
-/// continues to the action/broker policies.
-pub struct ScopeGatePolicy;
-#[async_trait]
-impl PermissionPolicy for ScopeGatePolicy {
-    fn name(&self) -> &'static str {
-        "scope-gate"
-    }
-    async fn evaluate(&self, ctx: &PolicyContext<'_>) -> PolicyDecision {
-        if ctx.unattended || matches!(ctx.scope_target, ScopeTarget::Unspecified) {
-            return PolicyDecision::Pass;
-        }
-        if ctx.operation_scope.allows(&ctx.scope_target) {
-            return PolicyDecision::Pass;
-        }
-        let rule = scope_target_to_rule(ctx.call_name, &ctx.scope_target);
-        if ctx.ctx.permissions().is_allowed(&rule) {
-            return PolicyDecision::Pass;
-        }
-        PolicyDecision::MissingAuthority {
-            request: Box::new(muta_contracts::PermissionRequest {
-                id: String::new(),
-                tool: ctx.call_name.to_string(),
-                label: format!("Elevate {}", ctx.tool.permission_label()),
-                description: format!(
-                    "This call targets {} outside the agent's delegated operation scope.",
-                    ScopeTargetDisplay(&ctx.scope_target)
-                ),
-                arguments: ctx.arguments.to_string(),
-                scope: rule.scope.clone(),
-                elevation: true,
-                one_off: false,
-                origin: None,
-                hazard: None,
-                submission: None,
-            }),
-            rule,
-        }
-    }
-}
-
-/// Tiny helper to render a [`ScopeTarget`] for denial messages without forcing
-/// a `Display` impl onto the core type.
-struct ScopeTargetDisplay<'a>(&'a ScopeTarget);
-
-impl std::fmt::Display for ScopeTargetDisplay<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            ScopeTarget::Path(p) => write!(f, "path {}", p.display()),
-            ScopeTarget::Command(c) => write!(f, "command {:?}", c),
-            ScopeTarget::Unspecified => f.write_str("no target"),
         }
     }
 }
@@ -443,7 +381,7 @@ impl PermissionPolicy for BrokerPolicy {
 
         // Direct policy tests may evaluate the broker without the preceding
         // scope gate, so retain the elevation bit from the declarative scope.
-        let elevation = !ctx.operation_scope.allows(&ctx.scope_target);
+        let elevation = false;
         let label = submission
             .as_ref()
             .map(|s| s.label.clone())
@@ -507,14 +445,7 @@ mod tests {
         let chain = PermissionChain::new(default_chain());
         assert_eq!(
             chain.policy_names(),
-            vec![
-                "hook",
-                "disabled",
-                "schema",
-                "scope-gate",
-                "bash-policy",
-                "broker",
-            ]
+            vec!["hook", "disabled", "schema", "bash-policy", "broker"]
         );
     }
     #[async_trait]
@@ -564,7 +495,6 @@ mod tests {
         args: &'a str,
         target: ScopeTarget,
         unattended: bool,
-        op: muta_contracts::OperationScope,
         disabled: HashSet<String>,
         scoped: ScopedToolDisable,
         ctx: &'a dyn PermissionContext,
@@ -577,7 +507,6 @@ mod tests {
             call_name: params.name,
             arguments: params.args,
             scope_target: params.target,
-            operation_scope: params.op,
             disabled: params.disabled,
             scoped_disabled: params.scoped,
             unattended: params.unattended,
@@ -606,7 +535,6 @@ mod tests {
         });
         let disabled: HashSet<String> = ["execute_command".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
-        let op = muta_contracts::OperationScope::unrestricted();
         let ctxr = StubCtx {
             perms: PermissionStore::new(),
         };
@@ -616,7 +544,6 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Unspecified,
             unattended: false,
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
@@ -628,152 +555,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scope_gate_out_of_scope_passes_when_unattended() {
-        let (granted, _inside, outside) = scoped_test_paths();
-        let tool: Arc<dyn Tool> = Arc::new(StubTool {
-            name: "write_file".into(),
-            target: ScopeTarget::Path(outside.clone()),
-        });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![granted]),
-            commands: None,
-        };
-        let disabled = HashSet::new();
-        let scoped = ScopedToolDisable::default();
-        let ctxr = StubCtx {
-            perms: PermissionStore::new(),
-        };
-        let c = pctx(TestPolicyParams {
-            tool: &tool,
-            name: "write_file",
-            args: "{}",
-            target: ScopeTarget::Path(outside),
-            unattended: true, // unattended
-            op: op.clone(),
-            disabled: disabled.clone(),
-            scoped: scoped.clone(),
-            ctx: &ctxr,
-        });
-        assert!(matches!(
-            ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::Pass
-        ));
-    }
-
-    #[tokio::test]
-    async fn scope_gate_reports_same_missing_authority_when_attended() {
-        let (granted, _inside, outside) = scoped_test_paths();
-        let tool: Arc<dyn Tool> = Arc::new(StubTool {
-            name: "write_file".into(),
-            target: ScopeTarget::Path(outside.clone()),
-        });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![granted]),
-            commands: None,
-        };
-        let disabled = HashSet::new();
-        let scoped = ScopedToolDisable::default();
-        let ctxr = StubCtx {
-            perms: PermissionStore::new(),
-        };
-        let c = pctx(TestPolicyParams {
-            tool: &tool,
-            name: "write_file",
-            args: "{}",
-            target: ScopeTarget::Path(outside),
-            unattended: false, // attended
-            op: op.clone(),
-            disabled: disabled.clone(),
-            scoped: scoped.clone(),
-            ctx: &ctxr,
-        });
-        assert!(matches!(
-            ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::MissingAuthority { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn scope_gate_in_scope_passes_regardless_of_unattended() {
-        // Inside the granted scope → always passes (broker applies as usual).
-        let (granted, inside, _outside) = scoped_test_paths();
-        let tool: Arc<dyn Tool> = Arc::new(StubTool {
-            name: "write_file".into(),
-            target: ScopeTarget::Path(inside.clone()),
-        });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![granted]),
-            commands: None,
-        };
-        let disabled = HashSet::new();
-        let scoped = ScopedToolDisable::default();
-        let ctxr = StubCtx {
-            perms: PermissionStore::new(),
-        };
-        let c = pctx(TestPolicyParams {
-            tool: &tool,
-            name: "write_file",
-            args: "{}",
-            target: ScopeTarget::Path(inside),
-            unattended: true,
-            op: op.clone(),
-            disabled: disabled.clone(),
-            scoped: scoped.clone(),
-            ctx: &ctxr,
-        });
-        assert!(matches!(
-            ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::Pass
-        ));
-    }
-
-    #[tokio::test]
-    async fn scope_gate_out_of_scope_passes_when_session_allowed() {
-        let (granted, _inside, outside) = scoped_test_paths();
-        let tool: Arc<dyn Tool> = Arc::new(StubTool {
-            name: "write_file".into(),
-            target: ScopeTarget::Path(outside.clone()),
-        });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![granted]),
-            commands: None,
-        };
-        let perms = PermissionStore::new();
-        perms.add_session(PermissionRule {
-            tool: "write_file".into(),
-            scope: outside.display().to_string(),
-        });
-        let disabled = HashSet::new();
-        let scoped = ScopedToolDisable::default();
-        let ctxr = StubCtx { perms };
-        let c = pctx(TestPolicyParams {
-            tool: &tool,
-            name: "write_file",
-            args: "{}",
-            target: ScopeTarget::Path(outside),
-            unattended: false,
-            op: op.clone(),
-            disabled: disabled.clone(),
-            scoped: scoped.clone(),
-            ctx: &ctxr,
-        });
-        assert!(matches!(
-            ScopeGatePolicy.evaluate(&c).await,
-            PolicyDecision::Pass
-        ));
-    }
-
-    #[tokio::test]
     async fn chain_out_of_scope_approves_when_session_allowed() {
-        let (granted, _inside, outside) = scoped_test_paths();
+        let (_granted, _inside, outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(outside.clone()),
         });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![granted]),
-            commands: None,
-        };
         let perms = PermissionStore::new();
         perms.add_session(PermissionRule {
             tool: "write_file".into(),
@@ -788,12 +575,11 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Path(outside),
             unattended: false,
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
         });
-        let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
+        let chain = PermissionChain::new(vec![Box::new(BrokerPolicy)]);
         assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
 
@@ -803,7 +589,6 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
         });
-        let op = muta_contracts::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -815,7 +600,6 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/anywhere")),
             unattended: true, // unattended
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
@@ -844,7 +628,6 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/workspace/file")),
             unattended: true,
-            op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
             ctx: &ctxr,
@@ -861,7 +644,6 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
         });
-        let op = muta_contracts::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -873,7 +655,6 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
             unattended: false,
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
@@ -885,53 +666,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broker_marks_out_of_scope_as_elevation() {
-        // #10: an attended out-of-scope call reaches the broker (the soft gate
-        // passes it), and the broker's request must carry elevation: true so
-        // the TUI renders the distinct ⚠ treatment.
-        let (granted, _inside, outside) = scoped_test_paths();
-        let tool: Arc<dyn Tool> = Arc::new(StubTool {
-            name: "write_file".into(),
-            target: ScopeTarget::Path(outside.clone()),
-        });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![granted]),
-            commands: None,
-        };
-        let disabled = HashSet::new();
-        let scoped = ScopedToolDisable::default();
-        let ctxr = StubCtx {
-            perms: PermissionStore::new(),
-        };
-        let c = pctx(TestPolicyParams {
-            tool: &tool,
-            name: "write_file",
-            args: "{}",
-            target: ScopeTarget::Path(outside),
-            unattended: false,
-            op: op.clone(),
-            disabled: disabled.clone(),
-            scoped: scoped.clone(),
-            ctx: &ctxr,
-        });
-        match BrokerPolicy.evaluate(&c).await {
-            PolicyDecision::MissingAuthority { request, .. } => assert!(request.elevation),
-            other => panic!("expected MissingAuthority, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
     async fn broker_in_scope_request_is_not_elevation() {
         // An in-scope call's request must carry elevation: false.
-        let (granted, inside, _outside) = scoped_test_paths();
+        let (_granted, inside, _outside) = scoped_test_paths();
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(inside.clone()),
         });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![granted]),
-            commands: None,
-        };
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -943,7 +684,6 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Path(inside),
             unattended: false,
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
@@ -960,7 +700,6 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
         });
-        let op = muta_contracts::OperationScope::unrestricted();
         let disabled: HashSet<String> = ["write_file".to_string()].into_iter().collect();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -972,7 +711,6 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/tmp/x")),
             unattended: false,
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
@@ -990,7 +728,6 @@ mod tests {
             name: "read_text".into(),
             target: ScopeTarget::Unspecified,
         });
-        let op = muta_contracts::OperationScope::unrestricted();
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -1002,29 +739,23 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Unspecified,
             unattended: false,
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
         });
-        let chain = PermissionChain::new(vec![Box::new(DisabledPolicy), Box::new(ScopeGatePolicy)]);
+        let chain = PermissionChain::new(vec![Box::new(DisabledPolicy)]);
         assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
 
     #[tokio::test]
     async fn chain_out_of_scope_attended_reaches_broker() {
-        // The behaviour the soft gate exists for: an attended out-of-scope call
-        // is not hard-blocked — it flows scope-gate (Pass) → broker
-        // (MissingAuthority), so the
-        // user, not a builtin limit, decides the elevation.
+        // An attended call with a locatable target is not hard-blocked — it
+        // flows to the broker (MissingAuthority), so the user, not a builtin
+        // limit, decides the elevation.
         let tool: Arc<dyn Tool> = Arc::new(StubTool {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
         });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![PathBuf::from("/home/user")]),
-            commands: None,
-        };
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -1036,12 +767,11 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
             unattended: false, // attended
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
         });
-        let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
+        let chain = PermissionChain::new(vec![Box::new(BrokerPolicy)]);
         assert!(matches!(
             chain.evaluate(&c).await,
             PolicyDecision::MissingAuthority { .. }
@@ -1054,10 +784,6 @@ mod tests {
             name: "write_file".into(),
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
         });
-        let op = muta_contracts::OperationScope {
-            paths: Some(vec![PathBuf::from("/home/user")]),
-            commands: None,
-        };
         let disabled = HashSet::new();
         let scoped = ScopedToolDisable::default();
         let ctxr = StubCtx {
@@ -1069,12 +795,11 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Path(PathBuf::from("/etc/passwd")),
             unattended: true, // unattended
-            op: op.clone(),
             disabled: disabled.clone(),
             scoped: scoped.clone(),
             ctx: &ctxr,
         });
-        let chain = PermissionChain::new(vec![Box::new(ScopeGatePolicy), Box::new(BrokerPolicy)]);
+        let chain = PermissionChain::new(vec![Box::new(BrokerPolicy)]);
         assert!(matches!(chain.evaluate(&c).await, PolicyDecision::Approve));
     }
 
@@ -1154,7 +879,6 @@ mod tests {
             args: "{}",
             target: ScopeTarget::Unspecified,
             unattended: false,
-            op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
             ctx: &ctxr,
@@ -1177,7 +901,6 @@ mod tests {
             args: "cargo test",
             target: ScopeTarget::Command("cargo test".to_string()),
             unattended: false,
-            op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
             ctx: &ctxr,
@@ -1217,7 +940,6 @@ mod tests {
             args: "cargo build",
             target: ScopeTarget::Command("cargo build".to_string()),
             unattended: false,
-            op: muta_contracts::OperationScope::unrestricted(),
             disabled: HashSet::new(),
             scoped: ScopedToolDisable::default(),
             ctx: &ctxr,

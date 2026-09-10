@@ -37,6 +37,7 @@ pub use muta_paths::paths;
 
 pub mod instances;
 pub mod model_providers;
+pub mod personas;
 pub mod provider_usage;
 pub mod route_settings;
 pub mod session;

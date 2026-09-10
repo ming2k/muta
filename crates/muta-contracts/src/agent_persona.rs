@@ -14,20 +14,19 @@
 //! That asymmetry meant adding a principal instance (a new binary, a new
 //! persona) duplicated assembly logic instead of binding a profile.
 //!
-//! `AgentPreset` closes the gap: a principal role is a value the embedding
+//! `AgentPersona` closes the gap: a principal role is a value the embedding
 //! binds via `Agent::apply_preset` (re-exported
 //! through the agent crate), exactly as the spawn tool binds a
 //! [`crate::SubagentPreset`]. Both live in core as vocabulary so the engine stays
 //! role-agnostic and ADR-0042's role taxonomy is declared in one place.
 
-use crate::{AgentIdentity, CommandScope, OperationScope, ToolScope, ToolSelection};
+use crate::{AgentIdentity, ToolScope, ToolSelection};
 
 /// User-tunable principal *runtime* behaviour — the declarative form of the
 /// values `muta`'s `main.rs` used to seed imperatively from the
 /// `[master]` config table. Mirrors the subset of [`crate::SubagentPreset`]
 /// that concerns execution knobs (hard stop, doom-loop guard, model-stdin)
-/// rather than capability scope, which lives directly on
-/// [`AgentPreset::agent_selection`] / [`AgentPreset::operation_scope`].
+/// rather than the tool set, which lives directly on [`AgentPersona::tools`].
 ///
 /// Defaults match [`crate::DoomGuardConfig`] / the constructor's built-in values
 /// so a profile with [`AgentRuntimeConfig::default`] is a no-op over the
@@ -67,7 +66,7 @@ pub struct AgentRuntimeConfig {
 /// quant/research/ops principal is another value.
 ///
 /// Unlike [`crate::SubagentPreset`] (a `Copy` `const` of `&'static` slices), this
-/// owns `String`s / `Vec`s because [`AgentIdentity`] and [`OperationScope`] do.
+/// owns `String`s / `Vec`s because [`AgentIdentity`] and tool selections do.
 /// That is fine — a principal is constructed once at startup, not per-spawn.
 ///
 /// ## Identity is supplied at construction, not applied
@@ -77,56 +76,51 @@ pub struct AgentRuntimeConfig {
 /// set by `Agent::apply_preset`. A role whose
 /// identity should differ per instance (side conversations, group chat) composes
 /// the profile with [`Self::with_identity`] before construction.
-/// A declarative agent role: an identity, capability scope, write boundary,
-/// execution knobs, and equipped ambient facets (ADR-0167 / ADR-0211).
+/// A declarative agent persona: an identity, its admitted tools, execution
+/// knobs, and equipped atomic extensions (ADR-0223/0224/0225).
 #[derive(Debug, Clone)]
-pub struct AgentRole {
+pub struct AgentPersona {
     /// The role's name, e.g. `"developer"`.
     pub name: &'static str,
     /// Who this principal is and what it is for (name + mission + optional persona).
     pub identity: AgentIdentity,
-    /// This principal's capability name scope over the tool pool (ADR-0041).
-    pub agent_selection: ToolSelection,
-    /// The hard write/command boundary this principal enforces (ADR-0028).
-    pub operation_scope: OperationScope,
+    /// The tools this persona admits from the pool (ADR-0041); the capability
+    /// itself (ADR-0223).
+    pub tools: ToolSelection,
     /// Runtime execution knobs (hard stop, doom guard, model stdin).
     pub config: AgentRuntimeConfig,
     /// Whether this principal runs in unattended execution mode.
     pub unattended: bool,
-    /// Ambient harness facets equipped by this role (ADR-0211).
-    pub facets: Vec<std::sync::Arc<dyn crate::HarnessFacet>>,
+    /// Atomic extensions equipped by this persona (ADR-0224).
+    pub extensions: Vec<std::sync::Arc<dyn crate::Extension>>,
 }
 
-/// Legacy alias for [`AgentRole`] (ADR-0211).
-pub type AgentPreset = AgentRole;
-
-impl AgentRole {
+impl AgentPersona {
     /// Build a role from an identity with full default scope and attended behaviour.
     pub fn with_identity(name: &'static str, identity: AgentIdentity) -> Self {
         Self {
             name,
             identity,
-            agent_selection: ToolSelection::unrestricted(),
-            operation_scope: OperationScope::unrestricted(),
+            tools: ToolSelection::unrestricted(),
             config: AgentRuntimeConfig::default(),
             unattended: false,
-            facets: Vec::new(),
+            extensions: Vec::new(),
         }
     }
 
-    /// Attach an ambient harness facet to this role (ADR-0211).
-    pub fn with_facet(mut self, facet: std::sync::Arc<dyn crate::HarnessFacet>) -> Self {
-        self.facets.push(facet);
+    /// Attach an atomic extension to this persona (ADR-0224).
+    pub fn with_extension(mut self, extension: std::sync::Arc<dyn crate::Extension>) -> Self {
+        self.extensions.push(extension);
         self
     }
 
-    /// Attach ambient harness facets to this role (ADR-0211).
-    pub fn with_facets(
+    /// Attach atomic extensions to this persona (ADR-0224).
+    pub fn with_extensions(
         mut self,
-        facets: impl IntoIterator<Item = std::sync::Arc<dyn crate::HarnessFacet>>,
+        extensions: impl IntoIterator<Item = std::sync::Arc<dyn crate::Extension>>,
     ) -> Self {
-        for facet in facets {
-            self.facets.push(facet);
+        for extension in extensions {
+            self.extensions.push(extension);
         }
         self
     }
@@ -161,18 +155,12 @@ impl AgentRole {
                 "a careful AI code analyst performing contained inspection and testing in sandbox",
             ),
         )
-        .with_selection(AGENT_CODE_ANALYST.selection())
+        .with_tools(AGENT_CODE_ANALYST.selection())
     }
 
     /// Narrow the capability scope (the scope axis of ADR-0041). Builder-style.
-    pub fn with_selection(mut self, selection: ToolSelection) -> Self {
-        self.agent_selection = selection;
-        self
-    }
-
-    /// Pin a write/command boundary (ADR-0028). Builder-style.
-    pub fn with_operation_scope(mut self, scope: OperationScope) -> Self {
-        self.operation_scope = scope;
+    pub fn with_tools(mut self, selection: ToolSelection) -> Self {
+        self.tools = selection;
         self
     }
 
@@ -199,17 +187,17 @@ impl AgentRole {
 /// The roles live in `muta-contracts` (shared vocabulary) rather than the
 /// application layer so both the CLI and the server offer the same set without
 /// duplicating definitions. They are *presets* over a base [`AgentIdentity`]:
-/// [`AgentPresetId::Code`] keeps the base untouched (the shipped coding CLI
+/// [`AgentPersonaId::Code`] keeps the base untouched (the shipped coding CLI
 /// ships an empty one, so the baseline prompt carries no identity line at
 /// all), while a focused role replaces the identity with its directive. The
 /// directive is the one framing line worth its tokens — it tells a switched
 /// agent how to behave when the baseline policy would not.
 ///
-/// Use [`AgentPreset::for_role`] to materialize a role onto a base
+/// Use [`AgentPersona::from_preset`] to materialize a role onto a base
 /// identity.
 /// Roles an interactive master agent may switch into (ADR-0183 / ADR-0211).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentRoleId {
+pub enum AgentPersonaId {
     /// The default coding principal — full capabilities, unrestricted writes,
     /// the embedding's own identity (empty for the shipped CLI). Identical in
     /// effect to the profile the embedding binds at startup, so switching back
@@ -230,43 +218,49 @@ pub enum AgentRoleId {
     /// narrow command allowlist (`git`, `rg`, `cargo audit`-class inspection).
     /// The directive focuses it on vulnerability and supply-chain review.
     Security,
+    /// Conversational principal: a workspace-free identity (practice partner,
+    /// tutor, companion). No filesystem or command tools; web + ask_user only
+    /// (ADR-0220 §3).
+    Conversational,
 }
 
-/// Legacy alias for [`AgentRoleId`] (ADR-0211).
-pub type AgentPresetId = AgentRoleId;
-
-impl AgentRoleId {
+impl AgentPersonaId {
     /// Every role in its canonical display order, for pickers and `/help`.
-    pub const ALL: &[AgentRoleId] = &[
-        AgentRoleId::Code,
-        AgentRoleId::CodeAnalyst,
-        AgentRoleId::Architect,
-        AgentRoleId::Reviewer,
-        AgentRoleId::Security,
+    pub const ALL: &[AgentPersonaId] = &[
+        AgentPersonaId::Code,
+        AgentPersonaId::CodeAnalyst,
+        AgentPersonaId::Architect,
+        AgentPersonaId::Reviewer,
+        AgentPersonaId::Security,
+        AgentPersonaId::Conversational,
     ];
 
     /// The stable string name used in `@role:{name}` / `/role <name>`. Legacy
     /// `@master:{name}` / `/master <name>` are accepted as aliases.
     pub fn as_str(self) -> &'static str {
         match self {
-            AgentRoleId::Code => "code",
-            AgentRoleId::CodeAnalyst => "code_analyst",
-            AgentRoleId::Architect => "architect",
-            AgentRoleId::Reviewer => "reviewer",
-            AgentRoleId::Security => "security",
+            AgentPersonaId::Code => "code",
+            AgentPersonaId::CodeAnalyst => "code_analyst",
+            AgentPersonaId::Architect => "architect",
+            AgentPersonaId::Reviewer => "reviewer",
+            AgentPersonaId::Security => "security",
+            AgentPersonaId::Conversational => "conversational",
         }
     }
 
     /// Parse a role name (case-insensitive). Returns `None` for an unknown
     /// name so the caller can surface a clear "unknown role" error listing
-    /// [`AgentRoleId::ALL`].
+    /// [`AgentPersonaId::ALL`].
     pub fn parse(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
-            "code" | "coder" | "developer" | "dev" | "default" => Some(AgentRoleId::Code),
-            "code_analyst" | "analyst" | "analysis" => Some(AgentRoleId::CodeAnalyst),
-            "architect" | "architecture" => Some(AgentRoleId::Architect),
-            "reviewer" | "review" => Some(AgentRoleId::Reviewer),
-            "security" | "audit" | "auditor" => Some(AgentRoleId::Security),
+            "code" | "coder" | "developer" | "dev" | "default" => Some(AgentPersonaId::Code),
+            "code_analyst" | "analyst" | "analysis" => Some(AgentPersonaId::CodeAnalyst),
+            "architect" | "architecture" => Some(AgentPersonaId::Architect),
+            "reviewer" | "review" => Some(AgentPersonaId::Reviewer),
+            "security" | "audit" | "auditor" => Some(AgentPersonaId::Security),
+            "conversational" | "chat" | "companion" | "tutor" => {
+                Some(AgentPersonaId::Conversational)
+            }
             _ => None,
         }
     }
@@ -274,11 +268,16 @@ impl AgentRoleId {
     /// A short human description of what this role does, for confirmations.
     pub fn description(self) -> &'static str {
         match self {
-            AgentRoleId::Code => "the default developer master (full native capabilities)",
-            AgentRoleId::CodeAnalyst => "code analyst (read-only analysis & sandboxed execution)",
-            AgentRoleId::Architect => "architecture & design focus (analysis-first)",
-            AgentRoleId::Reviewer => "read-only code review",
-            AgentRoleId::Security => "read-only security audit (command-confined)",
+            AgentPersonaId::Code => "the default developer master (full native capabilities)",
+            AgentPersonaId::CodeAnalyst => {
+                "code analyst (read-only analysis & sandboxed execution)"
+            }
+            AgentPersonaId::Architect => "architecture & design focus (analysis-first)",
+            AgentPersonaId::Reviewer => "read-only code review",
+            AgentPersonaId::Security => "read-only security audit (command-confined)",
+            AgentPersonaId::Conversational => {
+                "workspace-free conversation (no filesystem or command tools)"
+            }
         }
     }
 }
@@ -287,10 +286,10 @@ impl AgentRoleId {
 ///
 /// This is the *default* master — identical in capability to the historical
 /// `Code` principal: unrestricted scope, host command execution, the full subagent
-/// catalog. What it adds over `for_role(Code, …)` is the explicit subagent
+/// catalog. What it adds over `from_preset(Code, …)` is the explicit subagent
 /// delegation set, which the master-facing subagent dispatch consults to decide
 /// which [`crate::SubagentPreset`]s may be loaded.
-pub const AGENT_DEVELOPER: AgentPresetDelegation = AgentPresetDelegation {
+pub const AGENT_DEVELOPER: AgentPersonaDelegation = AgentPersonaDelegation {
     preset_id: "developer",
     // Subagent presets a developer master may load: the full catalog, since the
     // developer owns host execution and may spawn write-capable subagents.
@@ -312,7 +311,7 @@ pub const AGENT_DEVELOPER: AgentPresetDelegation = AgentPresetDelegation {
 /// writes. Its subagent delegation is restricted to read-only presets — an
 /// analyst must not be able to spawn a write-capable subagent and thereby
 /// regain the write authority its own preset denies.
-pub const AGENT_CODE_ANALYST: AgentPresetDelegation = AgentPresetDelegation {
+pub const AGENT_CODE_ANALYST: AgentPersonaDelegation = AgentPersonaDelegation {
     preset_id: "code_analyst",
     subagent_presets: &[
         crate::subagent::SUBAGENT_EXPLORE.name,
@@ -325,7 +324,7 @@ pub const AGENT_CODE_ANALYST: AgentPresetDelegation = AgentPresetDelegation {
 /// The delegation face of an agent role (ADR-0144 §3 / ADR-0211): which subagents
 /// it may load, and the tool scope it declares against the pool.
 #[derive(Debug, Clone)]
-pub struct AgentRoleDelegation {
+pub struct AgentPersonaDelegation {
     /// Stable id (also the `[master] role = "…"` config value).
     pub preset_id: &'static str,
     /// Subagent names this master may load, in preference order.
@@ -334,10 +333,7 @@ pub struct AgentRoleDelegation {
     pub tool_scope: ToolScope,
 }
 
-/// Legacy alias for [`AgentRoleDelegation`] (ADR-0211).
-pub type AgentPresetDelegation = AgentRoleDelegation;
-
-impl AgentRoleDelegation {
+impl AgentPersonaDelegation {
     /// Whether a master bound to this preset may load the subagent preset
     /// named `name`.
     pub fn admits_subagent(&self, name: &str) -> bool {
@@ -345,7 +341,7 @@ impl AgentRoleDelegation {
     }
 
     /// All shipping master delegations, developer first (the default).
-    pub const ALL: &'static [AgentPresetDelegation] = &[AGENT_DEVELOPER, AGENT_CODE_ANALYST];
+    pub const ALL: &'static [AgentPersonaDelegation] = &[AGENT_DEVELOPER, AGENT_CODE_ANALYST];
 
     /// The code-analyst's tool declaration: the full read/analyze surface
     /// plus the workspace-contained `execute_command` variant.
@@ -402,46 +398,46 @@ fn role_directive(text: &str) -> AgentIdentity {
     AgentIdentity::from_persona(text)
 }
 
-impl AgentPreset {
-    /// Materialize a [`AgentPresetId`] onto a product's base [`AgentIdentity`].
+impl AgentPersona {
+    /// Materialize a [`AgentPersonaId`] onto a product's base [`AgentIdentity`].
     ///
-    /// [`AgentPresetId::Code`] clones the base identity unchanged (empty for
+    /// [`AgentPersonaId::Code`] clones the base identity unchanged (empty for
     /// the shipped coding CLI, so the baseline prompt carries no identity line
     /// at all). A focused role replaces it with an imperative **role
     /// directive** — `from_persona`, so the text lands verbatim as the
     /// preamble — because that role's behaviour is not expressible through
     /// capability scope alone. Capability scope and operation boundary narrow
-    /// per the role's contract (see [`AgentPresetId`]).
+    /// per the role's contract (see [`AgentPersonaId`]).
     ///
     /// Runtime config and the attended flag are left at defaults; the live
     /// `[master]` config overlay and the current attended setting are not
     /// disturbed by a role switch.
-    pub fn for_role(role: AgentPresetId, base: &AgentIdentity) -> Self {
+    pub fn from_preset(role: AgentPersonaId, base: &AgentIdentity) -> Self {
         match role {
-            AgentPresetId::Code => Self::with_identity("code", base.clone()),
-            AgentPresetId::CodeAnalyst => {
+            AgentPersonaId::Code => Self::with_identity("code", base.clone()),
+            AgentPersonaId::CodeAnalyst => {
                 let identity = role_directive(
                     "Role: code analyst. Explore the codebase deeply, analyse syntax and \
                      structure, and run only sandboxed functional tests — never mutate the host.",
                 );
                 let mut preset = Self::with_identity("code_analyst", identity);
-                preset.agent_selection = AGENT_CODE_ANALYST.selection();
+                preset.tools = AGENT_CODE_ANALYST.selection();
                 preset
             }
-            AgentPresetId::Architect => {
+            AgentPersonaId::Architect => {
                 let identity = role_directive(
                     "Role: software architect. Evaluate design tradeoffs, propose structure, \
                      and write design rationale before changing code.",
                 );
                 Self::with_identity("architect", identity)
             }
-            AgentPresetId::Reviewer => {
+            AgentPersonaId::Reviewer => {
                 // Read-only inspection tools. `run_command` is excluded: a reviewer
                 // reports findings, it does not execute arbitrary commands.
                 let identity = role_directive(
                     "Role: code reviewer. Report findings and proposed diffs; never apply changes.",
                 );
-                Self::with_identity("reviewer", identity).with_selection(ToolSelection::only([
+                Self::with_identity("reviewer", identity).with_tools(ToolSelection::only([
                     "read_text",
                     "find_files",
                     "list_dir",
@@ -453,49 +449,45 @@ impl AgentPreset {
                     "ask_user",
                 ]))
             }
-            AgentPresetId::Security => {
+            AgentPersonaId::Security => {
                 // Read-only, plus a confined command allowlist for audit-style
                 // inspection (version control, search, dependency audit).
                 let identity = role_directive(
                     "Role: security auditor. Review for vulnerabilities and supply-chain risk; \
                      do not modify the project.",
                 );
-                let scope = OperationScope {
-                    paths: None,
-                    commands: Some(CommandScope::new([
-                        "git".to_string(),
-                        "rg".to_string(),
-                        "cargo".to_string(),
-                        "npm".to_string(),
-                        "ls".to_string(),
-                        "cat".to_string(),
-                        "find".to_string(),
-                        "file".to_string(),
-                    ])),
-                };
-                Self::with_identity("security", identity)
-                    .with_selection(ToolSelection::only([
-                        "read_text",
-                        "find_files",
-                        "list_dir",
-                        "read_image",
-                        "search_text",
-                        "run_command",
-                        "read_url",
-                        "search_web",
-                        "todo",
-                        "ask_user",
-                    ]))
-                    .with_operation_scope(scope)
+                Self::with_identity("security", identity).with_tools(ToolSelection::only([
+                    "read_text",
+                    "find_files",
+                    "list_dir",
+                    "read_image",
+                    "search_text",
+                    "run_command",
+                    "read_url",
+                    "search_web",
+                    "todo",
+                    "ask_user",
+                ]))
+            }
+            AgentPersonaId::Conversational => {
+                let identity = role_directive(
+                    "Role: conversational partner. Hold a focused conversation, keep turns \
+                     short, and stay on the user's topic. Do not modify files or run commands.",
+                );
+                Self::with_identity("conversational", identity).with_tools(ToolSelection::only([
+                    "read_url",
+                    "search_web",
+                    "ask_user",
+                ]))
             }
         }
     }
 }
 
-/// Alias for [`AgentPresetDelegation`].
-pub type DelegationPolicy = AgentPresetDelegation;
+/// Alias for [`AgentPersonaDelegation`].
+pub type DelegationPolicy = AgentPersonaDelegation;
 
-impl AgentPreset {
+impl AgentPersona {
     /// Preset developer policy (associated constant).
     pub const DEVELOPER: DelegationPolicy = AGENT_DEVELOPER;
     /// Preset code-analyst policy (associated constant).
@@ -514,15 +506,12 @@ mod tests {
 
     #[test]
     fn with_identity_is_unrestricted_and_attended() {
-        let p = AgentPreset::with_identity("code", AgentIdentity::new("n", "m"));
+        let p = AgentPersona::with_identity("code", AgentIdentity::new("n", "m"));
         assert_eq!(p.name, "code");
         assert!(!p.unattended);
         // unrestricted selection ⇒ All scope, empty variant pins
-        assert_eq!(p.agent_selection.scope, crate::ToolScope::All);
-        assert!(p.agent_selection.variants.is_empty());
-        // unrestricted operation scope
-        assert!(p.operation_scope.paths.is_none());
-        assert!(p.operation_scope.commands.is_none());
+        assert_eq!(p.tools.scope, crate::ToolScope::All);
+        assert!(p.tools.variants.is_empty());
         // default runtime config
         assert_eq!(p.config.hard_stop_turns, 0);
         assert!(!p.config.allow_model_stdin);
@@ -532,7 +521,7 @@ mod tests {
 
     #[test]
     fn builders_override_defaults() {
-        let p = AgentPreset::with_identity("ops", AgentIdentity::default())
+        let p = AgentPersona::with_identity("ops", AgentIdentity::default())
             .with_unattended(true)
             .with_runtime_config(AgentRuntimeConfig {
                 hard_stop_turns: 7,
@@ -551,22 +540,22 @@ mod tests {
 
     #[test]
     fn role_round_trips_through_parse() {
-        for role in AgentPresetId::ALL {
-            let parsed = AgentPresetId::parse(role.as_str());
+        for role in AgentPersonaId::ALL {
+            let parsed = AgentPersonaId::parse(role.as_str());
             assert_eq!(parsed, Some(*role), "{} should parse back", role.as_str());
         }
         // Aliases.
-        assert_eq!(AgentPresetId::parse("Coder"), Some(AgentPresetId::Code));
+        assert_eq!(AgentPersonaId::parse("Coder"), Some(AgentPersonaId::Code));
         assert_eq!(
-            AgentPresetId::parse("REVIEW"),
-            Some(AgentPresetId::Reviewer)
+            AgentPersonaId::parse("REVIEW"),
+            Some(AgentPersonaId::Reviewer)
         );
         assert_eq!(
-            AgentPresetId::parse("auditor"),
-            Some(AgentPresetId::Security)
+            AgentPersonaId::parse("auditor"),
+            Some(AgentPersonaId::Security)
         );
         // Unknown.
-        assert!(AgentPresetId::parse("wizard").is_none());
+        assert!(AgentPersonaId::parse("wizard").is_none());
     }
 
     #[test]
@@ -574,19 +563,19 @@ mod tests {
         // `code` is the baseline: it clones the embedding's identity untouched,
         // so switching back after another role restores it.
         let base = AgentIdentity::from_mission("an expert AI coding assistant");
-        let code = AgentPreset::for_role(AgentPresetId::Code, &base);
+        let code = AgentPersona::from_preset(AgentPersonaId::Code, &base);
         assert_eq!(code.identity.preamble(), base.preamble());
         assert_eq!(code.name, "code");
 
         // Focused roles replace it with an imperative directive — instruction,
         // never a "You are …" self-description.
         for role in [
-            AgentPresetId::CodeAnalyst,
-            AgentPresetId::Architect,
-            AgentPresetId::Reviewer,
-            AgentPresetId::Security,
+            AgentPersonaId::CodeAnalyst,
+            AgentPersonaId::Architect,
+            AgentPersonaId::Reviewer,
+            AgentPersonaId::Security,
         ] {
-            let profile = AgentPreset::for_role(role, &base);
+            let profile = AgentPersona::from_preset(role, &base);
             assert_eq!(profile.name, role.as_str());
             let directive = profile.identity.preamble();
             assert!(
@@ -604,18 +593,16 @@ mod tests {
     #[test]
     fn code_role_is_unrestricted_baseline() {
         let base = AgentIdentity::from_mission("coding assistant");
-        let code = AgentPreset::for_role(AgentPresetId::Code, &base);
-        assert_eq!(code.agent_selection.scope, crate::ToolScope::All);
-        assert!(code.operation_scope.paths.is_none());
-        assert!(code.operation_scope.commands.is_none());
+        let code = AgentPersona::from_preset(AgentPersonaId::Code, &base);
+        assert_eq!(code.tools.scope, crate::ToolScope::All);
     }
 
     #[test]
     fn reviewer_role_is_read_only() {
         let base = AgentIdentity::from_mission("coding assistant");
-        let reviewer = AgentPreset::for_role(AgentPresetId::Reviewer, &base);
+        let reviewer = AgentPersona::from_preset(AgentPersonaId::Reviewer, &base);
         // Scoped: write/edit/command execution are NOT admitted.
-        let crate::ToolScope::Only(names) = &reviewer.agent_selection.scope else {
+        let crate::ToolScope::Only(names) = &reviewer.tools.scope else {
             panic!("reviewer must be scoped, not unrestricted");
         };
         assert!(!names.contains("write_file"));
@@ -625,17 +612,18 @@ mod tests {
     }
 
     #[test]
-    fn security_role_confines_commands() {
+    fn security_role_admits_audit_tools() {
+        // ADR-0223: the persona-level command allowlist is retired; the tool
+        // surface is the capability. Security admits read/inspect tools plus
+        // `run_command`.
         let base = AgentIdentity::from_mission("coding assistant");
-        let security = AgentPreset::for_role(AgentPresetId::Security, &base);
-        // Command execution is admitted for audits, but its scope is narrowed.
-        let crate::ToolScope::Only(names) = &security.agent_selection.scope else {
+        let security = AgentPersona::from_preset(AgentPersonaId::Security, &base);
+        let crate::ToolScope::Only(names) = &security.tools.scope else {
             panic!("security must be scoped");
         };
         assert!(names.contains("run_command"));
-        let commands = security.operation_scope.commands.as_ref().unwrap();
-        assert!(commands.allows("git log"));
-        assert!(commands.allows("cargo audit"));
-        assert!(!commands.allows("rm -rf /"));
+        assert!(names.contains("read_text"));
+        assert!(!names.contains("write_file"));
+        assert!(!names.contains("edit_text"));
     }
 }
