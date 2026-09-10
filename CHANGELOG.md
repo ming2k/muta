@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.3] - 2026-09-10
+
 ### Changed
 
 - Remove application proxy support (`MUTA_PROXY`, the Rust proxy constructor,
@@ -6791,7 +6793,9 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.45.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.45.3...HEAD
+[0.45.3]: https://github.com/ming2k/muta/compare/v0.45.2...v0.45.3
+[0.45.2]: https://github.com/ming2k/muta/compare/v0.45.1...v0.45.2
 [0.45.1]: https://github.com/ming2k/muta/compare/v0.45.0...v0.45.1
 [0.45.0]: https://github.com/ming2k/muta/compare/v0.44.0...v0.45.0
 [0.38.12]: https://github.com/ming2k/muta/compare/v0.38.11...v0.38.12
