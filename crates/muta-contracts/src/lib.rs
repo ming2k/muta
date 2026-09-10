@@ -172,7 +172,8 @@ pub mod tool_registry;
 pub mod web_config;
 pub use capability::{
     ModelRequest, Provider, ProviderEventStream, ProviderPromptHints, ProviderStreamEvent,
-    ProviderTextStream, ScopeTarget, Tool, ToolSpec, VariantSelection, empty_variant_selection,
+    ProviderTextStream, ProviderTurnContext, ScopeTarget, Tool, ToolSpec, VariantSelection,
+    empty_variant_selection,
 };
 pub use catalog::{
     AnthropicMessagesDialect, Channel, GoogleGeminiDialect, GoogleGenerateContentDialect,

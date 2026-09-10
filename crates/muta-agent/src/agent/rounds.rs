@@ -208,6 +208,7 @@ impl Agent {
         self.round_paused_ms
             .store(0, std::sync::atomic::Ordering::Relaxed);
         StreamingRoundState {
+            turn_context: Arc::default(),
             state: RoundState {
                 guards: RoundState::guards_default(self.doom_guard_config()),
                 ..RoundState::default()
@@ -250,6 +251,7 @@ impl Agent {
         self.round_paused_ms
             .store(point.paused_ms, std::sync::atomic::Ordering::Relaxed);
         StreamingRoundState {
+            turn_context: Arc::default(),
             state: RoundState {
                 guards: RoundState::guards_default(self.doom_guard_config()),
                 ..RoundState::default()
@@ -336,6 +338,7 @@ impl Agent {
                 {
                     request = self.model_request(messages);
                 }
+                request.turn_context = Arc::clone(&round.turn_context);
                 round.pending_request = Some(request);
             }
             tracing::debug!(

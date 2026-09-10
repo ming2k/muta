@@ -11,7 +11,33 @@ use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Transient provider-owned state shared by requests in one user round.
+/// Each provider namespaces its slots by route. Never serialized or included
+/// in prompt fingerprints; dropping the round releases its routing tokens.
+#[derive(Default)]
+pub struct ProviderTurnContext {
+    slots: Mutex<HashMap<String, Arc<OnceLock<String>>>>,
+}
+
+impl std::fmt::Debug for ProviderTurnContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderTurnContext")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProviderTurnContext {
+    pub fn slot(&self, key: String) -> Arc<OnceLock<String>> {
+        self.slots
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .entry(key)
+            .or_default()
+            .clone()
+    }
+}
 
 /// Per-model (and per-subagent-profile) variant selection: a map from a
 /// capability name (a [`Tool::name`]) to the [`Tool::variant`] id chosen for
@@ -74,6 +100,8 @@ impl ToolSpec {
 /// serialize it into their protocol-specific wire shape).
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelRequest {
+    #[serde(skip)]
+    pub turn_context: Arc<ProviderTurnContext>,
     /// Structured instruction manifest (tiers: Base, Session, Task, Ephemeral).
     #[serde(default, skip_serializing_if = "crate::InstructionBundle::is_empty")]
     pub instructions: crate::InstructionBundle,
@@ -111,6 +139,7 @@ impl ModelRequest {
     /// Build a request without tools (title generation, summarization, tests).
     pub fn new(messages: Vec<Message>) -> Self {
         Self {
+            turn_context: Arc::default(),
             instructions: crate::InstructionBundle::default(),
             messages,
             temporary_context: Vec::new(),
@@ -128,6 +157,7 @@ impl ModelRequest {
     /// Build an ephemeral request without tools (e.g. title generation, compaction).
     pub fn ephemeral(messages: Vec<Message>) -> Self {
         Self {
+            turn_context: Arc::default(),
             instructions: crate::InstructionBundle::default(),
             messages,
             temporary_context: Vec::new(),
@@ -164,6 +194,7 @@ impl ModelRequest {
             .collect();
         tool_specs.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
+            turn_context: Arc::default(),
             instructions: crate::InstructionBundle::default(),
             messages,
             temporary_context: Vec::new(),
@@ -190,6 +221,7 @@ impl ModelRequest {
             .collect();
         tool_specs.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
+            turn_context: Arc::default(),
             instructions,
             messages,
             temporary_context: Vec::new(),

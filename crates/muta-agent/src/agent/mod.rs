@@ -540,6 +540,7 @@ fn checkpoint_tool_signature(call: &ToolCall) -> String {
 /// request preparation and turn-start hooks so retrying cannot replay work
 /// that already happened at the request boundary.
 pub(crate) struct StreamingRoundState {
+    turn_context: Arc<muta_contracts::ProviderTurnContext>,
     state: RoundState,
     turn_index: usize,
     /// Number of in-flight stream-loop recoveries already attempted in this

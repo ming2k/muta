@@ -270,6 +270,7 @@ impl OpenAiResponsesProvider {
         &self,
         body: &serde_json::Value,
         auth: &ResolvedAuth,
+        turn_state: Option<&str>,
     ) -> crate::request::RequestBuilder {
         let mut req =
             crate::request::RequestBuilder::new(http::Method::POST, self.endpoint.base_url())
@@ -290,6 +291,17 @@ impl OpenAiResponsesProvider {
             req = req.header("Copilot-Vision-Request", "true");
         }
         if chatgpt {
+            let session_id = self
+                .prompt_cache
+                .routing_key()
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or_else(|| self.endpoint.effective_session_id());
+            req = req
+                .header("session-id", session_id)
+                .header("thread-id", session_id);
+            if let Some(turn_state) = turn_state {
+                req = req.header("x-codex-turn-state", turn_state);
+            }
             req = req.header(
                 "x-codex-routing-hint",
                 format!("model={}", self.endpoint.model),
@@ -316,17 +328,25 @@ impl OpenAiResponsesProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
+        turn_context: &muta_contracts::ProviderTurnContext,
     ) -> Result<crate::egress::HttpResponse, ProviderError> {
         let auth = self
             .endpoint
             .resolve_auth()
             .await
             .map_err(|e| ProviderError::authentication(self.label(), e))?;
-        let mut req = self.build_request_for_auth(body, &auth);
+        let turn_state = turn_context.slot(format!(
+            "codex:{}:{}:{:?}",
+            self.endpoint.base_url(),
+            self.endpoint.model,
+            auth.account_id
+        ));
+        let mut req =
+            self.build_request_for_auth(body, &auth, turn_state.get().map(String::as_str));
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
-        let response = self.client.send_raw(req, self.label()).await?;
+        let mut response = self.client.send_raw(req, self.label()).await?;
 
         if response.status == http::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
             tracing::warn!(
@@ -340,14 +360,29 @@ impl OpenAiResponsesProvider {
                 .force_refresh_auth_after(&auth.token)
                 .await
                 .map_err(|error| ProviderError::authentication(self.label(), error))?;
-            let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
+            let mut retry_req = self.build_request_for_auth(
+                body,
+                &refreshed_auth,
+                turn_state.get().map(String::as_str),
+            );
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
             }
-            return self.client.send(retry_req, self.label()).await;
+            response = self.client.send_raw(retry_req, self.label()).await?;
         }
 
-        ensure_success(response, self.label(), Some(&self.endpoint.model)).await
+        let response = ensure_success(response, self.label(), Some(&self.endpoint.model)).await?;
+        if self.dialect == muta_contracts::OpenAiResponsesDialect::ChatGpt
+            && let Some(value) = response
+                .headers
+                .get("x-codex-turn-state")
+                .and_then(|value| value.to_str().ok())
+                .filter(|value| !value.is_empty())
+        {
+            // The first token is immutable for this round, including retries.
+            let _ = turn_state.set(value.to_string());
+        }
+        Ok(response)
     }
 
     fn build_body(
@@ -508,8 +543,9 @@ impl Provider for OpenAiResponsesProvider {
             return self.collect_streaming_completion(request).await;
         }
         let label = self.label();
+        let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, false)?;
-        let resp = self.send_request(&body, false).await?;
+        let resp = self.send_request(&body, false, &turn_context).await?;
         let value: serde_json::Value = decode_response_json(resp, label).await?;
         if let Some(err) = value.get("error") {
             return Err(ProviderError::new(
@@ -557,8 +593,9 @@ impl Provider for OpenAiResponsesProvider {
         muta_contracts::ProviderError,
     > {
         let label = self.label();
+        let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, true)?;
-        let resp = self.send_request(&body, true).await?;
+        let resp = self.send_request(&body, true, &turn_context).await?;
         let stream = crate::sse::data_payloads(resp, label).map(|item| {
             let data = item?;
             let value = decode_stream_payload(&data, label)?;
@@ -580,8 +617,9 @@ impl Provider for OpenAiResponsesProvider {
         muta_contracts::ProviderError,
     > {
         let label = self.label();
+        let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, true)?;
-        let resp = self.send_request(&body, true).await?;
+        let resp = self.send_request(&body, true, &turn_context).await?;
         let model_catalog_etag = models_etag(&resp.headers);
 
         // One stateful parser threads the function-call item state across the
@@ -630,6 +668,95 @@ impl Provider for OpenAiResponsesProvider {
 #[cfg(test)]
 mod stream_protocol_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn chatgpt_routing_state_is_sticky_only_within_one_round() {
+        use mockito::{Matcher, Server};
+        let mut server = Server::new_async().await;
+        let provider = OpenAiResponsesProvider::from_static_key(
+            "test".into(),
+            "gpt-6-astra".into(),
+            &server.url(),
+        )
+        .with_dialect(muta_contracts::OpenAiResponsesDialect::ChatGpt)
+        .with_session_id("session-astra");
+        let round = muta_contracts::ProviderTurnContext::default();
+        let body = serde_json::json!({"model": "gpt-6-astra"});
+
+        // First response establishes routing; later responses must not replace it.
+        for (request_token, response_token) in [
+            (None, "route-a"),
+            (Some("route-a"), "route-b"),
+            (Some("route-a"), "route-c"),
+        ] {
+            let mock = server
+                .mock("POST", "/")
+                .match_header("session-id", "session-astra")
+                .match_header("thread-id", "session-astra")
+                .match_header(
+                    "x-codex-turn-state",
+                    request_token.map(Matcher::from).unwrap_or(Matcher::Missing),
+                )
+                .with_status(200)
+                .with_header("x-codex-turn-state", response_token)
+                .create_async()
+                .await;
+            provider.send_request(&body, true, &round).await.unwrap();
+            mock.assert_async().await;
+            mock.remove_async().await;
+        }
+        // A new user round (or a concurrent auxiliary request) has no old token.
+        let mock = server
+            .mock("POST", "/")
+            .match_header("x-codex-turn-state", Matcher::Missing)
+            .with_status(200)
+            .create_async()
+            .await;
+        provider
+            .send_request(&body, true, &muta_contracts::ProviderTurnContext::default())
+            .await
+            .unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn chatgpt_routing_state_ignores_failed_responses_and_other_routes() {
+        use mockito::{Matcher, Server};
+        let mut server = Server::new_async().await;
+        let round = muta_contracts::ProviderTurnContext::default();
+        let body = serde_json::json!({});
+        for (dialect, status, expected) in [
+            (muta_contracts::OpenAiResponsesDialect::ChatGpt, 503, None),
+            (muta_contracts::OpenAiResponsesDialect::ChatGpt, 200, None),
+            (muta_contracts::OpenAiResponsesDialect::Standard, 200, None),
+            (
+                muta_contracts::OpenAiResponsesDialect::ChatGpt,
+                200,
+                Some("route-a"),
+            ),
+        ] {
+            let provider = OpenAiResponsesProvider::from_static_key(
+                "test".into(),
+                "gpt-6-astra".into(),
+                &server.url(),
+            )
+            .with_dialect(dialect);
+            let mock = server
+                .mock("POST", "/")
+                .match_header(
+                    "x-codex-turn-state",
+                    expected.map(Matcher::from).unwrap_or(Matcher::Missing),
+                )
+                .with_status(status)
+                .with_header("x-codex-turn-state", "route-a")
+                .create_async()
+                .await;
+            let response = provider.send_request(&body, true, &round).await;
+            assert_eq!(response.is_ok(), status == 200);
+            mock.assert_async().await;
+            mock.remove_async().await;
+        }
+    }
 
     #[test]
     fn malformed_sse_payload_is_a_decode_error() {
