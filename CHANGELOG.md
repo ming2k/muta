@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.2] - 2026-09-10
+
 ### Changed
 
 - **Catalog refresh is connection-scoped and user-initiated (ADR-0227).** The
