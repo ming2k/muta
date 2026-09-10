@@ -570,10 +570,7 @@ pub fn sync_fitted_model_registry() {
             fitted_map.map(|map| {
                 let (format, family) = match spec {
                     Some(spec) => (spec.protocol, spec.id.to_string()),
-                    None => (
-                        WireProtocol::ChatCompletions,
-                        connection.provider.clone(),
-                    ),
+                    None => (WireProtocol::ChatCompletions, connection.provider.clone()),
                 };
                 map.iter()
                     .map(move |(id, info)| muta_contracts::model::FittedModel {

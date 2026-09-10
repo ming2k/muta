@@ -32,11 +32,7 @@ pub fn draw_tasks_bar(
     props: TasksBarProps<'_>,
     theme: &Theme,
 ) -> Rect {
-    let tasks: Vec<&BackgroundTaskItem> = props
-        .tasks
-        .iter()
-        .filter(|t| !t.dismissed)
-        .collect();
+    let tasks: Vec<&BackgroundTaskItem> = props.tasks.iter().filter(|t| !t.dismissed).collect();
 
     if tasks.is_empty() {
         return Rect::default();
@@ -47,22 +43,19 @@ pub fn draw_tasks_bar(
         .fg(theme.brand())
         .add_modifier(Modifier::BOLD);
 
-    let running_tasks: Vec<&&BackgroundTaskItem> =
-        tasks.iter().filter(|t| t.running).collect();
-    let settled_tasks: Vec<&&BackgroundTaskItem> =
-        tasks.iter().filter(|t| !t.running).collect();
+    let running_tasks: Vec<&&BackgroundTaskItem> = tasks.iter().filter(|t| t.running).collect();
+    let settled_tasks: Vec<&&BackgroundTaskItem> = tasks.iter().filter(|t| !t.running).collect();
 
-    let mut left: Vec<Span<'static>> = vec![
-        Span::styled("TASKS", tag_style),
-        Span::styled(" ", dim),
-    ];
+    let mut left: Vec<Span<'static>> =
+        vec![Span::styled("TASKS", tag_style), Span::styled(" ", dim)];
 
     if !running_tasks.is_empty() {
-        let count_style = Style::default()
-            .fg(theme.fg())
-            .add_modifier(Modifier::BOLD);
+        let count_style = Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD);
         left.push(Span::styled("⚙ ", Style::default().fg(theme.brand())));
-        left.push(Span::styled(format!("{} running", running_tasks.len()), count_style));
+        left.push(Span::styled(
+            format!("{} running", running_tasks.len()),
+            count_style,
+        ));
 
         if let Some(first) = running_tasks.first() {
             let label = if first.label.len() > 24 {

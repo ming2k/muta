@@ -496,7 +496,7 @@ pub struct App {
     pub input_drag_scroll: Option<bool>,
     /// Authoritative foreground surface: the full-screen view plus whatever
     /// panel/transient floats over it (ADR-0141). Callers consume
-    /// [`Self::active_modal`] as the rendering projection; panel identity is
+    /// `Self::active_modal` as the rendering projection; panel identity is
     /// always read from [`Self::active_panel`] and view identity from
     /// [`Self::current_view`].
     pub(crate) surfaces: crate::surfaces::SurfaceRouter,

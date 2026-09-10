@@ -6,7 +6,7 @@
 //! layers:
 //!
 //! - **Transport** (`endpoint`, `sse`, `transport`, `client`, `json`): the
-//!   connection configuration, the pooled [`reqwest::Client`] wrapper, SSE byte
+//!   connection configuration, the pooled HTTP client wrapper, SSE byte
 //!   reassembly, retry/error classification, and JSON framing helpers shared by
 //!   every protocol.
 //! - **Protocols** (`protocol::{openai, anthropic, google}`): per-vendor

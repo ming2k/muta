@@ -135,6 +135,7 @@ pub struct OverlayThemeConfig {
 pub struct SurfacesThemeConfig {
     pub view: Option<ViewThemeConfig>,
     pub sheet: Option<SheetThemeConfig>,
+    #[serde(alias = "modal")]
     pub dialog: Option<DialogThemeConfig>,
     pub overlay: Option<OverlayThemeConfig>,
 }

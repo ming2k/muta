@@ -227,12 +227,8 @@ pub fn route_for_model(
             muta_contracts::WireProtocol::AnthropicMessages => {
                 "https://opencode.ai/zen/go/v1/messages"
             }
-            muta_contracts::WireProtocol::GoogleGemini => {
-                "https://opencode.ai/zen/go/v1beta"
-            }
-            muta_contracts::WireProtocol::Responses => {
-                "https://opencode.ai/zen/go/v1/responses"
-            }
+            muta_contracts::WireProtocol::GoogleGemini => "https://opencode.ai/zen/go/v1beta",
+            muta_contracts::WireProtocol::Responses => "https://opencode.ai/zen/go/v1/responses",
             muta_contracts::WireProtocol::ChatCompletions => {
                 "https://opencode.ai/zen/go/v1/chat/completions"
             }
@@ -251,12 +247,8 @@ pub fn route_for_model(
             muta_contracts::WireProtocol::AnthropicMessages => {
                 "https://opencode.ai/zen/go/v1/messages"
             }
-            muta_contracts::WireProtocol::GoogleGemini => {
-                "https://opencode.ai/zen/go/v1beta"
-            }
-            muta_contracts::WireProtocol::Responses => {
-                "https://opencode.ai/zen/go/v1/responses"
-            }
+            muta_contracts::WireProtocol::GoogleGemini => "https://opencode.ai/zen/go/v1beta",
+            muta_contracts::WireProtocol::Responses => "https://opencode.ai/zen/go/v1/responses",
             muta_contracts::WireProtocol::ChatCompletions => {
                 "https://opencode.ai/zen/go/v1/chat/completions"
             }

@@ -727,10 +727,14 @@ impl SubagentTool {
         // ADR-0211: Bind instance-scoped HarnessFacets according to the child's mission
         match profile.name {
             "explore" => {
-                subagent.add_facet(std::sync::Arc::new(crate::facet::CodeIntelligenceFacet::read_only(1024)));
+                subagent.add_facet(std::sync::Arc::new(
+                    crate::facet::CodeIntelligenceFacet::read_only(1024),
+                ));
             }
             "code" => {
-                subagent.add_facet(std::sync::Arc::new(crate::facet::CodeIntelligenceFacet::new(1024)));
+                subagent.add_facet(std::sync::Arc::new(
+                    crate::facet::CodeIntelligenceFacet::new(1024),
+                ));
             }
             _ => {}
         }

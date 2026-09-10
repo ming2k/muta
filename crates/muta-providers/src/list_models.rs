@@ -76,7 +76,7 @@ impl DiscoveryProtocol {
     /// The standard one-to-one mapping for a single-format endpoint. A preset
     /// whose catalog endpoint deviates (ChatGPT's Codex backend, Google's
     /// Antigravity cloudcode surface) declares its own scheme explicitly via
-    /// [`crate::registry::LiveCatalog`] rather than being sniffed here.
+    /// [`crate::registry::RemoteCatalogSource`] rather than being sniffed here.
     pub fn from_wire_protocol(protocol: muta_contracts::WireProtocol) -> Self {
         match protocol {
             muta_contracts::WireProtocol::AnthropicMessages => Self::Anthropic,

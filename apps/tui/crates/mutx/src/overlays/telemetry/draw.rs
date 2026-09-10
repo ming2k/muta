@@ -1,9 +1,9 @@
 //! Telemetry modal orchestrator: chrome, breadcrumbs, and level routing.
 //!
 //! Rendering is split by level:
-//! - [`overview`] — Overview tab (L1)
-//! - [`tables`]   — Activity tab rounds/turns tables (L1/L2)
-//! - [`attempt`]  — Attempt inspector with the latency timeline (L3)
+//! - `overview` — Overview tab (L1)
+//! - `tables`   — Activity tab rounds/turns tables (L1/L2)
+//! - `attempt`  — Attempt inspector with the latency timeline (L3)
 
 use muta_contracts::TokenSourceReport;
 use mutx_engine::{Frame, Line, Modifier, Rect, Span, Style};

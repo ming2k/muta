@@ -2,7 +2,7 @@
 //! on the Hypervisor.
 //!
 //! The Hypervisor station (ADR-0167) is the daemon's single workspace-free
-//! slot. The operator-facing [`Hypervisor`] coordinates the fleet; the
+//! slot. The operator-facing `Hypervisor` coordinates the fleet; the
 //! **Archivist** is a second conversational identity on the same station — a
 //! Root-posture agent whose job is *institutional memory*: it knows every
 //! session this instance has ever hosted, where they live, and how to find

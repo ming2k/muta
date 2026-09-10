@@ -2051,8 +2051,7 @@ name = "DeepSeek"
         snapshot.default_connection = "new".to_string();
         snapshot.default_model = Some("m2".to_string());
         // Runtime merges a trusted project root on top of the loaded config.
-        snapshot
-            .merge_project_additional_roots(vec!["../project-root".to_string()]);
+        snapshot.merge_project_additional_roots(vec!["../project-root".to_string()]);
         assert_eq!(
             snapshot.workspace.additional_roots,
             vec!["../user-root", "../project-root"]

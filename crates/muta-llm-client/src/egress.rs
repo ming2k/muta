@@ -3,7 +3,7 @@
 //! ADR-0200 replaces `reqwest` with an owned transport, and the switch must not
 //! reach the protocol adapters. The seam is drawn at "given a fully formed
 //! request, give me a response": [`Egress`] is implemented by [`MutaNetEgress`]
-//! (production) and, behind the `reqwest-oracle` feature, by [`ReqwestEgress`]
+//! (production) and, behind the `reqwest-oracle` feature, by `ReqwestEgress`
 //! — which exists only so the differential and shadow comparisons have a
 //! reference implementation. `reqwest` is therefore a *dev/test* dependency;
 //! it is not in the production graph.

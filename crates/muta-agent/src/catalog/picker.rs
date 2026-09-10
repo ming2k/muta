@@ -216,9 +216,7 @@ pub(super) fn channel_protocol_and_base_url(channel: &Channel) -> (String, Strin
             base_url.clone(),
         ),
         Transport::OpenAiResponses { base_url, .. } => (
-            muta_contracts::WireProtocol::Responses
-                .as_str()
-                .to_string(),
+            muta_contracts::WireProtocol::Responses.as_str().to_string(),
             base_url.clone(),
         ),
         Transport::Anthropic { base_url, .. } => (
@@ -309,9 +307,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
-                protocol: muta_contracts::WireProtocol::Responses
-                    .as_str()
-                    .to_string(),
+                protocol: muta_contracts::WireProtocol::Responses.as_str().to_string(),
                 effort: effective,
                 thinking: None,
                 effort_levels,

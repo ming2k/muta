@@ -200,20 +200,20 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
                 let msg = app.side_messages.remove(pos);
                 text_to_restore = Some(msg.raw);
             }
-            if let Some(text) = text_to_restore {
-                if app.live_session_id == session_id {
-                    app.adopt_as_draft(
-                        text,
-                        Vec::new(),
-                        Vec::new(),
-                        crate::app::DraftAdoption::OnlyIfIdle,
-                    );
-                    app.notice_toast_severity = crate::model::document::NoticeSeverity::Info;
-                    app.notice_toast_message =
-                        "Steer missed active round; restored to composer".to_string();
-                    app.notice_toast_until =
-                        Some(std::time::Instant::now() + std::time::Duration::from_millis(2600));
-                }
+            if let Some(text) = text_to_restore
+                && app.live_session_id == session_id
+            {
+                app.adopt_as_draft(
+                    text,
+                    Vec::new(),
+                    Vec::new(),
+                    crate::app::DraftAdoption::OnlyIfIdle,
+                );
+                app.notice_toast_severity = crate::model::document::NoticeSeverity::Info;
+                app.notice_toast_message =
+                    "Steer missed active round; restored to composer".to_string();
+                app.notice_toast_until =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(2600));
             }
             app.remove_dispatch(&session_id, &input_id);
             app.layout_height_cache.clear();

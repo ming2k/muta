@@ -1231,8 +1231,7 @@ mod tests {
         assert_eq!(tmpl.fields(), vec![CustomField::Name, CustomField::Token]);
         for id in ["gpt-5.5", "gpt-5.4", "gpt-5.6-sol"] {
             assert!(
-                protocol_model_candidates(WireProtocol::ChatCompletions.as_str())
-                    .contains(&id),
+                protocol_model_candidates(WireProtocol::ChatCompletions.as_str()).contains(&id),
                 "OpenAI candidate set missing {id}"
             );
         }

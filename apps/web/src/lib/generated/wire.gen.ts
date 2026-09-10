@@ -65,7 +65,16 @@ overrides: CapabilityOverrides | null, } } | { "DeleteConnection": { name: strin
 /**
  * How many recent events to include in the event-log tail.
  */
-event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | "QueryInputHistory" | { "RecordInputHistory": { entries: Array<HistoryEntry>, dedup: boolean, } } | { "DeleteInputHistoryEntry": { text: string, created_at_ms: number, } } | { "QueryRouteSettings": { provider_id: string, model: string, } } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } } | "QueryWebSearchConfig" | { "UpdateWebSearchConfig": WebConfigUpdate };
+event_cap: number, } } | "QuerySessionContext" | { "RevokePermission": { tool: string, scope: string, } } | "ClearAllPermissions" | { "ToggleTool": { name: string, enabled: boolean, } } | { "ToggleMcpServer": { name: string, enabled: boolean, } } | { "ReconnectMcpServer": { name: string, } } | "ExitSideView" | { "FocusSide": { side_id: string, } } | { "InterruptSide": { side_id: string, } } | { "CloseSide": { side_id: string, } } | "QueryBtwList" | { "UpdateTuiLayout": string } | "QueryInputHistory" | { "RecordInputHistory": { entries: Array<HistoryEntry>, dedup: boolean, } } | { "DeleteInputHistoryEntry": { text: string, created_at_ms: number, } } | { "QueryRouteSettings": { provider_id: string, model: string, } } | { "UpdateTuiColorScheme": { name: string, custom: ColorSchemeConfig, } } | "QueryWebSearchConfig" | { "SearchHistory": { query: string, 
+/**
+ * When `Some`, restrict hits to this project root; `None` searches
+ * every project the instance has ever hosted.
+ */
+workspace: string | null, 
+/**
+ * Maximum hits (default 20, engine-clamped).
+ */
+limit: number | null, } } | { "UpdateWebSearchConfig": WebConfigUpdate };
 
 /**
  * What role the connection wants to assume.
@@ -406,7 +415,7 @@ export type ContextTokenSource = "Api" | "Projection";
 /**
  * Single-shot session-management verbs.
  */
-export type ControlRequest = { "verb": "shutdown" } | { "verb": "create_session", project: string, prompt?: string | null, init_options?: SessionInitOptions | null, } | { "verb": "send_prompt", session_id: string, text: string, } | { "verb": "interrupt", session_id: string, } | { "verb": "resolve_permission", session_id: string, request_id: string, decision: PermissionDecision, } | { "verb": "kill_session", session_id: string, } | { "verb": "suspend_session", session_id: string, };
+export type ControlRequest = { "verb": "shutdown" } | { "verb": "create_session", project: string, prompt?: string | null, init_options?: SessionInitOptions | null, } | { "verb": "send_prompt", session_id: string, text: string, } | { "verb": "interrupt", session_id: string, } | { "verb": "resolve_permission", session_id: string, request_id: string, decision: PermissionDecision, } | { "verb": "kill_session", session_id: string, } | { "verb": "suspend_session", session_id: string, } | { "verb": "ask_archivist", text: string, };
 
 /**
  * Component-specific override for crate tags and package badges.
@@ -516,6 +525,46 @@ retry_pending: boolean, };
  * command executions, and process lifecycle operations.
  */
 export type HazardLevel = "safe" | "file_modification" | "command_execution" | "process_lifecycle" | "network_or_external";
+
+/**
+ * One full-text search hit across persisted session transcripts (ADR-0208).
+ *
+ * Produced by the daemon's FTS5 query over `fts_entries` — the wire-facing
+ * mirror of the persistence layer's raw result, enriched with the session
+ * title so a hit is presentable without a second round-trip. The snippet
+ * carries FTS `<b>`/`</b>` highlight markers; renderers that cannot show
+ * emphasis strip them.
+ */
+export type HistorySearchHit = { 
+/**
+ * The transcript entry that matched (stable entry identity).
+ */
+entry_id: string, 
+/**
+ * The session the entry belongs to — the dashboard's jump/attach anchor.
+ */
+session_id: string, 
+/**
+ * Project root of the owning session (addressing metadata, ADR-0093).
+ */
+workspace: string, 
+/**
+ * Stored AI/manual title of the owning session, when one exists.
+ */
+session_title?: string, 
+/**
+ * Role of the matched entry (`user` / `assistant` / `system` / `tool`).
+ */
+role: string, 
+/**
+ * Highlighted content excerpt around the match (`<b>`/`</b>` markers).
+ */
+snippet: string, 
+/**
+ * BM25 relevance score (lower is better, FTS5 convention). Purely
+ * ordering metadata — not a stable quantity across builds.
+ */
+score: number, };
 
 /**
  * Which lifecycle point a hook fires on — the routing key only. The payload

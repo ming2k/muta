@@ -147,9 +147,7 @@ pub use aspects::AspectEngine;
 pub mod cognitive;
 pub mod session_title;
 mod shell_input;
-pub use cognitive::{
-    CognitiveError, CognitivePipeline, HarnessTaskError, HarnessTaskPipeline,
-};
+pub use cognitive::{CognitiveError, CognitivePipeline, HarnessTaskError, HarnessTaskPipeline};
 pub mod stream_loop_detector;
 use muta_skills as skills;
 pub use stream_loop_detector::{DegeneratePattern, StreamLoopDetector};
@@ -161,8 +159,8 @@ mod tool_manager;
 mod tool_scheduler;
 pub mod tools;
 
-pub mod syntax;
 pub mod facet;
+pub mod syntax;
 pub use facet::CodeIntelligenceFacet;
 
 pub use context_projection::ContextProjectionGate;

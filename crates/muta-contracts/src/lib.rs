@@ -173,8 +173,7 @@ pub use capability::{
 };
 pub use catalog::{
     AnthropicMessagesDialect, Channel, GoogleGeminiDialect, GoogleGenerateContentDialect,
-    OpenAiChatDialect,
-    OpenAiResponsesDialect, ProviderEntry, Transport,
+    OpenAiChatDialect, OpenAiResponsesDialect, ProviderEntry, Transport,
 };
 pub use connection_auth::{ChannelAuth, ConnectionAuth, LoginMethod};
 pub use connection_detail::{
@@ -255,8 +254,8 @@ pub use web_config::{
     BOCHA_SEARCH_ENDPOINT, DUCKDUCKGO_HTML_ENDPOINT, DUCKDUCKGO_LITE_ENDPOINT, EXA_SEARCH_ENDPOINT,
     JINA_READER_ENDPOINT, PARALLEL_SEARCH_ENDPOINT, SharedWebConfig, TAVILY_SEARCH_ENDPOINT,
     WebConfig, WebCredentialRequirement, WebCredentialStatus, WebEndpointRequirement,
-    WebProviderAxis, WebProviderCapability, WebReaderProvider, WebRuntimeConfig, WebSearchProvider,
-    web_provider_capabilities,
+    WebProviderAxis, WebProviderCapability, WebReaderProvider, WebRuntimeConfig, WebSearchConfig,
+    WebSearchProvider, web_provider_capabilities,
 };
 pub use wire::{
     AttachAction, ControlRequest, ERR_PROTOCOL_MISMATCH, ERR_VERSION_MISMATCH,

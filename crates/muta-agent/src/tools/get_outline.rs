@@ -10,7 +10,9 @@ use crate::tools::helpers::{
 #[derive(ToolSchema, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GetOutlineArgs {
-    #[tool(desc = "Path to the source file (e.g. .rs, .ts, .py); relative paths use the primary workspace")]
+    #[tool(
+        desc = "Path to the source file (e.g. .rs, .ts, .py); relative paths use the primary workspace"
+    )]
     path: String,
 }
 

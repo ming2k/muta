@@ -381,9 +381,7 @@ pub fn default_endpoint(protocol: WireProtocol) -> String {
         WireProtocol::GoogleGemini => "http://localhost:8080/v1beta".to_string(),
         WireProtocol::AnthropicMessages => "http://localhost:8080/v1/messages".to_string(),
         WireProtocol::Responses => "http://localhost:8080/v1/responses".to_string(),
-        WireProtocol::ChatCompletions => {
-            "http://localhost:8080/v1/chat/completions".to_string()
-        }
+        WireProtocol::ChatCompletions => "http://localhost:8080/v1/chat/completions".to_string(),
     }
 }
 

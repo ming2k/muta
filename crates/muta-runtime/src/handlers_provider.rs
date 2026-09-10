@@ -1757,9 +1757,7 @@ pub(crate) async fn query_connection_detail(
             }
         })
         .unwrap_or_else(|| {
-            let p = connection
-                .protocol
-                .unwrap_or(WireProtocol::ChatCompletions);
+            let p = connection.protocol.unwrap_or(WireProtocol::ChatCompletions);
             (
                 p.to_string(),
                 connection.base_url.clone().unwrap_or_default(),

@@ -7,7 +7,7 @@
 //! (a provider is built once per session), so a single pool is reused across
 //! every chat, stream, and ReAct turn.
 //!
-//! A protocol builds a fully-formed [`reqwest::RequestBuilder`] — URL, auth
+//! A protocol builds a fully-formed HTTP request builder — URL, auth
 //! headers, JSON body, all vendor-specific — and hands it to [`Client::send`]
 //! (streaming) or [`Client::send_json`] (non-streaming). The builder is only a
 //! convenient way to *describe* a request: execution goes through the
@@ -25,14 +25,14 @@
 //!   [`crate::transport`] never sees an error to classify.
 //! - `CHAT_REQUEST_TIMEOUT` bounds one whole non-streaming request
 //!   (connect → full body). It is stamped per request by [`Client::send_json`]
-//!   (and by Google's `chat`, which sends through [`Client::http`] directly),
+//!   (and by Google's `chat`, which sends through `Client::http` directly),
 //!   never on the streaming path: an overall timeout would cut a long SSE
 //!   generation mid-stream, and reqwest's per-read `read_timeout` would kill
 //!   legitimate streams whose token gaps exceed the bound. Stall policy for a
 //!   live stream belongs to the harness (muta-agent's `STREAM_IDLE_TIMEOUT`).
 //!
 //! Both bounds surface as `reqwest` timeout errors, which
-//! [`transport_error`] classifies as retryable, so a stall feeds the retry
+//! `transport_error` classifies as retryable, so a stall feeds the retry
 //! loop instead of hanging the turn forever.
 
 use std::sync::Arc;
@@ -243,7 +243,7 @@ impl Client {
 
     /// The overall timeout non-streaming call sites stamp per request.
     /// [`Self::send_json`] applies it automatically; protocols that send
-    /// non-streaming requests through [`Self::http`] directly (Google's
+    /// non-streaming requests through `Self::http` directly (Google's
     /// `chat`) stamp it on the builder themselves.
     pub(crate) fn request_timeout(&self) -> Duration {
         self.request_timeout
@@ -297,7 +297,7 @@ impl Client {
     /// (`CHAT_REQUEST_TIMEOUT`): a non-streaming response delivers nothing
     /// until generation completes, so a stalled endpoint would otherwise hang
     /// the turn forever. The timeout surfaces as a retryable transport error
-    /// via [`transport_error`].
+    /// via `transport_error`.
     pub async fn send_json(
         &self,
         request: crate::request::RequestBuilder,

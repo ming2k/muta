@@ -1160,37 +1160,88 @@ mod tests {
         use std::str::FromStr;
 
         // Display names
-        assert_eq!(WireProtocol::ChatCompletions.display_name(), "Chat Completions");
+        assert_eq!(
+            WireProtocol::ChatCompletions.display_name(),
+            "Chat Completions"
+        );
         assert_eq!(WireProtocol::Responses.display_name(), "Responses");
-        assert_eq!(WireProtocol::AnthropicMessages.display_name(), "Anthropic Messages");
+        assert_eq!(
+            WireProtocol::AnthropicMessages.display_name(),
+            "Anthropic Messages"
+        );
         assert_eq!(WireProtocol::GoogleGemini.display_name(), "Google Gemini");
 
         // as_str
         assert_eq!(WireProtocol::ChatCompletions.as_str(), "chat-completions");
         assert_eq!(WireProtocol::Responses.as_str(), "responses");
-        assert_eq!(WireProtocol::AnthropicMessages.as_str(), "anthropic-messages");
+        assert_eq!(
+            WireProtocol::AnthropicMessages.as_str(),
+            "anthropic-messages"
+        );
         assert_eq!(WireProtocol::GoogleGemini.as_str(), "google-gemini");
 
         // FromStr canonical
-        assert_eq!(WireProtocol::from_str("chat-completions").unwrap(), WireProtocol::ChatCompletions);
-        assert_eq!(WireProtocol::from_str("responses").unwrap(), WireProtocol::Responses);
-        assert_eq!(WireProtocol::from_str("anthropic-messages").unwrap(), WireProtocol::AnthropicMessages);
-        assert_eq!(WireProtocol::from_str("google-gemini").unwrap(), WireProtocol::GoogleGemini);
+        assert_eq!(
+            WireProtocol::from_str("chat-completions").unwrap(),
+            WireProtocol::ChatCompletions
+        );
+        assert_eq!(
+            WireProtocol::from_str("responses").unwrap(),
+            WireProtocol::Responses
+        );
+        assert_eq!(
+            WireProtocol::from_str("anthropic-messages").unwrap(),
+            WireProtocol::AnthropicMessages
+        );
+        assert_eq!(
+            WireProtocol::from_str("google-gemini").unwrap(),
+            WireProtocol::GoogleGemini
+        );
 
         // FromStr legacy aliases
-        assert_eq!(WireProtocol::from_str("openai-chat-completions").unwrap(), WireProtocol::ChatCompletions);
-        assert_eq!(WireProtocol::from_str("openai-responses").unwrap(), WireProtocol::Responses);
-        assert_eq!(WireProtocol::from_str("google-generate-content").unwrap(), WireProtocol::GoogleGemini);
+        assert_eq!(
+            WireProtocol::from_str("openai-chat-completions").unwrap(),
+            WireProtocol::ChatCompletions
+        );
+        assert_eq!(
+            WireProtocol::from_str("openai-responses").unwrap(),
+            WireProtocol::Responses
+        );
+        assert_eq!(
+            WireProtocol::from_str("google-generate-content").unwrap(),
+            WireProtocol::GoogleGemini
+        );
 
         // Serde serialization
-        assert_eq!(serde_json::to_string(&WireProtocol::ChatCompletions).unwrap(), "\"chat-completions\"");
-        assert_eq!(serde_json::to_string(&WireProtocol::Responses).unwrap(), "\"responses\"");
-        assert_eq!(serde_json::to_string(&WireProtocol::AnthropicMessages).unwrap(), "\"anthropic-messages\"");
-        assert_eq!(serde_json::to_string(&WireProtocol::GoogleGemini).unwrap(), "\"google-gemini\"");
+        assert_eq!(
+            serde_json::to_string(&WireProtocol::ChatCompletions).unwrap(),
+            "\"chat-completions\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WireProtocol::Responses).unwrap(),
+            "\"responses\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WireProtocol::AnthropicMessages).unwrap(),
+            "\"anthropic-messages\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WireProtocol::GoogleGemini).unwrap(),
+            "\"google-gemini\""
+        );
 
         // Serde deserialization aliases
-        assert_eq!(serde_json::from_str::<WireProtocol>("\"openai-chat-completions\"").unwrap(), WireProtocol::ChatCompletions);
-        assert_eq!(serde_json::from_str::<WireProtocol>("\"openai-responses\"").unwrap(), WireProtocol::Responses);
-        assert_eq!(serde_json::from_str::<WireProtocol>("\"google-generate-content\"").unwrap(), WireProtocol::GoogleGemini);
+        assert_eq!(
+            serde_json::from_str::<WireProtocol>("\"openai-chat-completions\"").unwrap(),
+            WireProtocol::ChatCompletions
+        );
+        assert_eq!(
+            serde_json::from_str::<WireProtocol>("\"openai-responses\"").unwrap(),
+            WireProtocol::Responses
+        );
+        assert_eq!(
+            serde_json::from_str::<WireProtocol>("\"google-generate-content\"").unwrap(),
+            WireProtocol::GoogleGemini
+        );
     }
 }

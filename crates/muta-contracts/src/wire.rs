@@ -41,7 +41,10 @@ use serde::{Deserialize, Serialize};
 /// variants with structured `WebSearchHit` results.
 /// v9 (ADR-0203): `RemoteCatalogSourceOverride` and `RemoteCatalogEndpoint`
 /// contracts for connection-local catalog source decoupling.
-pub const PROTOCOL_VERSION: u32 = 9;
+/// v10 (ADR-0208, ADR-0211): Archivist single-shot control query (`ControlRequest::AskArchivist`),
+/// cross-project session history full-text search (`AgentRequest::SearchHistory`,
+/// `AgentResponse::HistorySearch`), and provider model effort levels (`ProviderModelInfo.effort_levels`).
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Minimum served wire protocol version. Raised to 6 by ADR-0201 (connection
 /// vocabulary) and to 7 by ADR-0183 (subagent vocabulary): peers carrying the

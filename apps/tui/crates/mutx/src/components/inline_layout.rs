@@ -36,7 +36,7 @@ pub enum InlineSlot<'a> {
 }
 
 /// A structured line consisting of semantic slots evaluated either as lossless
-/// plain text or as a constrained Ratatui [`Line`] using a 1D flex solver.
+/// plain text or as a constrained `Line` using a 1D flex solver.
 #[derive(Clone, Debug, Default)]
 pub struct SemanticLine<'a> {
     slots: Vec<InlineSlot<'a>>,

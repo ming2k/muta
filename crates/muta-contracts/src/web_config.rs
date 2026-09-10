@@ -310,6 +310,9 @@ impl Default for WebConfig {
     }
 }
 
+/// Backward compatibility alias for [`WebConfig`].
+pub type WebSearchConfig = WebConfig;
+
 #[derive(Clone, Default)]
 pub struct WebRuntimeConfig {
     pub behavior: WebConfig,

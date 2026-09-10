@@ -5,7 +5,7 @@
 //! The [`CognitivePipeline`] provides internal cognitive execution for the Agent Harness.
 //!
 //! Key design invariants:
-//! - **Typed Tasks**: Dispatches any task implementing [`CognitiveTask`].
+//! - **Typed Tasks**: Dispatches any task implementing `CognitiveTask`.
 //! - **Timeout Bounds**: Strict timeouts on every consult call, preventing background task leaks.
 //! - **Fail-Open Resilience**: Helper methods guarantee graceful fallback if model calls fail or timeout.
 //! - **JSON Normalization**: Extracts structured JSON payloads even if the model wraps them in markdown.
@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use muta_contracts::{
     EnvironmentReminderOutput, EnvironmentSensorInput, EnvironmentSensorTask, ExecutionTier,
-    Message, ModelRequest, PreFlightRouteInput, PreFlightRouteOutput, PreFlightRouterTask, Provider,
-    Role, SessionTitleInput, SessionTitleTask, StreamLoopReviewInput, StreamLoopReviewerTask,
-    StreamLoopVerdict,
+    Message, ModelRequest, PreFlightRouteInput, PreFlightRouteOutput, PreFlightRouterTask,
+    Provider, Role, SessionTitleInput, SessionTitleTask, StreamLoopReviewInput,
+    StreamLoopReviewerTask, StreamLoopVerdict,
 };
 
 /// Errors that can occur during a harness task consultation (ADR-0211).
@@ -70,7 +70,7 @@ impl HarnessTaskPipeline {
         &self.provider
     }
 
-    /// Consult the harness task pipeline with a typed [`HarnessTask`].
+    /// Consult the harness task pipeline with a typed [`muta_contracts::HarnessTask`].
     pub async fn consult<T: muta_contracts::HarnessTask>(
         &self,
         task: T,

@@ -32,7 +32,7 @@ ROOT=$(mktemp -d /tmp/mutx-smoke.XXXXXX)
 PORT=${PORT:-9809}
 export MUTA_HOME="$ROOT"
 export MUTA_PORT="$PORT"
-cleanup() { "$MUTA" daemon stop >/dev/null 2>&1; rm -rf "$ROOT"; }
+cleanup() { "$MUTA" stop >/dev/null 2>&1; rm -rf "$ROOT"; }
 trap cleanup EXIT
 
 pass=0
@@ -104,7 +104,7 @@ for _ in $(seq 1 50); do
   [ -s "$ROOT/muta/instance/daemon.json" ] && break
   sleep 0.2
 done
-TOKEN=$("$MUTA" daemon token)
+TOKEN=$("$MUTA" token)
 # The handshake must complete over TCP+bearer: with no provider configured
 # the daemon's own reply is the "no provider" error — proof the remote
 # path reached a live daemon rather than failing to connect.

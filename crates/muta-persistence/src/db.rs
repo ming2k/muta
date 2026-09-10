@@ -4333,9 +4333,11 @@ mod tests {
             use muta_contracts::{Message, Role, TranscriptEntry};
 
             let engine = DatabaseEngine::open_in_memory().unwrap();
-            let mut data = crate::session::SessionData::default();
-            data.project_root = std::path::PathBuf::from("/tmp/proj-a");
-            data.title = Some("Retry loop debugging".into());
+            let mut data = crate::session::SessionData {
+                project_root: std::path::PathBuf::from("/tmp/proj-a"),
+                title: Some("Retry loop debugging".into()),
+                ..Default::default()
+            };
             let msg = Message::new(
                 Role::User,
                 "we need to debug the exponential backoff in the retry loop",
@@ -4395,10 +4397,12 @@ mod tests {
                 ("s-retry", "we debugged the retry loop's backoff"),
                 ("s-paint", "repaint the widget border only"),
             ] {
-                let mut data = crate::session::SessionData::default();
-                data.id = id.to_string();
-                data.project_root = std::path::PathBuf::from("/tmp/proj-r");
-                data.title = Some(id.to_string());
+                let mut data = crate::session::SessionData {
+                    id: id.to_string(),
+                    project_root: std::path::PathBuf::from("/tmp/proj-r"),
+                    title: Some(id.to_string()),
+                    ..Default::default()
+                };
                 let msg = Message::new(Role::User, text);
                 data.transcript.push(TranscriptEntry::from_message(0, &msg));
                 engine.save_session_full(&data).unwrap();

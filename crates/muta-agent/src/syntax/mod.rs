@@ -169,7 +169,9 @@ fn format_symbol_signature(lang: SupportedLanguage, node: Node, source: &str) ->
                 let clean = first_line.trim_end_matches('{').trim();
                 Some(format!("  {clean}"))
             }
-            "function_declaration" | "class_declaration" | "interface_declaration"
+            "function_declaration"
+            | "class_declaration"
+            | "interface_declaration"
             | "type_alias_declaration" => {
                 let text = node_text(node, source);
                 let first_line = text.lines().next().unwrap_or("").trim();

@@ -1,7 +1,7 @@
 //! Connections — the persisted "who I connect to" records.
 //!
 //! A connection is a **named pipe** to a model provider (ADR-0201): it points
-//! at exactly one [`ModelProvider`] by id, owns one credential, declares the
+//! at exactly one model provider by id, owns one credential, declares the
 //! client identity (impersonation / User-Agent) it speaks with, and may narrow
 //! or override the provider's model universe. It never defines models itself.
 //!

@@ -264,12 +264,18 @@ impl Agent {
         // ADR-0211: Staff the role with appropriate instance-bound HarnessFacets
         match resolved {
             muta_contracts::AgentRoleId::Code => {
-                profile.facets.push(Arc::new(crate::facet::CodeIntelligenceFacet::new(1024)));
+                profile
+                    .facets
+                    .push(Arc::new(crate::facet::CodeIntelligenceFacet::new(1024)));
             }
             muta_contracts::AgentRoleId::CodeAnalyst
             | muta_contracts::AgentRoleId::Reviewer
             | muta_contracts::AgentRoleId::Architect => {
-                profile.facets.push(Arc::new(crate::facet::CodeIntelligenceFacet::read_only(1024)));
+                profile
+                    .facets
+                    .push(Arc::new(crate::facet::CodeIntelligenceFacet::read_only(
+                        1024,
+                    )));
             }
             muta_contracts::AgentRoleId::Security => {}
         }

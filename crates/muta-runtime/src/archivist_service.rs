@@ -137,7 +137,10 @@ impl ArchivistService {
         // by the caller (one question at a time per dashboard), so the holder
         // never races across asks.
         {
-            let mut guard = self.holder.write().unwrap();
+            let mut guard = self
+                .holder
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             *guard = provider;
         }
         if muta_agent::NoProvider::is(self.agent.provider.as_ref()) {

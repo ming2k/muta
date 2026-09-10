@@ -61,10 +61,7 @@ impl HarnessFacet for CodeIntelligenceFacet {
         if self.read_only {
             return Ok(());
         }
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         crate::syntax::verify_ast_syntax(ext, content)
     }
 
@@ -129,9 +126,10 @@ mod tests {
         );
         agent.set_project_root(Some(dir.path().to_path_buf()));
 
-        let source_messages = vec![
-            muta_contracts::Message::new(muta_contracts::Role::User, "Hello"),
-        ];
+        let source_messages = vec![muta_contracts::Message::new(
+            muta_contracts::Role::User,
+            "Hello",
+        )];
 
         let req = agent.model_request(&source_messages);
 

@@ -1215,7 +1215,7 @@ pub fn parse_console_command(line: &str) -> ConsoleCommand {
         let word = parts.next().unwrap_or("").to_ascii_lowercase();
         let remainder = parts.next().unwrap_or("").trim().to_string();
         return match word.as_str() {
-            "help" => ConsoleCommand::Help,
+            "help" | "?" => ConsoleCommand::Help,
             "ask" => {
                 if remainder.is_empty() {
                     ConsoleCommand::Unrecognized(

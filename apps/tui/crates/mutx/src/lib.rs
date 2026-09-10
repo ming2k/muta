@@ -1356,7 +1356,9 @@ pub async fn run_tui(
                                 transcript!(E::Append { message });
                             }
                             RoundEvent::BackgroundJobCompleted(outcome) => {
-                                let (label, is_success, exit_code, duration_secs) = match &outcome.state {
+                                let (label, is_success, exit_code, duration_secs) = match &outcome
+                                    .state
+                                {
                                     muta_contracts::JobState::Succeeded { duration_ms, .. } => (
                                         format!(
                                             "Background job `{}` completed ({}s)",

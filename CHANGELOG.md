@@ -7,25 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-09-10
+
+### Added
+
+- **Dashboard Archivist & muta-level retrieval agent (ADR-0208).** Single-shot
+  Archivist conversational queries via `? <question>` or `/ask <question>` from
+  the TUI dashboard. Cross-project session history full-text search powered by
+  SQLite FTS5 over persisted transcript entries (`AgentRequest::SearchHistory`,
+  `HistorySearchHit`), enabling instant context recall across any session hosted
+  by the daemon without touching the underlying project files directly.
+- **Agent role harness facets & ephemeral AST code intelligence (ADR-0211).**
+  Introduced `AgentRole` harness facets and tree-sitter integration. Adds the
+  `get_outline` tool for instant structural exploration (functions, types, traits,
+  classes) without consuming token budgets on full-file reads. Equipped tailored
+  facets across developer and code-analyst roles.
+- **Decoupled followup queue & authoritative TUI task bar (ADR-0212).**
+  Added an authoritative background task bar (`TasksBar`) rendered at the top of the
+  TUI view, displaying active, running, and settled background jobs with visual
+  lifecycle indicators. Decoupled followup queue execution from the main agent
+  steering cycle.
+- **OpenRouter provider registry integration.** Integrated OpenRouter into the
+  declarative model provider registry, complete with official remote discovery
+  endpoints and catalog configuration.
+- **Wire protocol v10 bump.** Bumped wire protocol version to v10 to support
+  single-shot Archivist control verbs (`ControlRequest::AskArchivist`),
+  cross-project full-text search, and model reasoning effort level metadata.
+
+### Changed
+
+- **Extracted network transport stack into independent `netune` library (ADR-0210).**
+  Decoupled HTTP, SSE stream reassembly, TLS connection pooling, and packet trace
+  infrastructure from `muta-llm-client` into the standalone `netune` and
+  `netune-trace` crates.
+- **Telemetry overlays overhaul.** Overhauled the telemetry modal architecture with
+  dedicated views for session-level latency metrics, per-turn request attempts,
+  token accounting tables, and TTFT breakdowns.
+
 ### Fixed
 
-- **`config.toml` saves no longer resurrect user-deleted settings.** The
-  session daemon holds an in-memory config snapshot loaded at startup
-  (ADR-0209); previously any save — a `/models` switch, a favorite toggle,
-  `muta mcp add`, a pruned-favorites pass — rewrote the whole file from that
-  snapshot, silently restoring anything the user had hand-deleted in the
-  meantime (the reported symptom: removing `[workspace].additional_roots`
-  from `~/.config/muta/config.toml` put the entries straight back). Saves are
-  now ownership-reconciled merges: under the config file lock the on-disk
-  document is re-read, user-owned tables (`[workspace]`, `[web]`, `[agent]`,
-  `[mcp]`, `[[hooks]]`, favorites, …) are written back exactly as the user
-  left them, and only the runtime-owned selection pair (`default_connection`
-  / `default_model`, subject to the existing preserve semantics) is overlaid
-  from the in-memory snapshot. Persisted `[workspace].additional_roots` thus
-  means exactly the user-declared global roots, as documented; project-trust
-  merges stay runtime view state and are never written into the file.
-  Snapshot-driven saves remain pure flushes — the user's edits are not
-  folded back into the handler's `&mut Config` mid-request.
+- **`config.toml` saves no longer resurrect user-deleted settings (ADR-0209).**
+  Saves are now ownership-reconciled merges: under config file lock the on-disk
+  document is re-read and user-owned tables (`[workspace]`, `[web]`, `[agent]`,
+  `[mcp]`, `[[hooks]]`, favorites, …) are preserved verbatim, overlaying only
+  runtime-owned selections.
+- **Dashboard console `/?` shortcut.** Fixed `/?` invocation in dashboard command
+  parsing so it reliably routes to the `/help` command table.
+- **Theme surface modal compatibility.** Added Serde backward-compatibility alias
+  `modal` for the ADR-0205 `dialog` surface configuration.
 
 ## [0.43.1] - 2026-09-09
 

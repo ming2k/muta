@@ -1022,7 +1022,7 @@ pub async fn control(
     control_with_reply(info, request).await.map(|_| ())
 }
 
-/// [`Self::control`] for reply-bearing verbs (ADR-0208 `AskArchivist`): the
+/// [`control`] for reply-bearing verbs (ADR-0208 `AskArchivist`): the
 /// daemon's `ControlReply` free-string travels back on success instead of
 /// being dropped. Verbs without a payload reply with an empty string, so
 /// every existing caller can migrate to this shape without behavior change.
