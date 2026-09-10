@@ -8,13 +8,13 @@ use super::request::{self, BodyInput};
 use super::response;
 use super::*;
 use muta_contracts::{
-    Effort, Message, PromptCacheMode, ReasoningMode, ResolvedCachePlan, Role, Tool,
+    Effort, Message, PromptCacheMode, ReasoningMode, ResolvedCachePolicy, Role, Tool,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-static DEFAULT_UNSUPPORTED_CACHE_PLAN: ResolvedCachePlan = ResolvedCachePlan::Unsupported;
-static DEFAULT_EXPLICIT_CACHE_PLAN: ResolvedCachePlan = ResolvedCachePlan::Enabled {
+static DEFAULT_UNSUPPORTED_CACHE_PLAN: ResolvedCachePolicy = ResolvedCachePolicy::Unsupported;
+static DEFAULT_EXPLICIT_CACHE_PLAN: ResolvedCachePolicy = ResolvedCachePolicy::Enabled {
     mode: PromptCacheMode::Explicit,
     retention: Some(muta_contracts::CacheRetention::FiveMinutes),
     routing_key: None,
@@ -177,7 +177,7 @@ fn count_cache_breakpoints(body: &Value) -> usize {
 }
 
 #[test]
-fn cache_breakpoints_hit_all_four_zones() {
+fn cache_breakpoints_use_all_four_slots() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(DummyTool)];
@@ -239,7 +239,7 @@ fn disabled_cache_plan_omits_cache_breakpoints() {
             tool_specs: Some(&tool_specs),
             max_tokens: provider.max_tokens,
             thinking: provider.thinking,
-            cache_plan: &muta_contracts::ResolvedCachePlan::Disabled,
+            cache_plan: &muta_contracts::ResolvedCachePolicy::Disabled,
         },
     );
     assert_eq!(count_cache_breakpoints(&body), 0);
@@ -310,7 +310,7 @@ fn cache_breakpoints_use_default_five_minute_ttl() {
 }
 
 #[test]
-fn cache_breakpoints_degrade_when_zones_absent() {
+fn cache_breakpoints_degrade_when_regions_absent() {
     let provider =
         AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
     let mut input = body_input(&provider, false);

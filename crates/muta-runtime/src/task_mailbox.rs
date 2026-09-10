@@ -96,7 +96,7 @@ pub(crate) async fn run_mailbox(
                 let digest = format!(
                     "[background service ready: job `{}` is running and its \
                      readiness condition is met. Continue your work; use \
-                     process_logs to inspect its output.]",
+                     the process tool (action: 'logs') to inspect its output.]",
                     job_id.0
                 );
                 request_wake_turn(&env, &session_id, digest).await;

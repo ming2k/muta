@@ -47,20 +47,26 @@ impl ModelRequestAssembler {
         let mut messages = window.to_vec();
         crate::agent::remove_empty_assistant_messages(&mut messages);
         messages.retain(|message| message.role != Role::System && !message.is_command_echo());
-        self.assemble_prepared(messages, context, tools)
+        self.assemble_prepared(messages, Vec::new(), context, tools)
     }
 
     /// Assemble from an already-filtered, owned message list. The hot path
     /// (`Agent::model_request`) builds that list with a single clone and
     /// hands it over — no second copy of the window per turn (ADR-0187).
+    ///
+    /// `temporary_context` is the request-local `E_n` tail (ADR-0213/ADR-0217):
+    /// it is attached to the snapshot but excluded from the cacheable prefix and
+    /// never enters durable history.
     pub(crate) fn assemble_prepared(
         &self,
         messages: Vec<Message>,
+        temporary_context: Vec<Message>,
         context: &SystemPromptContext,
         tools: &[Arc<dyn Tool>],
     ) -> muta_contracts::ModelRequest {
         let instructions = self.system_prompt_registry.build_bundle(context);
         muta_contracts::ModelRequest::with_instructions_and_tools(instructions, messages, tools)
+            .with_temporary_context(temporary_context)
     }
 }
 

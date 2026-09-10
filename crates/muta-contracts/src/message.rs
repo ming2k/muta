@@ -109,7 +109,7 @@ pub enum InjectionKind {
     /// backstops (`hard_stop_turns`, `abort`, `Esc`) still cap. This is a
     /// harness-internal steering injection, distinct from the user-configurable
     /// `Hook(Turn)` axis. Site: `Agent::maybe_inject_loop_nudge`
-    /// (`crate::loop_guard`).
+    /// (`muta_agent::guard`).
     LoopReviewNudge,
     /// Context-compaction checkpoint: an LLM summary of archived rounds wrapped
     /// under the stable checkpoint header. Site: `checkpoint_message`.

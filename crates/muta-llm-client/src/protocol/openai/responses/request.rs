@@ -54,7 +54,7 @@ pub struct BodyInput<'a> {
     pub reasoning_effort: Option<Effort>,
     pub delivery: &'a muta_contracts::RequestDelivery,
     pub store: bool,
-    pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
+    pub cache_plan: &'a muta_contracts::ResolvedCachePolicy,
 }
 
 /// Build the Responses request body.
@@ -399,8 +399,8 @@ mod tests {
 
     static DEFAULT_DELIVERY: muta_contracts::RequestDelivery =
         muta_contracts::RequestDelivery::FullReplay;
-    static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePlan =
-        muta_contracts::ResolvedCachePlan::Unsupported;
+    static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePolicy =
+        muta_contracts::ResolvedCachePolicy::Unsupported;
 
     fn test_body_input<'a>(
         model: &'a str,
@@ -409,7 +409,7 @@ mod tests {
         reasoning_effort: Option<Effort>,
         delivery: &'a muta_contracts::RequestDelivery,
         store: bool,
-        cache_plan: &'a muta_contracts::ResolvedCachePlan,
+        cache_plan: &'a muta_contracts::ResolvedCachePolicy,
     ) -> BodyInput<'a> {
         BodyInput {
             model,
@@ -706,7 +706,7 @@ mod tests {
                 None,
                 &muta_contracts::RequestDelivery::OpaqueReplay,
                 false,
-                &muta_contracts::ResolvedCachePlan::Unsupported,
+                &muta_contracts::ResolvedCachePolicy::Unsupported,
             ),
             &muta_contracts::ModelCapabilities::for_channel("gpt-5.6-sol", None),
         )

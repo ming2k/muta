@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use muta_contracts::{MeshAddress, MeshEnvelope, MeshMessage, MeshStation, Tool};
 
 use super::MeshTracker;
+use crate::sync::poison_lock;
 
 /// Tool allowing agents to send lawful messages over the mesh network.
 pub struct MeshSendTool {
@@ -21,10 +22,7 @@ impl MeshSendTool {
     }
 
     pub fn bind_sender(&self, address: MeshAddress) {
-        *self
-            .sender_address
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(address);
+        *poison_lock(&self.sender_address) = Some(address);
     }
 }
 
@@ -114,11 +112,7 @@ impl Tool for MeshSendTool {
             other => return Err(format!("Unknown message_type: '{other}'")),
         };
 
-        let sender = self
-            .sender_address
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let sender = poison_lock(&self.sender_address).clone();
 
         let envelope = MeshEnvelope::new(sender, recipient, message);
         let msg_id = envelope.id.clone();
@@ -150,10 +144,7 @@ impl MeshListPeersTool {
     }
 
     pub fn bind_sender(&self, address: MeshAddress) {
-        *self
-            .sender_address
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(address);
+        *poison_lock(&self.sender_address) = Some(address);
     }
 }
 
@@ -184,11 +175,7 @@ impl Tool for MeshListPeersTool {
         let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
         let scope = args["scope"].as_str().unwrap_or("same_station");
 
-        let sender = self
-            .sender_address
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let sender = poison_lock(&self.sender_address).clone();
 
         let addresses = match scope {
             "all" => self.tracker.live_addresses(),

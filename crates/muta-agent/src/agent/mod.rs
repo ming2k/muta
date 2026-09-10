@@ -136,6 +136,14 @@ impl ScopedToolDisable {
 pub(crate) type TurnPersistFn =
     Arc<dyn Fn(&[Message]) -> BoxFuture<'static, Result<(), String>> + Send + Sync>;
 
+/// Invoked once per freshly assembled model request (ADR-0218) with its
+/// request-projection record. The runtime installs a closure that enqueues the
+/// record to the session's forensic archive. It is synchronous and infallible
+/// by design: forensic persistence must never block or fail request dispatch.
+/// It is `None` on subagents, the review diagnostic, and tests.
+pub(crate) type RequestProjectionFn =
+    Arc<dyn Fn(muta_contracts::RequestProjection) + Send + Sync>;
+
 /// Title-established observer fired by the background session titler
 /// (ADR-0022).
 ///
@@ -326,6 +334,10 @@ pub struct Agent {
     /// subagents, the review diagnostic, and tests — they have no session of
     /// their own to persist, so the turn boundary is a plain no-op there.
     turn_persist: std::sync::Mutex<Option<TurnPersistFn>>,
+    /// Request-projection archive sink installed by the session driver
+    /// (ADR-0218): fired once per freshly assembled request with its forensic
+    /// record. `None` for subagents, the review diagnostic, and tests.
+    request_projection_persist: std::sync::Mutex<Option<RequestProjectionFn>>,
     /// Title-established observer installed by the session driver: fired
     /// once when the background titler durably persists a session's first
     /// title, so the runtime can push a fresh sessions overview (and the
@@ -476,7 +488,7 @@ pub(crate) struct RoundState {
     /// `ReadLoopGuard`) and tool-call data for the ReAct turn just dispatched.
     /// It lives and dies with this `RoundState`, so loop
     /// state never crosses user rounds.
-    pub(crate) guards: crate::loop_guard::RoundGuardState,
+    pub(crate) guards: crate::guard::RoundGuardState,
     /// Exact tool calls that reached a terminal result in this round. The set
     /// becomes an idempotency fence only after a transient provider retry;
     /// normal ReAct turns retain their existing repeat-call behavior.
@@ -497,8 +509,8 @@ impl RoundState {
     /// `RoundState`, so loop state never crosses user rounds.
     fn guards_default(
         config: muta_contracts::DoomGuardConfig,
-    ) -> crate::loop_guard::RoundGuardState {
-        crate::loop_guard::RoundGuardState::new()
+    ) -> crate::guard::RoundGuardState {
+        crate::guard::RoundGuardState::new()
             .with_doom(crate::doom_guard::DoomLoopGuard::new(config))
     }
 

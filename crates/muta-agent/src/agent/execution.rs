@@ -198,7 +198,10 @@ impl Agent {
     }
 
     /// Emit a [`AgentEvent::TodosUpdated`] snapshot whenever a tool mutates
-    /// the task list (`todo` full-replace or `todo_update` surgical edit).
+    /// the task list (`todo` full-replace or surgical edit; the legacy
+    /// `write_todos`/`update_todo`/`todo_update` names predate ADR-0215 and
+    /// match only so persisted prompts replaying them still refresh the
+    /// panel).
     /// The TUI stores the snapshot and re-renders the sticky panel above the
     /// input box.
     pub(super) fn emit_todos_change<F>(&self, call: &ToolCall, on_event: &mut F)
@@ -207,7 +210,7 @@ impl Agent {
     {
         if matches!(
             call.name.as_str(),
-            "write_todos" | "update_todo" | "todo" | "todo_update"
+            "todo" | "write_todos" | "update_todo" | "todo_update"
         ) {
             on_event(AgentEvent::TodosUpdated(self.todos()));
         }

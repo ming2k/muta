@@ -78,6 +78,13 @@ pub struct ModelRequest {
     #[serde(default, skip_serializing_if = "crate::InstructionBundle::is_empty")]
     pub instructions: crate::InstructionBundle,
     pub messages: Vec<Message>,
+    /// Request-local temporary context (`E_n`, ADR-0213/ADR-0217): optional,
+    /// bounded, and never persisted to the durable interaction record. Provider
+    /// adapters append it at the tail of the wire message sequence; it is
+    /// deliberately excluded from the request envelope's revisions and from the
+    /// cacheable prefix identity because it does not survive a request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub temporary_context: Vec<Message>,
     /// Tool declarations in the provider-neutral [`ToolSpec`] shape. Provider
     /// adapters translate these into their own wire format.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -106,6 +113,7 @@ impl ModelRequest {
         Self {
             instructions: crate::InstructionBundle::default(),
             messages,
+            temporary_context: Vec::new(),
             tool_specs: Vec::new(),
             ephemeral: false,
             delivery: crate::RequestDelivery::FullReplay,
@@ -122,6 +130,7 @@ impl ModelRequest {
         Self {
             instructions: crate::InstructionBundle::default(),
             messages,
+            temporary_context: Vec::new(),
             tool_specs: Vec::new(),
             ephemeral: true,
             delivery: crate::RequestDelivery::FullReplay,
@@ -157,6 +166,7 @@ impl ModelRequest {
         Self {
             instructions: crate::InstructionBundle::default(),
             messages,
+            temporary_context: Vec::new(),
             tool_specs,
             ephemeral: false,
             delivery: crate::RequestDelivery::FullReplay,
@@ -182,6 +192,7 @@ impl ModelRequest {
         Self {
             instructions,
             messages,
+            temporary_context: Vec::new(),
             tool_specs,
             ephemeral: false,
             delivery: crate::RequestDelivery::FullReplay,
@@ -237,12 +248,36 @@ impl ModelRequest {
         self
     }
 
+    /// Attach request-local temporary context (`E_n`). It is appended at the
+    /// wire tail by adapters and excluded from the cacheable prefix identity, so
+    /// it does not recompute the request revisions.
+    pub fn with_temporary_context(mut self, temporary_context: Vec<Message>) -> Self {
+        self.temporary_context = temporary_context;
+        self
+    }
+
+    /// Borrow the request-local temporary context (`E_n`).
+    pub fn temporary_context(&self) -> &[Message] {
+        &self.temporary_context
+    }
+
+    /// Derive the provider-neutral cache plan: the identity of the cacheable
+    /// prefix `S | H | I` plus message counts separated from `E`. See
+    /// [`crate::CachePlan`] and ADR-0217.
+    pub fn cache_plan(&self) -> crate::CachePlan {
+        crate::CachePlan::from_request(self)
+    }
+
     /// Borrow tool declarations in the optional form used by request builders.
     pub fn tool_specs(&self) -> Option<&[ToolSpec]> {
         (!self.tool_specs.is_empty()).then_some(self.tool_specs.as_slice())
     }
 
-    pub fn into_parts(self) -> (Vec<Message>, Vec<ToolSpec>) {
+    /// Consume the request into the provider-facing `(messages, tool_specs)`
+    /// pair. Request-local `E_n` is appended after the conversation so the wire
+    /// tail matches the assembled request; it is never silent-dropped.
+    pub fn into_parts(mut self) -> (Vec<Message>, Vec<ToolSpec>) {
+        self.messages.append(&mut self.temporary_context);
         (self.messages, self.tool_specs)
     }
 }

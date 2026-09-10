@@ -163,6 +163,7 @@ impl Agent {
             round_paused_ms: std::sync::atomic::AtomicU64::new(0),
             identity: std::sync::RwLock::new(identity),
             turn_persist: std::sync::Mutex::new(None),
+            request_projection_persist: std::sync::Mutex::new(None),
             title_established: std::sync::Mutex::new(None),
             model_request_assembler,
             variant_selection: Arc::new(std::sync::Mutex::new(
@@ -336,16 +337,24 @@ impl Agent {
         crate::agent::remove_empty_assistant_messages(&mut enriched);
         enriched.retain(|message| !message.is_command_echo());
 
-        // ADR-0211: Zone 3 True Ephemeral Context (Request Tail).
-        // Contributed by bound HarnessFacets (e.g. 1024-token Repo Map).
-        // Appended strictly to in-flight `enriched` memory at request dispatch;
-        // NEVER committed into persistent SQLite transcripts, preserving 100% prefix KV-cache.
+        // `E_n` (the request-local temporary context) is empty by default
+        // (ADR-0213/ADR-0214/ADR-0217): code structure is delivered on demand
+        // via `get_outline`, not as an automatic ambient Repo Map. The facet
+        // loop remains the generic extension point for explicitly-approved,
+        // budgeted temporary-context producers. A projection is bounded and
+        // stays strictly request-local: it travels in `temporary_context`,
+        // never in `messages`, so it is excluded from the cacheable prefix and
+        // is never committed to the durable transcript.
+        let mut temporary_context: Vec<Message> = Vec::new();
         let ws_root = self.workspace_root();
         for facet in self.facets() {
-            if let Some(ephemeral) = facet.project_ephemeral_context(ws_root.as_deref()) {
-                enriched.push(crate::conversation_context::hidden_user(
+            if let Some(projection) = facet.project_temporary_context(ws_root.as_deref()) {
+                if projection.is_empty() {
+                    continue;
+                }
+                temporary_context.push(crate::conversation_context::hidden_user(
                     muta_contracts::InjectionKind::SystemReminder,
-                    ephemeral,
+                    bound_temporary_context(projection),
                 ));
             }
         }
@@ -353,7 +362,7 @@ impl Agent {
         let tools = self.visible_tools();
         let context = self.system_prompt_context(&tools);
         self.model_request_assembler
-            .assemble_prepared(enriched, &context, &tools)
+            .assemble_prepared(enriched, temporary_context, &context, &tools)
             .with_route_state(
                 &self.provider.route_fingerprint(),
                 self.provider.continuation_mode(),
@@ -394,6 +403,7 @@ impl Agent {
             history_tokens,
             overhead_tokens: total_tokens.saturating_sub(history_tokens),
             total_tokens,
+            temporary_context_tokens: weights.temporary_context_tokens,
         }
     }
 
@@ -678,6 +688,32 @@ impl Agent {
         }
     }
 
+    /// Install the request-projection archive sink (ADR-0218). Called by the
+    /// session driver; `None` (subagents, tests) makes recording a no-op.
+    pub fn set_request_projection_persist(&self, f: RequestProjectionFn) {
+        *self
+            .request_projection_persist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(f);
+    }
+
+    /// Fire the request-projection archive sink if installed. Synchronous and
+    /// infallible: the sink only enqueues the record, so request dispatch is
+    /// never blocked or failed by forensic persistence.
+    pub(super) fn fire_request_projection_persist(
+        &self,
+        projection: muta_contracts::RequestProjection,
+    ) {
+        let f = self
+            .request_projection_persist
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(f) = f {
+            f(projection);
+        }
+    }
+
     /// Snapshot the hook registry as a cheap `Arc` clone, so insertion points
     /// fire hooks without holding the swap lock across the async `fire`.
     pub(super) fn hooks(&self) -> Arc<crate::hooks::HookRegistry> {
@@ -888,5 +924,75 @@ impl Agent {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .push(facet);
+    }
+}
+
+/// Hard byte budget for a single request-local temporary-context producer
+/// (ADR-0213 §2). Temporary context is optional enrichment, not a channel for
+/// bulk repository state, so the budget is deliberately small.
+pub(crate) const TEMPORARY_CONTEXT_BUDGET_BYTES: usize = 8 * 1024;
+
+/// Bound a producer's output to [`TEMPORARY_CONTEXT_BUDGET_BYTES`], splitting on
+/// a UTF-8 boundary and disclosing the truncation. Keeping this in the assembly
+/// path means a facet cannot widen the request without an explicit budget.
+fn bound_temporary_context(mut text: String) -> String {
+    if text.len() <= TEMPORARY_CONTEXT_BUDGET_BYTES {
+        return text;
+    }
+    let mut cut = TEMPORARY_CONTEXT_BUDGET_BYTES;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    text.truncate(cut);
+    text.push_str("\n[temporary context truncated to its byte budget]");
+    text
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn short_temporary_context_is_unchanged() {
+        let text = "outline".to_string();
+        assert_eq!(bound_temporary_context(text.clone()), text);
+    }
+
+    #[test]
+    fn oversized_temporary_context_is_bounded_and_disclosed() {
+        let text = "x".repeat(TEMPORARY_CONTEXT_BUDGET_BYTES + 100);
+        let bounded = bound_temporary_context(text);
+        assert!(bounded.len() <= TEMPORARY_CONTEXT_BUDGET_BYTES + 64);
+        assert!(bounded.ends_with("[temporary context truncated to its byte budget]"));
+    }
+
+    /// ADR-0218: the archive sink fires with the record and a write failure is
+    /// non-fatal (forensic, never authoritative).
+    #[tokio::test]
+    async fn request_projection_sink_fires_and_is_non_fatal() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let agent = crate::Agent::new(
+            std::sync::Arc::new(crate::NoProvider),
+            Vec::new(),
+            crate::AgentIdentity::new("dev", "developer"),
+        );
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
+        let seen = count.clone();
+        agent.set_request_projection_persist(std::sync::Arc::new(move |_record| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        agent.fire_request_projection_persist(muta_contracts::RequestProjection {
+            round: 1,
+            turn: 0,
+            created_at_ms: 0,
+            prefix_fingerprint: "sha256:test".to_string(),
+            conversation_messages: 0,
+            temporary_context_tokens: 0,
+            temporary_context: Vec::new(),
+        });
+
+        assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 }

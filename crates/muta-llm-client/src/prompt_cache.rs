@@ -2,7 +2,7 @@
 
 use muta_contracts::{
     ModelRequest, PromptCacheCapabilities, PromptCacheModePreference, PromptCachePreference,
-    ResolvedCachePlan,
+    ResolvedCachePolicy,
 };
 
 /// Immutable prompt-cache policy attached to one concrete provider route.
@@ -43,7 +43,7 @@ impl PromptCacheConfig {
 
     /// Merge a request override onto the route default, then validate the
     /// exact result against this route's declared capabilities.
-    pub fn resolve(&self, request: &ModelRequest) -> Result<ResolvedCachePlan, String> {
+    pub fn resolve(&self, request: &ModelRequest) -> Result<ResolvedCachePolicy, String> {
         let request_preference = request.prompt_cache_preference;
         let preference = PromptCachePreference {
             mode: if request_preference.mode == PromptCacheModePreference::ProviderDefault {
@@ -95,7 +95,7 @@ mod tests {
             });
         assert_eq!(
             config.resolve(&request).unwrap(),
-            ResolvedCachePlan::Enabled {
+            ResolvedCachePolicy::Enabled {
                 mode: PromptCacheMode::Automatic,
                 retention: Some(CacheRetention::OneHour),
                 routing_key: None,

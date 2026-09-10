@@ -42,7 +42,7 @@ pub struct BodyInput<'a> {
     pub tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
     pub max_tokens: u32,
     pub thinking: ThinkingConfig,
-    pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
+    pub cache_plan: &'a muta_contracts::ResolvedCachePolicy,
 }
 
 /// Build the `/messages` request body from the harness message list.
@@ -142,7 +142,7 @@ pub fn body_with_capabilities(
         body["system"] = json!(system_text);
     }
 
-    if let muta_contracts::ResolvedCachePlan::Enabled {
+    if let muta_contracts::ResolvedCachePolicy::Enabled {
         mode, retention, ..
     } = cache_plan
     {
@@ -215,9 +215,9 @@ pub fn headers(
 /// (a 5th returns HTTP 400).
 const MAX_BREAKPOINTS: usize = 4;
 
-/// Stamp cache breakpoints across the `tools → system → messages` zones within
-/// the 4-breakpoint budget: last tool, last system block, and the two newest
-/// messages. No-op for zones that are absent.
+/// Stamp cache breakpoints across the ordered request regions
+/// (`tools → system → messages`) within the 4-breakpoint budget: last tool,
+/// last system block, and the two newest messages. No-op for absent regions.
 fn stamp_caching_breakpoints(body: &mut Value, system_text: &str, control: &Value) {
     let mut breakpoints = 0usize;
 

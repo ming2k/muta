@@ -28,12 +28,12 @@ pub struct StatusOptions {
     pub diagnostic: bool,
 }
 
-pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String> {
+pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), Box<dyn std::error::Error>> {
     if opts.diagnostic {
         let diag = client::diagnose_daemon();
         render_diagnostics(&diag, opts.json);
         if opts.watch {
-            return Err("cannot watch static diagnostic output".to_string());
+            return Err("cannot watch static diagnostic output".into());
         }
         if client::discover(project_root).is_none() {
             return Ok(());
@@ -47,7 +47,7 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
         return Ok(());
     };
     if !client::versions_compatible(&info) {
-        return Err(client::incompatibility_error(&info));
+        return Err(client::incompatibility_error(&info).into());
     }
     let action = MonitorAction {
         watch: opts.watch,
@@ -59,8 +59,8 @@ pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), String>
     // coherent table instead of a raw event log.
     let mut state = match rx.recv().await {
         Some(MonitorEvent::Snapshot(snapshot)) => snapshot,
-        Some(_) => return Err("monitor stream opened without a snapshot".to_string()),
-        None => return Err("daemon closed the monitor stream".to_string()),
+        Some(_) => return Err("monitor stream opened without a snapshot".into()),
+        None => return Err("daemon closed the monitor stream".into()),
     };
     render(&state, opts);
     if !opts.watch {
@@ -309,7 +309,7 @@ pub(crate) fn table(snapshot: &MonitorSnapshot) -> String {
             short_id(&row.id),
             row.status.as_str(),
             hosting_cell(row),
-            row.round_turn(),
+            round_turn(row),
             row.output_tokens,
             fmt_elapsed(row.elapsed_ms),
             detail(row),
@@ -329,16 +329,11 @@ fn hosting_cell(row: &MonitoredSession) -> String {
 
 /// `round 3 › turn 2` while a round runs; `round 3` once it settled; `–`
 /// before the first round.
-trait RoundCell {
-    fn round_turn(&self) -> String;
-}
-impl RoundCell for MonitoredSession {
-    fn round_turn(&self) -> String {
-        match (self.round, self.turn) {
-            (0, _) => "–".to_string(),
-            (round, Some(turn)) => format!("{round} › {turn}"),
-            (round, None) => format!("{round}"),
-        }
+fn round_turn(row: &MonitoredSession) -> String {
+    match (row.round, row.turn) {
+        (0, _) => "–".to_string(),
+        (round, Some(turn)) => format!("{round} › {turn}"),
+        (round, None) => format!("{round}"),
     }
 }
 

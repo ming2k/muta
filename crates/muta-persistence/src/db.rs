@@ -15,17 +15,22 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{info, warn};
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 10;
+pub const CURRENT_DB_VERSION: u32 = 11;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "b0252afc017b06817eb515e8ffc97db656b755f2854274c0df7f77a072b6b127";
+    "cc88bc00f1401b975e4a8b53c73fe4ac30f3b6c6ce3404e4400fca7856d22d9b";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
+
+/// Hard cap on retained request-projection records per session (ADR-0218). The
+/// archive is forensic, not authoritative: a bounded ring keeps a long session
+/// from growing it without limit.
+pub const MAX_RETAINED_REQUEST_PROJECTIONS: usize = 64;
 
 /// Initialize and return a connection to the SQLite database.
 /// Configures WAL mode, synchronous=NORMAL for robustness, busy timeout, and turns on foreign keys.
@@ -386,6 +391,29 @@ const MIGRATIONS: &[Migration] = &[
         // does not trip the referential guard.
         version: 10,
         sql: "",
+    },
+    Migration {
+        // Durable request-projection archive (ADR-0218): a key-addressed table
+        // for forensic snapshots of assembled requests. It is deliberately a
+        // table, not a `sessions` JSON column: the projection is written on the
+        // request hot path, and a row column would force an O(records)
+        // serialization on every session save (the same reason migration 8
+        // moved the usage ledger into its own table). `CREATE TABLE IF NOT
+        // EXISTS` is idempotent, so a database that already carries the table
+        // passes through unchanged.
+        version: 11,
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS request_projections (
+            session_id    TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            round         INTEGER NOT NULL,
+            turn          INTEGER NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            payload       TEXT NOT NULL,
+            PRIMARY KEY (session_id, round, turn)
+        );
+        CREATE INDEX IF NOT EXISTS idx_request_projections_session_created
+            ON request_projections(session_id, created_at_ms DESC);
+        "#,
     },
 ];
 
@@ -761,6 +789,16 @@ fn verify_sessions_schema(conn: &Connection) -> Result<()> {
              skipped schema migration — restore a backup or recreate the state",
             missing.join(", ")
         )));
+    }
+    // Table owned by migration 11 (ADR-0218). The sessions-column guard above
+    // cannot see it; verify it explicitly so a database that skipped the
+    // migration fails loud at startup instead of on the first request.
+    if !table_exists(conn, "request_projections")? {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "request_projections table is missing; the database predates schema \
+             migration 11 — restore a backup or recreate the state"
+                .to_string(),
+        ));
     }
     Ok(())
 }
@@ -2261,6 +2299,72 @@ impl DatabaseEngine {
         Ok(())
     }
 
+    /// Insert or replace one request-projection record (ADR-0218). Keyed by
+    /// `(session, round, turn)`, so a re-recorded logical invocation replaces
+    /// its row. After the insert, the per-session archive is trimmed to the
+    /// newest [`MAX_RETAINED_REQUEST_PROJECTIONS`] rows.
+    pub fn insert_request_projection(
+        &self,
+        session_id: &str,
+        record: &muta_contracts::RequestProjection,
+    ) -> Result<()> {
+        let payload = serde_json::to_string(record)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO request_projections
+                (session_id, round, turn, created_at_ms, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id,
+                record.round as i64,
+                record.turn as i64,
+                record.created_at_ms as i64,
+                payload,
+            ],
+        )?;
+        self.conn.execute(
+            "DELETE FROM request_projections
+             WHERE session_id = ?1
+               AND rowid NOT IN (
+                   SELECT rowid FROM request_projections
+                   WHERE session_id = ?1
+                   ORDER BY created_at_ms DESC, rowid DESC
+                   LIMIT ?2
+               )",
+            params![session_id, MAX_RETAINED_REQUEST_PROJECTIONS as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Load a session's request-projection archive in capture order, oldest
+    /// first, capped at `limit`. Undecodable payloads are skipped with a log,
+    /// never surfaced as history.
+    pub fn load_request_projections(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<muta_contracts::RequestProjection>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT payload FROM request_projections WHERE session_id = ?1
+             ORDER BY created_at_ms ASC, rowid ASC LIMIT ?2",
+        )?;
+        let rows =
+            stmt.query_map(params![session_id, limit as i64], |row| row.get::<_, String>(0))?;
+        let mut records = Vec::new();
+        for payload in rows {
+            let payload = payload?;
+            match serde_json::from_str(&payload) {
+                Ok(record) => records.push(record),
+                Err(error) => tracing::warn!(
+                    session = %session_id,
+                    error = %error,
+                    "request projection payload undecodable; skipped"
+                ),
+            }
+        }
+        Ok(records)
+    }
+
     /// List keys with a given prefix, ordered descending.
     pub fn list_kv_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
         let pattern = format!("{prefix}%");
@@ -2807,6 +2911,11 @@ pub enum PersistenceCommand {
         cmd: muta_contracts::CommandRecord,
         ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
+    RecordRequestProjection {
+        session_id: String,
+        record: muta_contracts::RequestProjection,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
+    },
     SetKV {
         key: String,
         value: String,
@@ -2877,6 +2986,14 @@ impl PersistenceCommand {
                 let res = guarded(|| engine.record_command(&cmd));
                 let _ = ack.send(res);
             }
+            Self::RecordRequestProjection {
+                session_id,
+                record,
+                ack,
+            } => {
+                let res = guarded(|| engine.insert_request_projection(&session_id, &record));
+                let _ = ack.send(res);
+            }
             Self::SetKV { key, value, ack } => {
                 let res = guarded(|| engine.set_kv(&key, &value));
                 let _ = ack.send(res);
@@ -2931,6 +3048,7 @@ impl PersistenceCommand {
             Self::SaveSession { ack, .. }
             | Self::UpsertSession { ack, .. }
             | Self::RecordCommand { ack, .. }
+            | Self::RecordRequestProjection { ack, .. }
             | Self::SetKV { ack, .. }
             | Self::SaveInputHistory { ack, .. }
             | Self::ClearInputHistory { ack } => {
@@ -3339,6 +3457,49 @@ impl PersistenceHandle {
             .await
             .map_err(|_| PersistenceError::WriterDown)?;
         ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
+    }
+
+    /// Asynchronously insert a request-projection record (ADR-0218). Awaits the
+    /// writer ack for callers that need the durable write confirmed (tests,
+    /// tooling); the request hot path uses
+    /// [`Self::try_record_request_projection`] instead.
+    pub async fn record_request_projection(
+        &self,
+        session_id: String,
+        record: muta_contracts::RequestProjection,
+    ) -> Result<(), PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
+            .send(PersistenceCommand::RecordRequestProjection {
+                session_id,
+                record,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
+    }
+
+    /// Non-blocking fire-and-forget request-projection insert (ADR-0218). Used
+    /// on the model-request hot path: forensic persistence must never block
+    /// dispatch. A dropped archive write is logged, not surfaced as a round
+    /// failure.
+    pub fn try_record_request_projection(
+        &self,
+        session_id: String,
+        record: muta_contracts::RequestProjection,
+    ) {
+        let (ack_tx, _) = oneshot::channel();
+        if let Err(error) =
+            self.supervisor
+                .try_send(PersistenceCommand::RecordRequestProjection {
+                    session_id,
+                    record,
+                    ack: ack_tx,
+                })
+        {
+            warn!(error = %error, "dropped fire-and-forget request projection: writer unavailable");
+        }
     }
 
     /// Asynchronously set a key-value entry.

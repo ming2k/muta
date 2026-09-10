@@ -1,11 +1,15 @@
 //! AST and Code Intelligence utilities powered by Tree-sitter (ADR-0211).
 //!
 //! Provides:
-//! - 1ms incremental syntax verification (`verify_ast_syntax`)
-//! - Structural symbol extraction for Repo Map generation (`generate_repo_map`)
-//! - AST Symbol delta detection for dirty files (`extract_ast_deltas`)
+//! - Pre-mutation syntax verification (`verify_ast_syntax`)
+//! - Structural symbol extraction for on-demand outlines (`extract_symbols`)
+//!
+//! Per ADR-0214 there is no ambient repository-wide Repo Map generator here:
+//! structure enters the model context only through the scoped, bounded
+//! `get_outline` tool. This module owns parsing; it does not own freshness or
+//! context delivery, and an on-demand parse of the current bytes is the
+//! correctness baseline.
 
-use std::path::Path;
 use tree_sitter::{Node, Parser};
 
 /// Supported language for Tree-sitter parsing.
@@ -220,85 +224,6 @@ fn node_text<'a>(node: Node, source: &'a str) -> &'a str {
         &source[range.start..range.end]
     } else {
         ""
-    }
-}
-
-/// Generate a compact repository outline within the given token budget (ADR-0211).
-///
-/// Estimated at ~4 characters per token. Default budget is 1024 tokens (~4000 chars).
-pub fn generate_repo_map(workspace_root: &Path, token_budget: usize) -> Option<String> {
-    let char_budget = token_budget.saturating_mul(4);
-    let mut accumulated = String::new();
-    let mut file_count = 0;
-
-    let walker = ignore::WalkBuilder::new(workspace_root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .max_depth(Some(4))
-        .build();
-
-    for entry in walker.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        if SupportedLanguage::from_extension(&ext).is_none() {
-            continue;
-        }
-
-        // Exclude test directories or vendor folders
-        let rel_path = path
-            .strip_prefix(workspace_root)
-            .unwrap_or(path)
-            .to_string_lossy();
-
-        if rel_path.starts_with("target")
-            || rel_path.starts_with("node_modules")
-            || rel_path.starts_with(".git")
-            || rel_path.contains("tests/")
-        {
-            continue;
-        }
-
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
-        };
-
-        let symbols = extract_symbols(&ext, &content);
-        if symbols.is_empty() {
-            continue;
-        }
-
-        let mut block = format!("{rel_path}:\n");
-        for sym in symbols.iter().take(8) {
-            block.push_str(sym);
-            block.push('\n');
-        }
-
-        if accumulated.len() + block.len() > char_budget {
-            break;
-        }
-
-        accumulated.push_str(&block);
-        file_count += 1;
-        if file_count >= 20 {
-            break;
-        }
-    }
-
-    if accumulated.is_empty() {
-        None
-    } else {
-        Some(accumulated)
     }
 }
 

@@ -62,9 +62,47 @@ use tokio_util::sync::CancellationToken;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
+/// Why a scheduled tool call did not produce its result.
+///
+/// The scheduler's error channel previously carried a bare `String`, into
+/// which several distinct failure shapes were collapsed. This enum restores
+/// the distinction. It carries **scheduler-level** failures only — a task's
+/// own failure is its result, not the scheduler's business, and flows through
+/// the task's normal result channel (for tool dispatch, the `ToolResult`
+/// event):
+///
+/// - **CancelledBeforeStart** / **Cancelled**: lifecycle outcomes of the
+///   two-tier cancellation contract, expected during every interrupt.
+/// - **Panicked**: a task's future panicked; the scheduler caught it (via
+///   `catch_unwind`) so the queue re-scan could proceed, and reports the
+///   panic payload here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchedulerError {
+    /// The task was still queued when the batch was cancelled; it never ran.
+    CancelledBeforeStart,
+    /// The task observed the cancellation token and gave up before finishing.
+    Cancelled,
+    /// The task's future panicked. The scheduler caught the panic so the
+    /// queue re-scan could proceed; the payload's message is carried here.
+    Panicked(String),
+}
+
+impl std::fmt::Display for SchedulerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CancelledBeforeStart => write!(f, "cancelled before start"),
+            Self::Cancelled => write!(f, "cancelled"),
+            Self::Panicked(detail) => write!(f, "tool task panicked: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for SchedulerError {}
+
 /// A run closure: receives a cancellation token (a child of the batch-wide
 /// token), returns the tool's result. Boxed so the scheduler is monomorphic.
-pub type RunClosure<R> = Box<dyn FnOnce(CancellationToken) -> BoxFuture<Result<R, String>> + Send>;
+pub type RunClosure<R> =
+    Box<dyn FnOnce(CancellationToken) -> BoxFuture<Result<R, SchedulerError>> + Send>;
 
 /// A schedulable tool call: its declared accesses plus a closure that runs the
 /// call to completion. Construction is decoupled from scheduling so callers
@@ -75,11 +113,11 @@ pub struct ToolCallTask<R> {
 }
 
 impl<R: Send + 'static> ToolCallTask<R> {
-    /// Build a task from an async closure.
+    /// Build a task from an async closure returning `Result<R, SchedulerError>`.
     pub fn new<F, Fut>(accesses: ToolAccesses, run: F) -> Self
     where
         F: FnOnce(CancellationToken) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<R, String>> + Send + 'static,
+        Fut: Future<Output = Result<R, SchedulerError>> + Send + 'static,
     {
         Self {
             accesses,
@@ -92,7 +130,7 @@ impl<R: Send + 'static> ToolCallTask<R> {
 struct QueuedTask<R> {
     accesses: ToolAccesses,
     run: RunClosure<R>,
-    completion: oneshot::Sender<Result<R, String>>,
+    completion: oneshot::Sender<Result<R, SchedulerError>>,
 }
 
 /// A running task. The `run` closure has already moved into its spawned task;
@@ -102,7 +140,7 @@ struct QueuedTask<R> {
 struct ActiveTask<R> {
     id: u64,
     accesses: ToolAccesses,
-    completion: Option<oneshot::Sender<Result<R, String>>>,
+    completion: Option<oneshot::Sender<Result<R, SchedulerError>>>,
     handle: JoinHandle<()>,
 }
 
@@ -159,7 +197,7 @@ impl<R: Send + 'static> ToolScheduler<R> {
     /// the task conflicts with nothing running or queued ahead of it, it
     /// starts right away; otherwise it waits until earlier conflicting tasks
     /// finish and free it up.
-    pub async fn add(&self, task: ToolCallTask<R>) -> oneshot::Receiver<Result<R, String>> {
+    pub async fn add(&self, task: ToolCallTask<R>) -> oneshot::Receiver<Result<R, SchedulerError>> {
         let (tx, rx) = oneshot::channel();
         let mut inner = self.shared.inner.lock().await;
         if inner.is_blocked(&task.accesses) {
@@ -198,9 +236,7 @@ impl<R: Send + 'static> ToolScheduler<R> {
             drained = std::mem::take(&mut inner.queued);
         }
         for qt in drained {
-            let _ = qt
-                .completion
-                .send(Err("cancelled before start".to_string()));
+            let _ = qt.completion.send(Err(SchedulerError::CancelledBeforeStart));
         }
         self.shared.cancel.cancel();
     }
@@ -226,9 +262,7 @@ impl<R: Send + 'static> ToolScheduler<R> {
             )
         };
         for qt in queued {
-            let _ = qt
-                .completion
-                .send(Err("cancelled before start".to_string()));
+            let _ = qt.completion.send(Err(SchedulerError::CancelledBeforeStart));
         }
         for task in active {
             // Abort first; `task` then drops at the end of the iteration,
@@ -269,7 +303,7 @@ impl<R: Send + 'static> ToolScheduler<R> {
                         .or_else(|| payload.downcast_ref::<String>().cloned())
                         .unwrap_or_else(|| "non-string payload".to_string());
                     tracing::error!(panic = %detail, "tool task panicked; resolving as error");
-                    Err(format!("tool task panicked: {detail}"))
+                    Err(SchedulerError::Panicked(detail))
                 }
             };
             Self::finish(id, result, shared).await;
@@ -286,7 +320,7 @@ impl<R: Send + 'static> ToolScheduler<R> {
     /// borrow checker refuse it as non-Send across the `tokio::spawn` site).
     fn finish(
         id: u64,
-        result: Result<R, String>,
+        result: Result<R, SchedulerError>,
         shared: Arc<Shared<R>>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
         Box::pin(async move {
@@ -364,7 +398,7 @@ mod tests {
                 counter.fetch_add(1, Ordering::SeqCst);
                 // Block until cancelled.
                 let _ = token.cancelled().await;
-                Err("cancelled".to_string())
+                Err(SchedulerError::Cancelled)
             }
         });
         (entered, task)
@@ -551,7 +585,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             r2,
-            Err("cancelled".to_string()),
+            Err(SchedulerError::Cancelled),
             "promoted task must observe the batch cancel"
         );
     }
@@ -633,7 +667,7 @@ mod tests {
             .await
             .expect("panicking task must not hang its receiver");
         match r1 {
-            Ok(Err(e)) => assert!(e.contains("panicked"), "got: {e}"),
+            Ok(Err(e)) => assert!(matches!(e, SchedulerError::Panicked(_)), "got: {e}"),
             other => panic!("panicking task must resolve as Err, got: {other:?}"),
         }
         let r2 = tokio::time::timeout(Duration::from_secs(2), rx2)

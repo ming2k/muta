@@ -2,23 +2,21 @@
 //! *any* tool call whose signature has already been issued this round, before
 //! the tool runs — not just reads.
 //!
-//! # Why a separate guard
+//! # Why pre-dispatch, not post-hoc
 //!
-//! `crate::loop_guard::ReadLoopGuard` is read-only, post-hoc, and defaults
-//! to off: it observes a turn *after* the tools have executed, nudges the
-//! model, and only hard-blocks on the *next* recurrence. That means the
-//! repeating call's result is already in context when the nudge lands — the
-//! model sees "I read it successfully" right next to "don't read it again", a
-//! self-contradictory signal that strong models routinely resolve in favour of
-//! re-running the call. Coverage is also limited to read-tier tools, so a
-//! `bash` re-run, a `read_url` re-read, or an `edit` A→B→A thrash sails
-//! straight through.
+//! A post-hoc, read-only detector observes a turn *after* the tools have
+//! executed: the repeating call's result is already in context when its nudge
+//! lands — the model sees "I read it successfully" right next to "don't read
+//! it again", a self-contradictory signal that strong models routinely resolve
+//! in favour of re-running the call. Read-only coverage also lets a command
+//! re-run, a `read_url` re-read, or an `edit` A→B→A thrash sail straight
+//! through.
 //!
 //! This guard is the inverse on every axis:
 //! - **Pre-dispatch**: it runs *before* tools execute, so a repeated call never
 //!   produces side effects or output. The model only ever sees the refusal.
 //! - **All tools**: covers the common doom-loop culprits — `read`,
-//!   `find_files`, `list_dir`, `search_text`, `bash`, `read_url`, `search_web`, `edit_text`,
+//!   `find_files`, `list_dir`, `search_text`, `execute_command`, `run_command`, `read_url`, `search_web`, `edit_text`,
 //!   `write_file` — keyed by a normalised signature, not just reads.
 //! - **Threshold-gated (default 3, ADR-0148)**: one same-signature re-run per
 //!   window is tolerated — a transient retry, or re-running the same test
@@ -27,22 +25,23 @@
 //!   `[master.doom_guard]`.
 //!
 //! Detection is pure signature bookkeeping — no model call. The action is a
-//! [`crate::loop_guard::GuardAction::Block`]: the signature is masked for the
+//! [`crate::guard::GuardAction::Block`]: the signature is masked for the
 //! rest of the round and an explanatory note is injected, so the model learns
 //! the call is now refused and must change approach (or call `abort`).
 //!
 //! # Relation to `NudgeConfig`
 //!
-//! The doom guard is gated by `NudgeConfig::enabled` for consistency with the
-//! read-loop guard: when nudging is off, neither guard runs. Subagent and review
-//! paths disable nudging, so they stay unobstructed.
+//! The doom guard is gated by `NudgeConfig::enabled` so the guard and the
+//! steering-nudge system switch together: when nudging is off, the guard does
+//! not run. Subagent and review paths disable nudging, so they stay
+//! unobstructed.
 
 use std::collections::VecDeque;
 
 use muta_contracts::DoomGuardConfig;
 use serde_json::Value;
 
-use crate::loop_guard::GuardAction;
+use crate::guard::GuardAction;
 
 /// The tools this guard watches. Anything outside this set is passed through
 /// untouched — MCP tools, `ask_user`, `use_skill`, `todo_*`, subagent, etc. are
@@ -91,7 +90,7 @@ pub(crate) fn covers(name: &str) -> bool {
 ///   file no longer collide.
 /// - **Path-addressed directory reads** (`list_dir`, `read_image`):
 ///   `name|path` — the target dir/file.
-/// - **Command-addressed calls** (`bash`): `name|command` — the literal command
+/// - **Command-addressed calls** (`execute_command`, `run_command`): `name|command` — the literal command
 ///   string. Running the identical command twice in a turn is never productive.
 /// - **Query-addressed calls** (`search_text`, `search_web`): `name|query` — the search
 ///   text. A different query is a different call; the same query again is a

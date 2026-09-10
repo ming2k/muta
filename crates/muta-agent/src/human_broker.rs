@@ -40,6 +40,8 @@ use std::time::Instant;
 use muta_contracts::PermissionDecision;
 use muta_contracts::human_request::{HumanReply, HumanRequestKind, ReplyProvenance};
 
+use crate::sync::poison_lock;
+
 /// One parked request's oneshot plus bookkeeping.
 struct Parked {
     sender: tokio::sync::oneshot::Sender<Settled>,
@@ -110,10 +112,6 @@ pub struct HumanRequestBroker {
     metrics: [KindMetrics; 3],
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
 impl Default for HumanRequestBroker {
     fn default() -> Self {
         Self::new()
@@ -151,7 +149,7 @@ impl HumanRequestBroker {
         kind: HumanRequestKind,
     ) -> tokio::sync::oneshot::Receiver<Settled> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        lock(&self.parked).insert(
+        poison_lock(&self.parked).insert(
             request_id,
             Parked {
                 sender,
@@ -178,7 +176,7 @@ impl HumanRequestBroker {
             sender,
             kind,
             parked_at,
-        }) = lock(&self.parked).remove(request_id)
+        }) = poison_lock(&self.parked).remove(request_id)
         else {
             return false;
         };
@@ -210,7 +208,7 @@ impl HumanRequestBroker {
             sender,
             kind,
             parked_at: _,
-        }) = lock(&self.parked).remove(request_id)
+        }) = poison_lock(&self.parked).remove(request_id)
         else {
             return false;
         };
@@ -242,7 +240,7 @@ impl HumanRequestBroker {
     /// cancelled request settles with its kind's cancellation payload
     /// (`None` for Question / Input, `Reject` for Permission).
     pub fn cancel_all(&self) {
-        let entries: Vec<Parked> = lock(&self.parked)
+        let entries: Vec<Parked> = poison_lock(&self.parked)
             .drain()
             .map(|(_id, parked)| parked)
             .collect();
@@ -272,11 +270,11 @@ impl HumanRequestBroker {
     /// Cancel every parked request of one kind. The question teardown path
     /// uses this so permission/input lifecycles are untouched.
     pub fn cancel_kind(&self, kind: HumanRequestKind) {
-        let (matching, kept): (Vec<_>, Vec<_>) = lock(&self.parked)
+        let (matching, kept): (Vec<_>, Vec<_>) = poison_lock(&self.parked)
             .drain()
             .partition(|(_, parked)| parked.kind == kind);
         for (id, parked) in kept {
-            lock(&self.parked).insert(id, parked);
+            poison_lock(&self.parked).insert(id, parked);
         }
         for (
             _id,
@@ -307,7 +305,7 @@ impl HumanRequestBroker {
     /// Number of requests currently parked. Read by the interrupt path to
     /// log what was torn down.
     pub fn parked_count(&self) -> usize {
-        lock(&self.parked).len()
+        poison_lock(&self.parked).len()
     }
 
     /// Metrics snapshot for one request kind.

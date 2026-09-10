@@ -335,8 +335,7 @@ const CODING_TOOLS: &[&str] = &[
     "write_file",
     // Self-contained task tracking (the subagent's own todo list, not the
     // parent's).
-    "write_todos",
-    "update_todo",
+    "todo",
 ];
 
 /// The coding subagent role. Unlike [`SUBAGENT_EXPLORE`] (read-only, autonomous), this is
@@ -699,7 +698,7 @@ mod tests {
         assert!(SUBAGENT_CODE.tool_policy.admits(&make("run_command")));
         assert!(SUBAGENT_CODE.tool_policy.admits(&make("edit_text")));
         assert!(SUBAGENT_CODE.tool_policy.admits(&make("write_file")));
-        assert!(SUBAGENT_CODE.tool_policy.admits(&make("write_todos")));
+        assert!(SUBAGENT_CODE.tool_policy.admits(&make("todo")));
         // Shared read-only inspection: admitted.
         assert!(SUBAGENT_CODE.tool_policy.admits(&make("read_text")));
         assert!(SUBAGENT_CODE.tool_policy.admits(&make("search_text")));

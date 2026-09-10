@@ -517,6 +517,76 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// ADR-0218: a real round archives one request projection into the
+/// key-addressed archive, and that archive never enters the model window.
+#[tokio::test]
+async fn execute_round_archives_a_request_projection_outside_the_window() {
+    let directory =
+        std::env::temp_dir().join(format!("muta-projection-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("create test directory");
+    let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let agent = Arc::new(Agent::new(
+        Arc::new(InstantProvider),
+        Vec::new(),
+        muta_agent::AgentIdentity::default(),
+    ));
+    let (tx, _rx) = mpsc::unbounded_channel();
+
+    execute_round(
+        RoundContext {
+            agent,
+            tx,
+            token: CancellationToken::new(),
+            session_id: session.id().await,
+            session: session.clone(),
+            projection: ContextProjectionSettings {
+                budget: muta_contracts::CompactionPolicy::default().resolve(100_000),
+                preserve_rounds: 6,
+                summarize: false,
+                prune: false,
+                prune_protect_tokens: 0,
+            },
+            retry_max_attempts: 3,
+            retry_base_ms: 1,
+            retry_max_ms: 10,
+            emit_round_completed: false,
+            in_flight_draft: None,
+        },
+        RoundInput {
+            prompt: "work".to_string(),
+            hidden: false,
+            display_prompt: None,
+            sent_at_ms: None,
+            images: Vec::new(),
+            driver: muta_agent::orchestration::RoundDriver::Fresh,
+        },
+    )
+    .await
+    .unwrap();
+
+    // The archive insert is fire-and-forget; poll briefly for the writer.
+    let mut projections = Vec::new();
+    for _ in 0..200 {
+        projections = session.request_projections().await;
+        if !projections.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        projections.len(),
+        1,
+        "one logical invocation must archive exactly one projection"
+    );
+    assert!(!projections[0].prefix_fingerprint.is_empty());
+    assert!(projections[0].conversation_messages >= 1);
+
+    // The archive is not history.
+    let window = session.model_window().await;
+    assert!(window.iter().all(|m| !m.content.contains("temporary-context")));
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[tokio::test]
 async fn partial_tool_stream_is_not_executed_before_provider_retry() {
     let directory =

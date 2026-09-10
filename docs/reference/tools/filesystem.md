@@ -1,8 +1,9 @@
 # Filesystem tools
 
 Read and mutate files and directory listings. `read_text`, `read_image`,
-`find_files`, `list_dir`, and `search_text` are `Read`; `write_file` and
-`edit_text` are `Write`. Source: `crates/muta-agent/src/tools/`.
+`find_files`, `list_dir`, `get_outline`, and `search_text` are `Read`;
+`write_file` and `edit_text` are `Write`. Source:
+`crates/muta-agent/src/tools/`.
 
 Relative paths resolve from the primary workspace. An absolute path is
 accepted only when it is inside the primary or an explicitly admitted
@@ -82,6 +83,24 @@ prunes repository metadata, dependency, and build-output directories.
 Runs in-process with Rust's `regex` engine (escaped by default for safe literal matching) and ripgrep's `ignore` traversal
 library; it does not spawn an `rg` executable. Output is capped at about 32 KB,
 and each file contributes at most 50 matches.
+
+## `get_outline`
+
+| Parameter | Type | Required | Notes |
+|-----------|------|----------|-------|
+| `path` | string | yes | Source file path (`.rs`, `.ts`, `.js`, `.py`, `.c`, `.cpp`, `.go`); relative paths use primary workspace |
+
+Returns the top-level syntactic symbols of one file — a navigation aid, not a
+full AST, type analysis, or dependency proof. The tool reads the current bytes
+at call time, reports a content-addressed version identity for the snapshot it
+described, and bounds both the input (2 MiB) and the rendered output (200
+symbols / 16 KiB). Truncation and unsupported analysis are stated in the
+result.
+
+Code structure enters model context only through this scoped, on-demand query:
+no facet projects an automatic repository-wide map, and a returned outline is
+history-bearing evidence that is not rewritten when the source later changes.
+See [Model context](../../explanation/agent-design/model-context.md).
 
 ## `list_dir`
 

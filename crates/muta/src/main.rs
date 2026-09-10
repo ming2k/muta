@@ -73,12 +73,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// `muta start` (detached, the default): spawn the daemon in the
 /// background and return. If a daemon is already running, report it
 /// instead of spawning a second one.
-fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
+fn detach_daemon(flags: &DaemonStart) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(info) = client::discover(std::path::Path::new(".")) {
         return Err(format!(
             "a muta daemon is already running (pid {}, port {}). Stop it with `muta stop` before starting another.",
             info.pid, info.port
-        ));
+        )
+        .into());
     }
     let program = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("muta"));
     let mut command = std::process::Command::new(&program);
@@ -129,7 +130,7 @@ fn detach_daemon(flags: &DaemonStart) -> Result<(), String> {
 /// SIGKILL). Stopping a daemon that is not running (or whose record is
 /// stale) is a success — the operator's desired end state ("no daemon")
 /// is already true.
-async fn stop_daemon() -> Result<(), String> {
+async fn stop_daemon() -> Result<(), Box<dyn std::error::Error>> {
     let info = match client::discover(std::path::Path::new(".")) {
         Some(info) => info,
         None => {
@@ -191,8 +192,7 @@ async fn run_daemon_action(
                     no_local_auth,
                     idle_exit_minutes,
                     shutdown_grace_secs,
-                })
-                .map_err(Into::into);
+                });
             }
             run_daemon_foreground(DaemonStart {
                 port,
@@ -203,7 +203,7 @@ async fn run_daemon_action(
             })
             .await
         }
-        DaemonAction::Stop => stop_daemon().await.map_err(Into::into),
+        DaemonAction::Stop => stop_daemon().await,
         DaemonAction::Token => {
             let project_root = project_override
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -232,7 +232,6 @@ async fn run_daemon_action(
                 },
             )
             .await
-            .map_err(Into::into)
         }
     }
 }

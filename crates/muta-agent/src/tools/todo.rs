@@ -1,21 +1,31 @@
-//! The `todo` and `todo_update` tools.
+//! The `todo` tool (ADR-0215): one tool, two mutually exclusive modes.
 //!
-//! They implement the core [`Tool`] contract and mutate an injected
+//! It implements the core [`Tool`] contract and mutates an injected
 //! [`TodoToolContext`]. The agent owns the underlying state; this crate owns
-//! the concrete tool implementations.
+//! the concrete tool implementation.
+//!
+//! - `items` present → full-replace reconcile (identity preserved).
+//! - `key` + `status` present → surgical status update without re-sending
+//!   the list.
+//! - Both or neither → a guiding error naming the two modes.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use muta_contracts::{MAX_TODOS, TodoList, TodoStatus, Tool};
 
-const TODO_DESCRIPTION: &str = "Update the task list. Provide the full array of items ({content, status: 'pending'|'in_progress'|'completed'|'cancelled'}). At most one item in_progress.";
+const TODO_DESCRIPTION: &str = "Update the task list. Two modes, mutually exclusive: \
+(1) full replace — provide `items`, the full array ({content, status: \
+'pending'|'in_progress'|'completed'|'cancelled'}), at most one item in_progress (extras are \
+auto-demoted); (2) surgical update — provide `key` (1-based position or case-insensitive \
+content substring) and `status` to mark progress without re-sending the whole list. Prefer \
+the surgical mode when only marking progress on a single step.";
 
-/// Shared handle injected into the todo tools so they mutate the live state
-/// owned by the agent that dispatches them.
+/// Shared handle injected into the todo tool so it mutates the live state
+/// owned by the agent that dispatches it.
 #[derive(Clone)]
 pub struct TodoToolContext {
     todos: Arc<Mutex<TodoList>>,
@@ -44,57 +54,23 @@ impl TodoToolContext {
     }
 }
 
-/// Full-replace todo tool. The model sends the desired list each call; the
-/// tool reconciles it against the current list preserving identity (see
-/// `TodoList::reconcile`). This is the robust interface: the model never
-/// has to track ids.
-pub struct TodoWriteTool {
+/// The todo tool (ADR-0215). One model-visible tool owning the whole task-list
+/// lifecycle: full-replace reconcile *and* surgical status edit, selected by
+/// which parameters the call carries.
+pub struct TodoTool {
     context: TodoToolContext,
 }
 
-impl TodoWriteTool {
+impl TodoTool {
     pub fn new(context: TodoToolContext) -> Self {
         Self { context }
     }
-}
 
-#[async_trait]
-impl Tool for TodoWriteTool {
-    fn name(&self) -> &str {
-        "write_todos"
-    }
-
-    fn description(&self) -> &str {
-        TODO_DESCRIPTION
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "maxItems": MAX_TODOS,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "content": { "type": "string" },
-                            "status": {
-                                "type": "string",
-                                "enum": ["pending", "in_progress", "completed", "cancelled"]
-                            }
-                        },
-                        "required": ["content", "status"],
-                        "additionalProperties": false
-                    }
-                }
-            },
-            "required": ["items"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn call(&self, arguments: &str) -> Result<String, String> {
+    /// Full-replace mode (`items` present): the model sends the desired list;
+    /// the tool reconciles it against the current list preserving identity
+    /// (see `TodoList::reconcile`). This is the robust interface: the model
+    /// never has to track ids.
+    async fn replace(&self, arguments: &str) -> Result<String, String> {
         #[derive(serde::Deserialize)]
         struct Arguments {
             items: Vec<TodoArgs>,
@@ -195,59 +171,12 @@ impl Tool for TodoWriteTool {
             "Todo list updated:\n{rendered}{identity_note}{demotion_note}"
         ))
     }
-}
 
-const TODO_UPDATE_DESCRIPTION: &str = "Surgically update the status of one or more existing todo items without re-sending the whole \
-     list. `key` is either a 1-based position as shown by the `write_todos` tool (\"1\", \"3\") or, when \
-     not a valid position, a case-insensitive substring of the item content (all matches update). \
-     Prefer this over `write_todos` when you only want to mark progress on a single step.";
-
-/// Surgical update tool: change the status of items matched by position or
-/// content substring, leaving everything else untouched. Complements
-/// [`TodoWriteTool`] so the model can mark a step done without re-emitting the
-/// entire list.
-pub struct TodoUpdateTool {
-    context: TodoToolContext,
-}
-
-impl TodoUpdateTool {
-    pub fn new(context: TodoToolContext) -> Self {
-        Self { context }
-    }
-}
-
-#[async_trait]
-impl Tool for TodoUpdateTool {
-    fn name(&self) -> &str {
-        "update_todo"
-    }
-
-    fn description(&self) -> &str {
-        TODO_UPDATE_DESCRIPTION
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "key": {
-                    "type": "string",
-                    "description": "1-based position or case-insensitive content substring"
-                },
-                "status": {
-                    "type": "string",
-                    "enum": ["pending", "in_progress", "completed", "cancelled"],
-                    "description": "New status for the matched item(s)"
-                }
-            },
-            "required": ["key", "status"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn call(&self, arguments: &str) -> Result<String, String> {
-        let value = serde_json::from_str::<serde_json::Value>(arguments)
-            .map_err(|e| format!("Invalid JSON: {e}"))?;
+    /// Surgical mode (`key` + `status` present): change the status of items
+    /// matched by position or content substring, leaving everything else
+    /// untouched. Lets the model mark a step done without re-emitting the
+    /// entire list.
+    async fn update(&self, value: &Value) -> Result<String, String> {
         let key = value
             .get("key")
             .and_then(|v| v.as_str())
@@ -267,7 +196,7 @@ impl Tool for TodoUpdateTool {
         let mut list = self.context.todos();
         if list.is_empty() {
             return Ok(
-                "No todos to update. Use the `write_todos` tool to create the list first."
+                "No todos to update. Provide `items` (full list) to create the list first."
                     .to_string(),
             );
         }
@@ -304,6 +233,74 @@ impl Tool for TodoUpdateTool {
     }
 }
 
+#[async_trait]
+impl Tool for TodoTool {
+    fn name(&self) -> &str {
+        "todo"
+    }
+
+    fn description(&self) -> &str {
+        TODO_DESCRIPTION
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "maxItems": MAX_TODOS,
+                    "description": "Full-replace mode: the complete desired list. Mutually exclusive with key/status.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": { "type": "string" },
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "completed", "cancelled"]
+                            }
+                        },
+                        "required": ["content", "status"],
+                        "additionalProperties": false
+                    }
+                },
+                "key": {
+                    "type": "string",
+                    "description": "Surgical mode: 1-based position or case-insensitive content substring. Mutually exclusive with items."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "in_progress", "completed", "cancelled"],
+                    "description": "Surgical mode: new status for the matched item(s)"
+                }
+            },
+            "additionalProperties": false
+        })
+    }
+
+    async fn call(&self, arguments: &str) -> Result<String, String> {
+        let value: Value =
+            serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {e}"))?;
+        let has_items = value.get("items").is_some();
+        let has_key = value.get("key").is_some();
+
+        match (has_items, has_key) {
+            (true, false) => self.replace(arguments).await,
+            (false, true) => self.update(&value).await,
+            (true, true) => Err(
+                "Provide either `items` (full-replace mode) or `key` + `status` (surgical \
+                 update mode) — not both."
+                    .to_string(),
+            ),
+            (false, false) => Err(
+                "Provide either `items` (the full list, to replace it) or `key` + `status` \
+                 (to surgically update matched items)."
+                    .to_string(),
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,9 +315,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn todo_write_tool_reconciles_and_preserves_identity() {
+    async fn todo_tool_reconciles_and_preserves_identity() {
         let (context, list) = ctx();
-        let tool = TodoWriteTool::new(context.clone());
+        let tool = TodoTool::new(context.clone());
         tool.call(r#"{"items":[{"content":"design","status":"pending"}]}"#)
             .await
             .unwrap();
@@ -340,12 +337,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn todo_write_tool_auto_demotes_extra_in_progress() {
+    async fn todo_tool_auto_demotes_extra_in_progress() {
         // Full-replace must never reject on >1 in_progress — that would waste a
         // turn on a routine bookkeeping slip. Instead it keeps the last-declared
         // in_progress and demotes the earlier ones to pending, then commits.
         let (context, list) = ctx();
-        let tool = TodoWriteTool::new(context.clone());
+        let tool = TodoTool::new(context.clone());
         let body = tool
             .call(
                 r#"{"items":[
@@ -364,21 +361,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn todo_update_tool_matches_by_position() {
+    async fn todo_tool_surgical_update_matches_by_position() {
         let (context, list) = ctx();
-        let write = TodoWriteTool::new(context.clone());
-        write
-            .call(
-                r#"{"items":[
+        let tool = TodoTool::new(context.clone());
+        tool.call(
+            r#"{"items":[
                 {"content":"a","status":"pending"},
                 {"content":"b","status":"pending"}
             ]}"#,
-            )
-            .await
-            .unwrap();
-        let update = TodoUpdateTool::new(context);
-        update
-            .call(r#"{"key":"2","status":"completed"}"#)
+        )
+        .await
+        .unwrap();
+        tool.call(r#"{"key":"2","status":"completed"}"#)
             .await
             .unwrap();
         let guard = list.lock().unwrap();
@@ -387,15 +381,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn todo_update_tool_matches_by_content() {
+    async fn todo_tool_surgical_update_matches_by_content() {
         let (context, list) = ctx();
-        let write = TodoWriteTool::new(context.clone());
-        write
-            .call(r#"{"items":[{"content":"Write tests","status":"pending"}]}"#)
+        let tool = TodoTool::new(context.clone());
+        tool.call(r#"{"items":[{"content":"Write tests","status":"pending"}]}"#)
             .await
             .unwrap();
-        let update = TodoUpdateTool::new(context);
-        let body = update
+        let body = tool
             .call(r#"{"key":"tests","status":"completed"}"#)
             .await
             .unwrap();
@@ -404,33 +396,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn todo_update_tool_empty_list_returns_hint() {
+    async fn todo_tool_surgical_update_empty_list_returns_hint() {
         let (context, _) = ctx();
-        let tool = TodoUpdateTool::new(context);
+        let tool = TodoTool::new(context);
         let body = tool.call(r#"{"key":"1","status":"done"}"#).await.unwrap();
         assert!(body.contains("No todos"));
     }
 
     #[tokio::test]
-    async fn todo_update_tool_rejects_second_in_progress() {
+    async fn todo_tool_surgical_update_rejects_second_in_progress() {
         let (context, list) = ctx();
-        let write = TodoWriteTool::new(context.clone());
-        write
-            .call(
-                r#"{"items":[
+        let tool = TodoTool::new(context.clone());
+        tool.call(
+            r#"{"items":[
                 {"content":"a","status":"in_progress"},
                 {"content":"b","status":"pending"}
             ]}"#,
-            )
-            .await
-            .unwrap();
-        let update = TodoUpdateTool::new(context);
-        let body = update
+        )
+        .await
+        .unwrap();
+        let body = tool
             .call(r#"{"key":"b","status":"in_progress"}"#)
             .await
             .unwrap();
         assert!(body.contains("in_progress"));
         // The second item must NOT have been committed.
         assert_eq!(list.lock().unwrap().items[1].status, TodoStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn todo_tool_rejects_both_modes() {
+        let (context, _) = ctx();
+        let tool = TodoTool::new(context);
+        let body = tool
+            .call(
+                r#"{"items":[{"content":"a","status":"pending"}],
+                   "key":"1","status":"completed"}"#,
+            )
+            .await
+            .unwrap_err();
+        assert!(body.contains("not both"));
+    }
+
+    #[tokio::test]
+    async fn todo_tool_rejects_neither_mode() {
+        let (context, _) = ctx();
+        let tool = TodoTool::new(context);
+        let body = tool.call(r#"{}"#).await.unwrap_err();
+        assert!(body.contains("either"));
     }
 }

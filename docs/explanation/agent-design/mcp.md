@@ -206,7 +206,7 @@ re-binding. Two rules still hold:
 
 This is the sandboxing half of ADR-0138: heavy or chatty MCP integrations run
 in a scratchpad subagent that returns a summary, keeping the principal's context
-clean and its Zone-1 tool schema stable.
+clean and its stable-prefix (`S`) tool schema unchanged.
 
 ## Permission broker
 

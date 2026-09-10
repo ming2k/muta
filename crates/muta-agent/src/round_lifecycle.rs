@@ -113,10 +113,7 @@ impl RoundLifecycle {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.interrupted
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        *self
-            .interrupt_reason
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = None;
+        *crate::sync::poison_lock(&self.interrupt_reason) = None;
         let previous = self.token_slot.write().await.replace(token.clone());
         RoundBegin {
             token,
@@ -219,20 +216,14 @@ impl RoundLifecycle {
             reason,
             at_ms: at_ms.unwrap_or_else(crate::orchestration::unix_epoch_ms),
         };
-        *self
-            .interrupt_reason
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(parked);
+        *crate::sync::poison_lock(&self.interrupt_reason) = Some(parked);
     }
 
     /// Consume the parked interrupt reason, if any (C11). Called once by the
     /// unwinding round task when it emits its terminal cleanup; the take
     /// semantics prevent a later round from reading a stale label.
     pub fn take_interrupt(&self) -> Option<ParkedInterrupt> {
-        self.interrupt_reason
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
+        crate::sync::poison_lock(&self.interrupt_reason).take()
     }
 
     /// Coarse activity signal for watchers (e.g. the `/btw` parent-status

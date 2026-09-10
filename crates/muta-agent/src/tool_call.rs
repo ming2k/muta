@@ -246,9 +246,9 @@ mod tests {
             r#"{"limit": 90, "offset": 100, "path": "/path/to/sync.rs"}"#
         );
 
-        let text2 = r#"[Called tool `write_todos` with arguments: {"items": []}]"#;
+        let text2 = r#"[Called tool `todo` with arguments: {"items": []}]"#;
         let call2 = parse_text_tool_call(text2).expect("should parse backtick quoted called tool");
-        assert_eq!(call2.name, "write_todos");
+        assert_eq!(call2.name, "todo");
         assert_eq!(call2.arguments, r#"{"items": []}"#);
     }
 }

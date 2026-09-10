@@ -361,11 +361,13 @@ impl OpenAiResponsesProvider {
             .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let ModelRequest {
             instructions,
-            messages,
+            mut messages,
             tool_specs,
             delivery,
+            temporary_context,
             ..
         } = request;
+        messages.extend(temporary_context);
         request::body_with_capabilities(
             messages,
             request::BodyInput {

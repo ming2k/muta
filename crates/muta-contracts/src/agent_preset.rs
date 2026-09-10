@@ -365,8 +365,7 @@ impl AgentRoleDelegation {
         "write_file",
         "read_url",
         "search_web",
-        "write_todos",
-        "update_todo",
+        "todo",
         "ask_user",
     ];
 
@@ -450,8 +449,7 @@ impl AgentPreset {
                     "search_text",
                     "read_url",
                     "search_web",
-                    "write_todos",
-                    "update_todo",
+                    "todo",
                     "ask_user",
                 ]))
             }
@@ -485,8 +483,7 @@ impl AgentPreset {
                         "run_command",
                         "read_url",
                         "search_web",
-                        "write_todos",
-                        "update_todo",
+                        "todo",
                         "ask_user",
                     ]))
                     .with_operation_scope(scope)

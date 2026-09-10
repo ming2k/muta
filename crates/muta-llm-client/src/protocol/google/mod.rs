@@ -550,10 +550,12 @@ impl GoogleProvider {
         };
         let ModelRequest {
             instructions,
-            messages,
+            mut messages,
             tool_specs,
+            temporary_context,
             ..
         } = request;
+        messages.extend(temporary_context);
         let raw_body = request::body(
             messages,
             request::BodyInput {

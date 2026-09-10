@@ -728,12 +728,12 @@ impl SubagentTool {
         match profile.name {
             "explore" => {
                 subagent.add_facet(std::sync::Arc::new(
-                    crate::facet::CodeIntelligenceFacet::read_only(1024),
+                    crate::facet::CodeIntelligenceFacet::read_only(),
                 ));
             }
             "code" => {
                 subagent.add_facet(std::sync::Arc::new(
-                    crate::facet::CodeIntelligenceFacet::new(1024),
+                    crate::facet::CodeIntelligenceFacet::new(),
                 ));
             }
             _ => {}

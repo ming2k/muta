@@ -311,6 +311,7 @@ fn test_build_overview_and_sticky_table_headers() {
                 source: muta_contracts::ContextTokenSource::Api,
                 overhead_tokens: None,
                 history_tokens: None,
+                temporary_context_tokens: None,
             }),
             window_tokens: Some(200_000),
             draft_content_tokens: 50,

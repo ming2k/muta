@@ -1,4 +1,10 @@
-//! Built-in tools for inspecting and controlling background processes and sub-agents.
+//! The `process` tool: inspecting and controlling background processes and
+//! sub-agent jobs (ADR-0215 — one tool per resource lifecycle).
+//!
+//! The four former siblings (`process_poll`/`process_logs`/`process_kill`/
+//! `process_wait`) all operated on the same `job_id` through the same
+//! [`BackgroundJobService`]; they differ only in which service method they
+//! call. They are now one tool with an `action` discriminant.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -12,56 +18,39 @@ fn background_service(ctx: &ToolContext) -> Option<Arc<dyn BackgroundJobService>
     ctx.get::<Arc<dyn BackgroundJobService>>().cloned()
 }
 
-// process_poll
-
 #[derive(ToolSchema, Deserialize)]
-struct ProcessPollArgs {
+struct ProcessArgs {
     #[tool(desc = "The job ID returned when the background command or sub-agent was spawned.")]
     job_id: String,
+    #[tool(
+        desc = "What to do with the job: 'status' (state, runtime, latest output line), 'logs' (recent stdout/stderr lines), 'wait' (block until terminal state, default 60s max 600s), or 'kill' (terminate)."
+    )]
+    action: String,
+    #[tool(desc = "Only for action 'logs': number of tail lines to retrieve (default 50, max 200).")]
+    tail_lines: Option<usize>,
+    #[tool(desc = "Only for action 'wait': maximum seconds to wait (default 60, max 600).")]
+    timeout_seconds: Option<u64>,
 }
 
-pub struct ProcessPollTool {
+pub struct ProcessTool {
     service: Option<Arc<dyn BackgroundJobService>>,
 }
 
-impl ProcessPollTool {
+impl ProcessTool {
     pub fn new(service: Option<Arc<dyn BackgroundJobService>>) -> Self {
         Self { service }
     }
-}
 
-#[async_trait]
-impl Tool for ProcessPollTool {
-    fn name(&self) -> &str {
-        "process_poll"
-    }
-
-    fn description(&self) -> &str {
-        "Check the status, runtime, and latest output line of a background process or sub-agent job."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        ProcessPollArgs::parameters_schema()
-    }
-
-    fn accesses(&self, _args: &str) -> ToolAccesses {
-        ToolAccesses::none()
-    }
-
-    async fn call(&self, arguments: &str) -> Result<String, String> {
-        let output = self.call_structured(arguments).await?;
-        Ok(output.to_text())
-    }
-
-    async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
-        let args: ProcessPollArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
-        let service = self
-            .service
+    fn service(&self) -> Result<&Arc<dyn BackgroundJobService>, String> {
+        self.service
             .as_ref()
-            .ok_or("Background job service is unavailable")?;
-        let job_id = JobId(args.job_id);
+            .ok_or_else(|| "Background job service is unavailable".to_string())
+    }
 
-        match service.get_job(&job_id) {
+    /// action = "status": the job snapshot (state, runtime, latest output line).
+    fn status(&self, job_id: &JobId) -> Result<ToolOutput, String> {
+        let service = self.service()?;
+        match service.get_job(job_id) {
             Some(info) => {
                 let json = serde_json::to_string_pretty(&info).map_err(|e| e.to_string())?;
                 Ok(ToolOutput::text(json))
@@ -69,65 +58,13 @@ impl Tool for ProcessPollTool {
             None => Err(format!("Job not found: {}", job_id.0)),
         }
     }
-}
 
-muta_contracts::register_tool!(ProcessPollFactory => |ctx| ProcessPollTool {
-    service: background_service(ctx),
-});
+    /// action = "logs": tail stdout/stderr lines.
+    fn logs(&self, job_id: &JobId, tail_lines: Option<usize>) -> Result<ToolOutput, String> {
+        let service = self.service()?;
+        let tail = tail_lines.unwrap_or(50).clamp(1, 200);
 
-// process_logs
-
-#[derive(ToolSchema, Deserialize)]
-struct ProcessLogsArgs {
-    #[tool(desc = "The job ID to fetch logs for.")]
-    job_id: String,
-    #[tool(desc = "Number of tail lines to retrieve (default 50, max 200).")]
-    tail_lines: Option<usize>,
-}
-
-pub struct ProcessLogsTool {
-    service: Option<Arc<dyn BackgroundJobService>>,
-}
-
-impl ProcessLogsTool {
-    pub fn new(service: Option<Arc<dyn BackgroundJobService>>) -> Self {
-        Self { service }
-    }
-}
-
-#[async_trait]
-impl Tool for ProcessLogsTool {
-    fn name(&self) -> &str {
-        "process_logs"
-    }
-
-    fn description(&self) -> &str {
-        "Retrieve recent stdout/stderr output lines for a background process job."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        ProcessLogsArgs::parameters_schema()
-    }
-
-    fn accesses(&self, _args: &str) -> ToolAccesses {
-        ToolAccesses::none()
-    }
-
-    async fn call(&self, arguments: &str) -> Result<String, String> {
-        let output = self.call_structured(arguments).await?;
-        Ok(output.to_text())
-    }
-
-    async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
-        let args: ProcessLogsArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
-        let service = self
-            .service
-            .as_ref()
-            .ok_or("Background job service is unavailable")?;
-        let job_id = JobId(args.job_id);
-        let tail = args.tail_lines.unwrap_or(50).clamp(1, 500);
-
-        match service.get_logs(&job_id, tail) {
+        match service.get_logs(job_id, tail) {
             Some(lines) => {
                 if lines.is_empty() {
                     Ok(ToolOutput::text("(no output recorded yet)"))
@@ -138,130 +75,30 @@ impl Tool for ProcessLogsTool {
             None => Err(format!("Job not found: {}", job_id.0)),
         }
     }
-}
 
-muta_contracts::register_tool!(ProcessLogsFactory => |ctx| ProcessLogsTool {
-    service: background_service(ctx),
-});
-
-// process_kill
-
-#[derive(ToolSchema, Deserialize)]
-struct ProcessKillArgs {
-    #[tool(desc = "The job ID to terminate.")]
-    job_id: String,
-}
-
-pub struct ProcessKillTool {
-    service: Option<Arc<dyn BackgroundJobService>>,
-}
-
-impl ProcessKillTool {
-    pub fn new(service: Option<Arc<dyn BackgroundJobService>>) -> Self {
-        Self { service }
-    }
-}
-
-#[async_trait]
-impl Tool for ProcessKillTool {
-    fn name(&self) -> &str {
-        "process_kill"
-    }
-
-    fn description(&self) -> &str {
-        "Terminate an active background process or sub-agent job."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        ProcessKillArgs::parameters_schema()
-    }
-
-    fn accesses(&self, _args: &str) -> ToolAccesses {
-        ToolAccesses::none()
-    }
-
-    async fn call(&self, arguments: &str) -> Result<String, String> {
-        let output = self.call_structured(arguments).await?;
-        Ok(output.to_text())
-    }
-
-    async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
-        let args: ProcessKillArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
-        let service = self
-            .service
-            .as_ref()
-            .ok_or("Background job service is unavailable")?;
-        let job_id = JobId(args.job_id);
-
-        service.kill_job(&job_id)?;
+    /// action = "kill": terminate the job.
+    fn kill(&self, job_id: &JobId) -> Result<ToolOutput, String> {
+        let service = self.service()?;
+        service.kill_job(job_id)?;
         Ok(ToolOutput::text(format!(
             "Job {} was terminated.",
             job_id.0
         )))
     }
-}
 
-muta_contracts::register_tool!(ProcessKillFactory => |ctx| ProcessKillTool {
-    service: background_service(ctx),
-});
-
-// process_wait
-
-#[derive(ToolSchema, Deserialize)]
-struct ProcessWaitArgs {
-    #[tool(desc = "The job ID to wait for.")]
-    job_id: String,
-    #[tool(desc = "Maximum seconds to wait (default 60, max 600).")]
-    timeout_seconds: Option<u64>,
-}
-
-pub struct ProcessWaitTool {
-    service: Option<Arc<dyn BackgroundJobService>>,
-}
-
-impl ProcessWaitTool {
-    pub fn new(service: Option<Arc<dyn BackgroundJobService>>) -> Self {
-        Self { service }
-    }
-}
-
-#[async_trait]
-impl Tool for ProcessWaitTool {
-    fn name(&self) -> &str {
-        "process_wait"
-    }
-
-    fn description(&self) -> &str {
-        "Wait for a background job to finish and return its final outcome."
-    }
-
-    fn parameters(&self) -> serde_json::Value {
-        ProcessWaitArgs::parameters_schema()
-    }
-
-    fn accesses(&self, _args: &str) -> ToolAccesses {
-        ToolAccesses::none()
-    }
-
-    async fn call(&self, arguments: &str) -> Result<String, String> {
-        let output = self.call_structured(arguments).await?;
-        Ok(output.to_text())
-    }
-
-    async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
-        let args: ProcessWaitArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
-        let service = self
-            .service
-            .as_ref()
-            .ok_or("Background job service is unavailable")?;
-        let job_id = JobId(args.job_id);
-        let timeout = Duration::from_secs(args.timeout_seconds.unwrap_or(60).clamp(1, 600));
+    /// action = "wait": block until a terminal state, then return the tail.
+    async fn wait(&self, job_id: &JobId, timeout_seconds: Option<u64>) -> Result<ToolOutput, String> {
+        let service = self.service()?;
+        let timeout = Duration::from_secs(timeout_seconds.unwrap_or(60).clamp(1, 600));
 
         let start = std::time::Instant::now();
         loop {
-            if let Some(info) = service.get_job(&job_id) {
+            if let Some(info) = service.get_job(job_id) {
                 if info.state.is_terminal() {
-                    let logs = service.get_logs(&job_id, 20).unwrap_or_default().join("\n");
+                    let logs = service
+                        .get_logs(job_id, 20)
+                        .unwrap_or_default()
+                        .join("\n");
                     let res = serde_json::json!({
                         "job_id": job_id.0,
                         "state": info.state,
@@ -284,7 +121,46 @@ impl Tool for ProcessWaitTool {
     }
 }
 
-muta_contracts::register_tool!(ProcessWaitFactory => |ctx| ProcessWaitTool {
+#[async_trait]
+impl Tool for ProcessTool {
+    fn name(&self) -> &str {
+        "process"
+    }
+
+    fn description(&self) -> &str {
+        "Inspect or control a background process or sub-agent job. One tool, one `action`: 'status' (state, runtime, latest output line), 'logs' (recent stdout/stderr), 'wait' (block until the job finishes and return its final outcome), or 'kill' (terminate it)."
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        ProcessArgs::parameters_schema()
+    }
+
+    fn accesses(&self, _args: &str) -> ToolAccesses {
+        ToolAccesses::none()
+    }
+
+    async fn call(&self, arguments: &str) -> Result<String, String> {
+        let output = self.call_structured(arguments).await?;
+        Ok(output.to_text())
+    }
+
+    async fn call_structured(&self, arguments: &str) -> Result<ToolOutput, String> {
+        let args: ProcessArgs = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
+        let job_id = JobId(args.job_id);
+
+        match args.action.as_str() {
+            "status" => self.status(&job_id),
+            "logs" => self.logs(&job_id, args.tail_lines),
+            "wait" => self.wait(&job_id, args.timeout_seconds).await,
+            "kill" => self.kill(&job_id),
+            other => Err(format!(
+                "Unknown action '{other}'. Use 'status', 'logs', 'wait', or 'kill'."
+            )),
+        }
+    }
+}
+
+muta_contracts::register_tool!(ProcessFactory => |ctx| ProcessTool {
     service: background_service(ctx),
 });
 
@@ -376,42 +252,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_process_tools() {
+    async fn test_process_tool_actions() {
         let service: Arc<dyn BackgroundJobService> = Arc::new(MockJobService::new());
         let info = service
             .spawn_process("test-cmd".into(), Some("test".into()), None, false, None)
             .await
             .unwrap();
+        let tool = ProcessTool::new(Some(Arc::clone(&service)));
 
-        // 1. process_poll
-        let poll_tool = ProcessPollTool::new(Some(Arc::clone(&service)));
-        let poll_out = poll_tool
-            .call(&serde_json::json!({ "job_id": info.id.0 }).to_string())
+        // 1. status
+        let status_out = tool
+            .call(&serde_json::json!({ "job_id": info.id.0, "action": "status" }).to_string())
             .await
             .unwrap();
-        assert!(poll_out.contains(&info.id.0));
+        assert!(status_out.contains(&info.id.0));
 
-        // 2. process_logs
-        let logs_tool = ProcessLogsTool::new(Some(Arc::clone(&service)));
-        let logs_out = logs_tool
-            .call(&serde_json::json!({ "job_id": info.id.0, "tail_lines": 5 }).to_string())
+        // 2. logs
+        let logs_out = tool
+            .call(
+                &serde_json::json!({ "job_id": info.id.0, "action": "logs", "tail_lines": 5 })
+                    .to_string(),
+            )
             .await
             .unwrap();
         assert!(logs_out.contains("line 1"));
 
-        // 3. process_kill
-        let kill_tool = ProcessKillTool::new(Some(Arc::clone(&service)));
-        let kill_out = kill_tool
-            .call(&serde_json::json!({ "job_id": info.id.0 }).to_string())
+        // 3. kill
+        let kill_out = tool
+            .call(&serde_json::json!({ "job_id": info.id.0, "action": "kill" }).to_string())
             .await
             .unwrap();
         assert!(kill_out.contains("terminated"));
 
-        // 4. check poll after kill
-        let poll_after = poll_tool
-            .call(&serde_json::json!({ "job_id": info.id.0 }).to_string())
+        // 4. status after kill reports the terminal state
+        let status_after = tool
+            .call(&serde_json::json!({ "job_id": info.id.0, "action": "status" }).to_string())
             .await
             .unwrap();
-        assert!(poll_after.contains("killed"));
+        assert!(status_after.contains("killed"));
+    }
+
+    #[tokio::test]
+    async fn test_process_tool_rejects_unknown_action() {
+        let service: Arc<dyn BackgroundJobService> = Arc::new(MockJobService::new());
+        let tool = ProcessTool::new(Some(service));
+        let err = tool
+            .call(&serde_json::json!({ "job_id": "x", "action": "poll" }).to_string())
+            .await
+            .unwrap_err();
+        assert!(err.contains("Unknown action"));
+    }
+
+    #[tokio::test]
+    async fn test_process_tool_wait_until_terminal() {
+        let service: Arc<dyn BackgroundJobService> = Arc::new(MockJobService::new());
+        let info = service
+            .spawn_process("test-cmd".into(), None, None, false, None)
+            .await
+            .unwrap();
+        service.kill_job(&info.id).unwrap();
+        let tool = ProcessTool::new(Some(service));
+        let out = tool
+            .call(
+                &serde_json::json!({ "job_id": info.id.0, "action": "wait", "timeout_seconds": 2 })
+                    .to_string(),
+            )
+            .await
+            .unwrap();
+        assert!(out.contains("tail_logs"));
     }
 }

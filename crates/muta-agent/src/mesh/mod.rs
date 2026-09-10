@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::sync::poison_lock;
+
 pub mod tools;
 pub use tools::{MeshListPeersTool, MeshSendTool};
 
@@ -101,7 +103,7 @@ impl MeshTracker {
         token: CancellationToken,
         parent: Option<MeshAddress>,
     ) {
-        let mut map = lock(&self.entries);
+        let mut map = poison_lock(&self.entries);
         if let Some(old) = map.insert(
             address,
             Entry {
@@ -117,13 +119,13 @@ impl MeshTracker {
     /// Unregister an address explicitly (also happens automatically when the
     /// [`MeshMailbox`] drops).
     pub fn unregister(&self, address: &MeshAddress) {
-        lock(&self.entries).remove(address);
+        poison_lock(&self.entries).remove(address);
     }
 
     /// Cancel and remove all subagent endpoints registered under `master`
     /// (its subagents). Returns the number of addresses reaped.
     pub fn reap_children(&self, parent: &MeshAddress) -> usize {
-        let mut map = lock(&self.entries);
+        let mut map = poison_lock(&self.entries);
         let victims: Vec<MeshAddress> = map
             .iter()
             .filter(|(addr, e)| {
@@ -156,7 +158,7 @@ impl MeshTracker {
             });
         }
         let entry = {
-            let mut map = lock(&self.entries);
+            let mut map = poison_lock(&self.entries);
             if let Some(e) = map.get(&envelope.recipient) {
                 if e.token.is_cancelled() {
                     map.remove(&envelope.recipient);
@@ -177,13 +179,13 @@ impl MeshTracker {
     /// Every live address, sorted.
     pub fn live_addresses(&self) -> Vec<MeshAddress> {
         self.reap_cancelled();
-        lock(&self.entries).keys().cloned().collect::<Vec<_>>()
+        poison_lock(&self.entries).keys().cloned().collect::<Vec<_>>()
     }
 
     /// Addresses at one station, in one session (peer discovery).
     pub fn peers(&self, station: MeshStation, session: &str) -> Vec<MeshAddress> {
         self.reap_cancelled();
-        lock(&self.entries)
+        poison_lock(&self.entries)
             .keys()
             .filter(|a| a.station == station && a.session == session)
             .cloned()
@@ -193,7 +195,7 @@ impl MeshTracker {
     /// Addresses at one station across all sessions (cross-session peer discovery).
     pub fn peers_by_station(&self, station: MeshStation) -> Vec<MeshAddress> {
         self.reap_cancelled();
-        lock(&self.entries)
+        poison_lock(&self.entries)
             .keys()
             .filter(|a| a.station == station)
             .cloned()
@@ -202,7 +204,7 @@ impl MeshTracker {
 
     /// Sweep entries whose token has fired.
     fn reap_cancelled(&self) {
-        let mut map = lock(&self.entries);
+        let mut map = poison_lock(&self.entries);
         map.retain(|_, entry| !entry.token.is_cancelled());
     }
 }
@@ -259,10 +261,6 @@ impl Drop for MeshMailbox {
         self.token.cancel();
         self.tracker.unregister(&self.address);
     }
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]

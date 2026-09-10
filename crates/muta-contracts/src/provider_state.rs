@@ -132,23 +132,58 @@ pub type ProviderArtifacts = serde_json::Map<String, serde_json::Value>;
 pub fn semantic_context_head<'a>(messages: impl IntoIterator<Item = &'a crate::Message>) -> String {
     let mut digest = Sha256::new();
     for message in messages {
-        if message.role == crate::Role::System {
-            continue;
-        }
-        let semantic = serde_json::json!({
-            "role": message.role,
-            "content": message.content,
-            "content_blob": message.content_blob,
-            "reasoning_content": message.reasoning_content,
-            "tool_calls": message.tool_calls,
-            "tool_call_id": message.tool_call_id,
-            "images": message.images,
-        });
-        digest.update(serde_json::to_vec(&semantic).expect("semantic message serializes"));
-        digest.update([0xff]);
+        update_semantic_message(&mut digest, message);
     }
     format!("sha256:{:x}", digest.finalize())
 }
+
+/// Fold one message's semantic content (role, text, tool trace, images) into a
+/// digest. Instructions and provider-private metadata are excluded; see
+/// [`semantic_context_head`].
+#[allow(clippy::expect_used)] // `serde_json::Value` serialization is structurally infallible.
+fn update_semantic_message(digest: &mut Sha256, message: &crate::Message) {
+    if message.role == crate::Role::System {
+        return;
+    }
+    let semantic = serde_json::json!({
+        "role": message.role,
+        "content": message.content,
+        "content_blob": message.content_blob,
+        "reasoning_content": message.reasoning_content,
+        "tool_calls": message.tool_calls,
+        "tool_call_id": message.tool_call_id,
+        "images": message.images,
+    });
+    digest.update(serde_json::to_vec(&semantic).expect("semantic message serializes"));
+    digest.update([0xff]);
+}
+
+/// Stable identity of the cacheable request prefix `S | H | I` (ADR-0217): the
+/// instruction slices, the deterministically ordered tool declarations, and the
+/// semantic conversation messages. Request-local temporary context (`E`) is
+/// deliberately absent because callers pass only `messages`, never
+/// `temporary_context`.
+#[allow(clippy::expect_used)] // Tool declarations contain no fallible custom serializers.
+pub fn request_prefix_fingerprint(
+    instructions: &crate::InstructionBundle,
+    messages: &[crate::Message],
+    tools: &[crate::ToolSpec],
+) -> String {
+    let mut digest = Sha256::new();
+    for slice in &instructions.slices {
+        digest.update(slice.id.as_bytes());
+        digest.update([slice.tier as u8]);
+        digest.update(slice.content.as_bytes());
+        digest.update([0xff]);
+    }
+    digest.update(serde_json::to_vec(tools).expect("tool declarations serialize"));
+    digest.update([0xfe]);
+    for message in messages {
+        update_semantic_message(&mut digest, message);
+    }
+    format!("sha256:{:x}", digest.finalize())
+}
+
 
 #[allow(clippy::expect_used)] // Tool declarations contain no fallible custom serializers.
 pub fn request_envelope_fingerprint(

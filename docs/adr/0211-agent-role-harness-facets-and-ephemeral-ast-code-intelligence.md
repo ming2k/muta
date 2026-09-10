@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-03-31
+- **Amended by:** [ADR-0213](0213-model-request-composition-and-context-lifecycle.md) rejects this record's unconditional history cache-hit claims; [ADR-0214](0214-on-demand-code-structure-context-and-mutation-freshness.md) removes the ambient per-request Repo Map and the turn-intake environment scan; [ADR-0217](0217-request-components-and-derived-cache-plan.md) retires its three-zone vocabulary in favor of the `S | H | I | E` component model. The `AgentRole` / `HarnessFacet` terminology and instance-bound facets remain under this proposal.
 - **Extends/Builds on:** ADR-0137 (server-side KV-cache alignment and three-zone architecture), ADR-0167 (worker-station agent model), ADR-0183 (spatiotemporal aspect engine)
 - **Supersedes/Refines:** deprecates `AgentPreset` in favor of `AgentRole` (refining ADR-0053/ADR-0167); supersedes `CognitiveTask`/`CognitivePipeline` terminology with `HarnessTask` (completing ADR-0167 §2's de-stewarding trajectory); refines ADR-0183 Phase 2 turn intake from remote LLM generation to 0ms local synthesis.
 

@@ -798,7 +798,8 @@ pub fn termination_model_note(termination: ShellTermination) -> Option<&'static 
             "[running: the sync budget expired but the command is still alive. \
              It was NOT killed — it continues as a background job and its \
              completion (or the service's failure) will be reported here \
-             automatically. Use process_poll/process_logs to inspect it now.]",
+             automatically. Use the process tool (action: 'status' or 'logs') \
+             to inspect it now.]",
         ),
     }
 }

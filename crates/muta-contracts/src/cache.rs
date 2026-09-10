@@ -171,21 +171,21 @@ impl PromptCacheCapabilities {
         &self,
         preference: PromptCachePreference,
         routing_key: Option<String>,
-    ) -> Result<ResolvedCachePlan, CacheResolutionError> {
+    ) -> Result<ResolvedCachePolicy, CacheResolutionError> {
         self.validate()?;
         if self.modes.is_empty() {
             return match preference {
                 PromptCachePreference {
                     mode: PromptCacheModePreference::ProviderDefault,
                     retention: None,
-                } => Ok(ResolvedCachePlan::Unsupported),
+                } => Ok(ResolvedCachePolicy::Unsupported),
                 _ => Err(CacheResolutionError::CachingUnsupported),
             };
         }
 
         if preference.mode == PromptCacheModePreference::Disabled {
             return if self.disable_supported {
-                Ok(ResolvedCachePlan::Disabled)
+                Ok(ResolvedCachePolicy::Disabled)
             } else {
                 Err(CacheResolutionError::DisableUnsupported)
             };
@@ -211,7 +211,7 @@ impl PromptCacheCapabilities {
             return Err(CacheResolutionError::RetentionUnsupported { retention: value });
         }
 
-        Ok(ResolvedCachePlan::Enabled {
+        Ok(ResolvedCachePolicy::Enabled {
             mode,
             retention,
             routing_key: self.routing_key_supported.then_some(routing_key).flatten(),
@@ -225,7 +225,7 @@ impl PromptCacheCapabilities {
 /// Fully validated cache instructions consumed by a protocol encoder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
-pub enum ResolvedCachePlan {
+pub enum ResolvedCachePolicy {
     Unsupported,
     Disabled,
     Enabled {
@@ -306,6 +306,43 @@ fn first_non_negative(values: &[Option<i64>]) -> Option<i64> {
     values.iter().flatten().copied().find(|value| *value >= 0)
 }
 
+/// Provider-neutral cache plan derived from a prepared request (ADR-0217).
+///
+/// It carries the deterministic content identity of the cacheable prefix
+/// `S | H | I` and separates the durable conversation from the request-local
+/// temporary context `E`. Breakpoint placement, block sizing, retention, and
+/// affinity stay provider concerns applied on top of this plan; this type makes
+/// no claim that a cache hit occurs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachePlan {
+    /// Stable content identity of the cacheable prefix. Excludes `E`.
+    pub prefix_fingerprint: String,
+    /// Number of `S | H | I` messages carried by the request.
+    pub conversation_messages: usize,
+    /// Number of `E` messages, excluded from the prefix and never persisted.
+    pub temporary_context_messages: usize,
+}
+
+impl CachePlan {
+    pub fn from_request(request: &crate::ModelRequest) -> Self {
+        Self {
+            prefix_fingerprint: crate::request_prefix_fingerprint(
+                &request.instructions,
+                &request.messages,
+                &request.tool_specs,
+            ),
+            conversation_messages: request.messages.len(),
+            temporary_context_messages: request.temporary_context.len(),
+        }
+    }
+
+    /// Whether the request-local temporary context is empty. An empty tail
+    /// cannot shorten a later prefix.
+    pub fn has_temporary_context(&self) -> bool {
+        self.temporary_context_messages > 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,7 +365,7 @@ mod tests {
         };
         assert_eq!(
             caps.resolve(PromptCachePreference::default(), Some("session-42".into())),
-            Ok(ResolvedCachePlan::Enabled {
+            Ok(ResolvedCachePolicy::Enabled {
                 mode: PromptCacheMode::Implicit,
                 retention: Some(CacheRetention::ThirtyMinutes),
                 routing_key: Some("session-42".into()),
@@ -342,7 +379,7 @@ mod tests {
         let caps = PromptCacheCapabilities::unsupported();
         assert_eq!(
             caps.resolve(PromptCachePreference::default(), None),
-            Ok(ResolvedCachePlan::Unsupported)
+            Ok(ResolvedCachePolicy::Unsupported)
         );
         assert_eq!(
             caps.resolve(
@@ -415,5 +452,42 @@ mod tests {
                 miss_tokens: Some(400),
             }
         );
+    }
+
+    #[test]
+    fn cache_plan_is_deterministic_for_an_unchanged_request() {
+        let request =
+            crate::ModelRequest::new(vec![crate::Message::new(crate::Role::User, "hello")]);
+        assert_eq!(request.cache_plan(), request.cache_plan());
+    }
+
+    #[test]
+    fn cache_plan_identity_ignores_the_temporary_tail() {
+        let conversation = vec![crate::Message::new(crate::Role::User, "hello")];
+        let without = crate::ModelRequest::new(conversation.clone());
+        let with_tail = crate::ModelRequest::new(conversation).with_temporary_context(vec![
+            crate::Message::new(crate::Role::User, "request-local"),
+        ]);
+
+        let bare = without.cache_plan();
+        let tailed = with_tail.cache_plan();
+        assert_eq!(
+            bare.prefix_fingerprint, tailed.prefix_fingerprint,
+            "request-local temporary context must not move the cacheable prefix identity"
+        );
+        assert_eq!(bare.conversation_messages, 1);
+        assert_eq!(tailed.conversation_messages, 1);
+        assert_eq!(tailed.temporary_context_messages, 1);
+        assert!(!bare.has_temporary_context());
+        assert!(tailed.has_temporary_context());
+    }
+
+    #[test]
+    fn cache_plan_identity_tracks_conversation_content() {
+        let a = crate::ModelRequest::new(vec![crate::Message::new(crate::Role::User, "a")])
+            .cache_plan();
+        let b = crate::ModelRequest::new(vec![crate::Message::new(crate::Role::User, "b")])
+            .cache_plan();
+        assert_ne!(a.prefix_fingerprint, b.prefix_fingerprint);
     }
 }

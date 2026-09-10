@@ -1,12 +1,10 @@
-//! The guard-action type and the per-round guard state that backs the pre-dispatch
-//! doom-loop detector ([`crate::doom_guard`]).
+//! The guard-action type and per-round guard state consulted by tool dispatch.
 //!
-//! The old read-only, post-hoc `ReadLoopGuard` (nudge-then-block, read-only) was
-//! replaced by [`crate::doom_guard::DoomLoopGuard`], which intercepts *any*
-//! watched tool's repeat *before* it executes. See that module for the rationale.
-//! What remains here is the shared vocabulary — the [`GuardAction`] a guard
-//! returns, and [`RoundGuardState`] — the per-round carrier that holds the doom
-//! guard and the per-round block mask the dispatch layer consults.
+//! Provides the core decision vocabulary — the [`GuardAction`] a guard returns
+//! (continue, inject steering message, block signatures, abort), and
+//! [`RoundGuardState`] — the per-round carrier holding the pre-dispatch doom
+//! guard ([`crate::doom_guard::DoomLoopGuard`]) and the per-round block mask
+//! enforced by the tool dispatch layer.
 
 use std::collections::HashSet;
 

@@ -134,7 +134,8 @@ mod dispatch_pipeline;
 pub mod subagent_tool;
 pub use agent_slot::AgentSlot;
 mod hook_runner;
-pub mod loop_guard;
+pub mod guard;
+pub use guard::{GuardAction, RoundGuardState};
 mod model_request;
 pub mod no_provider;
 pub mod orchestration;
@@ -161,6 +162,7 @@ pub mod tools;
 
 pub mod facet;
 pub mod syntax;
+pub(crate) mod sync;
 pub use facet::CodeIntelligenceFacet;
 
 pub use context_projection::ContextProjectionGate;

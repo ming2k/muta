@@ -266,16 +266,14 @@ impl Agent {
             muta_contracts::AgentRoleId::Code => {
                 profile
                     .facets
-                    .push(Arc::new(crate::facet::CodeIntelligenceFacet::new(1024)));
+                    .push(Arc::new(crate::facet::CodeIntelligenceFacet::new()));
             }
             muta_contracts::AgentRoleId::CodeAnalyst
             | muta_contracts::AgentRoleId::Reviewer
             | muta_contracts::AgentRoleId::Architect => {
                 profile
                     .facets
-                    .push(Arc::new(crate::facet::CodeIntelligenceFacet::read_only(
-                        1024,
-                    )));
+                    .push(Arc::new(crate::facet::CodeIntelligenceFacet::read_only()));
             }
             muta_contracts::AgentRoleId::Security => {}
         }

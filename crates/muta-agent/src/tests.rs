@@ -223,7 +223,7 @@ impl Tool for StreamingReadTool {
 #[async_trait]
 impl Tool for ShadowTodoTool {
     fn name(&self) -> &str {
-        "write_todos"
+        "todo"
     }
 
     fn description(&self) -> &str {
@@ -255,7 +255,7 @@ fn agent_installs_its_stateful_todo_tools() {
         .into_iter()
         .map(|tool| tool.name().to_string())
         .collect::<std::collections::HashSet<_>>();
-    assert!(names.contains("write_todos"));
+    assert!(names.contains("todo"));
 }
 
 #[test]
@@ -293,7 +293,7 @@ fn agent_builder_accepts_additional_tools() {
         .map(|tool| tool.name().to_string())
         .collect::<std::collections::HashSet<_>>();
     assert!(names.contains("write_test"));
-    assert!(names.contains("write_todos"));
+    assert!(names.contains("todo"));
 }
 
 #[test]
@@ -308,7 +308,7 @@ fn agent_owned_tool_identity_replaces_a_caller_shadow() {
     let todo = agent
         .installed_tools()
         .into_iter()
-        .find(|tool| tool.name() == "write_todos")
+        .find(|tool| tool.name() == "todo")
         .expect("todo should be installed");
     assert_ne!(todo.description(), "caller-owned shadow");
 }
@@ -350,7 +350,7 @@ fn static_tool_identity_shadows_a_dynamic_collision() {
     let todos: Vec<_> = agent
         .installed_tools()
         .into_iter()
-        .filter(|tool| tool.name() == "write_todos")
+        .filter(|tool| tool.name() == "todo")
         .collect();
     assert_eq!(todos.len(), 1);
     assert_ne!(todos[0].description(), "caller-owned shadow");

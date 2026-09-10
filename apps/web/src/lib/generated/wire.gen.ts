@@ -397,7 +397,12 @@ export type ConnectionFilterPolicy = NamedFilterPolicy | Array<string>;
  */
 export type ConnectionUsageState = { "status": "unsupported" } | { "status": "fetching" } | { "status": "available", "data": ProviderUsage } | { "status": "error", "data": string };
 
-export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource, overhead_tokens?: number | null, history_tokens?: number | null, };
+export type ContextTokenSnapshot = { tokens: number, source: ContextTokenSource, overhead_tokens?: number | null, history_tokens?: number | null, 
+/**
+ * Request-local temporary-context tokens (`E_n`), reported separately from
+ * durable input so diagnostics do not conflate the two (ADR-0213 §8).
+ */
+temporary_context_tokens?: number | null, };
 
 /**
  * Session-scoped events emitted while a user round runs, carried under an
@@ -1603,7 +1608,13 @@ provider_output_tokens?: number, };
  * skill messages injected for this request. `overhead_tokens` covers the
  * freshly composed system message and visible tool schemas.
  */
-export type RequestTokenEstimate = { history_tokens: number, overhead_tokens: number, total_tokens: number, };
+export type RequestTokenEstimate = { history_tokens: number, overhead_tokens: number, total_tokens: number, 
+/**
+ * Request-local temporary-context tokens (`E_n`), a subset of
+ * `overhead_tokens`. Diagnostics must report this separately from durable
+ * input and provider-reported cache usage (ADR-0213 §8).
+ */
+temporary_context_tokens: number, };
 
 /**
  * Provenance of the counts attached to a request attempt.

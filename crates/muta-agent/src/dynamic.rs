@@ -26,14 +26,37 @@ pub fn spawn_refresh(catalog: impl DynamicCatalog + 'static) {
     tokio::spawn(async move {
         // Fire an immediate first refresh so the catalog is populated without
         // blocking the startup path, then settle into the periodic cadence.
+        let mut consecutive_failures = 0u32;
         if let Err(error) = catalog.refresh().await {
+            consecutive_failures = 1;
             tracing::warn!(catalog = id, %error, "initial background refresh failed");
         }
-        let mut interval = tokio::time::interval(period);
         loop {
-            interval.tick().await;
-            if let Err(error) = catalog.refresh().await {
-                tracing::warn!(catalog = id, %error, "periodic refresh failed");
+            // Apply exponential backoff when consecutive failures occur, capping at 4x period or 60s.
+            let next_delay = if consecutive_failures > 0 {
+                let multiplier = 1u32.checked_shl(consecutive_failures.min(3)).unwrap_or(8);
+                period.saturating_mul(multiplier).min(Duration::from_secs(60))
+            } else {
+                period
+            };
+            tokio::time::sleep(next_delay).await;
+
+            match catalog.refresh().await {
+                Ok(()) => {
+                    if consecutive_failures > 0 {
+                        tracing::info!(catalog = id, "periodic catalog refresh recovered");
+                        consecutive_failures = 0;
+                    }
+                }
+                Err(error) => {
+                    consecutive_failures = consecutive_failures.saturating_add(1);
+                    tracing::warn!(
+                        catalog = id,
+                        %error,
+                        consecutive_failures,
+                        "periodic refresh failed, backing off"
+                    );
+                }
             }
         }
     });

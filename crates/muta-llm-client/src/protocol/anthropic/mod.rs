@@ -151,7 +151,7 @@ impl AnthropicMessagesProvider {
     fn resolve_cache_plan(
         &self,
         request: &ModelRequest,
-    ) -> Result<muta_contracts::ResolvedCachePlan, ProviderError> {
+    ) -> Result<muta_contracts::ResolvedCachePolicy, ProviderError> {
         self.prompt_cache
             .resolve(request)
             .map_err(|e| ProviderError::invalid_request("Anthropic", e))
@@ -290,10 +290,12 @@ impl Provider for AnthropicMessagesProvider {
         let cache_plan = self.resolve_cache_plan(&request)?;
         let ModelRequest {
             instructions,
-            messages,
+            mut messages,
             tool_specs,
+            temporary_context,
             ..
         } = request;
+        messages.extend(temporary_context);
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
@@ -343,10 +345,12 @@ impl Provider for AnthropicMessagesProvider {
         let cache_plan = self.resolve_cache_plan(&request)?;
         let ModelRequest {
             instructions,
-            messages,
+            mut messages,
             tool_specs,
+            temporary_context,
             ..
         } = request;
+        messages.extend(temporary_context);
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
@@ -380,10 +384,12 @@ impl Provider for AnthropicMessagesProvider {
         let cache_plan = self.resolve_cache_plan(&request)?;
         let ModelRequest {
             instructions,
-            messages,
+            mut messages,
             tool_specs,
+            temporary_context,
             ..
         } = request;
+        messages.extend(temporary_context);
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {

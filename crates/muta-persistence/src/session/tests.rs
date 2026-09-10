@@ -443,6 +443,79 @@ async fn round_interrupts_record_and_clear() {
 }
 
 // ---------------------------------------------------------------
+// Request-projection archive (ADR-0218): durable forensics, never the window.
+// ---------------------------------------------------------------
+
+fn request_projection(round: u64, turn: u64) -> muta_contracts::RequestProjection {
+    muta_contracts::RequestProjection {
+        round,
+        turn,
+        created_at_ms: 42,
+        prefix_fingerprint: format!("sha256:{round:02x}{turn:02x}"),
+        conversation_messages: 1,
+        temporary_context_tokens: 7,
+        temporary_context: vec![Message::new(
+            Role::User,
+            "<temporary-context>request-local evidence</temporary-context>",
+        )],
+    }
+}
+
+#[tokio::test]
+async fn request_projections_persist_outside_the_window() {
+    let dir = temp_dir("request-projection");
+    let path = dir.join("session.json");
+    let store = SessionStore::for_path(path.clone());
+    store.replace_messages(vec![user("hello")]).await.unwrap();
+
+    store
+        .record_request_projection(request_projection(1, 0))
+        .await
+        .unwrap();
+    // Dedupe on (round, turn): a transport retry reuses the snapshot and must
+    // not mint a second record.
+    store
+        .record_request_projection(request_projection(1, 0))
+        .await
+        .unwrap();
+    assert_eq!(store.request_projections().await.len(), 1);
+
+    // The archive is not the window: E_n never enters model-visible history.
+    let window = store.model_window().await;
+    assert!(window.iter().all(|m| !m.content.contains("request-local evidence")));
+
+    // Durable round-trip: the projection survives a reload, still outside the
+    // window.
+    let reloaded = SessionStore::for_path(path);
+    let window = reloaded.model_window().await;
+    assert!(window.iter().all(|m| !m.content.contains("request-local evidence")));
+    let restored = reloaded.request_projections().await;
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].prefix_fingerprint, "sha256:0100");
+    assert!(restored[0].temporary_context[0]
+        .content
+        .contains("request-local evidence"));
+}
+
+#[tokio::test]
+async fn request_projections_are_retention_bounded() {
+    let store = store("request-projection-retention").await;
+    store.replace_messages(vec![user("hello")]).await.unwrap();
+    let cap = crate::db::MAX_RETAINED_REQUEST_PROJECTIONS;
+    for round in 0..(cap as u64 + 5) {
+        store
+            .record_request_projection(request_projection(round, 0))
+            .await
+            .unwrap();
+    }
+    let retained = store.request_projections().await;
+    assert_eq!(retained.len(), cap);
+    // Newest kept, oldest evicted.
+    assert_eq!(retained.last().unwrap().round, cap as u64 + 4);
+    assert_eq!(retained.first().unwrap().round, 5);
+}
+
+// ---------------------------------------------------------------
 // Command ledger.
 // ---------------------------------------------------------------
 

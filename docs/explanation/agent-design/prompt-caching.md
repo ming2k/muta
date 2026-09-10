@@ -19,6 +19,39 @@ guaranteed to accept every OpenAI cache extension. Muta enables a control only
 when that exact provider and model declare it. Custom and undocumented relays
 start unsupported.
 
+## Temporary context and prefix reuse
+
+Cache reuse is a prefix property. Consider a temporary tail `E_n` appended after
+the newly admitted input:
+
+```text
+Request 1: S | H | U1 | E1
+Output:                    A1
+Request 2: S | H | U1 | A1 | U2 | E2
+Common prefix: S | H | U1
+```
+
+The next history view keeps `H | U1 | A1`, never `E1`. Moving or removing a
+temporary tail prevents direct prefix reuse from its former start onward, and
+that can happen between tool-loop invocations as well as between user turns.
+This is why muta favors on-demand structure retrieval over an ambient
+per-request repository map, and why every enabled temporary producer is bounded
+by an explicit budget and relevance condition ([Model context](model-context.md),
+[ADR-0213](../../adr/0213-model-request-composition-and-context-lifecycle.md)).
+
+Block sizes, breakpoints, expiration, routing, and treatment of generated tokens
+remain provider-specific. An unchanged logical prefix is an *opportunity* for
+reuse, not proof of a cache hit; tool/schema or instruction changes, compaction,
+and provider serialization can shorten it. Diagnostics must not fabricate hit
+rates when the provider supplies no evidence.
+
+The prefix identity itself is provider-neutral: a derived
+[`CachePlan`](../../adr/0217-request-components-and-derived-cache-plan.md)
+fingerprints `S | H | I` and reports the durable-versus-temporary message split.
+It is computed from the prepared request snapshot and performs no I/O. Provider
+adapters then layer breakpoints, retention, and affinity on top — the plan
+records what this route will do, never that a hit occurred.
+
 ## Four separate questions
 
 Caching becomes easier to reason about when four concerns stay separate:

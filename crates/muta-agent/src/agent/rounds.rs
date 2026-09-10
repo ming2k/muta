@@ -353,6 +353,20 @@ impl Agent {
             // fingerprint walk (hash-rate, not BPE-rate) over unchanged bytes
             // — cheap enough to stay inline on the attempt path.
             let request_estimate = self.estimate_model_request(request);
+            // ADR-0218: archive the freshly assembled request's projection once
+            // per logical invocation. A transport retry reuses `pending_request`
+            // (so `resuming_provider_request` is true) and must not re-record.
+            if !resuming_provider_request {
+                self.fire_request_projection_persist(
+                    muta_contracts::RequestProjection::from_request(
+                        request,
+                        request_estimate.temporary_context_tokens,
+                        self.round_count(),
+                        round.turn_index as u64,
+                        crate::orchestration::unix_epoch_ms(),
+                    ),
+                );
+            }
             let request_projection = request_estimate.total_tokens;
             let request_provider = self.provider.provider_id();
             let request_model = self.provider.model();
@@ -1179,14 +1193,14 @@ impl Agent {
             // Pre-dispatch doom check, mirroring the native path: catch a repeat
             // *before* the text-fallback tool runs.
             let doom_action = if checkpoint_replay {
-                crate::loop_guard::GuardAction::Continue
+                crate::guard::GuardAction::Continue
             } else {
                 state
                     .guards
                     .check_doom_ahead(&[(call.name.as_str(), call.arguments.as_str())])
             };
             let doom_message: Option<String> = match &doom_action {
-                crate::loop_guard::GuardAction::Block { message, .. } => {
+                crate::guard::GuardAction::Block { message, .. } => {
                     tracing::warn!(
                         tool = %call.name,
                         args = %call.arguments,

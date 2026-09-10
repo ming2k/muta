@@ -269,10 +269,12 @@ impl Provider for OpenAiChatCompletionsProvider {
             .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let ModelRequest {
             instructions,
-            messages,
+            mut messages,
             tool_specs,
+            temporary_context,
             ..
         } = request;
+        messages.extend(temporary_context);
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
@@ -338,10 +340,12 @@ impl Provider for OpenAiChatCompletionsProvider {
             .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let ModelRequest {
             instructions,
-            messages,
+            mut messages,
             tool_specs,
+            temporary_context,
             ..
         } = request;
+        messages.extend(temporary_context);
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
@@ -379,10 +383,12 @@ impl Provider for OpenAiChatCompletionsProvider {
             .map_err(|e| ProviderError::invalid_request(self.label(), e))?;
         let ModelRequest {
             instructions,
-            messages,
+            mut messages,
             tool_specs,
+            temporary_context,
             ..
         } = request;
+        messages.extend(temporary_context);
         let body = request::body_with_capabilities(
             messages,
             request::BodyInput {
@@ -536,8 +542,8 @@ mod tests {
     fn body_with_tools(tools: &[Arc<dyn Tool>]) -> serde_json::Value {
         let request = ModelRequest::with_tools(vec![Message::new(Role::User, "go")], tools);
         let (messages, tool_specs) = request.into_parts();
-        static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePlan =
-            muta_contracts::ResolvedCachePlan::Unsupported;
+        static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePolicy =
+            muta_contracts::ResolvedCachePolicy::Unsupported;
         request::body(
             messages,
             request::BodyInput {

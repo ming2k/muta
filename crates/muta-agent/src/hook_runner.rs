@@ -8,11 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::hooks::HookRegistry;
-
-/// Internal lock-guard helper: poison-immune (recovers via `into_inner`).
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
+use crate::sync::poison_lock;
 
 /// Holds the lifecycle hook registry. The registry is swappable at runtime
 /// via [`HookRunner::set`]; every read clones the `Arc` first so the lock is
@@ -31,13 +27,13 @@ impl HookRunner {
     /// Replace the entire registry. Intended to be called once at startup
     /// after the `[hooks]` config is parsed.
     pub fn set(&self, registry: HookRegistry) {
-        *lock(&self.registry) = Arc::new(registry);
+        *poison_lock(&self.registry) = Arc::new(registry);
     }
 
     /// Snapshot the registry as a cheap `Arc` clone, so insertion points fire
     /// hooks without holding the swap lock across the async `fire`.
     pub fn get(&self) -> Arc<HookRegistry> {
-        lock(&self.registry).clone()
+        poison_lock(&self.registry).clone()
     }
 }
 

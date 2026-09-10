@@ -36,6 +36,17 @@ pub(crate) fn classify(command: &str) -> Option<ShellInputKind> {
             continue;
         }
 
+        // Skip leading/inline environment assignments (e.g. `FOO=bar sudo ...`).
+        if let Some((var_name, _)) = program.split_once('=') {
+            if !var_name.is_empty()
+                && var_name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                continue;
+            }
+        }
+
         if program.eq_ignore_ascii_case("gpg") {
             if !gpg_noninteractive {
                 return Some(ShellInputKind::Secret);

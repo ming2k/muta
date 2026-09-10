@@ -1,13 +1,13 @@
 //! OpenAI prompt-cache request controls shared by Chat Completions and
 //! Responses encoders.
 
-use muta_contracts::{CacheRetention, PromptCacheMode, ResolvedCachePlan};
+use muta_contracts::{CacheRetention, PromptCacheMode, ResolvedCachePolicy};
 use serde_json::{Value, json};
 
 /// Stamp top-level OpenAI controls and, for explicit mode, one stable content
 /// boundary in `items_field` (`messages` or `input`).
-pub fn apply(body: &mut Value, plan: &ResolvedCachePlan, items_field: &str) {
-    let ResolvedCachePlan::Enabled {
+pub fn apply(body: &mut Value, plan: &ResolvedCachePolicy, items_field: &str) {
+    let ResolvedCachePolicy::Enabled {
         mode,
         retention,
         routing_key,
@@ -59,11 +59,11 @@ pub fn apply(body: &mut Value, plan: &ResolvedCachePlan, items_field: &str) {
 /// the top-level `instructions` field.
 pub fn project_responses_instructions_for_explicit_mode(
     body: &mut Value,
-    plan: &ResolvedCachePlan,
+    plan: &ResolvedCachePolicy,
 ) {
     if !matches!(
         plan,
-        ResolvedCachePlan::Enabled {
+        ResolvedCachePolicy::Enabled {
             mode: PromptCacheMode::Explicit,
             ..
         }
@@ -142,7 +142,7 @@ mod tests {
         let mut body = json!({"input": []});
         apply(
             &mut body,
-            &ResolvedCachePlan::Enabled {
+            &ResolvedCachePolicy::Enabled {
                 mode: PromptCacheMode::Implicit,
                 retention: None,
                 routing_key: Some("session-42".into()),
@@ -168,7 +168,7 @@ mod tests {
         });
         apply(
             &mut body,
-            &ResolvedCachePlan::Enabled {
+            &ResolvedCachePolicy::Enabled {
                 mode: PromptCacheMode::Explicit,
                 retention: Some(CacheRetention::ThirtyMinutes),
                 routing_key: Some("session".into()),

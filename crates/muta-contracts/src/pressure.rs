@@ -852,6 +852,9 @@ impl ToolSchemaWeights {
 pub struct LayeredRequestWeights {
     pub instructions_tokens: usize,
     pub per_message: Vec<std::sync::Arc<i64>>,
+    /// Weight of the request-local temporary tail (`E_n`). It is not history,
+    /// but it is part of the provider-visible request.
+    pub temporary_context_tokens: usize,
     pub tool_schema_tokens: usize,
 }
 
@@ -867,10 +870,12 @@ impl LayeredRequestWeights {
             .max(0) as usize
     }
 
-    /// Total prepared-request weight including instructions and the head system message.
+    /// Total prepared-request weight including instructions and the request-local
+    /// temporary tail.
     pub fn prepared_tokens(&self) -> usize {
         self.instructions_tokens
             .saturating_add(self.per_message.iter().map(|t| **t).sum::<i64>().max(0) as usize)
+            .saturating_add(self.temporary_context_tokens)
     }
 
     pub fn total_tokens(&self) -> usize {
@@ -897,6 +902,11 @@ pub fn layered_request_weights(
         .iter()
         .map(|message| weights.weight(message))
         .collect();
+    let temporary_context_tokens = request
+        .temporary_context
+        .iter()
+        .map(|message| (*weights.weight(message)).max(0) as usize)
+        .sum();
     let tool_schema_tokens = request
         .tool_specs
         .iter()
@@ -905,6 +915,7 @@ pub fn layered_request_weights(
     LayeredRequestWeights {
         instructions_tokens,
         per_message,
+        temporary_context_tokens,
         tool_schema_tokens,
     }
 }
@@ -920,6 +931,10 @@ pub struct RequestTokenEstimate {
     pub history_tokens: usize,
     pub overhead_tokens: usize,
     pub total_tokens: usize,
+    /// Request-local temporary-context tokens (`E_n`), a subset of
+    /// `overhead_tokens`. Diagnostics must report this separately from durable
+    /// input and provider-reported cache usage (ADR-0213 §8).
+    pub temporary_context_tokens: usize,
 }
 
 impl RequestTokenEstimate {
@@ -928,6 +943,7 @@ impl RequestTokenEstimate {
             history_tokens,
             overhead_tokens,
             total_tokens: history_tokens.saturating_add(overhead_tokens),
+            temporary_context_tokens: 0,
         }
     }
 }

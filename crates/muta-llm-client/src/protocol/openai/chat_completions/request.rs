@@ -70,7 +70,7 @@ pub struct BodyInput<'a> {
     /// Provider-specific behavior layered on the shared Chat Completions wire.
     pub dialect: OpenAiChatDialect,
     /// Cache controls resolved against this exact provider route.
-    pub cache_plan: &'a muta_contracts::ResolvedCachePlan,
+    pub cache_plan: &'a muta_contracts::ResolvedCachePolicy,
 }
 
 /// Build the chat-completions request body.
@@ -348,15 +348,15 @@ mod tests {
     use super::*;
     use muta_contracts::ToolCall;
 
-    static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePlan =
-        muta_contracts::ResolvedCachePlan::Unsupported;
+    static DEFAULT_CACHE_PLAN: muta_contracts::ResolvedCachePolicy =
+        muta_contracts::ResolvedCachePolicy::Unsupported;
 
     fn test_body_input<'a>(
         model: &'a str,
         stream: bool,
         tool_specs: Option<&'a [muta_contracts::ToolSpec]>,
         reasoning_effort: Option<Effort>,
-        cache_plan: &'a muta_contracts::ResolvedCachePlan,
+        cache_plan: &'a muta_contracts::ResolvedCachePolicy,
     ) -> BodyInput<'a> {
         BodyInput {
             model,
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn request_injects_prompt_cache_key_when_present() {
-        let cache_plan = muta_contracts::ResolvedCachePlan::Enabled {
+        let cache_plan = muta_contracts::ResolvedCachePolicy::Enabled {
             mode: muta_contracts::PromptCacheMode::Implicit,
             retention: None,
             routing_key: Some("session-42".into()),

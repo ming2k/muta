@@ -277,7 +277,7 @@ impl Tool for ExecuteCommandTool {
                     "status": "spawned_in_background",
                     "job_id": info.id.0,
                     "state": info.state,
-                    "message": "Command started asynchronously in the background. You WILL receive an automatic notification here when it finishes (or fails). You can proceed with other tasks and inspect progress with process_poll/process_logs.",
+                    "message": "Command started asynchronously in the background. You WILL receive an automatic notification here when it finishes (or fails). You can proceed with other tasks and inspect progress with the process tool (action: 'status' or 'logs').",
                 });
                 return Ok(muta_contracts::ToolOutput::text(
                     serde_json::to_string_pretty(&output).unwrap_or_default(),
@@ -351,7 +351,7 @@ impl Tool for ExecuteCommandTool {
                     "status": "spawned_service",
                     "job_id": info.id.0,
                     "state": info.state,
-                    "message": "Service started in the background. You will be notified here when it reports readiness and if it dies unexpectedly. Do not wait for it to exit — it is not supposed to. Inspect with process_logs.",
+                    "message": "Service started in the background. You will be notified here when it reports readiness and if it dies unexpectedly. Do not wait for it to exit — it is not supposed to. Inspect with the process tool (action: 'logs').",
                 });
                 return Ok(muta_contracts::ToolOutput::text(
                     serde_json::to_string_pretty(&output).unwrap_or_default(),

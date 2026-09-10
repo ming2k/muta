@@ -160,7 +160,7 @@ impl Agent {
             .collect();
         let doom_action = state.guards.check_doom_ahead(&doom_calls);
         let doom_nudge: Option<String> = match &doom_action {
-            crate::loop_guard::GuardAction::Block { message, .. } => {
+            crate::guard::GuardAction::Block { message, .. } => {
                 tracing::warn!(
                     blocked = ?state.guards.blocked_summary(),
                     "doom guard blocked a repeating tool call before execution"
@@ -360,7 +360,7 @@ impl Agent {
                             .as_ref()
                             .is_some_and(|sourced| sourced.tool.supports_cooperative_cancel());
                         if !cancellable {
-                            return Err("cancelled".to_string());
+                            return Err(crate::tool_scheduler::SchedulerError::Cancelled);
                         }
                         if let Some(sourced) = &tool {
                             sourced.tool.request_cancel(&call_id);

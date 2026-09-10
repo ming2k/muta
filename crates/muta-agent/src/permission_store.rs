@@ -10,10 +10,7 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-/// Internal lock-guard helper: poison-immune (recovers via `into_inner`).
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
+use crate::sync::poison_lock;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct PermissionRule {
@@ -91,11 +88,11 @@ impl PermissionStore {
     // unattended execution posture
 
     pub fn unattended(&self) -> bool {
-        *lock(&self.unattended)
+        *poison_lock(&self.unattended)
     }
 
     pub fn set_unattended(&self, value: bool) {
-        *lock(&self.unattended) = value;
+        *poison_lock(&self.unattended) = value;
     }
 
     // Pending-request parking moved to the human-request broker
@@ -111,7 +108,7 @@ impl PermissionStore {
     /// substring matching, so `bash git` does not allow `bash git status`.
     /// (`PermissionRuleConfig.scope` documents this contract for config authors.)
     pub fn is_always_allowed(&self, rule: &PermissionRule) -> bool {
-        let state = lock(&self.state);
+        let state = poison_lock(&self.state);
         state.always.contains(rule)
             || state.always.contains(&PermissionRule {
                 tool: rule.tool.clone(),
@@ -121,7 +118,7 @@ impl PermissionStore {
 
     /// Check whether a rule is in the session allow set (granted for this session only).
     pub fn is_session_allowed(&self, rule: &PermissionRule) -> bool {
-        let state = lock(&self.state);
+        let state = poison_lock(&self.state);
         state.session.contains(rule)
             || state.session.contains(&PermissionRule {
                 tool: rule.tool.clone(),
@@ -136,14 +133,14 @@ impl PermissionStore {
 
     /// Add a rule to the session-scoped allow set (in-memory only, not written to disk).
     pub fn add_session(&self, rule: PermissionRule) {
-        let mut state = lock(&self.state);
+        let mut state = poison_lock(&self.state);
         state.session.insert(rule);
     }
 
     /// Clear all session-scoped grants.
     #[cfg(test)]
     pub fn clear_session(&self) {
-        let mut state = lock(&self.state);
+        let mut state = poison_lock(&self.state);
         state.session.clear();
     }
 
@@ -153,7 +150,7 @@ impl PermissionStore {
     /// it as expected rather than treating it as still-revoked.
     pub fn add_always(&self, rule: PermissionRule) {
         {
-            let mut state = lock(&self.state);
+            let mut state = poison_lock(&self.state);
             state.always.insert(rule.clone());
             state.revoked.remove(&rule);
         }
@@ -161,7 +158,7 @@ impl PermissionStore {
     }
 
     pub fn allowed_tools(&self) -> Vec<String> {
-        let mut tools = lock(&self.state)
+        let mut tools = poison_lock(&self.state)
             .always
             .iter()
             .map(|rule| format!("{} {}", rule.tool, rule.scope))
@@ -171,7 +168,7 @@ impl PermissionStore {
     }
 
     pub fn allowed_tools_structured(&self) -> Vec<muta_contracts::PermissionRuleInfo> {
-        let mut rules: Vec<muta_contracts::PermissionRuleInfo> = lock(&self.state)
+        let mut rules: Vec<muta_contracts::PermissionRuleInfo> = poison_lock(&self.state)
             .always
             .iter()
             .map(|rule| muta_contracts::PermissionRuleInfo {
@@ -188,7 +185,7 @@ impl PermissionStore {
     /// it — the user's blanket revocation must survive a restart. (#3)
     pub fn clear_allowed(&self) {
         {
-            let mut state = lock(&self.state);
+            let mut state = poison_lock(&self.state);
             // Record each revoked rule so the declarative seed cannot re-grant
             // it on the next start. Collect before inserting into `revoked`:
             // `drain` holds a mutable borrow of `state.always` for its whole
@@ -212,7 +209,7 @@ impl PermissionStore {
             scope: scope.to_string(),
         };
         let removed = {
-            let mut state = lock(&self.state);
+            let mut state = poison_lock(&self.state);
             let removed = state.always.remove(&rule);
             if removed {
                 // Remember the revocation so the declarative seed does not
@@ -243,7 +240,7 @@ impl PermissionStore {
     /// rule later (`add_always`) clears the revocation and lets the seed apply
     /// again.
     pub fn seed_from_config(&self, rules: &[muta_persistence::config::PermissionRuleConfig]) {
-        let mut state = lock(&self.state);
+        let mut state = poison_lock(&self.state);
         let mut added = 0;
         let mut skipped_revoked = 0;
         for rule in rules {
@@ -274,7 +271,7 @@ impl PermissionStore {
 
     /// The persisted project root, if any.
     pub fn project_root(&self) -> Option<std::path::PathBuf> {
-        lock(&self.persistence)
+        poison_lock(&self.persistence)
             .as_ref()
             .map(|target| target.project_root.clone())
     }
@@ -301,7 +298,7 @@ impl PermissionStore {
             file: dirs.project_permissions(&project_root),
             project_root,
         });
-        *lock(&self.persistence) = target.clone();
+        *poison_lock(&self.persistence) = target.clone();
         if let Some(target) = target {
             self.load_persistent(&target.file);
         }
@@ -319,7 +316,7 @@ impl PermissionStore {
                 // v1 files predate the `revoked` list; the `#[serde(default)]`
                 // on that field yields an empty vec, so they load cleanly with
                 // no revocations remembered (the pre-#3 behaviour).
-                let mut perms = lock(&self.state);
+                let mut perms = poison_lock(&self.state);
                 let count = persisted.rules.len();
                 for rule in persisted.rules {
                     perms.always.insert(rule);
@@ -356,13 +353,13 @@ impl PermissionStore {
     /// into the project bucket. Best-effort: logs on failure and never
     /// propagates the error.
     fn persist(&self) {
-        let target = lock(&self.persistence).clone();
+        let target = poison_lock(&self.persistence).clone();
         let Some(target) = target else {
             return;
         };
         let path = target.file;
         let snapshot = {
-            let perms = lock(&self.state);
+            let perms = poison_lock(&self.state);
             let mut rules: Vec<PermissionRule> = perms.always.iter().cloned().collect();
             rules.sort_by(|a, b| a.tool.cmp(&b.tool).then_with(|| a.scope.cmp(&b.scope)));
             let mut revoked: Vec<PermissionRule> = perms.revoked.iter().cloned().collect();

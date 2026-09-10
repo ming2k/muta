@@ -43,6 +43,71 @@ provider supports native tool calling. A disabled or masked tool is not
 declared to the provider, and dispatch rejects calls to tools that are not
 admitted for the current agent.
 
+## Request Composition and Lifecycle
+
+For every model invocation `n` — user turns and tool-loop invocations alike —
+the request is a logical composition of four parts:
+
+```text
+R_n = S | H_n | I_n | E_n
+```
+
+The separator is logical ordering, not literal concatenation or four API
+fields; provider adapters still map instructions, tools, messages, and supported
+content blocks to their native protocol. The older `Zone 1/2/3` labels are
+retired; the components are the model, and prompt caching is modeled separately
+as a derived [cache plan](../../adr/0217-request-components-and-derived-cache-plan.md).
+
+| Component | Meaning | Lifecycle |
+|-----------|---------|-----------|
+| `S` | Stable instructions and deterministically ordered tool declarations | Stable within a compatible configuration epoch; a legitimate rule, tool, model, or route change can start a new epoch |
+| `H_n` | Model-visible history preceding this invocation's newly admitted input | Append-oriented within a history epoch; compaction and reconstruction are explicit boundaries |
+| `I_n` | Newly admitted input, such as user messages or tool results | Included exactly once in this request and in subsequent history |
+| `E_n` | Optional, bounded request-local information | Not automatically promoted into history or the durable interaction transcript |
+
+Assembly consumes prepared data only: no repository traversal, file parsing, tool
+execution, or network enrichment happens here. Producers run before assembly
+under the applicable execution and permission boundaries, and every enabled
+temporary-context producer must have a finite budget and an explicit relevance
+condition. `E_n` may be empty — and is empty by default, because code structure
+is delivered on demand through the `get_outline` tool rather than as an ambient
+per-request map ([ADR-0214](../../adr/0214-on-demand-code-structure-context-and-mutation-freshness.md)).
+
+Three data surfaces stay distinct:
+
+1. **Interaction record** — durable admitted user, assistant, and tool facts.
+2. **Model history view** — the selected or compacted representation the model
+   reads; not necessarily a byte-for-byte copy of the interaction record.
+3. **Request projection** — the immutable prepared snapshot combining prefix,
+   history, new input, and any temporary information.
+
+Human visibility, durability, and inclusion in later requests are independent
+properties. A hidden tool result can remain in history; hiding presentation does
+not make it ephemeral. Temporary payloads are never silently promoted into the
+interaction record or later history: retained context enters through an explicit
+history-bearing event with provenance. A transport retry of the same prepared
+invocation reuses its snapshot rather than refreshing temporary information; a
+changed input, route-dependent projection, or refreshed environment requires an
+explicitly rebuilt request.
+
+For the full decision, see
+[ADR-0213](../../adr/0213-model-request-composition-and-context-lifecycle.md).
+
+The assembled request keeps `H_n | I_n` as its conversation messages and carries
+`E_n` in a separate request-local field (`ModelRequest.temporary_context`), so temporary
+context cannot leak into durable history by construction. A provider-neutral
+[`CachePlan`](../../adr/0217-request-components-and-derived-cache-plan.md)
+derives the deterministic identity of the cacheable prefix `S | H | I` and the
+durable-versus-temporary message split; provider adapters layer their own
+breakpoints, retention, and affinity on top. Diagnostics report temporary-context
+token volume separately from durable input.
+
+`E_n` is not discarded, though: each assembled request is also archived as a
+durable [`RequestProjection`](../../adr/0218-durable-request-projection-archive.md)
+outside the transcript, so the exact request scene (temporary payload and prefix
+identity) can be reconstructed later. The archive is forensic only — it is never
+read back into a model window, transcript, compaction, or replay.
+
 ## Tool Schemas and Tool Trace
 
 Tool definitions and tool usage are separate parts of the context.

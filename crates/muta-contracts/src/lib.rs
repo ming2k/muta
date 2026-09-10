@@ -24,10 +24,12 @@ pub use color_scheme_config::{
 };
 pub mod cache;
 pub use cache::{
-    CacheResolutionError, CacheRetention, PromptCacheCapabilities, PromptCacheMode,
+    CachePlan, CacheResolutionError, CacheRetention, PromptCacheCapabilities, PromptCacheMode,
     PromptCacheModePreference, PromptCachePreference, PromptCacheSpec, PromptCacheUsage,
-    ResolvedCachePlan, read_prompt_cache_usage,
+    ResolvedCachePolicy, read_prompt_cache_usage,
 };
+pub mod request_projection;
+pub use request_projection::RequestProjection;
 pub mod usage;
 pub use usage::TokenUsage;
 
@@ -200,8 +202,8 @@ pub use provider_state::{
     ContinuationMode, CursorInvalidationReason, EnvelopeRevision, OPENAI_RESPONSE_ID_ARTIFACT_KEY,
     OPENAI_RESPONSE_OUTPUT_ARTIFACT_KEY, ProviderArtifacts, ProviderCompletion,
     ProviderCompletionMeta, ProviderCursorState, RequestDelivery, RouteFingerprint,
-    read_continuation_cursor, request_envelope_fingerprint, select_request_delivery,
-    semantic_context_head, write_continuation_cursor,
+    read_continuation_cursor, request_envelope_fingerprint, request_prefix_fingerprint,
+    select_request_delivery, semantic_context_head, write_continuation_cursor,
 };
 pub use subagent::{
     SUBAGENT_CODE, SUBAGENT_EXPLORE, SUBAGENT_MCP_SPECIALIST, SUBAGENT_TITLE, SubagentPreset,

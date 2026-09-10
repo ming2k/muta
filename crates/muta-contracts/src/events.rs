@@ -969,6 +969,10 @@ pub struct ContextTokenSnapshot {
     pub overhead_tokens: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history_tokens: Option<usize>,
+    /// Request-local temporary-context tokens (`E_n`), reported separately from
+    /// durable input so diagnostics do not conflate the two (ADR-0213 §8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporary_context_tokens: Option<usize>,
 }
 
 impl ContextTokenSnapshot {
@@ -978,6 +982,7 @@ impl ContextTokenSnapshot {
             source,
             overhead_tokens: None,
             history_tokens: None,
+            temporary_context_tokens: None,
         }
     }
 
@@ -990,6 +995,7 @@ impl ContextTokenSnapshot {
             source,
             overhead_tokens: Some(estimate.overhead_tokens),
             history_tokens: Some(estimate.history_tokens),
+            temporary_context_tokens: Some(estimate.temporary_context_tokens),
         }
     }
 }

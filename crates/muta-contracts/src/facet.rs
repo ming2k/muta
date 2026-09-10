@@ -3,9 +3,13 @@
 //! A [`HarnessFacet`] represents an ambient environmental capability equipped
 //! by an [`crate::AgentRole`]. Unlike active [`crate::Tool`]s which require explicit
 //! model-driven invocations, facets hook directly into the harness lifecycle:
-//! - Projecting true-ephemeral context into Zone 3 (request tail)
-//! - Intercepting mutations before disk writes (Phase 4 Tool Gating)
+//! - Contributing optional, bounded request-local temporary context (`E_n`)
+//! - Routing pre-mutation validation through the production mutation lifecycle
 //! - Registering companion read-only inspection tools
+//!
+//! Per ADR-0214 no facet projects an automatic repository-wide map; code
+//! structure is retrieved on demand, and any temporary-context contribution is
+//! finite and request-local.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -18,18 +22,21 @@ pub trait HarnessFacet: Send + Sync + std::fmt::Debug {
     /// Unique facet identifier, e.g. "code_intelligence".
     fn name(&self) -> &'static str;
 
-    /// Zone 3 Ephemeral Context projection hook (ADR-0137 / ADR-0211).
+    /// Optional request-local temporary-context hook (ADR-0213 / ADR-0214).
     ///
-    /// Contributes true-ephemeral context (such as 1024-token Repo Map or AST delta)
-    /// to the request tail without committing into persistent conversation transcripts.
-    fn project_ephemeral_context(&self, _workspace_root: Option<&Path>) -> Option<String> {
+    /// Contributes a bounded, relevance-gated payload to the request tail
+    /// without committing it into the persistent conversation transcript. The
+    /// default is empty; a producer must define a finite budget. Ambient
+    /// repository-wide structures are not delivered here.
+    fn project_temporary_context(&self, _workspace_root: Option<&Path>) -> Option<String> {
         None
     }
 
-    /// Pre/post-mutation safety guard hook (Phase 4).
+    /// Optional pre-mutation validation hook.
     ///
-    /// Intercepts and validates file mutations before disk commit (e.g. 1ms Tree-sitter
-    /// syntax validation to block broken brackets/delimiters).
+    /// The production mutation lifecycle (the write tools' syntax guard) owns
+    /// validation. A facet that participates must route to that same policy
+    /// rather than maintain an independent, contradictory implementation.
     fn intercept_file_mutation(&self, _path: &Path, _content: &str) -> Result<(), String> {
         Ok(())
     }

@@ -83,6 +83,56 @@ impl SessionStore {
         Ok(())
     }
 
+    /// The durable request-projection archive (ADR-0218): forensic snapshots
+    /// of assembled requests, oldest first. Pure projection state — never part
+    /// of the transcript, never replayed into a later model request. Read from
+    /// the key-addressed `request_projections` table on demand; it is not held
+    /// in `SessionData`.
+    pub async fn request_projections(&self) -> Vec<muta_contracts::RequestProjection> {
+        let db_path = self.db_path.clone();
+        let session_id = self.id().await;
+        tokio::task::spawn_blocking(move || {
+            crate::db::DatabaseEngine::open(&db_path, None)
+                .and_then(|engine| {
+                    engine.load_request_projections(
+                        &session_id,
+                        crate::db::MAX_RETAINED_REQUEST_PROJECTIONS,
+                    )
+                })
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Insert one request-projection record (ADR-0218), awaiting the durable
+    /// write. Keyed by `(session, round, turn)`, so re-recording a logical
+    /// invocation replaces its row rather than duplicating it. Retention is a
+    /// bounded ring enforced by the storage layer.
+    pub async fn record_request_projection(
+        &self,
+        record: muta_contracts::RequestProjection,
+    ) -> Result<(), String> {
+        let session_id = self.id().await;
+        self.writer
+            .record_request_projection(session_id, record)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Fire-and-forget request-projection insert (ADR-0218) for the model
+    /// request hot path: forensic persistence must never block dispatch. The
+    /// caller passes the session id because this path cannot await the store
+    /// lock to read it. A dropped write is logged, never surfaced as a round
+    /// failure.
+    pub fn try_record_request_projection(
+        &self,
+        session_id: String,
+        record: muta_contracts::RequestProjection,
+    ) {
+        self.writer.try_record_request_projection(session_id, record);
+    }
+
     /// Clear every round-interrupt record (C11). Called when the interrupted
     /// round's outcome is superseded.
     pub async fn clear_round_interrupts(&self) -> Result<(), String> {

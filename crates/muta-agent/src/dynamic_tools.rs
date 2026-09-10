@@ -40,14 +40,27 @@ impl DynamicToolRegistry {
     }
 
     pub fn find(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.snapshot()
-            .into_iter()
-            .find(|entry| entry.tool.name() == name)
-            .map(|entry| entry.tool)
+        let sources = self.sources.read().unwrap_or_else(|e| e.into_inner());
+        for tools in sources.values() {
+            for tool in tools {
+                if tool.name() == name {
+                    return Some(Arc::clone(tool));
+                }
+            }
+        }
+        None
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.find(name).is_some()
+        let sources = self.sources.read().unwrap_or_else(|e| e.into_inner());
+        for tools in sources.values() {
+            for tool in tools {
+                if tool.name() == name {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
@@ -73,12 +86,9 @@ impl DynamicToolSink for DynamicToolRegistry {
 
 impl muta_contracts::DynamicToolSource for DynamicToolRegistry {
     fn snapshot_tools(&self) -> Vec<Arc<dyn Tool>> {
-        // First-wins on cross-source name collision, mirroring the sink-side
-        // advertisement order (`ToolManager::installed` dedupes the same way).
-        let mut seen = HashSet::new();
+        // `snapshot()` already deduplicates first-wins on cross-source name collision.
         self.snapshot()
             .into_iter()
-            .filter(|entry| seen.insert(entry.tool.name().to_string()))
             .map(|entry| entry.tool)
             .collect()
     }

@@ -104,6 +104,25 @@ injection carries a structured record of *what* it is and *why* it is here, so
 the transcript stays reconstructible: resume, replay, and audit can answer
 "what was injected, when, and why" without fragile string-sniffing.
 
+## Request-local temporary context
+
+A separate, narrower channel feeds the optional temporary tail of a request
+(`E_n` in [Model context](model-context.md)). Unlike the injections above, this
+material is request-local: it is appended to the request projection only, never
+committed to the durable transcript, and bounded by a fixed byte budget so a
+producer cannot grow the request without limit. It is empty by default. For
+post-hoc reconstruction it is separately archived outside the transcript and
+never replayed (see
+[ADR-0218](../../adr/0218-durable-request-projection-archive.md)).
+
+Code structure is not delivered through this channel. Earlier designs projected
+an automatic repository outline into every request; that ambient map is removed.
+The model retrieves structure on demand through the scoped, bounded
+`get_outline` tool, and optional change reminders are not a back door that
+rebuilds repository structure during assembly. See
+[ADR-0213](../../adr/0213-model-request-composition-and-context-lifecycle.md) and
+[ADR-0214](../../adr/0214-on-demand-code-structure-context-and-mutation-freshness.md).
+
 ## The user channel: genuine versus injected
 
 The user channel carries two kinds of message that share a role but are

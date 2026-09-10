@@ -491,6 +491,7 @@ mod projection_settings_tests {
             history_tokens: 100_000,
             overhead_tokens: 12_000,
             total_tokens: 112_000,
+            temporary_context_tokens: 0,
         });
 
         assert_eq!(settings.budget.target_tokens, 50_000);
@@ -1082,25 +1083,10 @@ pub async fn execute_round(
         window[..watermark].to_vec()
     } else {
         let mut th = session.model_window().await;
-        // Phase 2: Turn-Intake Aspect Evaluation (ADR-0183)
-        if !input.hidden {
-            if token.is_cancelled() {
-                return Err(HarnessError::Interrupted);
-            }
-            let aspects = agent.aspects();
-            let root = agent.workspace_root();
-            let reminder = tokio::select! {
-                _ = token.cancelled() => return Err(HarnessError::Interrupted),
-                rem = aspects.evaluate_turn_intake(root.as_deref()) => rem,
-            };
-            if let Some(reminder) = reminder {
-                tracing::info!(reminder = %reminder, "Spatiotemporal Aspect: Injected dynamic environment reminder");
-                th.push(crate::conversation_context::hidden_user(
-                    InjectionKind::SystemReminder,
-                    format!("<system-reminder>\n{reminder}\n</system-reminder>"),
-                ));
-            }
-        }
+        // ADR-0214: no automatic turn-intake environment scan. Code structure
+        // and workspace change information enter through scoped, on-demand tool
+        // retrieval (`get_outline`) and optional request-local reminders, never
+        // as a silently-committed history injection.
         th.push(if input.hidden {
             crate::conversation_context::hidden_user(InjectionKind::HiddenRoundInput, input.prompt)
         } else {
@@ -1194,6 +1180,18 @@ pub async fn execute_round(
                 }
                 outcome
             })
+        }));
+    }
+    // Install the request-projection archive sink (ADR-0218): each freshly
+    // assembled request is enqueued to the session's forensic archive, stored
+    // outside the transcript and never replayed into a later request. The sink
+    // is fire-and-forget so it never blocks request dispatch.
+    {
+        let session_for_projection = Arc::clone(&session);
+        let projection_session_id = session_id.clone();
+        agent.set_request_projection_persist(Arc::new(move |record| {
+            session_for_projection
+                .try_record_request_projection(projection_session_id.clone(), record);
         }));
     }
     let _ = tx.send(round_response(
