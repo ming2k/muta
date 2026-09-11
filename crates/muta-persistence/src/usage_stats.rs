@@ -1,350 +1,59 @@
-//! Cross-session usage-statistics store (ADR-0122).
-//!
-//! The durable sibling of the per-session token ledger. Terminal request
-//! records are appended into **one JSON file per local day** under
-//! `<data_dir>/usage/daily/` — a sibling of `projects/`, never inside a
-//! project bucket — so the data survives every form of session cleanup
-//! (deleting a session file, pruning empty sessions, wiping a whole project
-//! bucket) and the `/usage` report reflects each day's real consumption.
-//!
-//! Correctness properties:
-//! - **Append is idempotent per [`RequestUsageKey`]**: a replayed key is a
-//!   no-op (crash-retry never double counts), and a replay carrying
-//!   *reported* usage upgrades an earlier *estimated* record in place — the
-//!   same monotonic rule the in-memory ledger applies.
-//! - **Atomic**: each day file is rewritten via temp-file + rename
-//!   ([`crate::fsutil::atomic_write_json`]); a crash mid-write never leaves
-//!   a partial file.
-//! - **Cross-process safe**: the read-modify-write window is serialised by a
-//!   `FileLock` on a companion `.lock` file (the daemon and any
-//!   `--no-daemon` standalone instance may write concurrently).
-//! - **Unreadable days are non-fatal**: a corrupt/undecodable day file is
-//!   skipped with a warning — usage telemetry must never take the app down.
-
+//! Authoritative request-attempt accounting and recoverable usage projections (ADR-0236).
+//! No production read imports legacy files, and no settlement rewrites a day bucket.
 use std::path::PathBuf;
+use muta_contracts::usage_stats::{UsageStatRecord, UsageStatsReport, day_key_from_epoch_ms};
+use muta_contracts::{RequestUsageKey, RequestUsageRecord};
 
-use muta_contracts::usage_stats::{
-    UsageStatRecord, UsageStatsReport, aggregate_usage_records, day_key_from_epoch_ms,
-};
-use muta_contracts::{RequestUsageKey, RequestUsageRecord, RequestUsageSource};
-use serde::{Deserialize, Serialize};
-
-use crate::paths;
-
-/// How many day files the report reads (newest first) before aggregation.
-/// Bounds the work of a `/usage` query: 400 days ≈ 13 months of history.
-const REPORT_DAY_WINDOW: usize = 400;
-
-/// How many day files are **kept on disk**. Retention exceeds the report
-/// window deliberately (data older than the window is never read, but the
-/// user may lower `REPORT_DAY_WINDOW`-shaped settings before it is deleted);
-/// anything past this age is telemetry about long-gone work and is pruned by
-/// [`UsageStatsStore::prune_old_days`] so the store does not grow forever.
-const RETAINED_DAYS: usize = 400;
-
-/// On-disk shape of one day file: a plain list of records under a `records`
-/// key (leaving room for future per-day metadata) with a `version` tag.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct DayFile {
-    version: u32,
-    #[serde(default)]
-    records: Vec<UsageStatRecord>,
-}
-
-/// The append-only, day-partitioned usage store.
-///
-/// Every read and write goes through the single-writer actor (ADR-0231):
-/// `record` / `prune_old_days` are mutations and therefore serialize with
-/// every other write to the unified database, while `all_records` reads
-/// through a snapshot connection. Before this routing the store opened a
-/// connection per day file, so whenever the writer held the lock the record
-/// was simply dropped with "database is locked" after burning the 5 s busy
-/// timeout.
 #[derive(Debug, Clone, Default)]
 pub struct UsageStatsStore {
-    /// Root override for tests. Production resolves via [`paths::get`].
     root: Option<PathBuf>,
-    /// The actor this store writes through. `None` resolves lazily to the
-    /// process-wide handle; an overridden root gets a store-private actor so
-    /// a sandbox never touches the real database.
     handle: Option<crate::db::PersistenceHandle>,
 }
-
 impl UsageStatsStore {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Bind the store to an explicit root directory (tests / sandboxes).
+    pub fn new() -> Self { Self::default() }
     pub fn with_root(root: PathBuf) -> Self {
-        let root = root.join("usage");
-        let handle = crate::db::PersistenceHandle::spawn(root.join("usage.db"), None);
-        Self {
-            root: Some(root),
-            handle: Some(handle),
-        }
+        let root=root.join("usage");
+        let handle=crate::db::PersistenceHandle::spawn(root.join("usage.db"),None);
+        Self { root:Some(root), handle:Some(handle) }
     }
-
-    fn root(&self) -> PathBuf {
-        self.root
-            .clone()
-            .unwrap_or_else(|| paths::get().data_dir.join("usage"))
+    fn handle(&self)->crate::db::PersistenceHandle { self.handle.clone().unwrap_or_else(crate::db::get_persistence_handle) }
+    pub fn record(&self,at:u64,project:&str,record:&RequestUsageRecord)->Result<(),String> {
+        self.record_batch(&[(at,project,record.clone())])
     }
-
-    /// The single-writer actor for this store's database.
-    fn handle(&self) -> crate::db::PersistenceHandle {
-        self.handle
-            .clone()
-            .unwrap_or_else(crate::db::get_persistence_handle)
+    pub fn record_batch(&self,entries:&[(u64,&str,RequestUsageRecord)])->Result<(),String> {
+        let records=entries.iter().filter(|(_,_,r)|r.status.is_terminal()).map(|(at,p,r)|UsageStatRecord {
+            day:day_key_from_epoch_ms(*at),recorded_at_ms:*at,project:p.to_string(),record:r.clone(),
+        }).collect();
+        self.handle().record_usage_stats_blocking(records).map_err(|e|e.to_string())
     }
-
-    /// A read snapshot for this store's database.
-    fn reader(&self) -> Option<crate::db::DbReader> {
-        self.handle().reader().ok()
+    pub async fn persist_attempt(&self,at:u64,project:&str,record:RequestUsageRecord)->Result<(),String> {
+        self.handle().record_attempts(vec![UsageStatRecord {day:day_key_from_epoch_ms(at),recorded_at_ms:at,project:project.into(),record}]).await.map_err(|e|e.to_string())
     }
-
-    fn daily_dir(&self) -> PathBuf {
-        self.root().join("daily")
+    pub fn all_records(&self)->Vec<UsageStatRecord> {
+        self.handle().reader().and_then(|r|r.usage_records(400,usize::MAX)).unwrap_or_else(|e| {tracing::warn!(%e,"usage read failed");Vec::new()})
     }
-
-    pub fn day_file(&self, day: &str) -> PathBuf {
-        let dir = self.daily_dir();
-        let _ = std::fs::create_dir_all(&dir);
-        dir.join(format!("{day}.json"))
+    pub fn report(&self,event_cap:usize)->UsageStatsReport {
+        let handle=self.handle();
+        // On-demand bounded catch-up; never called from turn completion.
+        if let Err(error)=handle.catch_up_usage() {tracing::warn!(%error,"usage projection catch-up failed");}
+        handle.reader().and_then(|r|r.usage_report(400,event_cap)).unwrap_or_else(|e| {tracing::warn!(%e,"usage report failed");UsageStatsReport::default()})
     }
-
-    /// Read one day bucket. `reader` lets a caller sweep several days over a
-    /// single connection; `None` opens one for this call.
-    fn read_day(&self, day: &str, reader: Option<&crate::db::DbReader>) -> DayFile {
-        let legacy = self.day_file(day);
-        if legacy.exists() {
-            if let Ok(content) = std::fs::read_to_string(&legacy)
-                && let Ok(parsed) = serde_json::from_str::<DayFile>(&content)
-            {
-                let _ = self
-                    .handle()
-                    .set_json_blocking(&format!("usage:day:{day}"), &parsed);
-                return parsed;
-            }
-            return DayFile::default();
-        }
-
-        let key = format!("usage:day:{day}");
-        if let Some(reader) = reader {
-            if let Ok(Some(day_file)) = reader.get_json::<DayFile>(&key) {
-                return day_file;
-            }
-        } else if let Ok(Some(day_file)) = self.handle().reader().and_then(|r| r.get_json(&key)) {
-            return day_file;
-        }
-        DayFile::default()
-    }
-
-    /// Persist one day bucket through the actor.
-    fn persist_day(&self, day: &str, day_file: &DayFile) -> Result<(), String> {
-        self.handle()
-            .set_json_blocking(&format!("usage:day:{day}"), day_file)
-            .map_err(|e| format!("could not persist usage day to sqlite: {e}"))
-    }
-
-    /// Delete day records older than `RETAINED_DAYS` newest days. Returns the number of days removed.
-    pub fn prune_old_days(&self) -> usize {
-        let days = self.list_days();
-        if days.len() <= RETAINED_DAYS {
-            return 0;
-        }
-        let handle = self.handle();
-        let mut removed = 0;
-        for day in days.into_iter().skip(RETAINED_DAYS) {
-            let key = format!("usage:day:{day}");
-            if handle.delete_kv_blocking(key).unwrap_or(false) {
-                removed += 1;
-            }
-            let _ = std::fs::remove_file(self.day_file(&day));
-            let _ = std::fs::remove_file(self.day_file(&day).with_extension("json.lock"));
-        }
-        removed
-    }
-
-    /// Append one terminal request record to its day bucket in SQLite (SSOT).
-    pub fn record(
-        &self,
-        recorded_at_ms: u64,
-        project: &str,
-        record: &RequestUsageRecord,
-    ) -> Result<(), String> {
-        if !record.status.is_terminal() {
-            return Ok(());
-        }
-        let day = day_key_from_epoch_ms(recorded_at_ms);
-        let mut day_file = self.read_day(&day, None);
-        upsert_record(
-            &mut day_file,
-            UsageStatRecord {
-                day: day.clone(),
-                recorded_at_ms,
-                project: project.to_string(),
-                record: record.clone(),
-            },
-        );
-        self.persist_day(&day, &day_file)
-    }
-
-    /// Append many records at once (batch flush).
-    pub fn record_batch(&self, entries: &[(u64, &str, RequestUsageRecord)]) -> Result<(), String> {
-        let mut by_day: std::collections::BTreeMap<String, Vec<UsageStatRecord>> =
-            std::collections::BTreeMap::new();
-        for (recorded_at_ms, project, record) in entries {
-            if !record.status.is_terminal() {
-                continue;
-            }
-            let day = day_key_from_epoch_ms(*recorded_at_ms);
-            by_day
-                .entry(day.clone())
-                .or_default()
-                .push(UsageStatRecord {
-                    day,
-                    recorded_at_ms: *recorded_at_ms,
-                    project: project.to_string(),
-                    record: record.clone(),
-                });
-        }
-        for (day, records) in by_day {
-            let mut day_file = self.read_day(&day, None);
-            for entry in records {
-                upsert_record(&mut day_file, entry);
-            }
-            self.persist_day(&day, &day_file)?;
-        }
-        Ok(())
-    }
-
-    /// Every record across the report window, oldest day first.
-    pub fn all_records(&self) -> Vec<UsageStatRecord> {
-        let mut days = self.list_days();
-        days.reverse();
-        if days.len() > REPORT_DAY_WINDOW {
-            let start = days.len() - REPORT_DAY_WINDOW;
-            days.drain(..start);
-        }
-        // One snapshot for the whole sweep: a report reads up to
-        // `REPORT_DAY_WINDOW` day blobs, and opening a connection per day
-        // dominated the cost.
-        let reader = self.reader();
-        let mut out = Vec::new();
-        for day in days {
-            out.extend(self.read_day(&day, reader.as_ref()).records);
-        }
-        out
-    }
-
-    /// The aggregated report over the whole window.
-    pub fn report(&self, event_cap: usize) -> UsageStatsReport {
-        aggregate_usage_records(&self.all_records(), event_cap)
-    }
-
-    /// Day keys present in SQLite (and any legacy disk cache), newest first.
-    fn list_days(&self) -> Vec<String> {
-        let mut days = Vec::new();
-        if let Some(reader) = self.reader()
-            && let Ok(keys) = reader.list_kv_keys_with_prefix("usage:day:")
-        {
-            for key in keys {
-                if let Some(day) = key.strip_prefix("usage:day:")
-                    && day.len() == 10
-                    && day.as_bytes()[4] == b'-'
-                    && day.as_bytes()[7] == b'-'
-                    && day.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                {
-                    days.push(day.to_string());
-                }
-            }
-        }
-        let daily = self.daily_dir();
-        if daily.exists()
-            && let Ok(entries) = std::fs::read_dir(&daily)
-        {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "json")
-                    && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
-                    && stem.len() == 10
-                    && stem.as_bytes()[4] == b'-'
-                    && stem.as_bytes()[7] == b'-'
-                    && stem.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                    && !days.contains(&stem.to_string())
-                {
-                    days.push(stem.to_string());
-                }
-            }
-        }
-        days.sort();
-        days.reverse();
-        days
-    }
+    pub fn prune_old_days(&self)->usize { 0 }
+    #[cfg(test)]
+    fn list_days(&self)->Vec<String> { self.handle().reader().unwrap().usage_days(400).unwrap() }
 }
-
-/// Insert-or-upgrade one record. Same-key replay is idempotent; a reported
-/// replay upgrades an estimated row (an estimate can never downgrade a
-/// reported one — mirroring `TokenSourceLedger::settle_request`).
-///
-/// The record list stays sorted by `key` so `find` can binary-search: the
-/// day file grows with the day's request count and the previous linear scan
-/// per insert made each settle cost `O(n²)` over a heavy day.
-fn upsert_record(day_file: &mut DayFile, entry: UsageStatRecord) {
-    match day_file
-        .records
-        .binary_search_by(|existing| existing.record.key.cmp(&entry.record.key))
-    {
-        Ok(index) => {
-            let existing = &mut day_file.records[index];
-            let upgrade = existing.record.source != RequestUsageSource::Reported
-                && entry.record.source == RequestUsageSource::Reported;
-            if upgrade {
-                *existing = entry;
-            }
-        }
-        Err(index) => day_file.records.insert(index, entry),
-    }
-}
-
-/// Convenience: the day bucket key for a wall-clock instant, exposed for
-/// callers that pre-group records.
-pub fn day_key(epoch_ms: u64) -> String {
-    day_key_from_epoch_ms(epoch_ms)
-}
-
-/// Whether two records describe the same attempt (exposed for tests and
-/// future importers).
-pub fn same_attempt(a: &RequestUsageKey, b: &RequestUsageKey) -> bool {
-    a == b
-}
-
-/// [`muta_contracts::UsageStatSink`] adapter over the store, safe to share
-/// as an `Arc` into a [`muta_contracts::TokenSourceLedger`].
-///
-/// Writes happen synchronously on the settling thread. A terminal settle is
-/// already an off-hot-path event (a provider response just completed), the
-/// day file is small, and the write is atomic — so the simplicity of a
-/// synchronous mirror beats a buffered channel that could lose the last
-/// records on crash. Errors are logged and swallowed: usage telemetry must
-/// never break request accounting.
+pub fn day_key(at:u64)->String {day_key_from_epoch_ms(at)}
+pub fn same_attempt(a:&RequestUsageKey,b:&RequestUsageKey)->bool {a==b}
 impl muta_contracts::UsageStatSink for UsageStatsStore {
-    fn record_usage(&self, recorded_at_ms: u64, project: &str, record: &RequestUsageRecord) {
-        if let Err(error) = self.record(recorded_at_ms, project, record) {
-            tracing::warn!(
-                %error,
-                session = %record.key.session_id,
-                "could not persist usage-stat record"
-            );
-        }
+    fn persist_usage<'a>(&'a self, at:u64, project:&'a str, record:RequestUsageRecord) -> futures::future::BoxFuture<'a,Result<(),String>> {
+        Box::pin(self.persist_attempt(at,project,record))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::{RequestUsageKey, RequestUsageStatus};
+    use muta_contracts::{RequestUsageKey, RequestUsageStatus, RequestUsageSource};
 
     fn sample_record(session: &str, attempt: u32, total: i64) -> RequestUsageRecord {
         RequestUsageRecord {
@@ -370,6 +79,39 @@ mod tests {
         let dir = tempfile::tempdir().expect("create temp root");
         let path = dir.path().to_path_buf();
         (path, dir)
+    }
+
+    #[test]
+    fn concurrent_usage_writers_preserve_all_records() {
+        let (root, _tmp) = temp_root();
+        // Independent handles model standalone processes sharing one DB.
+        let stores: Vec<_> = (0..4)
+            .map(|_| UsageStatsStore::with_root(root.clone()))
+            .collect();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(stores.len()));
+        let threads: Vec<_> = stores
+            .into_iter()
+            .enumerate()
+            .map(|(i, store)| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for attempt in 0..8 {
+                        store
+                            .record(
+                                1_700_000_000_000,
+                                "p",
+                                &sample_record(&format!("s{i}"), attempt, 100),
+                            )
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(UsageStatsStore::with_root(root).all_records().len(), 32);
     }
 
     #[test]
@@ -463,33 +205,11 @@ mod tests {
         assert_eq!(report.grand_total.requests, 3);
     }
 
-    #[test]
-    fn corrupt_day_file_is_skipped() {
-        let (root, _tmp) = temp_root();
-        let store = UsageStatsStore::with_root(root.clone());
-        store
-            .record(1_700_000_000_000, "p", &sample_record("s1", 1, 10))
-            .unwrap();
-        // Corrupt one day file.
-        let days = store.list_days();
-        let day = days[0].clone();
-        let path = store.day_file(&day);
-        std::fs::write(&path, b"{ not json").unwrap();
-        let fresh = UsageStatsStore::with_root(root);
-        assert!(fresh.all_records().is_empty());
-    }
 
-    #[test]
-    fn non_day_files_are_ignored() {
-        let (root, _tmp) = temp_root();
-        let store = UsageStatsStore::with_root(root.clone());
-        let daily = store.root().join("daily");
-        std::fs::create_dir_all(&daily).unwrap();
-        std::fs::write(daily.join("readme.txt"), b"ignore me").unwrap();
-        std::fs::write(daily.join("junk.json"), b"{}").unwrap();
-        assert!(store.list_days().is_empty());
-        assert!(store.all_records().is_empty());
-    }
+
+
+
+
 
     /// End-to-end: a `TokenSourceLedger` with this store installed as its
     /// `UsageStatSink` mirrors terminal settles into the day files, and the
@@ -530,6 +250,12 @@ mod tests {
         let retry = ledger.begin_request("s1", "anthropic", "claude", 1, 2, 900);
         ledger.settle_request(&retry, RequestUsageStatus::Failed, None, 20, 0);
 
+        futures::executor::block_on(ledger.persist_pending("s1")).unwrap();
+        // A FIFO writer barrier makes the asynchronous sink visible to readers.
+        store
+            .handle()
+            .set_kv_blocking("test:barrier".into(), "1".into())
+            .unwrap();
         let report = store.report(10);
         assert_eq!(report.grand_total.requests, 2);
         assert_eq!(report.grand_total.completed, 1);
@@ -546,7 +272,9 @@ mod tests {
         // carries the `usage` segment, so re-wrap from its parent.
         let reread = UsageStatsStore::with_root(
             store
-                .root()
+                .root
+                .clone()
+                .expect("root is set")
                 .parent()
                 .expect("root has a parent")
                 .to_path_buf(),
@@ -554,58 +282,4 @@ mod tests {
         assert_eq!(reread.report(10).grand_total.requests, 2);
     }
 
-    /// `upsert_record` keeps the day file sorted by key (the invariant the
-    /// binary search in `upsert_record` relies on), stays idempotent on
-    /// replays, and upgrades estimated rows to reported ones without ever
-    /// letting a reported row regress.
-    #[test]
-    fn upsert_keeps_records_sorted_idempotent_and_upgrade_only() {
-        fn entry(session: &str, attempt: u32, source: RequestUsageSource) -> UsageStatRecord {
-            let mut record = sample_record(session, attempt, 100);
-            record.source = source;
-            UsageStatRecord {
-                day: "2026-08-20".to_string(),
-                recorded_at_ms: 1,
-                project: "p".to_string(),
-                record,
-            }
-        }
-
-        let mut day = DayFile::default();
-        // Insert out of key order: "s2" before "s1".
-        upsert_record(&mut day, entry("s2", 1, RequestUsageSource::Reported));
-        upsert_record(&mut day, entry("s1", 2, RequestUsageSource::Estimated));
-        upsert_record(&mut day, entry("s1", 1, RequestUsageSource::Estimated));
-
-        let keys: Vec<String> = day
-            .records
-            .iter()
-            .map(|r| format!("{}#{}", r.record.key.session_id, r.record.key.attempt))
-            .collect();
-        assert_eq!(
-            keys,
-            vec!["s1#1", "s1#2", "s2#1"],
-            "records stay key-sorted"
-        );
-
-        // Same-key replay is a no-op (idempotent, no duplicate row).
-        let before = day.records.len();
-        upsert_record(&mut day, entry("s1", 1, RequestUsageSource::Estimated));
-        assert_eq!(day.records.len(), before);
-
-        // An estimated row upgrades to reported…
-        upsert_record(&mut day, entry("s1", 1, RequestUsageSource::Reported));
-        assert_eq!(
-            day.records[0].record.source,
-            RequestUsageSource::Reported,
-            "estimated upgrades to reported"
-        );
-        // …and a reported row never regresses to estimated.
-        upsert_record(&mut day, entry("s1", 1, RequestUsageSource::Estimated));
-        assert_eq!(
-            day.records[0].record.source,
-            RequestUsageSource::Reported,
-            "reported must not downgrade"
-        );
-    }
 }

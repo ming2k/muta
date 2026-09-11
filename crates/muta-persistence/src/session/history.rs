@@ -15,6 +15,15 @@ pub struct CommitTurn<'a> {
     pub usage_records: &'a [muta_contracts::RequestUsageRecord],
     pub retry_point: Option<Option<muta_contracts::RetryPoint>>,
     pub round_interrupt: Option<muta_contracts::RoundInterrupt>,
+    /// ADR-0236 D3 idempotency identity. Replaying the same key returns the
+    /// original commit receipt instead of applying the deltas a second time.
+    /// `None` mints a fresh identity for this commit.
+    pub operation_id: Option<String>,
+    /// ADR-0236 D3 revision precondition. When supplied, the writer refuses
+    /// the commit if the durable session revision no longer matches — the
+    /// check fails closed rather than writing over content the caller did
+    /// not see.
+    pub expected_revision: Option<u64>,
 }
 
 impl<'a> CommitTurn<'a> {
@@ -25,6 +34,8 @@ impl<'a> CommitTurn<'a> {
             usage_records: &[],
             retry_point: None,
             round_interrupt: None,
+            operation_id: None,
+            expected_revision: None,
         }
     }
 }
@@ -360,8 +371,13 @@ impl SessionStore {
     }
 
     /// Commit everything a finished ReAct turn changed, in **one** lock
-    /// acquisition and at most **one** snapshot write.
-    pub async fn commit_turn(&self, commit: CommitTurn<'_>) -> Result<(), String> {
+    /// acquisition and at most **one** snapshot write. Returns the committed
+    /// session revision (ADR-0236 D3).
+    pub async fn commit_turn(&self, commit: CommitTurn<'_>) -> Result<u64, String> {
+        let guard = crate::db::CommitGuard {
+            operation_id: commit.operation_id.clone(),
+            expected_revision: commit.expected_revision,
+        };
         let (path, data, children, usage_upserts) = {
             let mut state = self.state.lock().await;
 
@@ -485,7 +501,53 @@ impl SessionStore {
             (state.path.clone(), data, children, usage_upserts)
         };
         persist_subagent_children(&self.writer, &self.blob_store, &children);
-        self.persist_with_usage(path, data, usage_upserts).await
+        self.persist_with_usage_guarded(path, data, usage_upserts, guard)
+            .await
+    }
+
+    /// Durably classify crash residue (ADR-0236 D4): every request attempt
+    /// still `InFlight` in this session becomes `Abandoned` with its projected
+    /// prompt as a lower bound, committed so every reader sees the resolution
+    /// instead of a silently filtered unresolved attempt. Returns the number
+    /// of attempts reclassified (0 is the steady state).
+    ///
+    /// Called by crash recovery after it has read the store-side `InFlight`
+    /// signal (which this clears). Idempotent: once reclassified in memory, a
+    /// second call finds nothing to settle.
+    pub async fn settle_abandoned_attempts(&self) -> Result<usize, String> {
+        use muta_contracts::{RequestUsageSource, RequestUsageStatus};
+        let (path, data, settled): (PathBuf, SessionData, Vec<muta_contracts::RequestUsageRecord>) = {
+            let mut state = self.state.lock().await;
+            let mut settled = Vec::new();
+            for record in state.data.request_usage_records.iter_mut() {
+                if record.status == RequestUsageStatus::InFlight {
+                    record.status = RequestUsageStatus::Abandoned;
+                    record.source = RequestUsageSource::Estimated;
+                    record.prompt_tokens = record.projected_prompt_tokens.max(0);
+                    record.total_tokens = record.prompt_tokens;
+                    settled.push(record.clone());
+                }
+            }
+            if settled.is_empty() {
+                return Ok(0);
+            }
+            state.data.updated_at = unix_timestamp();
+            state.defer_persist = false;
+            (
+                state.path.clone(),
+                state.data.clone_metadata_without_history(),
+                settled,
+            )
+        };
+        let count = settled.len();
+        self.persist_with_usage_guarded(
+            path,
+            data,
+            settled,
+            crate::db::CommitGuard::default(),
+        )
+        .await?;
+        Ok(count)
     }
 
     /// Commit a model-context projection (ADR-0186): translate the

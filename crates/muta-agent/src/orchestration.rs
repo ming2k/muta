@@ -1104,7 +1104,7 @@ pub async fn execute_round(
         let mut th = session.model_window().await;
         // ADR-0214: no automatic turn-intake environment scan. Code structure
         // and workspace change information enter through scoped, on-demand tool
-        // retrieval (`get_outline`) and optional request-local reminders, never
+        // retrieval (`code_query`) and optional request-local reminders, never
         // as a silently-committed history injection.
         th.push(if input.hidden {
             crate::conversation_context::hidden_user(InjectionKind::HiddenRoundInput, input.prompt)
@@ -1135,6 +1135,8 @@ pub async fn execute_round(
             usage_records: &[],
             retry_point: None,
             round_interrupt: None,
+            operation_id: None,
+            expected_revision: None,
         })
         .await?;
 
@@ -1176,7 +1178,7 @@ pub async fn execute_round(
                 // setters.
                 let usage_records = ledger
                     .as_ref()
-                    .map(|ledger| ledger.records_for_session(&session_id));
+                    .map(|ledger| ledger.pending_records_for_session(&session_id));
                 let usage_slice = usage_records.as_deref().unwrap_or(&[]);
                 let outcome = session
                     .commit_turn(CommitTurn {
@@ -1185,8 +1187,12 @@ pub async fn execute_round(
                         usage_records: usage_slice,
                         retry_point: None,
                         round_interrupt: None,
+                        operation_id: None,
+                        expected_revision: None,
                     })
-                    .await;
+                    .await
+                    .map(|_| ());
+                if outcome.is_ok() { if let Some(ref ledger) = ledger { ledger.acknowledge_records(usage_slice); } }
                 // ADR-0209: Proactive push of token ledger updates on mid-round turn boundary.
                 // When an LLM turn produces tool calls or outputs and commits, stream the live
                 // report immediately so open telemetry dialogs update turn-by-turn without polling.
@@ -1342,7 +1348,7 @@ pub async fn execute_round(
                         let session = Arc::clone(&accounting_session);
                         let session_id = accounting_session_id.clone();
                         tokio::spawn(async move {
-                            let records = ledger.records_for_session(&session_id);
+                            let records = ledger.pending_records_for_session(&session_id);
                             if let Err(error) = session.set_request_usage_records(records).await {
                                 tracing::warn!(
                                     %error,
@@ -1592,7 +1598,7 @@ pub async fn execute_round(
     let ledger = agent.token_ledger();
     let usage_records = ledger
         .as_ref()
-        .map(|ledger| ledger.records_for_session(&session_id));
+        .map(|ledger| ledger.pending_records_for_session(&session_id));
     let usage_slice = usage_records.as_deref().unwrap_or(&[]);
 
     // Commit all terminal round state (messages, usage records, retry point)
@@ -1604,14 +1610,18 @@ pub async fn execute_round(
             usage_records: usage_slice,
             retry_point,
             round_interrupt: None,
+            operation_id: None,
+            expected_revision: None,
         })
         .await?;
+
+    if let Some(ref ledger) = ledger { ledger.acknowledge_records(usage_slice); }
 
     // Publish from the final committed history on every terminal path. This
     // reconciles the pre-wire estimate after interruption, tool cancellation,
     // or response commit instead of leaving the meter anchored to a request
     // shape that is no longer AI-visible.
-    send_context_projection(&tx, &session_id, &agent, &round_history);
+    send_context_projection(&tx, &session_id, &agent, &round_history).await;
 
     let outcome = match outcome {
         Ok(outcome) => outcome,
@@ -1729,13 +1739,19 @@ pub async fn execute_round(
     Ok(RoundCompletion::Completed)
 }
 
-fn send_context_projection(
+async fn send_context_projection(
     tx: &mpsc::UnboundedSender<AgentResponse>,
     session_id: &str,
-    agent: &Agent,
+    agent: &Arc<Agent>,
     messages: &[Message],
 ) {
-    let estimate = agent.estimate_next_request_tokens(messages);
+    let started = std::time::Instant::now();
+    let estimate = estimate_off_executor(agent, messages).await;
+    if started.elapsed() >= std::time::Duration::from_millis(250) {
+        tracing::warn!(session = %session_id,
+            duration_ms = started.elapsed().as_millis() as u64,
+            "slow local final context projection");
+    }
     let _ = tx.send(round_response(
         session_id,
         RoundEvent::ContextTokens(muta_contracts::ContextTokenSnapshot::from_estimate(
@@ -1754,7 +1770,7 @@ async fn persist_request_usage(
         return Ok(());
     };
     session
-        .set_request_usage_records(ledger.records_for_session(session_id))
+        .set_request_usage_records(ledger.pending_records_for_session(session_id))
         .await
 }
 

@@ -298,6 +298,125 @@ async fn commit_turn_rebuilds_on_divergence() {
     assert_eq!(window[0].content, "replaced");
 }
 
+#[tokio::test]
+async fn commit_turn_honors_the_revision_precondition() {
+    let store = store("commit-guard").await;
+    let messages = vec![user("hello")];
+    let first = store
+        .commit_turn(CommitTurn::new(&messages))
+        .await
+        .unwrap();
+
+    // A precondition that does not match the durable revision fails closed.
+    let stale = store
+        .commit_turn(CommitTurn {
+            expected_revision: Some(first + 5),
+            ..CommitTurn::new(&messages)
+        })
+        .await
+        .unwrap_err();
+    assert!(stale.contains("stale session revision"), "got {stale}");
+
+    // A matching precondition commits and advances the durable revision.
+    let advanced = store
+        .commit_turn(CommitTurn {
+            expected_revision: Some(first),
+            ..CommitTurn::new(&messages)
+        })
+        .await
+        .unwrap();
+    assert_eq!(advanced, first + 1);
+    assert_eq!(store.model_window().await.len(), 1);
+}
+
+#[tokio::test]
+async fn crash_residue_is_durably_settled_as_abandoned() {
+    use muta_contracts::{
+        RequestUsageKey, RequestUsageRecord, RequestUsageSource, RequestUsageStatus,
+    };
+    let dir = temp_dir("abandoned");
+    let path = dir.join("session.json");
+    let store = SessionStore::for_path(path.clone());
+    // Make the session non-empty so subsequent writes are not deferred.
+    store.replace_messages(vec![user("hi")]).await.unwrap();
+
+    let record = RequestUsageRecord {
+        key: RequestUsageKey {
+            session_id: store.id().await,
+            actor_id: "root".to_string(),
+            round: 1,
+            turn: 1,
+            attempt: 1,
+        },
+        provider: "openai".to_string(),
+        model: "gpt-5".to_string(),
+        status: RequestUsageStatus::InFlight,
+        source: RequestUsageSource::Unknown,
+        projected_prompt_tokens: 321,
+        ..Default::default()
+    };
+    store
+        .set_request_usage_records(vec![record])
+        .await
+        .unwrap();
+
+    assert_eq!(store.settle_abandoned_attempts().await.unwrap(), 1);
+
+    // The classification is durable, not merely in-memory: a fresh store reads
+    // the attempt resolved instead of a silently filtered in-flight.
+    let reloaded = SessionStore::for_path(path);
+    let records = reloaded.request_usage_records().await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].status, RequestUsageStatus::Abandoned);
+    assert_eq!(records[0].source, RequestUsageSource::Estimated);
+    assert_eq!(records[0].prompt_tokens, 321);
+    assert_eq!(records[0].total_tokens, 321);
+
+    // Idempotent: nothing left to settle on a second pass.
+    assert_eq!(reloaded.settle_abandoned_attempts().await.unwrap(), 0);
+}
+
+/// ADR-0236 invariant #3: an ordinary turn's row checksum and delta must not
+/// scale with the session's total retained attempts. Usage lives in its own
+/// key-addressed table, so the session-row checksum excludes the mirror and a
+/// delta does not clone it.
+#[test]
+fn row_checksum_and_delta_ignore_retained_attempts() {
+    use muta_contracts::{RequestUsageKey, RequestUsageRecord, RequestUsageStatus};
+    let mut data = SessionData::default();
+    data.transcript.push(muta_contracts::TranscriptEntry::from_message(
+        0,
+        &user("hello"),
+    ));
+    let baseline = compute_checksum(&data).unwrap();
+
+    for attempt in 1..=1_000 {
+        data.request_usage_records.push(RequestUsageRecord {
+            key: RequestUsageKey {
+                session_id: data.id.clone(),
+                actor_id: "root".to_string(),
+                round: 1,
+                turn: 1,
+                attempt,
+            },
+            status: RequestUsageStatus::Completed,
+            ..Default::default()
+        });
+    }
+
+    assert_eq!(
+        compute_checksum(&data).unwrap(),
+        baseline,
+        "retained attempts must not be folded into the session-row checksum"
+    );
+    assert!(
+        data.clone_metadata_without_history()
+            .request_usage_records
+            .is_empty(),
+        "a delta must not clone the per-session usage mirror"
+    );
+}
+
 // ---------------------------------------------------------------
 // Working state: todos derive from state entries; title is terminal.
 // ---------------------------------------------------------------

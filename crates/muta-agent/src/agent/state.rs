@@ -364,7 +364,7 @@ impl Agent {
 
         // `E_n` (the request-local temporary context) is empty by default
         // (ADR-0213/ADR-0214/ADR-0217): code structure is delivered on demand
-        // via `get_outline`, not as an automatic ambient Repo Map. The facet
+        // via `code_query`, not as an automatic ambient Repo Map. The facet
         // loop remains the generic extension point for explicitly-approved,
         // budgeted temporary-context producers. A projection is bounded and
         // stays strictly request-local: it travels in `temporary_context`,
@@ -809,7 +809,12 @@ impl Agent {
             Some(f) => f(messages).await.map_err(|error| {
                 HarnessError::Other(format!("could not persist mid-round turn: {error}"))
             }),
-            None => Ok(()),
+            None => {
+                if let Some(ledger) = self.token_ledger() {
+                    ledger.persist_pending(&self.thread_id().unwrap_or_default()).await.map_err(HarnessError::Other)?;
+                }
+                Ok(())
+            },
         }
     }
 

@@ -23,6 +23,10 @@ use std::path::{Path, PathBuf};
 /// The one module allowed to name the engine or a raw `rusqlite` handle.
 const THE_DOOR: &str = "crates/muta-persistence/src/db.rs";
 
+/// Child modules of the door (`src/db/*.rs`): still inside `muta-persistence::db`,
+/// so the ADR-0231 boundary is unchanged when `db.rs` is split into a directory.
+const THE_DOOR_DIR: &str = "crates/muta-persistence/src/db/";
+
 /// This guard names the forbidden patterns, so it exempts itself.
 const THE_GUARD: &str = "crates/muta-persistence/tests/one_door.rs";
 
@@ -68,7 +72,29 @@ fn is_exempt(path: &Path, root: &Path) -> bool {
         return false;
     };
     let rel = rel.to_string_lossy().replace('\\', "/");
-    rel == THE_DOOR || rel == THE_GUARD
+    rel == THE_DOOR || rel.starts_with(THE_DOOR_DIR) || rel == THE_GUARD
+}
+
+/// Concatenated source of the door module: `db.rs` plus every `src/db/*.rs`
+/// child. The door is a module directory now, so the shape assertions must
+/// span it rather than a single file.
+fn door_text() -> String {
+    let root = workspace_root();
+    let mut text = std::fs::read_to_string(root.join(THE_DOOR)).expect("the door exists");
+    let dir = root.join("crates/muta-persistence/src/db");
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        let mut paths: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+            .collect();
+        paths.sort();
+        for path in paths {
+            text.push('\n');
+            text.push_str(&std::fs::read_to_string(&path).expect("door child is readable"));
+        }
+    }
+    text
 }
 
 /// Patterns that mean "this file opens or names a database connection".
@@ -135,8 +161,7 @@ fn only_the_persistence_door_names_a_connection() {
 /// way to persist or read.
 #[test]
 fn the_door_exposes_exactly_two_ways_in() {
-    let door = workspace_root().join(THE_DOOR);
-    let text = std::fs::read_to_string(&door).expect("the door exists");
+    let text = door_text();
 
     for needle in [
         "pub(crate) struct DatabaseEngine",

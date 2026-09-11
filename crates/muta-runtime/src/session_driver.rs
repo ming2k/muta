@@ -14,7 +14,7 @@
 use crate::handlers_slash::SlashEnv;
 use crate::side::{SideEnv, resolve_turn_target};
 use muta_agent::catalog;
-use muta_agent::orchestration::{round_response, send_harness_state_for_session};
+use muta_agent::orchestration::{RoundInput, round_response, send_harness_state_for_session};
 use muta_agent::{Agent, RoundLifecycle, SubagentRegistry};
 use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
@@ -221,6 +221,10 @@ pub struct SessionDriver {
     pub websearch_shared: muta_contracts::SharedWebConfig,
     /// Background job manager for asynchronous processes and sub-subagents.
     pub background_jobs: crate::background_jobs::BackgroundJobManager,
+    /// Authorized continuation requests from the task fabric (ADR-0234). A
+    /// dedicated channel, not `req_rx`: a settled machine result is not a human
+    /// request and must not contend as one.
+    pub system_wake_rx: mpsc::Receiver<crate::task_continuation::SystemWake>,
 }
 
 impl SessionDriver {
@@ -261,6 +265,7 @@ impl SessionDriver {
             extra_commands,
             websearch_shared,
             background_jobs,
+            mut system_wake_rx,
         } = self;
         // Hand the shared token-source ledger to the agent so each turn's token
         // usage (reported vs. estimated) is booked into it for the report modal.
@@ -317,6 +322,21 @@ impl SessionDriver {
                 );
                 if let Err(error) = session.arm_retry_pending(point).await {
                     tracing::warn!(%error, "could not arm crash-resume retry point");
+                }
+            }
+            // ADR-0236 D4: the residue read above is the store's last word on
+            // the crash. Commit the reclassification so every reader — not just
+            // this process's ledger — sees the abandoned attempt resolved,
+            // rather than having it filtered out as an unresolved in-flight.
+            match session.settle_abandoned_attempts().await {
+                Ok(0) => {}
+                Ok(settled) => tracing::info!(
+                    session = %initial_session_id,
+                    settled,
+                    "durably settled abandoned request attempts"
+                ),
+                Err(error) => {
+                    tracing::warn!(%error, "could not settle abandoned request attempts");
                 }
             }
         }
@@ -463,7 +483,15 @@ impl SessionDriver {
         enum Incoming {
             Request(AgentRequest),
             Wake(String),
+            /// A settled background result offered for a possible continuation
+            /// round (ADR-0234).
+            SystemWake(crate::task_continuation::SystemWake),
         }
+        // ADR-0234: the wake budget for the current originating request. It is
+        // re-armed by request-channel activity (a human or client is driving)
+        // and spent by wake rounds; a wake round never re-arms it, which is what
+        // makes an unbounded autonomous chain impossible.
+        let mut wake_budget = crate::task_continuation::WakeBudget::new(agent.unattended());
         loop {
             let incoming = tokio::select! {
                 res_opt = req_rx.recv() => {
@@ -473,6 +501,12 @@ impl SessionDriver {
                 wake_res = followup_wake_rx.recv() => {
                     match wake_res {
                         Some(target) => Incoming::Wake(target),
+                        None => break,
+                    }
+                }
+                wake = system_wake_rx.recv() => {
+                    match wake {
+                        Some(wake) => Incoming::SystemWake(wake),
                         None => break,
                     }
                 }
@@ -553,88 +587,171 @@ impl SessionDriver {
                     continue;
                 }
             };
-            let Incoming::Request(req) = incoming else {
-                let Incoming::Wake(wake_target) = incoming else {
-                    unreachable!("the else arm only fires for Wake");
-                };
-                // Round-boundary wake (ADR-0197 M4): a target round ended.
-                // A round the operator interrupted parks its queue — the
-                // user said stop; auto-firing more prompts after an Esc is
-                // never the intent. Ctrl+P / a fresh send re-arms it.
-                if let Some(target) =
-                    resolve_turn_target(&side, &agent, &session, &lifecycle, &wake_target).await
-                    && target.lifecycle.was_interrupted()
-                {
-                    followup_queue.set_paused(&wake_target, true);
-                    crate::handlers_chat::emit_queue_snapshot(
-                        &resp_tx,
-                        &followup_queue,
-                        &wake_target,
-                    );
+            let req = match incoming {
+                Incoming::Request(req) => {
+                    // Request-channel activity means a human or client is
+                    // driving this session again, so the originating request's
+                    // continuation grant is renewed here — and *only* here
+                    // (ADR-0234). A wake round never takes this path, which is
+                    // what makes an unbounded autonomous chain impossible.
+                    wake_budget.on_originating_request();
+                    req
                 }
-                // Ship the next queued item for any idle, un-paused target
-                // the queue knows about (in queue order).
-                let targets: Vec<String> = {
-                    let mut seen = Vec::new();
-                    // order-preserving distinct scan of the queue's targets
-                    for item in &followup_queue.items {
-                        if !seen.contains(&item.session_id) {
-                            seen.push(item.session_id.clone());
-                        }
-                    }
-                    seen
-                };
-                for target_id in targets {
-                    let Some(_item) = (followup_queue.has_items_for(&target_id)).then_some(())
-                    else {
+                Incoming::SystemWake(wake) => {
+                    // ADR-0234 admission. Each gate below is a refusal that
+                    // leaves the settled result retained and collectable through
+                    // the `process` tool; none of them lose it.
+                    let this_session = session.id().await;
+                    if wake.session_id != this_session {
+                        // Only the session that dispatched the work may be woken
+                        // by it (INV-BG-05).
                         continue;
-                    };
-                    let Some(target) =
-                        resolve_turn_target(&side, &agent, &session, &lifecycle, &target_id).await
-                    else {
-                        // Target gone (aside closed): drop its items.
-                        followup_queue.clear(&target_id);
+                    }
+                    // Human precedence (INV-BG-04): queued human work goes
+                    // first, always. The human's own round re-arms the budget,
+                    // and the still-unclaimed result can be delivered after it.
+                    if followup_queue.has_items_for(&this_session) {
+                        continue;
+                    }
+                    // A round is already in flight. Starting a concurrent one
+                    // would supersede the live round; the result reaches the
+                    // model at the next safe boundary through the ordinary tool
+                    // path instead.
+                    if lifecycle.is_running().await {
+                        continue;
+                    }
+                    let pending = background_jobs
+                        .pending_outcomes_for_session(&this_session)
+                        .into_iter()
+                        .filter(|entry| !entry.claimed)
+                        .collect::<Vec<_>>();
+                    if pending.is_empty() {
+                        // Already collected (e.g. by `process wait`), or nothing
+                        // settled — there is nothing to report, so no round and
+                        // no inference is spent.
+                        continue;
+                    }
+                    // Spend before starting: a failure after this point loses
+                    // the round rather than repeating it.
+                    if !wake_budget.try_claim() {
+                        continue;
+                    }
+                    let outcomes = background_jobs
+                        .claim_outcomes_for_session(&this_session)
+                        .into_iter()
+                        .map(|entry| entry.outcome)
+                        .collect::<Vec<_>>();
+                    let digest = crate::task_continuation::continuation_digest(&outcomes);
+                    let config = shared_config.read().await;
+                    crate::side::start_active_turn(
+                        SideEnv {
+                            side: &side,
+                            agent: &agent,
+                            primary_session: &session,
+                            primary_lifecycle: &lifecycle,
+                            tx: &resp_tx,
+                            config: &config,
+                        },
+                        RoundInput {
+                            // Harness-authored context: `hidden` keeps it out of
+                            // the visible user text while still reaching the
+                            // model — the same vehicle the file-mention notes
+                            // use. The digest states outright that it is not a
+                            // user message.
+                            prompt: digest,
+                            hidden: true,
+                            display_prompt: None,
+                            sent_at_ms: None,
+                            images: Vec::new(),
+                            driver: muta_agent::orchestration::RoundDriver::Fresh,
+                        },
+                    )
+                    .await;
+                    continue;
+                }
+                Incoming::Wake(wake_target) => {
+                    // Round-boundary wake (ADR-0197 M4): a target round ended.
+                    // A round the operator interrupted parks its queue — the
+                    // user said stop; auto-firing more prompts after an Esc is
+                    // never the intent. Ctrl+P / a fresh send re-arms it.
+                    if let Some(target) =
+                        resolve_turn_target(&side, &agent, &session, &lifecycle, &wake_target).await
+                        && target.lifecycle.was_interrupted()
+                    {
+                        followup_queue.set_paused(&wake_target, true);
                         crate::handlers_chat::emit_queue_snapshot(
                             &resp_tx,
                             &followup_queue,
-                            &target_id,
+                            &wake_target,
                         );
-                        continue;
-                    };
-                    if target.lifecycle.is_running().await || followup_queue.is_paused(&target_id) {
-                        continue;
                     }
-                    if let Some(message) = followup_queue.dequeue_front(&target_id) {
-                        let config = shared_config.read().await;
-                        crate::handlers_chat::start_queued_follow_up(
-                            SideEnv {
-                                side: &side,
-                                agent: &agent,
-                                primary_session: &session,
-                                primary_lifecycle: &lifecycle,
-                                tx: &resp_tx,
-                                config: &config,
-                            },
-                            target_id.clone(),
-                            message,
-                            &mut followup_queue,
-                        )
-                        .await;
-                        // Watch this round's boundary so the *next* queued
-                        // item ships when it ends.
-                        if let Some(target) =
+                    // Ship the next queued item for any idle, un-paused target
+                    // the queue knows about (in queue order).
+                    let targets: Vec<String> = {
+                        let mut seen = Vec::new();
+                        // order-preserving distinct scan of the queue's targets
+                        for item in &followup_queue.items {
+                            if !seen.contains(&item.session_id) {
+                                seen.push(item.session_id.clone());
+                            }
+                        }
+                        seen
+                    };
+                    for target_id in targets {
+                        let Some(_item) = (followup_queue.has_items_for(&target_id)).then_some(())
+                        else {
+                            continue;
+                        };
+                        let Some(target) =
                             resolve_turn_target(&side, &agent, &session, &lifecycle, &target_id)
                                 .await
-                        {
-                            crate::handlers_chat::spawn_boundary_watcher(
-                                target.lifecycle.clone(),
-                                followup_wake_tx.clone(),
-                                target_id.clone(),
+                        else {
+                            // Target gone (aside closed): drop its items.
+                            followup_queue.clear(&target_id);
+                            crate::handlers_chat::emit_queue_snapshot(
+                                &resp_tx,
+                                &followup_queue,
+                                &target_id,
                             );
+                            continue;
+                        };
+                        if target.lifecycle.is_running().await
+                            || followup_queue.is_paused(&target_id)
+                        {
+                            continue;
+                        }
+                        if let Some(message) = followup_queue.dequeue_front(&target_id) {
+                            let config = shared_config.read().await;
+                            crate::handlers_chat::start_queued_follow_up(
+                                SideEnv {
+                                    side: &side,
+                                    agent: &agent,
+                                    primary_session: &session,
+                                    primary_lifecycle: &lifecycle,
+                                    tx: &resp_tx,
+                                    config: &config,
+                                },
+                                target_id.clone(),
+                                message,
+                                &mut followup_queue,
+                            )
+                            .await;
+                            // Watch this round's boundary so the *next* queued
+                            // item ships when it ends.
+                            if let Some(target) =
+                                resolve_turn_target(&side, &agent, &session, &lifecycle, &target_id)
+                                    .await
+                            {
+                                crate::handlers_chat::spawn_boundary_watcher(
+                                    target.lifecycle.clone(),
+                                    followup_wake_tx.clone(),
+                                    target_id.clone(),
+                                );
+                            }
                         }
                     }
+                    continue;
                 }
-                continue;
             };
             let pre_session_id = session.id().await;
             let pre_provider = agent.provider.provider_id();
@@ -1460,6 +1577,11 @@ impl SessionDriver {
                 token_ledger.set_active_session(post_session_id.clone());
                 agent.set_thread_id(post_session_id.clone());
                 agent.restore_round_count(session.round_counter().await);
+                // ADR-0236 D4: a switched-to session may itself carry crash
+                // residue; classify it durably now that its store is live.
+                if let Err(error) = session.settle_abandoned_attempts().await {
+                    tracing::warn!(%error, "could not settle abandoned request attempts");
+                }
             }
 
             if session_changed || provider_or_model_changed || may_mutate_context {

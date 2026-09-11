@@ -142,6 +142,10 @@ pub struct UsageStatsReport {
     /// First and last day keys present in the store (empty store → `None`).
     pub first_day: Option<String>,
     pub last_day: Option<String>,
+    #[serde(default)]
+    pub source_revision: u64,
+    #[serde(default)]
+    pub projection_revision: u64,
 }
 
 /// One provider+model row of the model breakdown.
@@ -191,6 +195,8 @@ pub fn aggregate_usage_records(records: &[UsageStatRecord], event_cap: usize) ->
     UsageStatsReport {
         first_day: days.first().map(|d| d.day.clone()),
         last_day: days.last().map(|d| d.day.clone()),
+        source_revision: 0,
+        projection_revision: 0,
         days,
         models,
         grand_total: grand,

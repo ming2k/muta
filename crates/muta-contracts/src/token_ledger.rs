@@ -13,21 +13,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-/// Receiver of terminal request records for the durable cross-session usage
-/// statistics (ADR-0122). Implemented by the persistence layer
-/// (`muta-persistence`'s `UsageStatsStore`); installed into a
-/// [`TokenSourceLedger`] by the daemon bootstrap so every settled request is
-/// mirrored into the day-partitioned store that survives session cleanup.
-///
-/// The sink must be non-blocking and non-fatal from the ledger's
-/// perspective: implementations buffer or write synchronously at their own
-/// discretion and swallow/report errors on their own channels — a stats
-/// failure must never break request accounting.
+/// Durable request accounting. Callers await admission and settlement explicitly;
+/// a persistence failure is observable and cannot be swallowed by a sync callback.
 pub trait UsageStatSink: Send + Sync {
-    /// Called once per terminally settled request attempt. `recorded_at_ms`
-    /// is the wall-clock settlement time; `project` is the project bucket
-    /// name (empty = unknown).
-    fn record_usage(&self, recorded_at_ms: u64, project: &str, record: &RequestUsageRecord);
+    fn persist_usage<'a>(&'a self, recorded_at_ms: u64, project: &'a str, record: RequestUsageRecord)
+        -> futures::future::BoxFuture<'a, Result<(), String>>;
 }
 
 /// Lifecycle state of one concrete provider request attempt.
@@ -726,6 +716,7 @@ pub struct TokenSourceLedger {
     /// Optional durable mirror (ADR-0122): every terminally settled request
     /// is forwarded to this sink. `None` in tests / when no store is bound.
     usage_sink: Mutex<Option<Arc<dyn UsageStatSink>>>,
+    dirty_usage: Mutex<std::collections::HashSet<RequestUsageKey>>,
     /// Project bucket name stamped onto sink records (empty = unknown).
     usage_project: Mutex<String>,
 }
@@ -862,6 +853,7 @@ impl TokenSourceLedger {
                 ..Default::default()
             },
         );
+        self.dirty_usage.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone());
         key
     }
 
@@ -967,26 +959,40 @@ impl TokenSourceLedger {
             // repair is visible in the report itself.
             record.sanitize_poisoned_estimate();
         }
-        // Mirror the terminal record into the durable cross-session usage
-        // store (ADR-0122). The sink owns its error handling; a stats failure
-        // must never propagate into request accounting. Drop the requests
-        // lock first so the sink (which may read the ledger) cannot
-        // deadlock.
-        let sink = self
-            .usage_sink
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if let Some(sink) = sink {
-            let project = self
-                .usage_project
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
-            let settled = record.clone();
-            drop(requests);
-            sink.record_usage(now_epoch_ms(), &project, &settled);
+        self.dirty_usage.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone());
+    }
+
+    pub fn pending_records_for_session(&self, session_id: &str) -> Vec<RequestUsageRecord> {
+        let requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        let dirty = self.dirty_usage.lock().unwrap_or_else(|e| e.into_inner());
+        dirty.iter().filter(|key| key.session_id == session_id)
+            .filter_map(|key| requests.get(key).cloned()).collect()
+    }
+
+    pub fn acknowledge_records(&self, records: &[RequestUsageRecord]) {
+        let requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
+        let mut dirty = self.dirty_usage.lock().unwrap_or_else(|e| e.into_inner());
+        for record in records {
+            if requests.get(&record.key) == Some(record) { dirty.remove(&record.key); }
         }
+    }
+
+    pub async fn persist_request(&self, key: &RequestUsageKey) -> Result<(), String> {
+        let sink = self.usage_sink.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let record = self.requests.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned();
+        if let (Some(sink), Some(record)) = (sink, record) {
+            let project = self.usage_snapshot();
+            sink.persist_usage(record.started_at_ms, &project, record.clone()).await?;
+            self.acknowledge_records(&[record]);
+        }
+        Ok(())
+    }
+
+    pub async fn persist_pending(&self, session_id: &str) -> Result<(), String> {
+        for record in self.pending_records_for_session(session_id) {
+            self.persist_request(&record.key).await?;
+        }
+        Ok(())
     }
 
     /// Owned lifecycle records for one session, in stable request order.
@@ -1271,12 +1277,12 @@ mod tests {
     }
 
     impl UsageStatSink for CollectingSink {
-        fn record_usage(&self, recorded_at_ms: u64, project: &str, record: &RequestUsageRecord) {
-            self.received.lock().unwrap().push((
+        fn persist_usage<'a>(&'a self, recorded_at_ms: u64, project: &'a str, record: RequestUsageRecord) -> futures::future::BoxFuture<'a, Result<(), String>> {
+            Box::pin(async move { self.received.lock().unwrap().push((
                 recorded_at_ms,
                 project.to_string(),
-                record.clone(),
-            ));
+                record,
+            )); Ok(()) })
         }
     }
 
@@ -1304,6 +1310,7 @@ mod tests {
         // idempotency fence fires before the sink forward).
         ledger.settle_request(&key, RequestUsageStatus::Failed, None, 5, 0);
 
+        futures::executor::block_on(ledger.persist_request(&key)).unwrap();
         let received = sink.received.lock().unwrap();
         assert_eq!(received.len(), 1, "one terminal settle → one sink record");
         assert_eq!(received[0].1, "bucket-42");

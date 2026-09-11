@@ -276,6 +276,19 @@ impl Agent {
     /// per-round state are already present, so the next invocation sends the
     /// same pending provider request instead of executing those tools again.
     pub(crate) async fn resume_streaming_with_events<F>(
+        self: &Arc<Self>, messages: &mut Vec<Message>, cancel: &CancellationToken,
+        round: &mut StreamingRoundState, on_event: F,
+    ) -> Result<RoundOutcome, HarnessError> where F: FnMut(AgentEvent) + Send {
+        let result = self.resume_streaming_inner(messages, cancel, round, on_event).await;
+        if result.is_err() {
+            if let Some(ledger) = self.token_ledger() {
+                ledger.persist_pending(&self.thread_id().unwrap_or_default()).await.map_err(HarnessError::Other)?;
+            }
+        }
+        result
+    }
+
+    async fn resume_streaming_inner<F>(
         self: &Arc<Self>,
         messages: &mut Vec<Message>,
         cancel: &CancellationToken,
@@ -395,6 +408,9 @@ impl Agent {
                 round.turn_index,
                 request_projection,
             );
+            if let (Some(ledger), Some(key)) = (&request_accounting.ledger, &request_accounting.key) {
+                ledger.persist_request(key).await.map_err(HarnessError::Other)?;
+            }
             request_accounting.start_request();
             // Stamp this attempt's own telemetry handle onto the request it
             // dispatches (ADR-0232). The turn's assembled request is reused by
@@ -1029,13 +1045,9 @@ impl Agent {
                 // any further work, so a crash leaves the transcript in sync
                 // with filesystem side effects.
                 self.fire_turn_persist(messages).await?;
-                let post_turn_estimate = self.estimate_next_request_tokens(messages);
-                on_event(AgentEvent::ContextTokens(
-                    muta_contracts::ContextTokenSnapshot::from_estimate(
-                        post_turn_estimate,
-                        muta_contracts::ContextTokenSource::Projection,
-                    ),
-                ));
+                // The next loop iteration publishes the estimate from the
+                // assembled request after Turn/TurnStart hooks. Rebuilding it
+                // here repeats full-history work and projects stale hook state.
                 self.run_turn_hooks(messages, &round.state, round.turn_index)
                     .await;
                 // Restore TurnEnd-scoped disables now that the ReAct turn is
@@ -1085,6 +1097,7 @@ impl Agent {
             // User-round end: clear every scoped disable so the toolset is
             // fresh for the next user request.
             self.restore_scoped_round_end();
+            self.fire_turn_persist(messages).await?;
             return Ok(RoundOutcome {
                 message: response,
                 token_usage: round.state.token_usage,

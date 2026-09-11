@@ -13,20 +13,29 @@ async fn save_retrying(
     data: crate::session::SessionData,
     full: bool,
     usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
-) -> Result<(), crate::db::PersistenceError> {
+    mut guard: crate::db::CommitGuard,
+) -> Result<u64, crate::db::PersistenceError> {
     const MAX_ATTEMPTS: u32 = 5;
     const BASE_DELAY: Duration = Duration::from_millis(100);
 
+    // ADR-0236 D3: every logical save carries an idempotency identity, so a
+    // retry after a commit whose acknowledgement was lost resolves to the
+    // original receipt instead of re-applying. A caller-supplied identity is
+    // preserved across the attempts; otherwise one is minted once here.
+    if guard.operation_id.is_none() {
+        guard.operation_id = Some(uuid::Uuid::new_v4().to_string());
+    }
+
     let mut delay = BASE_DELAY;
     for attempt in 1..=MAX_ATTEMPTS {
-        // The save is idempotent by watermark (ADR-0187), so re-sending a
-        // possibly-delivered delta is safe — that license is what makes the
-        // retry honest.
+        // The save is idempotent by watermark (ADR-0187) and now by operation
+        // receipt (ADR-0236 D3), so re-sending a possibly-delivered delta is
+        // safe — that license is what makes the retry honest.
         match writer
-            .save_session(data.clone(), full, usage_upserts.clone())
+            .save_session(data.clone(), full, usage_upserts.clone(), guard.clone())
             .await
         {
-            Ok(()) => return Ok(()),
+            Ok(revision) => return Ok(revision),
             Err(crate::db::PersistenceError::WriterDown) if attempt < MAX_ATTEMPTS => {
                 tokio::time::sleep(delay).await;
                 delay *= 2;
@@ -420,15 +429,37 @@ impl SessionStore {
     /// deterministic.
     pub(crate) async fn persist_with_usage(
         &self,
+        path: PathBuf,
+        data: SessionData,
+        usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
+    ) -> Result<(), String> {
+        self.persist_with_usage_guarded(path, data, usage_upserts, crate::db::CommitGuard::default())
+            .await
+            .map(|_| ())
+    }
+
+    /// [`Self::persist_with_usage`] that carries an ADR-0236 D3 commit guard
+    /// and returns the committed session revision.
+    pub(crate) async fn persist_with_usage_guarded(
+        &self,
         _path: PathBuf,
         mut data: SessionData,
         usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
-    ) -> Result<(), String> {
+        guard: crate::db::CommitGuard,
+    ) -> Result<u64, String> {
+        let started = std::time::Instant::now();
+        let session_id = data.id.clone();
         let _persist_gate = self.persist_gate.lock().await;
         data.checksum = Some(compute_checksum(&data)?);
-        save_retrying(&self.writer, data, false, usage_upserts)
+        let result = save_retrying(&self.writer, data, false, usage_upserts, guard)
             .await
-            .map_err(|e| format!("session persist task failed: {e}"))
+            .map_err(|e| format!("session persist task failed: {e}"));
+        let elapsed = started.elapsed();
+        if elapsed >= Duration::from_millis(250) {
+            tracing::warn!(session = %session_id, duration_ms = elapsed.as_millis() as u64,
+                "slow local session persistence");
+        }
+        result
     }
 
     /// Persist a full rewrite (rare: wholesale working-state replacement).
@@ -439,9 +470,16 @@ impl SessionStore {
         let _persist_gate = self.persist_gate.lock().await;
         let mut data = data;
         data.checksum = Some(compute_checksum(&data)?);
-        save_retrying(&self.writer, data, true, Vec::new())
-            .await
-            .map_err(|e| format!("session persist task failed: {e}"))
+        save_retrying(
+            &self.writer,
+            data,
+            true,
+            Vec::new(),
+            crate::db::CommitGuard::default(),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("session persist task failed: {e}"))
     }
 
     /// Resolve `input` (a 4+ char hex id or prefix) to the full session id

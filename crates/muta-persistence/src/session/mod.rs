@@ -43,7 +43,11 @@ use tokio::sync::Mutex;
 /// legacy pre-transcript snapshots are not migrated and load as empty.
 /// v14 (ADR-0187): persistence v2 — the row checksum covers the session row
 /// (working state) instead of the transcript, and is verified on load.
-pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 14;
+/// v15 (ADR-0236): the row checksum no longer folds the per-session
+/// `request_usage_records` mirror — usage lives in its own key-addressed table
+/// (its integrity is the table's PK), so including it made every ordinary turn
+/// checksum scale with the session's total retained attempts (invariant #3).
+pub(crate) const CURRENT_SCHEMA_VERSION: u32 = 15;
 
 /// A session-scoped connection + model pin (C6 / ADR-0186). `connection`
 /// carries the **connection id** (provider + account + endpoint, per
@@ -195,7 +199,11 @@ impl SessionData {
             provider_selection: self.provider_selection.clone(),
             disabled_tools: self.disabled_tools.clone(),
             round_counter: self.round_counter,
-            request_usage_records: self.request_usage_records.clone(),
+            // ADR-0236 invariant #3: the delta carries only new transcript rows
+            // and the changed usage upserts (passed separately to the save), so
+            // the per-session usage mirror is *not* cloned here. Cloning it made
+            // every turn O(total retained attempts).
+            request_usage_records: Vec::new(),
             commands: self.commands.clone(),
             round_interrupts: self.round_interrupts.clone(),
             retry_resolutions: self.retry_resolutions.clone(),
@@ -346,7 +354,6 @@ struct SessionRowChecksumView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     workspace: Option<&'a muta_contracts::WorkspaceBinding>,
     provider_selection: Option<&'a ProviderSelection>,
-    request_usage_records: &'a Vec<muta_contracts::RequestUsageRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     retry_pending: Option<&'a muta_contracts::RetryPoint>,
     round_counter: u64,
@@ -374,7 +381,6 @@ impl<'a> From<&'a SessionData> for SessionRowChecksumView<'a> {
             persona: data.persona.as_deref(),
             workspace: data.workspace.as_ref(),
             provider_selection: data.provider_selection.as_ref(),
-            request_usage_records: &data.request_usage_records,
             retry_pending: data.retry_pending.as_ref(),
             round_counter: data.round_counter,
             round_interrupts: &data.round_interrupts,

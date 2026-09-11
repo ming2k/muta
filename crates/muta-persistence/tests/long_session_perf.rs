@@ -25,6 +25,8 @@ async fn long_session_commit_turn_scales_with_delta_not_session_length() {
             usage_records: &[],
             retry_point: None,
             round_interrupt: None,
+            operation_id: None,
+            expected_revision: None,
         })
         .await
         .expect("initial commit");
@@ -47,6 +49,8 @@ async fn long_session_commit_turn_scales_with_delta_not_session_length() {
                 usage_records: &[],
                 retry_point: None,
                 round_interrupt: None,
+                operation_id: None,
+                expected_revision: None,
             })
             .await
             .expect("turn commit");
@@ -66,6 +70,8 @@ async fn long_session_commit_turn_scales_with_delta_not_session_length() {
                 usage_records: &[],
                 retry_point: None,
                 round_interrupt: None,
+                operation_id: None,
+                expected_revision: None,
             })
             .await
             .expect("turn commit");
