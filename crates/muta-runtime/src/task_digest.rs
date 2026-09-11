@@ -9,14 +9,21 @@ fn chars_head(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
-/// Render the digest for a settled task.
-pub fn outcome_digest(outcome: &BackgroundJobOutcome) -> String {
-    let command = match &outcome.spec {
+/// Human-facing label for a task spec: the caller's label when it supplied one,
+/// otherwise the command / timer prompt. Shared by the completion digest and the
+/// continuation report so both name a job the same way.
+pub fn job_label(spec: &JobSpec) -> String {
+    match spec {
         JobSpec::Process { command, label, .. } => label.as_deref().unwrap_or(command).to_string(),
         JobSpec::Timer { label, prompt, .. } => label
             .clone()
             .unwrap_or_else(|| format!("timer: {}", chars_head(prompt, 40))),
-    };
+    }
+}
+
+/// Render the digest for a settled task.
+pub fn outcome_digest(outcome: &BackgroundJobOutcome) -> String {
+    let command = job_label(&outcome.spec);
 
     let state_line = match &outcome.state {
         JobState::Succeeded {

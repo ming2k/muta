@@ -56,8 +56,20 @@ pub trait BackgroundJobService: Send + Sync {
         Err("adoption is not supported by this job service".to_string())
     }
 
-    /// Arm a Timer task (ADR-0190): the command runs at `fire_at_ms` and its
-    /// completion wakes the owning session via the mailbox.
+    /// Arm a Timer task (ADR-0190): the fabric's clock arm. When the trigger
+    /// fires, the digest below is published through the ordinary completion
+    /// path (event stream, outcome queue, ledger) so the session can act on
+    /// it. The payload is *not* a shell command — the fabric never executes
+    /// it. A re-arming timer keeps its cancel handle between fires (ADR-0234):
+    /// only `kill_job` stops the loop, and the last fire's state is not
+    /// terminal while the next one is armed.
+    ///
+    /// No tool currently arms a timer: `run_command`'s former
+    /// `schedule_in_secs`/`repeat` parameters were removed in ADR-0234 because
+    /// they promised "the command runs at fire time" and, with the wake turn
+    /// disabled (ADR-0212), no consumer existed for the digest. Re-expose a
+    /// model-facing timer only alongside a real execution contract (ADR-0234
+    /// Stage 1) or an enabled SystemWake (Stage 2).
     async fn spawn_timer(
         &self,
         _label: &str,
@@ -76,6 +88,31 @@ pub trait BackgroundJobService: Send + Sync {
 
     /// Retrieve tail logs of a background job.
     fn get_logs(&self, id: &JobId, tail_lines: usize) -> Option<Vec<String>>;
+
+    /// Claim the retained settlement(s) of a settled job (ADR-0234).
+    ///
+    /// Returns the outcomes that had not already been claimed, oldest first,
+    /// and marks them claimed. This is the acknowledgment primitive: a caller
+    /// that has returned a terminal result to the model records that the
+    /// settlement has been consumed, so an automatic continuation for the same
+    /// delivery does not repeat work.
+    ///
+    /// The default retains nothing — a service without an outcome store
+    /// reports no claimable deliveries rather than pretending to have some.
+    fn claim_outcomes(&self, _id: &JobId) -> Vec<BackgroundJobOutcome> {
+        Vec::new()
+    }
+
+    /// The job's own settled result, if it has finished.
+    ///
+    /// Distinct from [`Self::claim_outcomes`]: claiming governs *automatic
+    /// delivery* (at most once per settlement), while this is the job's
+    /// readable outcome — a caller that inspects or re-waits a finished job
+    /// must still see what it produced rather than a null summary. Returns the
+    /// most recent settlement, which for a re-arming timer is its latest fire.
+    fn settled_result(&self, _id: &JobId) -> Option<BackgroundJobOutcome> {
+        None
+    }
 
     /// Kill a running background job.
     fn kill_job(&self, id: &JobId) -> Result<(), String>;
@@ -187,14 +224,17 @@ pub enum JobSpec {
         restart: Option<RestartPolicy>,
     },
     /// A scheduled wake (ADR-0190 Timer spec): the fabric's clock arm. When
-    /// the trigger fires, a wake turn starts with the digest below — the
-    /// successor of the retired `/schedule` scheduler, driven by the same
-    /// mailbox as every other task event.
+    /// the trigger fires, the digest below is published as a completed
+    /// outcome — the successor of the retired `/schedule` scheduler, driven by
+    /// the same completion path as every other task event.
+    ///
+    /// The payload is a *digest/prompt*, not a command line (ADR-0234): the
+    /// fabric does not run it. Nothing model-facing arms a timer today.
     Timer {
-        /// ISO-ish local datetime or cron-style descriptor (5-field cron or
-        /// `in <duration>`), opaque to the fabric — the caller stores the
-        /// human form; the fabric stores the absolute epoch-milliseconds
-        /// `fire_at` computed at spawn time.
+        /// Human-readable form the caller supplied (an ISO-ish local
+        /// datetime or cron-style descriptor), opaque to the fabric; the
+        /// fabric stores the absolute epoch-milliseconds `fire_at` computed
+        /// at spawn time.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
         /// Absolute fire time, Unix-epoch milliseconds.
@@ -202,7 +242,7 @@ pub enum JobSpec {
         /// For recurring timers: re-arm interval after each fire.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         interval_ms: Option<u64>,
-        /// The prompt delivered to the wake turn.
+        /// The digest published on each fire.
         prompt: String,
     },
 }

@@ -22,24 +22,18 @@ struct ExecuteCommandArgs {
         desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is detached or killed as a blocked-command guard."
     )]
     timeout: Option<u64>,
-    #[tool(desc = "Set to true to run this command asynchronously in the background.")]
+    #[tool(
+        desc = "Set to true to run this bounded command asynchronously in the background. The call returns immediately with a job id; collect the outcome later with the process tool."
+    )]
     background: Option<bool>,
     #[tool(
-        desc = "Set to true to start a long-running service (dev server, watcher, daemon). Readiness is reported and you are notified if it dies; do not wait for a service to exit."
+        desc = "Set to true to start a long-running service (dev server, watcher, daemon). Readiness is reported and an unexpected exit is reported as a task event; do not wait for a service to exit. Takes precedence over `background` when both are set."
     )]
     service: Option<bool>,
     #[tool(
         desc = "Optional human-readable label for the background job (e.g. 'cargo-test', 'dev-server')."
     )]
     label: Option<String>,
-    #[tool(
-        desc = "Schedule this command to run later instead of now. Value: seconds from now (e.g. 3600), optionally repeating at that interval when `repeat` is true. When set, `command` runs as a timer task and you are woken with its result at fire time."
-    )]
-    schedule_in_secs: Option<u64>,
-    #[tool(
-        desc = "With schedule_in_secs: re-arm the timer after every fire (interval = schedule_in_secs) instead of firing once."
-    )]
-    repeat: Option<bool>,
 }
 
 #[allow(dead_code)] // tool-schema: dynamic JSON schema generation
@@ -171,7 +165,7 @@ impl Tool for ExecuteCommandTool {
         if self.workspace_sandbox {
             "Execute a shell command inside the isolated workspace. Use for builds, tests, metadata inspection, and contained checks. Host files outside the admitted workspace roots and network access are unavailable."
         } else {
-            "Execute a shell command. Use for build, test, git, or system commands. Long-running services, watchers, daemons, or any command that will not exit on its own MUST use background: true — a foreground call whose sync budget expires while the process is still running detaches it to the background fabric (it keeps running; you get the job id and an automatic completion notification)."
+            "Execute a shell command. Use for build, test, git, or system commands. For bounded work that should run while you do something else, set background: true and collect the outcome later with the process tool; for a long-lived service, watcher, or daemon, set service: true and do not wait for it to exit. A foreground call whose sync budget expires while the process is still running detaches it to the background job fabric (it keeps running; you get the job id)."
         }
     }
     fn parameters(&self) -> serde_json::Value {
@@ -259,6 +253,45 @@ impl Tool for ExecuteCommandTool {
         let timeout_secs = args.timeout.unwrap_or(1800);
         let timeout_duration = Duration::from_secs(timeout_secs);
 
+        // ADR-0234: mode selection is normalized, not raced. `service` is the
+        // strictly stronger mode (long-lived, readiness-reported), so it wins
+        // when both flags are set; a bounded background task is the fallback.
+        if args.service == Some(true) {
+            // ADR-0190 Service kind: spawn as a service task — readiness is
+            // reported, running is the success state, and an unsolicited
+            // death settles `Failed` (ADR-0234: that settle is recorded as a
+            // task event; it does not resume this turn).
+            if let Some(ref service) = self.job_service {
+                let info = service
+                    .spawn_process_ex(
+                        args.command,
+                        args.label,
+                        None,
+                        false,
+                        None,
+                        muta_contracts::JobKind::Service,
+                        Some(muta_contracts::Readiness::FirstOutput),
+                        None,
+                    )
+                    .await?;
+                let output = serde_json::json!({
+                    "status": "spawned_service",
+                    "job_id": info.id.0,
+                    "state": info.state,
+                    "message": "Service started and keeps running independently of this call. Readiness and an unexpected exit are recorded as task events in the client's task list; do not wait for it to exit — it is not supposed to. Inspect it with the process tool (action: 'status' or 'logs').",
+                });
+                return Ok(muta_contracts::ToolOutput::text(
+                    serde_json::to_string_pretty(&output).unwrap_or_default(),
+                ));
+            } else {
+                return Err(
+                    "Background job service is unavailable in this environment.".to_string()
+                );
+            }
+        }
+
+        // Bounded background work (ADR-0190 Interactive kind). Reached only
+        // after the `service` mode above has been ruled out (ADR-0234).
         if args.background == Some(true) {
             if let Some(ref service) = self.job_service {
                 let info = service
@@ -277,81 +310,7 @@ impl Tool for ExecuteCommandTool {
                     "status": "spawned_in_background",
                     "job_id": info.id.0,
                     "state": info.state,
-                    "message": "Command started asynchronously in the background. You WILL receive an automatic notification here when it finishes (or fails). You can proceed with other tasks and inspect progress with the process tool (action: 'status' or 'logs').",
-                });
-                return Ok(muta_contracts::ToolOutput::text(
-                    serde_json::to_string_pretty(&output).unwrap_or_default(),
-                ));
-            } else {
-                return Err(
-                    "Background job service is unavailable in this environment.".to_string()
-                );
-            }
-        }
-
-        if let Some(secs) = args.schedule_in_secs {
-            // ADR-0190 Timer spec: the command runs at fire time as a
-            // one-shot (or repeating) timer task; the mailbox wakes the
-            // session with its digest.
-            if let Some(ref service) = self.job_service {
-                let fire_at_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64
-                    + secs.saturating_mul(1000);
-                let interval = if args.repeat == Some(true) {
-                    Some(secs.saturating_mul(1000))
-                } else {
-                    None
-                };
-                let label = format!(
-                    "scheduled: {}",
-                    args.label
-                        .as_deref()
-                        .unwrap_or(args.command.split_whitespace().next().unwrap_or(""))
-                );
-                let info = service
-                    .spawn_timer(&label, fire_at_ms, interval, args.command.clone())
-                    .await?;
-                let output = serde_json::json!({
-                    "status": "scheduled",
-                    "job_id": info.id.0,
-                    "fire_at_ms": fire_at_ms,
-                    "recurring": interval.is_some(),
-                    "message": "Timer armed. The command runs at fire time and you will be woken with its result automatically. Proceed with other work meanwhile.",
-                });
-                return Ok(muta_contracts::ToolOutput::text(
-                    serde_json::to_string_pretty(&output).unwrap_or_default(),
-                ));
-            } else {
-                return Err(
-                    "Background job service is unavailable in this environment.".to_string()
-                );
-            }
-        }
-
-        if args.service == Some(true) {
-            // ADR-0190 Service kind: spawn as a service task — readiness is
-            // reported, running is the success state, and an unsolicited
-            // death wakes the session with the crash.
-            if let Some(ref service) = self.job_service {
-                let info = service
-                    .spawn_process_ex(
-                        args.command,
-                        args.label,
-                        None,
-                        false,
-                        None,
-                        muta_contracts::JobKind::Service,
-                        Some(muta_contracts::Readiness::FirstOutput),
-                        None,
-                    )
-                    .await?;
-                let output = serde_json::json!({
-                    "status": "spawned_service",
-                    "job_id": info.id.0,
-                    "state": info.state,
-                    "message": "Service started in the background. You will be notified here when it reports readiness and if it dies unexpectedly. Do not wait for it to exit — it is not supposed to. Inspect with the process tool (action: 'logs').",
+                    "message": "Command started asynchronously and keeps running independently of this call. Nothing resumes your turn when it finishes — collect the outcome with the process tool (action: 'wait' to block until it finishes, 'status' for the current state, 'logs' for recent output).",
                 });
                 return Ok(muta_contracts::ToolOutput::text(
                     serde_json::to_string_pretty(&output).unwrap_or_default(),

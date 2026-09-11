@@ -154,6 +154,7 @@ pub fn ensure_app_roots() {
 /// frame.
 #[allow(clippy::too_many_lines)]
 pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std::error::Error>> {
+    muta_persistence::db::get_persistence_handle().ensure_ready()?;
     let BootstrapParams {
         identity,
         preset,
@@ -519,7 +520,9 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     subagent_tool_handle.bind_variant_selection(agent.variant_selection_handle());
     subagent_tool_handle.bind_workspace_security(agent.workspace_security_handle());
     subagent_tool_handle.bind_execution_policy(agent.execution_policy());
-    // ADR-0138 §2: expose the master's live dynamic (MCP) tool registry to
+    // Tool-source binding for the mcp_specialist child (see ADR-0138 §2, archived
+    // — superseded by ADR-0144): expose the master's live dynamic (MCP) tool
+    // registry to
     // subagent dispatch. The mcp_specialist child resolves its toolset from this
     // source at spawn time, so McpCatalog re-discovery reaches later children
     // without re-binding. Other profiles are unaffected — only mcp_specialist
@@ -888,9 +891,33 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         let mut job_rx = background_jobs.subscribe();
         let resp_tx_jobs = resp_tx.clone();
         let session_for_jobs = session.clone();
+        let jobs_for_reconcile = background_jobs.clone();
         tokio::spawn(async move {
             let session_id = session_for_jobs.id().await;
-            while let Ok(event) = job_rx.recv().await {
+            loop {
+                let event = match job_rx.recv().await {
+                    Ok(event) => event,
+                    // ADR-0234: a lagged subscriber used to end this task,
+                    // which silently stopped every later task-bar update for
+                    // the session. Skip the gap and rebuild the rows from the
+                    // job snapshots instead — the manager is the source of
+                    // truth, the event stream is only a hint.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            session = %session_id,
+                            skipped,
+                            "background job event stream lagged; rebuilding task rows from snapshots"
+                        );
+                        for info in jobs_for_reconcile.list_jobs() {
+                            let _ = resp_tx_jobs.send(round_response(
+                                &session_id,
+                                RoundEvent::BackgroundJobStarted(info),
+                            ));
+                        }
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
                 let round_evt = match event {
                     crate::background_jobs::BackgroundJobEvent::Started(info) => {
                         RoundEvent::BackgroundJobStarted(info)
@@ -914,6 +941,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // driver's round machinery decides queue-vs-start via `RoundLifecycle`;
     // this task is the select-arm body running outside the request loop so
     // wake requests contend with user input on equal terms.
+    //
+    // ADR-0234: wakes ride their own channel. Whether one becomes a round is the
+    // driver's decision (authorization, budget, human precedence); the mailbox
+    // only classifies and offers.
+    let (system_wake_tx, system_wake_rx) = tokio::sync::mpsc::channel(16);
     {
         let mailbox_rx = background_jobs.subscribe();
         let mailbox_env = crate::task_mailbox::MailboxEnv {
@@ -923,6 +955,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             lifecycle: lifecycle.clone(),
             tx: resp_tx.clone(),
             req_tx: req_tx.clone(),
+            wake_tx: system_wake_tx,
             config: config.clone(),
         };
         let mailbox_id = session.id().await;
@@ -958,6 +991,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         extra_commands: Arc::new(crate::slash_handler::SlashCommandRegistry::new()),
         websearch_shared,
         background_jobs,
+        system_wake_rx,
     };
 
     Ok(Bootstrap {

@@ -93,6 +93,7 @@ pub mod shutdown;
 pub mod side;
 pub mod slash_handler;
 pub mod startup;
+pub mod task_continuation;
 pub mod task_digest;
 pub mod task_fault_tolerance;
 pub mod task_ledger;

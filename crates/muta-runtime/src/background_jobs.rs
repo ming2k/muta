@@ -5,10 +5,13 @@
 //!   into in-memory ring buffers and disk logs, with 0 LLM token cost.
 //! - **Track B (Sub-Subagent Jobs)**: Asynchronous isolated exploration subagents.
 //!
-//! Emits live progress events and delivers completed outcomes to the session mailbox.
+//! Emits live progress events and retains completed outcomes (ADR-0234) so a
+//! settle is never only a transient notification — the result stays retrievable
+//! until a consumer claims it.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -19,22 +22,60 @@ use muta_contracts::{BackgroundJobInfo, BackgroundJobOutcome, JobId, JobKind, Jo
 
 const DEFAULT_RING_BUFFER_CAPACITY: usize = 500;
 
+/// Maximum retained, unclaimed outcomes per manager (ADR-0234).
+///
+/// Retention is bounded so a session that never collects results — or a
+/// re-arming timer firing forever — cannot grow the process without limit. The
+/// bound is loud, never silent: an eviction logs the job it dropped, and the
+/// job's own snapshot, ring buffer, and on-disk log remain available through
+/// `process` (`status`/`logs`).
+const MAX_PENDING_OUTCOMES: usize = 256;
+
 struct JobEntry {
     info: BackgroundJobInfo,
     ring_buffer: VecDeque<String>,
     cancel_tx: Option<tokio::sync::oneshot::Sender<()>>,
     /// Owning session (ADR-0190 D5): `None` = daemon-level task.
     owner_session: Option<String>,
+    /// The job's own most recent settlement (ADR-0234).
+    ///
+    /// Kept on the entry so `status` and a repeated `wait` still report what
+    /// the job produced after its delivery has been claimed: claiming governs
+    /// automatic delivery, not readability.
+    settled: Option<BackgroundJobOutcome>,
     #[cfg(unix)]
     pid: Option<u32>,
+}
+
+/// A settled outcome retained until a consumer claims it (ADR-0234).
+///
+/// This is the durable-in-process form of "the job finished and nobody has
+/// looked at the result yet". `sequence` is the delivery identity: it is
+/// assigned once, at settle time, and lets a consumer tell two fires of the
+/// same recurring job apart instead of deduplicating by `job_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingOutcome {
+    /// Monotonic delivery identity within this manager instance.
+    pub sequence: u64,
+    /// Owning session (`None` = daemon-level job, delivered to no session).
+    pub owner_session: Option<String>,
+    /// The settled result, including the summary and log path.
+    pub outcome: BackgroundJobOutcome,
+    /// Whether a consumer has already taken this result (see
+    /// [`BackgroundJobManager::pending_outcomes`]); claimed entries are kept
+    /// briefly as the delivery record, then pruned.
+    pub claimed: bool,
 }
 
 /// Shared thread-safe manager for session background jobs.
 #[derive(Clone)]
 pub struct BackgroundJobManager {
     inner: Arc<RwLock<HashMap<JobId, JobEntry>>>,
-    outcome_tx: mpsc::UnboundedSender<BackgroundJobOutcome>,
-    outcome_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<BackgroundJobOutcome>>>,
+    /// Retained outcomes, oldest first (ADR-0234). Bounded by
+    /// [`MAX_PENDING_OUTCOMES`].
+    pending: Arc<RwLock<VecDeque<PendingOutcome>>>,
+    /// Delivery-identity allocator (ADR-0234).
+    next_sequence: Arc<AtomicU64>,
     event_tx: broadcast::Sender<BackgroundJobEvent>,
     log_dir: PathBuf,
 }
@@ -77,30 +118,148 @@ pub struct ProcessSpawnOptions<'a> {
 
 impl BackgroundJobManager {
     pub fn new() -> Self {
-        let (outcome_tx, outcome_rx) = mpsc::unbounded_channel();
         let (event_tx, _) = broadcast::channel(256);
         let log_dir = std::env::temp_dir().join("muta-jobs");
         let _ = std::fs::create_dir_all(&log_dir);
 
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
-            outcome_tx,
-            outcome_rx: Arc::new(tokio::sync::Mutex::new(outcome_rx)),
+            pending: Arc::new(RwLock::new(VecDeque::new())),
+            next_sequence: Arc::new(AtomicU64::new(1)),
             event_tx,
             log_dir,
         }
     }
 
     /// Subscribe to real-time job lifecycle events (started, progress, completed).
+    ///
+    /// The stream is a *notification* channel: it can lag and drop under load
+    /// (see [`broadcast::error::RecvError::Lagged`]), and consumers must
+    /// reconcile from [`Self::pending_outcomes`] rather than assume they saw
+    /// every settle.
     pub fn subscribe(&self) -> broadcast::Receiver<BackgroundJobEvent> {
         self.event_tx.subscribe()
     }
 
-    /// Receiver for completed job outcomes (for the session event loop mailbox).
-    pub fn outcome_receiver(
-        &self,
-    ) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<BackgroundJobOutcome>>> {
-        Arc::clone(&self.outcome_rx)
+    /// Retained outcomes, oldest first — claimed entries included.
+    pub fn pending_outcomes(&self) -> Vec<PendingOutcome> {
+        let guard = self
+            .pending
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.iter().cloned().collect()
+    }
+
+    /// Retained outcomes belonging to one session, oldest first.
+    pub fn pending_outcomes_for_session(&self, session_id: &str) -> Vec<PendingOutcome> {
+        let guard = self
+            .pending
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard
+            .iter()
+            .filter(|p| p.owner_session.as_deref() == Some(session_id))
+            .cloned()
+            .collect()
+    }
+
+    /// The job's own most recent settlement (ADR-0234): readable through
+    /// `status`/`wait` independently of whether its automatic delivery has been
+    /// claimed.
+    pub fn settled_result(&self, id: &JobId) -> Option<BackgroundJobOutcome> {
+        let guard = self
+            .inner
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.get(id).and_then(|entry| entry.settled.clone())
+    }
+
+    /// Take the retained deliveries for one job (ADR-0234).
+    ///
+    /// Claims every unclaimed delivery for `job_id` — a re-arming timer may
+    /// have several — and returns them oldest first. This is the
+    /// acknowledgment primitive: once a caller has returned the terminal
+    /// result to the model, a later automatic delivery of the same settlement
+    /// must not enqueue a second continuation.
+    pub fn claim_outcomes_for_job(&self, job_id: &JobId) -> Vec<PendingOutcome> {
+        let mut guard = self
+            .pending
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut claimed = Vec::new();
+        for entry in guard.iter_mut() {
+            if !entry.claimed && &entry.outcome.job_id == job_id {
+                entry.claimed = true;
+                claimed.push(entry.clone());
+            }
+        }
+        claimed
+    }
+
+    /// Take the retained deliveries for one session (ADR-0234): every unclaimed
+    /// delivery whose owner is `session_id`, claimed in one atomic step.
+    ///
+    /// Used by the SystemWake admission path, which must hand the model exactly
+    /// the results it is acknowledging so a later delivery cannot repeat them.
+    pub fn claim_outcomes_for_session(&self, session_id: &str) -> Vec<PendingOutcome> {
+        let mut guard = self
+            .pending
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut claimed = Vec::new();
+        for entry in guard.iter_mut() {
+            if !entry.claimed && entry.owner_session.as_deref() == Some(session_id) {
+                entry.claimed = true;
+                claimed.push(entry.clone());
+            }
+        }
+        claimed
+    }
+
+    /// Drop every retained delivery for a closed session.
+    ///
+    /// Called at session teardown: a result never crosses into another session,
+    /// and a closed session is not revived to receive it.
+    pub fn discard_pending_for_session(&self, session_id: &str) -> usize {
+        let mut guard = self
+            .pending
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = guard.len();
+        guard.retain(|p| p.owner_session.as_deref() != Some(session_id));
+        before - guard.len()
+    }
+
+    /// Retain a settled outcome, returning its delivery identity.
+    ///
+    /// Abandons the oldest retained delivery when the bound is reached, and
+    /// says so: an eviction is a lost automatic delivery, and silence here
+    /// would turn a bounded resource into a silent correctness hole.
+    fn retain_outcome(&self, outcome: BackgroundJobOutcome, owner_session: Option<String>) -> u64 {
+        let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
+        let mut guard = self
+            .pending
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while guard.len() >= MAX_PENDING_OUTCOMES {
+            if let Some(dropped) = guard.pop_front() {
+                tracing::warn!(
+                    job_id = %dropped.outcome.job_id.0,
+                    sequence = dropped.sequence,
+                    claimed = dropped.claimed,
+                    limit = MAX_PENDING_OUTCOMES,
+                    "background job outcome evicted from the retention queue; \
+                     the job snapshot, ring buffer, and log file remain readable"
+                );
+            }
+        }
+        guard.push_back(PendingOutcome {
+            sequence,
+            owner_session,
+            outcome,
+            claimed: false,
+        });
+        sequence
     }
 
     /// Query snapshot info for all jobs.
@@ -221,6 +380,7 @@ impl BackgroundJobManager {
                     ring_buffer: VecDeque::with_capacity(DEFAULT_RING_BUFFER_CAPACITY),
                     owner_session: owner_session.clone(),
                     cancel_tx: Some(cancel_tx),
+                    settled: None,
                     #[cfg(unix)]
                     pid,
                 },
@@ -454,6 +614,7 @@ impl BackgroundJobManager {
                     ring_buffer: VecDeque::with_capacity(DEFAULT_RING_BUFFER_CAPACITY),
                     owner_session: owner_session.clone(),
                     cancel_tx: Some(cancel_tx),
+                    settled: None,
                     #[cfg(unix)]
                     pid,
                 },
@@ -640,6 +801,7 @@ impl BackgroundJobManager {
                     ring_buffer: VecDeque::with_capacity(DEFAULT_RING_BUFFER_CAPACITY),
                     owner_session: owner_session.clone(),
                     cancel_tx: Some(cancel_tx),
+                    settled: None,
                     #[cfg(unix)]
                     pid: None,
                 },
@@ -655,6 +817,7 @@ impl BackgroundJobManager {
         tokio::spawn(async move {
             let mut deadline = fire_at_ms;
             let mut cancel = cancel_rx;
+            let mut cancelled = false;
             loop {
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -662,23 +825,37 @@ impl BackgroundJobManager {
                     .as_millis() as u64;
                 let wait = deadline.saturating_sub(now);
                 tokio::select! {
-                    _ = &mut cancel => break,
+                    _ = &mut cancel => {
+                        cancelled = true;
+                        break;
+                    }
                     _ = tokio::time::sleep(Duration::from_millis(wait)) => {}
                 }
-                mgr.finish_job_with_summary(
-                    jid.clone(),
-                    spec.clone(),
-                    JobState::Succeeded {
-                        duration_ms: 0,
-                        exit_code: 0,
-                    },
-                    None,
-                    prompt.clone(),
-                );
                 match interval_ms {
-                    Some(interval) => deadline += interval,
-                    None => break,
+                    // Re-arming timer (ADR-0234): the fire publishes its
+                    // digest, and the task stays armed — and cancellable — for
+                    // the next tick. Only a one-shot timer settles its entry.
+                    Some(interval) => {
+                        mgr.publish_timer_fire(&jid, &spec, prompt.clone());
+                        deadline += interval;
+                    }
+                    None => {
+                        mgr.finish_job_with_summary(
+                            jid.clone(),
+                            spec.clone(),
+                            JobState::Succeeded {
+                                duration_ms: 0,
+                                exit_code: 0,
+                            },
+                            None,
+                            prompt.clone(),
+                        );
+                        break;
+                    }
                 }
+            }
+            if cancelled {
+                mgr.settle_entry_silently(&jid, JobState::Killed { duration_ms: 0 });
             }
         });
 
@@ -714,6 +891,7 @@ impl BackgroundJobManager {
         command: String,
         label: Option<String>,
         adoption: muta_contracts::AdoptionInfo,
+        owner_session: Option<String>,
     ) -> Result<BackgroundJobInfo, String> {
         let job_id = JobId::new("adopted");
         let now_ms = SystemTime::now()
@@ -752,8 +930,12 @@ impl BackgroundJobManager {
                 JobEntry {
                     info: info.clone(),
                     ring_buffer: VecDeque::with_capacity(DEFAULT_RING_BUFFER_CAPACITY),
-                    owner_session: None,
+                    // ADR-0234: an adopted child belongs to the session that
+                    // detached it — losing the owner here would make the later
+                    // settle undeliverable and unrevocable.
+                    owner_session: owner_session.clone(),
                     cancel_tx: None,
+                    settled: None,
                     #[cfg(unix)]
                     pid: Some(adoption.pid),
                 },
@@ -894,6 +1076,13 @@ impl BackgroundJobManager {
                     entry.info.state = state.clone();
                     entry.info.completed_at_ms = Some(now_ms);
                     entry.cancel_tx = None;
+                    // ADR-0234: drop the kill handle with the cancel channel.
+                    // A settled entry must not look signalable — the pid may
+                    // already be recycled by an unrelated process.
+                    #[cfg(unix)]
+                    {
+                        entry.pid = None;
+                    }
                     entry.owner_session.clone()
                 }
                 None => None,
@@ -908,24 +1097,119 @@ impl BackgroundJobManager {
             log_path,
         };
 
+        self.deliver_outcome(outcome, owner_session);
+    }
+
+    /// Deliver one settled outcome: record it on the entry, retain it, notify,
+    /// then ledger (ADR-0234).
+    ///
+    /// The entry record and the retention queue answer different questions:
+    /// the entry is "what did this job produce" (stays readable through
+    /// `status`/`wait` after the delivery has been claimed); the queue is "what
+    /// has not been delivered automatically yet".
+    ///
+    /// Retention precedes notification on purpose — an observer that misses the
+    /// broadcast (lag, no subscriber yet, a consumer that starts later) must
+    /// still find the result. The notification is a hint; the retained outcome
+    /// is the record.
+    fn deliver_outcome(&self, outcome: BackgroundJobOutcome, owner_session: Option<String>) {
+        self.record_settlement(&outcome);
+
+        self.retain_outcome(outcome.clone(), owner_session.clone());
+
         let _ = self
             .event_tx
             .send(BackgroundJobEvent::Completed(outcome.clone()));
-        let _ = self.outcome_tx.send(outcome.clone());
 
-        // ADR-0190 D4: persist the settle into the task ledger (best-effort,
-        // on the blocking pool so the fabric's event path never waits on I/O).
-        let ledger_outcome = outcome.clone();
+        // Persist the settle into the task ledger (ADR-0190 D4, best-effort, on
+        // the blocking pool so the fabric's event path never waits on I/O).
         tokio::task::spawn_blocking(move || {
             crate::task_ledger::record_outcome(
                 &muta_persistence::db::get_persistence_handle(),
-                &ledger_outcome,
+                &outcome,
                 owner_session,
             );
         });
     }
 
+    /// Record a settlement on the job entry, which is what keeps it readable
+    /// through `status`/`wait` after its automatic delivery has been claimed
+    /// (ADR-0234). Kept separate from [`Self::deliver_outcome`] so the record
+    /// has no I/O or notification side effects.
+    fn record_settlement(&self, outcome: &BackgroundJobOutcome) {
+        let mut guard = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = guard.get_mut(&outcome.job_id) {
+            entry.settled = Some(outcome.clone());
+        }
+    }
+
+    /// Publish one fire of a re-arming Timer task (ADR-0234).
+    ///
+    /// A recurring timer is a *live* job whose iteration settled: the digest
+    /// goes to the mailbox exactly like a one-shot settle, but the entry keeps
+    /// its state (armed/running) and its cancel handle, so
+    /// [`Self::kill_job`] can still stop the next fire. Settling the entry
+    /// here would strand the re-armed loop — the previous implementation
+    /// cleared `cancel_tx` on every fire, leaving a recurring timer
+    /// uncancellable after its first tick.
+    fn publish_timer_fire(&self, job_id: &JobId, spec: &JobSpec, summary: String) {
+        let owner_session = {
+            let guard = self
+                .inner
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard
+                .get(job_id)
+                .and_then(|entry| entry.owner_session.clone())
+        };
+        let outcome = BackgroundJobOutcome {
+            job_id: job_id.clone(),
+            spec: spec.clone(),
+            state: JobState::Succeeded {
+                duration_ms: 0,
+                exit_code: 0,
+            },
+            summary,
+            log_path: None,
+        };
+        self.deliver_outcome(outcome, owner_session);
+    }
+
+    /// Settle an entry without publishing an outcome, used when an operator
+    /// cancels a re-arming timer (ADR-0234): the job stops being armed, but a
+    /// deliberate cancellation needs no digest and no wake.
+    fn settle_entry_silently(&self, job_id: &JobId, state: JobState) {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let mut guard = self
+            .inner
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(entry) = guard.get_mut(job_id) {
+            entry.info.state = state;
+            entry.info.completed_at_ms = Some(now_ms);
+            entry.cancel_tx = None;
+            #[cfg(unix)]
+            {
+                entry.pid = None;
+            }
+        }
+    }
+
     /// Terminate a running background job.
+    ///
+    /// ADR-0234: the cancel handle — not the published state — is the
+    /// authority on whether a job can still be stopped. Once an entry has
+    /// settled, both its cancel sender and its pid are dropped, and the OS
+    /// may already have recycled that pid for an unrelated process; signalling
+    /// it would kill a stranger. A re-armed recurring timer keeps its handle
+    /// alive between fires, so it stays terminable even though its last
+    /// published state was a settle.
     pub fn kill_job(&self, id: &JobId) -> Result<(), String> {
         let mut guard = self
             .inner
@@ -934,6 +1218,18 @@ impl BackgroundJobManager {
         let entry = guard
             .get_mut(id)
             .ok_or_else(|| format!("Job not found: {id}"))?;
+
+        #[cfg(unix)]
+        let has_pid = entry.pid.is_some();
+        #[cfg(not(unix))]
+        let has_pid = false;
+
+        if entry.cancel_tx.is_none() && !has_pid {
+            return Err(format!(
+                "Job {id} is not terminable: it has already finished or is already terminating (state: {}).",
+                describe_state(&entry.info.state)
+            ));
+        }
 
         if let Some(tx) = entry.cancel_tx.take() {
             let _ = tx.send(());
@@ -951,12 +1247,18 @@ impl BackgroundJobManager {
     }
 
     /// Abort all active background jobs (e.g. during session teardown).
+    ///
+    /// ADR-0234: settled entries are skipped for the same pid-recycling reason
+    /// as [`Self::kill_job`].
     pub fn abort_all(&self) {
         let mut guard = self
             .inner
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for entry in guard.values_mut() {
+            if entry.info.state.is_terminal() {
+                continue;
+            }
             if let Some(tx) = entry.cancel_tx.take() {
                 let _ = tx.send(());
             }
@@ -968,6 +1270,20 @@ impl BackgroundJobManager {
                 }
             }
         }
+    }
+}
+
+/// Short human-readable rendering of a settled job state, for error messages
+/// that explain *why* a control action was refused.
+fn describe_state(state: &JobState) -> String {
+    match state {
+        JobState::Succeeded { exit_code, .. } => format!("succeeded, exit code {exit_code}"),
+        JobState::Failed { error, .. } => format!("failed: {error}"),
+        JobState::Killed { .. } => "killed".to_string(),
+        JobState::TimedOut { .. } => "timed out".to_string(),
+        JobState::Queued => "queued".to_string(),
+        JobState::Running { .. } => "running".to_string(),
+        JobState::Ready { .. } => "ready".to_string(),
     }
 }
 
@@ -1072,7 +1388,9 @@ impl muta_contracts::BackgroundJobService for SessionJobService {
         label: Option<String>,
         adoption: muta_contracts::AdoptionInfo,
     ) -> Result<BackgroundJobInfo, String> {
-        self.manager.adopt_process(command, label, adoption).await
+        self.manager
+            .adopt_process(command, label, adoption, self.owner())
+            .await
     }
 
     async fn spawn_timer(
@@ -1101,6 +1419,18 @@ impl muta_contracts::BackgroundJobService for SessionJobService {
 
     fn get_logs(&self, id: &JobId, tail_lines: usize) -> Option<Vec<String>> {
         self.manager.get_logs(id, tail_lines)
+    }
+
+    fn claim_outcomes(&self, id: &JobId) -> Vec<BackgroundJobOutcome> {
+        self.manager
+            .claim_outcomes_for_job(id)
+            .into_iter()
+            .map(|p| p.outcome)
+            .collect()
+    }
+
+    fn settled_result(&self, id: &JobId) -> Option<BackgroundJobOutcome> {
+        self.manager.settled_result(id)
     }
 
     fn kill_job(&self, id: &JobId) -> Result<(), String> {
@@ -1227,6 +1557,124 @@ mod tests {
             }
         }
         assert!(killed);
+    }
+
+    /// ADR-0234: a settled job is never signalled again — its pid may already
+    /// be recycled by an unrelated process, so a late "kill" would hit a
+    /// stranger. The control action refuses instead of claiming a termination.
+    #[tokio::test]
+    async fn test_kill_refuses_a_settled_job() {
+        if !muta_platform::workspace_sandbox::available() {
+            return;
+        }
+        let mgr = BackgroundJobManager::new();
+        let ws = std::env::temp_dir();
+        let roots = vec![];
+        let mut rx = mgr.subscribe();
+
+        let info = mgr
+            .spawn_process(
+                "echo done".to_string(),
+                ProcessSpawnOptions {
+                    label: Some("test-settled".to_string()),
+                    cwd: None,
+                    workspace_root: &ws,
+                    additional_roots: &roots,
+                    detached: false,
+                    timeout: Some(Duration::from_secs(10)),
+                    owner_session: None,
+                },
+            )
+            .await
+            .expect("spawn success");
+
+        let mut settled = false;
+        while let Ok(evt) = rx.recv().await {
+            if let BackgroundJobEvent::Completed(outcome) = evt
+                && outcome.job_id == info.id
+            {
+                settled = true;
+                break;
+            }
+        }
+        assert!(settled);
+        assert!(
+            mgr.get_job(&info.id)
+                .expect("job exists")
+                .state
+                .is_terminal(),
+            "job must be terminal before the guard is exercised"
+        );
+
+        let err = mgr
+            .kill_job(&info.id)
+            .expect_err("a settled job must not be signalled");
+        assert!(
+            err.contains("not terminable") && err.contains("state:"),
+            "refusal must explain why: {err}"
+        );
+    }
+
+    /// ADR-0234: a re-arming timer keeps its cancel handle between fires, so a
+    /// tick that already fired must not make the timer uncancellable — and a
+    /// cancelled recurring timer must stop claiming to be armed.
+    #[tokio::test]
+    async fn test_recurring_timer_stays_cancellable_after_a_fire() {
+        let mgr = BackgroundJobManager::new();
+        let mut rx = mgr.subscribe();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let info = mgr
+            .spawn_timer(None, now + 100, Some(100), "tick".to_string(), None)
+            .expect("timer spawn");
+
+        // Wait for the first fire, then cancel.
+        let mut fires = 0;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while fires == 0 && tokio::time::Instant::now() < deadline {
+            if let Ok(Ok(BackgroundJobEvent::Completed(o))) =
+                tokio::time::timeout(Duration::from_millis(500), rx.recv()).await
+                && o.job_id == info.id
+            {
+                fires += 1;
+            }
+        }
+        assert_eq!(fires, 1, "the recurring timer must fire at least once");
+
+        mgr.kill_job(&info.id)
+            .expect("a fired-but-re-armed timer must remain cancellable");
+
+        // The cancellation is silent but it must settle the entry, so the
+        // snapshot stops claiming the timer is armed.
+        let settle_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let mut settled = false;
+        while tokio::time::Instant::now() < settle_deadline {
+            if mgr
+                .get_job(&info.id)
+                .expect("job listed")
+                .state
+                .is_terminal()
+            {
+                settled = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(settled, "a cancelled recurring timer must settle");
+
+        // …and no further fire may be published for it.
+        let quiet_deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        while tokio::time::Instant::now() < quiet_deadline {
+            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+                Ok(Ok(BackgroundJobEvent::Completed(o))) if o.job_id == info.id => {
+                    panic!("a cancelled recurring timer must not fire again: {o:?}");
+                }
+                Ok(_) | Err(_) => {}
+            }
+        }
     }
 
     // ADR-0190 fabric tests: service readiness, adopt, extended spawn.
@@ -1385,6 +1833,7 @@ mod tests {
                     pid,
                     child: Box::new(Owned { child }),
                 },
+                Some("session-adopt".to_string()),
             )
             .await
             .expect("adopt");
@@ -1475,5 +1924,264 @@ mod tests {
         // settled once or was killed mid-wait — both acceptable.
         let snap = mgr.get_job(&info.id);
         let _ = snap;
+    }
+
+    // ADR-0234 outcome retention: a settle must stay retrievable until a
+    // consumer claims it, and claiming must be idempotent per delivery.
+
+    /// Build a settled result without a real process, so the retention and
+    /// claim contract can be tested deterministically.
+    fn settle(
+        mgr: &BackgroundJobManager,
+        job_id: &str,
+        owner: Option<&str>,
+    ) -> BackgroundJobOutcome {
+        let outcome = BackgroundJobOutcome {
+            job_id: JobId(job_id.to_string()),
+            spec: JobSpec::Timer {
+                label: None,
+                fire_at_ms: 0,
+                interval_ms: None,
+                prompt: "digest".to_string(),
+            },
+            state: JobState::Succeeded {
+                duration_ms: 5,
+                exit_code: 0,
+            },
+            summary: format!("summary for {job_id}"),
+            log_path: None,
+        };
+        mgr.retain_outcome(outcome.clone(), owner.map(str::to_string));
+        outcome
+    }
+
+    #[test]
+    fn retained_outcomes_survive_missing_the_event_and_claim_exactly_once() {
+        let mgr = BackgroundJobManager::new();
+        // No subscriber at all: the retention, not the notification, is the
+        // record.
+        settle(&mgr, "job_a", Some("s1"));
+        settle(&mgr, "job_b", Some("s1"));
+        settle(&mgr, "job_c", Some("s2"));
+
+        assert_eq!(mgr.pending_outcomes().len(), 3);
+        assert_eq!(mgr.pending_outcomes_for_session("s1").len(), 2);
+        assert_eq!(mgr.pending_outcomes_for_session("s2").len(), 1);
+
+        let job_a = JobId("job_a".to_string());
+        let claimed = mgr.claim_outcomes_for_job(&job_a);
+        assert_eq!(claimed.len(), 1, "the retained delivery is claimable");
+        assert_eq!(claimed[0].outcome.summary, "summary for job_a");
+        assert!(
+            mgr.claim_outcomes_for_job(&job_a).is_empty(),
+            "the same delivery must not be claimed twice"
+        );
+
+        // Claiming one job leaves the others untouched, and the claimed row
+        // stays as the delivery record.
+        assert_eq!(mgr.pending_outcomes_for_session("s1").len(), 2);
+        let record = mgr
+            .pending_outcomes()
+            .into_iter()
+            .find(|p| p.outcome.job_id.0 == "job_a")
+            .expect("claimed delivery is retained as a record");
+        assert!(record.claimed);
+    }
+
+    #[test]
+    fn distinct_fires_of_one_job_are_distinct_deliveries() {
+        let mgr = BackgroundJobManager::new();
+        // A re-arming timer settles repeatedly under one job id; deduplicating
+        // by job id alone would swallow every fire after the first.
+        settle(&mgr, "timer_x", Some("s1"));
+        settle(&mgr, "timer_x", Some("s1"));
+
+        let claimed = mgr.claim_outcomes_for_job(&JobId("timer_x".to_string()));
+        assert_eq!(claimed.len(), 2);
+        assert_ne!(
+            claimed[0].sequence, claimed[1].sequence,
+            "each fire carries its own delivery identity"
+        );
+    }
+
+    /// The SystemWake admission path claims a session's deliveries in one step
+    /// so the model is handed exactly the results it is acknowledging
+    /// (ADR-0234).
+    #[test]
+    fn a_session_claim_takes_only_that_sessions_unclaimed_deliveries() {
+        let mgr = BackgroundJobManager::new();
+        settle(&mgr, "job_a", Some("s1"));
+        settle(&mgr, "job_b", Some("s1"));
+        settle(&mgr, "job_c", Some("s2"));
+        settle(&mgr, "daemon_job", None);
+
+        let claimed = mgr.claim_outcomes_for_session("s1");
+        assert_eq!(claimed.len(), 2, "both of s1's deliveries are claimed");
+        assert!(
+            claimed
+                .iter()
+                .all(|p| p.owner_session.as_deref() == Some("s1")),
+            "no other session's result may be delivered to s1"
+        );
+        assert!(
+            claimed.iter().all(|p| !p.claimed == false),
+            "returned entries are marked claimed"
+        );
+
+        // Idempotent: a second admission finds nothing new to deliver.
+        assert!(mgr.claim_outcomes_for_session("s1").is_empty());
+
+        // Other owners are untouched and still deliverable.
+        assert_eq!(mgr.claim_outcomes_for_session("s2").len(), 1);
+        assert_eq!(
+            mgr.pending_outcomes()
+                .into_iter()
+                .filter(|p| !p.claimed)
+                .count(),
+            1,
+            "only the daemon-level result remains unclaimed"
+        );
+    }
+
+    #[test]
+    fn closing_a_session_discards_only_its_retained_outcomes() {
+        let mgr = BackgroundJobManager::new();
+        settle(&mgr, "job_a", Some("s1"));
+        settle(&mgr, "job_b", Some("s1"));
+        settle(&mgr, "daemon_job", None);
+
+        assert_eq!(mgr.discard_pending_for_session("s1"), 2);
+        let left = mgr.pending_outcomes();
+        assert_eq!(left.len(), 1, "daemon-level results are not session-owned");
+        assert_eq!(left[0].outcome.job_id.0, "daemon_job");
+    }
+
+    /// ADR-0234: claiming governs *automatic delivery*, not readability — a
+    /// caller that inspects or re-waits a finished job must still see what it
+    /// produced.
+    #[test]
+    fn a_claimed_settlement_remains_readable_on_the_job() {
+        let mgr = BackgroundJobManager::new();
+        let job = JobId("job_readable".to_string());
+        let outcome = BackgroundJobOutcome {
+            job_id: job.clone(),
+            spec: JobSpec::Timer {
+                label: None,
+                fire_at_ms: 0,
+                interval_ms: None,
+                prompt: "digest".to_string(),
+            },
+            state: JobState::Succeeded {
+                duration_ms: 12,
+                exit_code: 0,
+            },
+            summary: "the produced result".to_string(),
+            log_path: Some(PathBuf::from("/tmp/muta-jobs/job_readable.log")),
+        };
+        mgr.inner.write().unwrap().insert(
+            job.clone(),
+            JobEntry {
+                info: BackgroundJobInfo {
+                    id: job.clone(),
+                    spec: outcome.spec.clone(),
+                    state: outcome.state.clone(),
+                    created_at_ms: 0,
+                    completed_at_ms: Some(0),
+                    latest_output: None,
+                },
+                ring_buffer: VecDeque::new(),
+                cancel_tx: None,
+                owner_session: Some("s1".to_string()),
+                settled: None,
+                #[cfg(unix)]
+                pid: None,
+            },
+        );
+
+        // The two halves of delivery, minus the I/O the notification path adds:
+        // the entry record makes the result *readable*, the retention queue
+        // makes it *deliverable*.
+        mgr.record_settlement(&outcome);
+        mgr.retain_outcome(outcome.clone(), Some("s1".to_string()));
+
+        assert_eq!(
+            mgr.settled_result(&job).map(|o| o.summary),
+            Some("the produced result".to_string())
+        );
+
+        // Spend the automatic delivery; the readable settlement survives.
+        assert_eq!(mgr.claim_outcomes_for_job(&job).len(), 1);
+        let after = mgr
+            .settled_result(&job)
+            .expect("still readable after claim");
+        assert_eq!(after.summary, "the produced result");
+        assert_eq!(
+            after.log_path.as_deref(),
+            Some(Path::new("/tmp/muta-jobs/job_readable.log"))
+        );
+    }
+
+    /// A job the fabric never settled has nothing to report — the accessor must
+    /// not invent a result from the running snapshot.
+    #[test]
+    fn an_unsettled_job_has_no_settled_result() {
+        let mgr = BackgroundJobManager::new();
+        let jid = JobId::new("job");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        mgr.inner.write().unwrap().insert(
+            jid.clone(),
+            JobEntry {
+                info: BackgroundJobInfo {
+                    id: jid.clone(),
+                    spec: JobSpec::Timer {
+                        label: None,
+                        fire_at_ms: now + 1000,
+                        interval_ms: None,
+                        prompt: "later".to_string(),
+                    },
+                    state: JobState::Running {
+                        started_at_ms: now,
+                        pid: None,
+                    },
+                    created_at_ms: now,
+                    completed_at_ms: None,
+                    latest_output: None,
+                },
+                ring_buffer: VecDeque::new(),
+                cancel_tx: None,
+                owner_session: Some("s1".to_string()),
+                settled: None,
+                #[cfg(unix)]
+                pid: None,
+            },
+        );
+
+        assert!(mgr.settled_result(&jid).is_none());
+    }
+
+    #[test]
+    fn retention_is_bounded_and_evicts_the_oldest_delivery() {
+        let mgr = BackgroundJobManager::new();
+        for i in 0..(MAX_PENDING_OUTCOMES + 8) {
+            settle(&mgr, &format!("job_{i:04}"), Some("s1"));
+        }
+
+        let retained = mgr.pending_outcomes();
+        assert_eq!(
+            retained.len(),
+            MAX_PENDING_OUTCOMES,
+            "an unclaimed backlog must not grow without bound"
+        );
+        assert_eq!(
+            retained[0].outcome.job_id.0, "job_0008",
+            "the oldest deliveries are the ones abandoned"
+        );
+        assert_eq!(
+            retained[retained.len() - 1].outcome.job_id.0,
+            format!("job_{:04}", MAX_PENDING_OUTCOMES + 7)
+        );
     }
 }

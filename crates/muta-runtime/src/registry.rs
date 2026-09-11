@@ -977,6 +977,17 @@ impl SessionRegistry {
     ) -> Result<(), String> {
         let removed = self.sessions.lock().await.remove(session_id);
         self.drop_session_mailbox(session_id).await;
+        // ADR-0234: a closed session's retained results are dropped with it —
+        // no cross-session delivery, and a closed session is not revived to
+        // receive one. Daemon-level jobs (`owner_session: None`) are untouched.
+        let dropped = self.daemon_tasks.discard_pending_for_session(session_id);
+        if dropped > 0 {
+            tracing::debug!(
+                session = %session_id,
+                dropped,
+                "registry: discarded retained background job outcomes on session close"
+            );
+        }
         let Some(e) = removed else {
             return Err(format!(
                 "session '{session_id}' is not hosted on this server"
