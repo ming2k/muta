@@ -1238,3 +1238,50 @@ async fn create_backup_and_with_reader_roundtrip() {
         .expect("read from backup");
     assert_eq!(val.as_deref(), Some("backup:val"));
 }
+
+#[test]
+fn fast_fts_triggers_align_rowids_and_delete_in_sync() {
+    use muta_contracts::{Message, Role, TranscriptEntry};
+
+    let engine = DatabaseEngine::open_in_memory().unwrap();
+    let mut data = crate::session::SessionData::default();
+    data.transcript.push(TranscriptEntry::from_message(
+        0,
+        &Message::new(Role::User, "unique_needle_for_fts_test"),
+    ));
+    engine.save_session_full(&data).unwrap();
+
+    // Verify fts_entries has the entry and matches rowid
+    let fts_rowid: i64 = engine
+        .conn
+        .query_row(
+            "SELECT rowid FROM fts_entries WHERE content LIKE '%unique_needle_for_fts_test%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let membership_rowid: i64 = engine
+        .conn
+        .query_row(
+            "SELECT rowid FROM entry_memberships WHERE session_id = ?1",
+            params![data.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fts_rowid, membership_rowid);
+
+    // Verify FTS search works
+    let results = engine
+        .search_history("unique_needle_for_fts_test", None, 10)
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].session_id, data.id);
+
+    // Deleting session deletes entry_memberships and cascades via trigger to fts_entries
+    engine.delete_session(&data.id).unwrap();
+    let fts_count: i64 = engine
+        .conn
+        .query_row("SELECT COUNT(*) FROM fts_entries", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fts_count, 0);
+}

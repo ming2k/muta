@@ -517,3 +517,37 @@ async fn interrupt_marks_in_flight_prompt_cancelled_without_retracting() {
     // Composer input is NOT clobbered with the cancelled prompt
     assert!(app.input.is_empty());
 }
+
+#[tokio::test]
+async fn tool_result_does_not_forge_reasoning_phase() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    // Start with a tool running phase
+    crate::event_loop::apply::apply(
+        &mut app,
+        &runtime,
+        crate::event_loop::AppMutation::SetPhase(Some(crate::phase::Phase::Tool(
+            crate::phase::ToolVerb::Running,
+        ))),
+    );
+    assert_eq!(
+        app.phase,
+        Some(crate::phase::Phase::Tool(crate::phase::ToolVerb::Running))
+    );
+
+    // After tool finishes, phase transitions to Preparing, NEVER Reasoning ("thinking")
+    crate::event_loop::apply::apply(
+        &mut app,
+        &runtime,
+        crate::event_loop::AppMutation::SetPhase(Some(crate::phase::Phase::Preparing)),
+    );
+    assert_ne!(
+        app.phase,
+        Some(crate::phase::Phase::Reasoning),
+        "tool completion must not set thinking/reasoning phase"
+    );
+    assert_eq!(app.phase, Some(crate::phase::Phase::Preparing));
+    assert_eq!(app.phase.as_ref().unwrap().label(), "preparing context");
+}
+

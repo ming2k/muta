@@ -473,6 +473,12 @@ pub struct RankedModel {
     /// match (its PROVIDER name, or the wire id behind a name label) rather
     /// than the drawn label, in which case there is nothing to highlight.
     pub m: Option<fuzzy::FuzzyMatch>,
+    /// Subsequence match against the wire model ID (`model`).
+    pub match_id: Option<fuzzy::FuzzyMatch>,
+    /// Subsequence match against the human-readable model name (`name`), if present.
+    pub match_name: Option<fuzzy::FuzzyMatch>,
+    /// Subsequence match against the provider connection label (`provider_label`).
+    pub match_connection: Option<fuzzy::FuzzyMatch>,
 }
 
 impl RankedModel {
@@ -630,10 +636,12 @@ pub fn models_flat_filtered_from(
         if !prow.key_ready {
             continue;
         }
-        // The provider-name fallback match is computed once per provider: when
-        // it hits, every model of that provider is included (unhighlighted)
-        // even if its own id does not match the query.
-        let provider_matches = !query.is_empty() && fuzzy::fuzzy_match(&prow.name, query).is_some();
+        // Connection/provider match for this provider row
+        let conn_match = if query.is_empty() {
+            None
+        } else {
+            fuzzy::fuzzy_match(&prow.name, query)
+        };
         for model in &prow.models {
             let info = prow
                 .model_info
@@ -644,26 +652,25 @@ pub fn models_flat_filtered_from(
                     model: model.clone(),
                     ..ProviderModelInfo::default()
                 });
-            // The row's rendered label: the provider's own name for the model
-            // when it publishes one, else the wire id. The highlight positions
-            // index THIS string, because it is what the user is looking at.
-            let display = info.name.as_deref().unwrap_or(model.as_str());
-            let m = if query.is_empty() {
-                None
+            // Multi-field fuzzy matching: model id, model display name, and connection label.
+            let (match_id, match_name, match_connection) = if query.is_empty() {
+                (None, None, None)
             } else {
-                match fuzzy::fuzzy_match(display, query) {
-                    Some(m) => Some(m),
-                    // The label missed. The row is still worth showing — and
-                    // without highlight positions, since the query matched
-                    // something other than what is drawn — when it matched the
-                    // wire id behind a name label (`deepseek-flash` still finds
-                    // the row labelled "DeepSeek V4.1 Flash") or the provider
-                    // itself (`Anthropic` lists everything that connection
-                    // serves).
-                    None if provider_matches || fuzzy::fuzzy_match(model, query).is_some() => None,
-                    None => continue,
+                let id_m = fuzzy::fuzzy_match(model, query);
+                let name_m = info
+                    .name
+                    .as_deref()
+                    .and_then(|name| fuzzy::fuzzy_match(name, query));
+                let conn_m = conn_match.clone();
+
+                if id_m.is_none() && name_m.is_none() && conn_m.is_none() {
+                    continue;
                 }
+                (id_m, name_m, conn_m)
             };
+
+            let m = match_id.clone().or_else(|| match_name.clone());
+
             candidates.push(RankedModel {
                 section: ModelSection::All,
                 provider_id: prow.id.clone(),
@@ -677,6 +684,9 @@ pub fn models_flat_filtered_from(
                 last_used_ms: info.last_used_ms,
                 context_window: info.context_window,
                 m,
+                match_id,
+                match_name,
+                match_connection,
             });
         }
     }
@@ -1463,10 +1473,10 @@ mod tests {
             "the highlight indexes the rendered label"
         );
 
-        // The wire id still finds the row, just unhighlighted.
+        // The wire id finds the row and highlights the ID column.
         let rows = models_flat_filtered_from(&snapshot, "", "", "deepseek-flash");
-        assert_eq!(rows.len(), 1, "the id remains an alias: {rows:?}");
-        assert!(rows[0].m.is_none(), "nothing in the label to highlight");
+        assert_eq!(rows.len(), 1, "the id matches: {rows:?}");
+        assert!(rows[0].match_id.is_some(), "id matches and is highlighted");
 
         let rows = models_flat_filtered_from(&snapshot, "", "", "v9.9");
         assert!(rows.is_empty(), "no row matches: {rows:?}");

@@ -28,7 +28,7 @@ impl DatabaseEngine {
     pub(crate) fn project_usage_batch(&self, limit: usize) -> Result<usize> {
         use muta_contracts::{RequestUsageSource, RequestUsageStatus};
         let mut stmt = self.conn.prepare("SELECT u.payload,u.day,u.revision FROM usage_dirty d JOIN usage_records u USING(session_id,actor_id,round,turn,attempt) ORDER BY d.revision LIMIT ?1")?;
-        let rows = stmt.query_map([limit.min(32) as i64], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?)))?.collect::<Result<Vec<_>>>()?;
+        let rows = stmt.query_map([limit.min(128) as i64], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?)))?.collect::<Result<Vec<_>>>()?;
         drop(stmt);
         if rows.is_empty() { return Ok(0); }
         // Pure preparation precedes the write transaction; each batch is bounded.

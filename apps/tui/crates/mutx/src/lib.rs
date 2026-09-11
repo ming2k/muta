@@ -1017,8 +1017,11 @@ pub async fn run_tui(
                                 duration_ms,
                             } => {
                                 if !routes_to_side {
-                                    mutations.send(M::SetPhase(Some(Phase::Reasoning))).await;
+                                    mutations.send(M::SetPhase(Some(Phase::Preparing))).await;
                                 }
+                                chrome!(event_loop::mutations::ChromeEdit::PhaseOnly(Some(
+                                    Phase::Preparing,
+                                )));
                                 let (provider, model) = attribution!();
                                 let position = positions_by_session.get(&session_id).copied();
                                 // The fallback (no matching in-flight call, e.g. a

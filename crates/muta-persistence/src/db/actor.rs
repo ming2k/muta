@@ -50,7 +50,7 @@ impl PersistenceCommand {
                 let res = guarded(|| engine.insert_request_projection(&session_id, &record));
                 let _ = ack.send(res);
             }
-            Self::ProjectUsage { ack } => { let _ = ack.send(guarded(|| engine.project_usage_batch(32))); }
+            Self::ProjectUsage { ack } => { let _ = ack.send(guarded(|| engine.project_usage_batch(64))); }
             Self::RecordUsageStats {
                 entries,
                 ack,
@@ -463,8 +463,11 @@ async fn spawn_writer(
                 }
                 if rx.is_empty() || foreground >= 16 {
                     foreground = 0;
-                    match engine.project_usage_batch(32) {
-                        Ok(n) if n > 0 && rx.is_empty() => continue,
+                    match engine.project_usage_batch(64) {
+                        Ok(n) if n > 0 && rx.is_empty() => {
+                            std::thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
                         Err(error) => warn!(%error, "usage projection recovery failed"),
                         _ => {}
                     }

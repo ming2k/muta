@@ -118,6 +118,8 @@ enum Anchor {
         numerator: usize,
         denominator: usize,
     },
+    /// Anchored at an explicit column index relative to the row's inner start.
+    Column(usize),
     /// Right-aligned to the trailing edge.
     Trailing,
 }
@@ -193,6 +195,40 @@ impl RowGroup {
         }
     }
 
+    /// A group anchored at an explicit 0-based column index across the row.
+    pub(crate) fn column(col: usize) -> Self {
+        Self {
+            atoms: Vec::new(),
+            anchor: Anchor::Column(col),
+        }
+    }
+
+    /// Append text with optional matched character indices highlighted using `match_style`.
+    pub(crate) fn matched_text(
+        mut self,
+        text: &str,
+        normal_style: Style,
+        match_style: Style,
+        matched: &std::collections::HashSet<usize>,
+        gap: usize,
+    ) -> Self {
+        for (idx, c) in text.chars().enumerate() {
+            let s = if matched.contains(&idx) {
+                match_style
+            } else {
+                normal_style
+            };
+            self = self.styled(
+                RowStyledAtom {
+                    text: c.to_string(),
+                    style: s,
+                },
+                if idx == 0 { gap } else { 0 },
+            );
+        }
+        self
+    }
+
     /// Append a text atom, preceded by `gap` columns of background within the
     /// group. Pass `0` for the group's first atom (start flush at its anchor)
     /// and the intra-group spacing for later ones. The gap is background-filled
@@ -259,25 +295,33 @@ impl RowGroup {
 pub(crate) struct ListRow {
     style: ChoiceStyle,
     body_width: usize,
+    gutter: usize,
     groups: Vec<RowGroup>,
 }
 
 impl ListRow {
     /// Begin a row. `style` is the row palette (from
     /// [`super::options::choice_style`]); `body_width` is the available columns
-    /// the row must fill. The row starts empty.
+    /// the row must fill. The row starts empty with default gutter.
     pub(crate) fn new(style: ChoiceStyle, body_width: usize) -> Self {
         Self {
             style,
             body_width,
+            gutter: GUTTER,
             groups: Vec::new(),
         }
     }
 
+    /// Override the leading gutter indent (default is `GUTTER = 1`).
+    #[allow(dead_code)]
+    pub(crate) fn gutter(mut self, gutter: usize) -> Self {
+        self.gutter = gutter;
+        self
+    }
+
     /// Append a group in display order. Fixed groups render left-to-right from
-    /// the gutter, separated by [`GROUP_GAP`]; a midpoint group anchors at
-    /// `body_width / 2`; trailing groups pin to the right edge (separated by
-    /// [`GROUP_GAP`] when more than one). Returns `self` for chaining.
+    /// the gutter, separated by [`GROUP_GAP`]; anchored ratio/column groups
+    /// position at their respective columns; trailing groups pin to the right edge.
     pub(crate) fn group(mut self, group: RowGroup) -> Self {
         self.groups.push(group);
         self
@@ -296,34 +340,37 @@ impl ListRow {
     }
 
     /// Finalize the row into a single [`Line`] that fills `body_width`
-    /// edge-to-edge, starting with the [`GUTTER`] indent.
+    /// edge-to-edge, starting with the gutter indent.
     pub(crate) fn finish(self) -> Line<'static> {
         let bg = self.style.bg;
 
-        // Split groups by anchor and measure each block. Fixed groups consume
-        // width left-to-right from the gutter; a ratio group reserves a
-        // column range starting at its proportional position; trailing groups
-        // reserve the right edge.
-        let mut fixed_w = 0usize;
-        let mut fixed_count = 0usize;
-        let mut ratio_group: Option<(&RowGroup, usize, usize)> = None;
         let mut trailing_w = 0usize;
         let mut trailing_count = 0usize;
+
+        struct Positioned<'a> {
+            group: &'a RowGroup,
+            desired_col: usize,
+        }
+        let mut positioned: Vec<Positioned> = Vec::new();
+
         for g in &self.groups {
             match g.anchor {
-                Anchor::Fixed => {
-                    if fixed_count > 0 {
-                        fixed_w += GROUP_GAP;
-                    }
-                    fixed_w += g.width();
-                    fixed_count += 1;
-                }
+                Anchor::Fixed => {}
                 Anchor::Ratio {
                     numerator,
                     denominator,
                 } => {
-                    // Keep the last ratio group if more than one was added.
-                    ratio_group = Some((g, numerator, denominator));
+                    let col = (self.body_width * numerator) / denominator.max(1);
+                    positioned.push(Positioned {
+                        group: g,
+                        desired_col: col,
+                    });
+                }
+                Anchor::Column(col) => {
+                    positioned.push(Positioned {
+                        group: g,
+                        desired_col: col,
+                    });
                 }
                 Anchor::Trailing => {
                     if trailing_count > 0 {
@@ -335,33 +382,17 @@ impl ListRow {
             }
         }
 
-        let ratio_w = ratio_group.map(|(g, _, _)| g.width()).unwrap_or(0);
-        // The ratio group occupies [ratio_start, ratio_start + ratio_w). It may
-        // overlap the fixed block on a very narrow row; clamp so the row never
-        // exceeds body_width (the fixed block wins the left half).
-        let ratio_start = if let Some((_, num, den)) = ratio_group {
-            let target = (self.body_width * num) / den.max(1);
-            target.min(
-                self.body_width
-                    .saturating_sub(ratio_w)
-                    .max(fixed_w + GUTTER),
-            )
-        } else {
-            0
-        };
+        positioned.sort_by_key(|p| p.desired_col);
 
-        // Trailing groups occupy the rightmost trailing_w columns.
         let trailing_start = self.body_width.saturating_sub(trailing_w);
 
         let mut spans: Vec<Span> = Vec::new();
 
-        // Leading gutter (rule 2): one column of background before any content.
-        if GUTTER > 0 {
-            spans.push(Span::styled(" ".repeat(GUTTER), Style::default().bg(bg)));
+        if self.gutter > 0 {
+            spans.push(Span::styled(" ".repeat(self.gutter), Style::default().bg(bg)));
         }
 
-        // Render the fixed block starting at column GUTTER.
-        let mut col = GUTTER;
+        let mut col = self.gutter;
         let mut emitted_fixed = 0usize;
         for g in &self.groups {
             if !matches!(g.anchor, Anchor::Fixed) {
@@ -376,18 +407,19 @@ impl ListRow {
             emitted_fixed += 1;
         }
 
-        // Pad up to the ratio group's start, then render it.
-        if let Some((g, _, _)) = ratio_group {
-            if col < ratio_start {
-                spans.push(pad(ratio_start - col, bg));
-                col = ratio_start;
+        for pg in positioned {
+            let min_start = col + (if col > self.gutter { 1 } else { 0 });
+            let start = pg.desired_col.max(min_start);
+            if start < trailing_start {
+                if start > col {
+                    spans.push(pad(start - col, bg));
+                    col = start;
+                }
+                render_atoms(&mut spans, &pg.group.atoms, bg);
+                col += pg.group.width();
             }
-            render_atoms(&mut spans, &g.atoms, bg);
-            col += g.width();
         }
 
-        // Pad up to the trailing block's start, then render trailing groups
-        // left-to-right (they are already right-aligned as a block).
         if trailing_count > 0 {
             if col < trailing_start {
                 spans.push(pad(trailing_start - col, bg));
@@ -408,8 +440,6 @@ impl ListRow {
             }
         }
 
-        // Trailing fill to body_width (rule 1). Even when content already fills
-        // the width, emit a pad only if short — never let the row exceed.
         if col < self.body_width {
             spans.push(pad(self.body_width - col, bg));
         }
@@ -664,5 +694,29 @@ mod tests {
             dot_span.style.add.contains(mutx_engine::Modifier::BOLD),
             "glyph atom is bold"
         );
+    }
+
+    #[test]
+    fn multi_column_layout_anchors_columns_at_exact_positions() {
+        let theme = Theme::default();
+        let style = choice_style(ChoiceTone::Filled, false, &theme);
+        let body_width = 80;
+        let matched: std::collections::HashSet<usize> = [0, 1].into_iter().collect();
+        let line = ListRow::new(style, body_width)
+            .group(RowGroup::fixed().text("gpt-4o", style.fg, 0))
+            .group(RowGroup::column(20).matched_text(
+                "GPT 4o",
+                Style::default().fg(style.dim),
+                Style::default().fg(theme.brand()),
+                &matched,
+                0,
+            ))
+            .group(RowGroup::ratio(3, 5).text("OpenAI", style.dim, 0))
+            .finish();
+        let text = line_text(&line);
+        assert_eq!(line_width(&line), body_width);
+        assert_eq!(&text[1..7], "gpt-4o");
+        assert_eq!(&text[20..26], "GPT 4o");
+        assert_eq!(&text[48..54], "OpenAI");
     }
 }

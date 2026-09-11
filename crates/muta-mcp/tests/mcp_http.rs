@@ -24,11 +24,23 @@ fn fixture() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_mcp_http_server.py")
 }
 
+struct ServerGuard {
+    child: std::process::Child,
+    url: String,
+}
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 /// Spawn the mock HTTP server on an OS-assigned port; return its `/mcp` url
 /// once it is accepting connections. Panics (rather than skipping) on setup
 /// failure: a present-but-broken python3 is an environment bug worth failing
 /// for, while an absent one keeps the skip path above.
-async fn spawn_server(python: &str) -> String {
+async fn spawn_server(python: &str) -> ServerGuard {
     let port = {
         let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -53,10 +65,10 @@ async fn spawn_server(python: &str) -> String {
     // Wait for the server to accept connections (best-effort, bounded).
     for _ in 0..100 {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            // Park the child until process exit; the fixture is a test
-            // resource and the binary exiting reaps it.
-            std::mem::forget(child);
-            return format!("http://127.0.0.1:{port}/mcp");
+            return ServerGuard {
+                child,
+                url: format!("http://127.0.0.1:{port}/mcp"),
+            };
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
@@ -83,10 +95,10 @@ async fn http_transport_discovers_filters_and_calls_tools() {
         eprintln!("skipping: python3 unavailable");
         return;
     };
-    let url = spawn_server(&python).await;
+    let server = spawn_server(&python).await;
 
     let mut configs = HashMap::new();
-    configs.insert("mock".to_string(), config(url));
+    configs.insert("mock".to_string(), config(server.url.clone()));
 
     let loaded = load_mcp_tools(&configs).await;
 

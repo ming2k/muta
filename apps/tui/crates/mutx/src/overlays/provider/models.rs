@@ -1,7 +1,7 @@
 //! The flat Models picker modal (selecting the active model/instance).
 
 use mutx_engine::{
-    Frame, {Line, Span}, {Modifier, Style},
+    Frame, Rect, {Line, Span}, {Modifier, Style},
 };
 
 use unicode_width::UnicodeWidthStr;
@@ -9,10 +9,10 @@ use unicode_width::UnicodeWidthStr;
 use super::super::common::truncate_ellipsis;
 use super::common::{
     draw_picker_search_row, match_set, place_picker_search_cursor, search_empty_body,
-    split_search_body,
+    split_search_bottom,
 };
 use crate::components::options::{ChoiceTone, choice_style};
-use crate::components::row::{GUTTER, ListRow, RowGroup, RowStyledAtom};
+use crate::components::row::{ListRow, RowGroup};
 use crate::primitives::{
     BodyRenderOptions, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
     keyvocab, modal_area, modal_frame, modal_header, render_body, render_centered_body,
@@ -20,15 +20,6 @@ use crate::primitives::{
 };
 use crate::providers::{ModelBodyLine, RankedModel, models_body_lines};
 use crate::render::Theme;
-
-/// The narrowest leftover space worth spending on the wire-id suffix that
-/// rides behind a provider-published name label. The suffix fills only what the
-/// label leaves unused in the identity column, so below this there is nothing
-/// legible to draw and the row shows the label alone — the mirror of a row whose
-/// provider published no label at all. The floor is deliberately above a bare
-/// fragment: `deep…` would read as a different model rather than as an
-/// abbreviation of `deepseek-flash`.
-const MIN_SUFFIX_BUDGET: usize = 10;
 
 /// Properties for rendering the Models modal.
 pub struct ModelsModalProps<'a> {
@@ -127,12 +118,31 @@ pub fn draw_models_modal(
             },
         ];
         crate::elevation::modal_header_parts(frame, header_rect, &header, theme);
+    } else if search && !query.is_empty() {
+        let title = format!("Models ({})", models.len());
+        modal_header(frame, header_rect, &title, theme);
     } else {
         modal_header(frame, header_rect, "Models", theme);
     }
 
-    let (search_rect, body_rect) = split_search_body(f.body, search);
+    let (body_rect, search_rect) = split_search_bottom(f.body, search);
     if let Some(search_rect) = search_rect {
+        if search_rect.y > f.body.y {
+            let sep_rect = Rect {
+                x: search_rect.x,
+                y: search_rect.y - 1,
+                width: search_rect.width,
+                height: 1,
+            };
+            let sep_line = "─".repeat(sep_rect.width as usize);
+            frame.render_widget(
+                mutx_engine::Paragraph::new(Line::from(Span::styled(
+                    sep_line,
+                    Style::default().fg(theme.muted()),
+                ))),
+                sep_rect,
+            );
+        }
         draw_picker_search_row(frame, search_rect, query, cursor_position, theme);
     }
 
@@ -228,6 +238,12 @@ pub(crate) fn model_list_body(
         ))
     };
 
+    // Calculate dynamic ID column width based on the visible models
+    // to preserve tabular alignment across all rows.
+    let identity_budget = (body_width * 3 / 5).max(1);
+    let max_id_len = models.iter().map(|m| m.model.width()).max().unwrap_or(20);
+    let id_col_width = max_id_len.clamp(18, identity_budget.saturating_sub(10).max(18));
+
     for line in geometry {
         match line {
             ModelBodyLine::Section(section) => {
@@ -235,7 +251,7 @@ pub(crate) fn model_list_body(
                     body.push(spacer());
                 }
                 body.push(Line::from(Span::styled(
-                    format!("{}{}", " ".repeat(GUTTER), section.label()),
+                    format!(" {}", section.label()),
                     Style::default().fg(theme.muted()),
                 )));
             }
@@ -251,68 +267,66 @@ pub(crate) fn model_list_body(
                     _ => String::new(),
                 };
 
-                // The identity column is `body_width * 3 / 5` wide (the ratio
-                // group below starts there). The rendered label — the
-                // provider's own name for the model when it publishes one, else
-                // the wire id — owns that column, and is what the fuzzy
-                // highlight indexes. When the label is a name, the wire id
-                // still rides along as a dim suffix in whatever padding the
-                // label leaves unused: the id is the string that actually goes
-                // on the wire and into config, so a name-first list must not
-                // hide the value the user has to type. The suffix only fills
-                // blank padding, so it never shortens the label, never pushes
-                // the provider column out of alignment, and never widens the
-                // row; no room means no suffix.
-                let identity_budget = ((body_width * 3) / 5).saturating_sub(GUTTER + 1).max(1);
-                let display = truncate_ellipsis(
-                    rm.name.as_deref().unwrap_or(rm.model.as_str()),
-                    identity_budget,
+                // 1. Model ID: Primary column, always bold, bright.
+                let id_text = truncate_ellipsis(&rm.model, id_col_width);
+                let id_matched = match_set(rm.match_id.as_ref());
+                let id_group = RowGroup::fixed().matched_text(
+                    &id_text,
+                    Style::default().bg(style.bg).fg(style.fg).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .bg(style.bg)
+                        .fg(if is_selected { style.fg } else { theme.brand() })
+                        .add_modifier(Modifier::BOLD),
+                    &id_matched,
+                    0,
                 );
-                let id_suffix = rm.name.as_deref().and_then(|_| {
-                    let budget = identity_budget.saturating_sub(display.as_str().width() + 1);
-                    (budget >= MIN_SUFFIX_BUDGET).then(|| truncate_ellipsis(&rm.model, budget))
-                });
 
-                let matched = match_set(rm.m.as_ref());
-                let mut identity = RowGroup::fixed();
-                for (char_idx, c) in display.chars().enumerate() {
-                    let cs = if matched.contains(&char_idx) {
-                        Style::default()
-                            .bg(style.bg)
-                            .fg(if is_selected { style.fg } else { theme.brand() })
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                            .bg(style.bg)
-                            .fg(style.fg)
-                            .add_modifier(Modifier::BOLD)
-                    };
-                    identity = identity.styled(
-                        RowStyledAtom {
-                            text: c.to_string(),
-                            style: cs,
-                        },
-                        0,
-                    );
-                }
-                // The wire id behind a name label, dimmed and set one column off
-                // the label so the pair reads as ONE identity column: the label
-                // is what the provider calls it, the id is what you type. It
-                // stays inside the identity group (never the provider column)
-                // so tabular alignment with label-less rows is preserved.
-                if let Some(id_suffix) = id_suffix {
-                    identity = identity.styled(
-                        RowStyledAtom {
-                            text: id_suffix,
-                            style: Style::default().bg(style.bg).fg(style.dim),
-                        },
-                        1,
-                    );
+                let mut list_row = ListRow::new(style, body_width).group(id_group);
+
+                // 2. Model Name: Secondary column, dimmed, anchored at column (id_col_width + 2).
+                let distinct_name = rm
+                    .name
+                    .as_deref()
+                    .filter(|name| *name != rm.model.as_str());
+
+                let name_col = id_col_width + 2;
+                let name_budget = identity_budget.saturating_sub(name_col);
+                if let Some(name) = distinct_name {
+                    if name_budget >= 6 {
+                        let name_text = truncate_ellipsis(name, name_budget);
+                        let name_matched = match_set(rm.match_name.as_ref());
+                        let name_group = RowGroup::column(name_col).matched_text(
+                            &name_text,
+                            Style::default().bg(style.bg).fg(style.dim),
+                            Style::default()
+                                .bg(style.bg)
+                                .fg(if is_selected { style.fg } else { theme.brand() })
+                                .add_modifier(Modifier::BOLD),
+                            &name_matched,
+                            0,
+                        );
+                        list_row = list_row.group(name_group);
+                    }
                 }
 
-                let mut list_row = ListRow::new(style, body_width)
-                    .group(identity)
-                    .group(RowGroup::ratio(3, 5).text(rm.provider_label.as_str(), style.dim, 0));
+                // 3. Connection Name: Starts at ratio(3, 5), dimmed, with connection match highlighting.
+                let tag_len = if tag.is_empty() { 0 } else { tag.width() + 2 };
+                let conn_budget = body_width
+                    .saturating_sub((body_width * 3) / 5 + tag_len + 1)
+                    .max(1);
+                let conn_text = truncate_ellipsis(&rm.provider_label, conn_budget);
+                let conn_matched = match_set(rm.match_connection.as_ref());
+                let conn_group = RowGroup::ratio(3, 5).matched_text(
+                    &conn_text,
+                    Style::default().bg(style.bg).fg(style.dim),
+                    Style::default()
+                        .bg(style.bg)
+                        .fg(if is_selected { style.fg } else { theme.brand() })
+                        .add_modifier(Modifier::BOLD),
+                    &conn_matched,
+                    0,
+                );
+                list_row = list_row.group(conn_group);
 
                 if !tag.is_empty() {
                     let tag_fg = if is_selected {

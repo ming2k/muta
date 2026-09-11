@@ -5,14 +5,14 @@
 use super::*;
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 15;
+pub const CURRENT_DB_VERSION: u32 = 16;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 pub const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "5018938efbdfb0bfc08dfcd30e58209bcd0fe2dc83ad0285692eb51902870f32";
+    "4e6a565d1666c4046a078fd123d3bdc7027bef04041319f99661d5a168d4bcef";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -441,6 +441,7 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: "",
     },
     Migration { version: 15, sql: "" },
+    Migration { version: 16, sql: "" },
 ];
 
 /// Working-state columns the final ADR-0186 `sessions` rebuild must carry,
@@ -882,6 +883,57 @@ pub fn apply_workspace_partition_schema(tx: &rusqlite::Transaction) -> Result<()
     Ok(())
 }
 
+/// Fast FTS entry triggers (ADR-0187 fix), applied by migration 16: replaces
+/// the unindexed `trg_memberships_ad` trigger (which scanned the entire virtual
+/// table on every deleted entry, stalling session persistence for seconds) with
+/// an O(1) `rowid`-addressed delete, drops legacy `trg_entries_ai`/`trg_entries_ad`
+/// triggers, and ensures `fts_entries.rowid` aligns with `entry_memberships.rowid`.
+pub fn apply_fast_fts_triggers_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    if !table_exists(tx, "entry_memberships")? || !table_exists(tx, "fts_entries")? {
+        return Ok(());
+    }
+
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS trg_memberships_ai;
+         DROP TRIGGER IF EXISTS trg_memberships_ad;
+         DROP TRIGGER IF EXISTS trg_entries_ai;
+         DROP TRIGGER IF EXISTS trg_entries_ad;
+
+         CREATE TRIGGER trg_memberships_ai AFTER INSERT ON entry_memberships BEGIN
+             INSERT INTO fts_entries(rowid, entry_id, session_id, role, content)
+             SELECT new.rowid, new.entry_id, new.session_id, COALESCE(e.role, ''), COALESCE(e.content, '')
+             FROM entries e WHERE e.id = new.entry_id;
+         END;
+
+         CREATE TRIGGER trg_memberships_ad AFTER DELETE ON entry_memberships BEGIN
+             DELETE FROM fts_entries WHERE rowid = old.rowid;
+         END;",
+    )?;
+
+    let misaligned: i64 = tx.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM entry_memberships m
+            LEFT JOIN fts_entries f ON m.rowid = f.rowid
+            WHERE f.rowid IS NULL OR m.entry_id != f.entry_id OR m.session_id != f.session_id
+            LIMIT 1
+        )",
+        [],
+        |r| r.get(0),
+    )?;
+
+    if misaligned == 1 {
+        info!("rebuilding fts_entries to align rowids with entry_memberships");
+        tx.execute_batch(
+            "DELETE FROM fts_entries;
+             INSERT INTO fts_entries(rowid, entry_id, session_id, role, content)
+                 SELECT m.rowid, m.entry_id, m.session_id, COALESCE(e.role, ''), COALESCE(e.content, '')
+                 FROM entry_memberships m JOIN entries e ON e.id = m.entry_id;",
+        )?;
+    }
+
+    Ok(())
+}
+
 pub fn insert_legacy_usage_record_tx(
     tx: &rusqlite::Connection,
     session_id: &str,
@@ -1136,6 +1188,9 @@ pub fn apply_migrations(conn: &mut Connection, observed_version: u32) -> Result<
                 }
                 if migration.version == 15 {
                     apply_durable_attempt_schema(&tx)?;
+                }
+                if migration.version == 16 {
+                    apply_fast_fts_triggers_schema(&tx)?;
                 }
             }
         }

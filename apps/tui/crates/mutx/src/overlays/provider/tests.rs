@@ -723,24 +723,24 @@ fn models_modal_leads_with_the_provider_label_and_keeps_the_id_visible() {
 }
 
 #[test]
-fn models_modal_drops_the_id_suffix_that_has_no_room_instead_of_crowding_the_label() {
-    // The id suffix only ever fills the identity column's leftover padding, so
-    // on a cramped terminal it vanishes rather than truncating the label or
-    // overflowing the provider column.
+fn models_modal_drops_the_name_when_narrow_keeping_the_wire_id() {
+    // Model ID is the primary column and always renders. The display name
+    // only renders when there is enough room, so on a cramped terminal
+    // the name drops instead of crowding or truncating the wire ID.
     let narrow = render_labelled_models_modal(60);
     let row = narrow
         .lines()
-        .find(|line| line.contains("DeepSeek V4.1 Flash"))
-        .expect("row renders");
+        .find(|line| line.contains("gemini-3-pro"))
+        .expect("wire id row renders on narrow terminal");
     assert!(
-        !row.contains("gemini-3-pro"),
-        "no room for the suffix means no suffix: {row:?}"
+        !row.contains("DeepSeek V4.1 Flash"),
+        "on narrow screen, optional name drops to preserve wire id: {row:?}"
     );
 
-    // The wider render proves the two differ only by the suffix, so the
-    // assertion above is about the suffix and not about a missing row.
+    // On a wide terminal, both the wire ID and the display name render.
     let wide = render_labelled_models_modal(110);
     assert!(wide.contains("gemini-3-pro"));
+    assert!(wide.contains("DeepSeek V4.1 Flash"));
 }
 
 /// Render the Models modal with one provider-published model label at a given
@@ -831,6 +831,56 @@ fn models_modal_row_omits_leading_dot_and_trailing_diamond() {
             assert!(!line.contains('◆'), "no diamond glyph on row: {line:?}");
         }
     }
+}
+
+#[test]
+fn models_modal_search_bar_renders_at_bottom_without_shifting_list() {
+    let browse_text = render_models_modal(0, "", false);
+    let search_text = render_models_modal(0, "", true);
+
+    // Header "Models" remains on the same row for both
+    let browse_header_line = browse_text.lines().position(|l| l.contains("Models")).unwrap();
+    let search_header_line = search_text.lines().position(|l| l.contains("Models")).unwrap();
+    assert_eq!(browse_header_line, search_header_line);
+
+    // The first section in search ("FAVORITES") is at the exact same row as in browse mode
+    let browse_fav_line = browse_text.lines().position(|l| l.contains("FAVORITES")).unwrap();
+    let search_fav_line = search_text.lines().position(|l| l.contains("FAVORITES")).unwrap();
+    assert_eq!(
+        browse_fav_line, search_fav_line,
+        "list top did not shift when search opened"
+    );
+
+    // Search prompt renders near the bottom of search mode
+    let search_row = search_text.lines().position(|l| l.contains("Search")).expect("search prompt present");
+    assert!(search_row > search_fav_line, "search prompt is at the bottom");
+}
+
+#[test]
+fn models_modal_search_matches_id_name_and_connection() {
+    let mut picker = sectioned_snapshot();
+    for prow in &mut picker.rows {
+        if prow.id == "openai" {
+            prow.name = "OpenAI Official".to_string();
+        }
+        for info in &mut prow.model_info {
+            if info.model == "gpt-5.5" {
+                info.name = Some("GPT 5.5 Turbo".to_string());
+            }
+        }
+    }
+
+    // 1. Match by model ID
+    let by_id = crate::providers::models_flat_filtered_from(&picker, "", "", "gpt-5.5");
+    assert!(by_id.iter().any(|m| m.model == "gpt-5.5" && m.match_id.is_some()));
+
+    // 2. Match by model display name
+    let by_name = crate::providers::models_flat_filtered_from(&picker, "", "", "Turbo");
+    assert!(by_name.iter().any(|m| m.model == "gpt-5.5" && m.match_name.is_some()));
+
+    // 3. Match by connection/provider name
+    let by_conn = crate::providers::models_flat_filtered_from(&picker, "", "", "Official");
+    assert!(by_conn.iter().any(|m| m.provider_label == "OpenAI Official" && m.match_connection.is_some()));
 }
 
 #[test]

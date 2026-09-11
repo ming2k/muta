@@ -31,6 +31,29 @@ pub(crate) fn split_search_body(body: Rect, search: bool) -> (Option<Rect>, Rect
     (Some(search_rect), list_rect)
 }
 
+/// Split the modal body by placing the search row at the **bottom**, leaving the
+/// top of the list completely motionless to avoid layout shift when search toggles.
+pub(crate) fn split_search_bottom(body: Rect, search: bool) -> (Rect, Option<Rect>) {
+    if !search || body.height == 0 {
+        return (body, None);
+    }
+
+    let consumed = if body.height > 1 { 2 } else { 1 };
+    let list_rect = Rect {
+        x: body.x,
+        y: body.y,
+        width: body.width,
+        height: body.height.saturating_sub(consumed),
+    };
+    let search_rect = Rect {
+        x: body.x,
+        y: body.bottom().saturating_sub(1),
+        width: body.width,
+        height: 1,
+    };
+    (list_rect, Some(search_rect))
+}
+
 pub(crate) fn draw_picker_search_row(
     frame: &mut Frame,
     rect: Rect,
