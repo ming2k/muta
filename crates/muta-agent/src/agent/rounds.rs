@@ -1095,9 +1095,11 @@ impl Agent {
             }
 
             // User-round end: clear every scoped disable so the toolset is
-            // fresh for the next user request.
+            // fresh for the next user request. No persist here: the terminal
+            // round commit is the authority for the final answer (ADR-0236 D5),
+            // and the mid-round save points have already persisted every
+            // continuing turn.
             self.restore_scoped_round_end();
-            self.fire_turn_persist(messages).await?;
             return Ok(RoundOutcome {
                 message: response,
                 token_usage: round.state.token_usage,
