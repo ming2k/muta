@@ -406,8 +406,12 @@ pub(crate) fn handle_ctrl_c(
         // quit intent).
         app.exit_side_view();
         app.send_intent(AgentRequest::ExitSideView);
-    } else if !app.input.is_empty() {
-        // Ctrl+C clears the composer text.
+    } else if !app.input.is_empty()
+        || app.history_index.is_some()
+        || !app.pending_images.is_empty()
+        || !app.pending_text_pastes.is_empty()
+    {
+        // Ctrl+C clears the composer text and resets any active history recall.
         // Clearing text consumes this shortcut and does NOT arm
         // the quit window. If the user wants to exit, they must
         // press Ctrl+C twice with an empty input.

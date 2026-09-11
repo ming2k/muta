@@ -684,13 +684,35 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     if let Some(detail) = app.connection_detail.as_mut() {
                         detail.usage = muta_contracts::ConnectionUsageState::Fetching;
                     }
+                    show_local_toast(
+                        app,
+                        "Refreshing connection usage…",
+                        false,
+                        std::time::Duration::from_millis(1500),
+                    );
                     app.send_intent(AgentRequest::QueryConnectionDetail { id });
                 }
             } else if matches!(
                 app.active_dialog(),
                 Some(DialogKind::Models | DialogKind::Connections)
             ) {
-                app.send_intent(AgentRequest::RefreshProviderModels);
+                if app.models_refreshing {
+                    show_local_toast(
+                        app,
+                        "Model refresh already in progress…",
+                        false,
+                        std::time::Duration::from_millis(1500),
+                    );
+                } else {
+                    app.models_refreshing = true;
+                    show_local_toast(
+                        app,
+                        "Refreshing models…",
+                        false,
+                        std::time::Duration::from_millis(1500),
+                    );
+                    app.send_intent(AgentRequest::RefreshProviderModels);
+                }
             }
         }
         input::InputAction::OpenHistory => {
@@ -757,12 +779,16 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::OpenHelp => {
-            enter_panel(
-                app,
-                crate::surfaces::DialogKind::Help,
-                runtime,
-                viewed_session_id,
-            );
+            if app.active_dialog() == Some(crate::surfaces::DialogKind::Help) {
+                modals::handle_close_modal(app, viewed_session_id);
+            } else {
+                enter_panel(
+                    app,
+                    crate::surfaces::DialogKind::Help,
+                    runtime,
+                    viewed_session_id,
+                );
+            }
         }
         input::InputAction::OpenPermissions => {
             enter_panel(
@@ -1672,6 +1698,10 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             let app_ctx = crate::keymap::AppContext {
                 active_scene: app.current_scene(),
                 has_overlay: app.surfaces.active_overlay().is_some(),
+                active_dialog: app
+                    .surfaces
+                    .underlying_dialog()
+                    .or_else(|| app.active_dialog()),
                 is_responding: is_busy,
                 has_input: !app.input.is_empty(),
                 has_selection: !matches!(
@@ -2340,13 +2370,13 @@ pub(super) fn enter_panel(
         DialogKind::Permissions | DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {
             Some(AgentRequest::QuerySessionContext)
         }
-        DialogKind::UsageStats => {
-            if app.usage_stats.is_none() {
-                Some(AgentRequest::QueryUsageStats { event_cap: 200 })
-            } else {
-                None
-            }
-        }
+        // Always re-query. The report is a 400-day historical aggregate and
+        // is no longer pushed at round boundaries (the fold cost sat on the
+        // critical path to the round's idle snapshot), so reusing a cached
+        // copy would show the first snapshot forever. The previous numbers
+        // stay on screen until the fresh reply lands, so reopening does not
+        // flash the loading state.
+        DialogKind::UsageStats => Some(AgentRequest::QueryUsageStats { event_cap: 200 }),
         DialogKind::Telemetry if app.token_ledger.is_none() => {
             if app.token_report.is_none() {
                 Some(AgentRequest::QueryTokenUsage {
@@ -3001,6 +3031,7 @@ async fn execute_command_by_id(
                 std::time::Duration::from_millis(1000),
             );
         }
+        _ => {}
     }
     ActionFlow::Handled
 }

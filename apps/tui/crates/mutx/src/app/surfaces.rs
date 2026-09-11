@@ -393,6 +393,9 @@ impl App {
         if let Some(id) = self.active_dialog() {
             self.deactivate_dialog(id);
             self.surfaces.pop_overlay();
+            if let Some(underlying) = self.active_dialog() {
+                self.restore_dialog_state(underlying);
+            }
             true
         } else if self.current_scene() != SceneKind::Conversation {
             let leaving = self.current_scene();
@@ -465,6 +468,7 @@ impl App {
                 self.model_search = false;
                 self.model_scroll = 0;
                 self.model_modal_follow = true;
+                self.models_refreshing = false;
             }
             DialogKind::HistorySearch => {
                 self.history_search = false;

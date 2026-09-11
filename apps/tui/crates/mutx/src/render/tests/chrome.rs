@@ -128,6 +128,7 @@ fn redesigned_components_render_without_panicking() {
                 connection_info_scroll: &mut 0,
                 spinner_phase: 0,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &crate::model::selection::SelectionState::None,
@@ -144,6 +145,8 @@ fn redesigned_components_render_without_panicking() {
                 scroll: &mut 0,
                 follow_selection: true,
                 search: false,
+                refreshing: false,
+                spinner_phase: 0,
             },
             &theme,
         );

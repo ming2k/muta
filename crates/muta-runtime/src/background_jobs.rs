@@ -915,14 +915,13 @@ impl BackgroundJobManager {
 
         // ADR-0190 D4: persist the settle into the task ledger (best-effort,
         // on the blocking pool so the fabric's event path never waits on I/O).
-        let dirs = muta_persistence::paths::get();
         let ledger_outcome = outcome.clone();
         tokio::task::spawn_blocking(move || {
-            if let Ok(mut engine) =
-                muta_persistence::db::DatabaseEngine::open(&dirs.db_file(), None)
-            {
-                crate::task_ledger::record_outcome(&mut engine, &ledger_outcome, owner_session);
-            }
+            crate::task_ledger::record_outcome(
+                &muta_persistence::db::get_persistence_handle(),
+                &ledger_outcome,
+                owner_session,
+            );
         });
     }
 

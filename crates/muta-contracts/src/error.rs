@@ -120,6 +120,39 @@ impl ProviderError {
     pub const fn is_context_overflow(&self) -> bool {
         matches!(self.kind, ProviderErrorKind::ContextOverflow)
     }
+
+    /// Whether this failure is a **request-shape refusal**: the upstream
+    /// rejected what we sent, as opposed to a transport, auth, quota, or
+    /// server fault.
+    ///
+    /// Only a refusal of the request itself can have been caused by a field
+    /// *inside* it, which is why the image-cause probe (ADR-0230) is scoped to
+    /// these kinds. `Protocol` is included on
+    /// purpose: some vendors report a refusal in-band (HTTP 200 carrying an
+    /// `error` object), which surfaces as `Protocol` rather than
+    /// `InvalidRequest`.
+    pub const fn is_request_refusal(&self) -> bool {
+        matches!(
+            self.kind,
+            ProviderErrorKind::InvalidRequest
+                | ProviderErrorKind::Protocol
+                | ProviderErrorKind::Other
+        )
+    }
+
+    // Deliberately absent: any predicate that decides "was this refusal about
+    // images?" from the vendor's *text* — an `is_image_rejection` reading
+    // `error.message`, a marker list, an upstream code table. Every vendor
+    // formats its error envelope differently and its prose drifts, so such a
+    // predicate is a permanent maintenance liability whose failure modes are
+    // both bad: a false negative re-bricks a session, a false positive withholds
+    // a capability that works. The harness answers the question from an
+    // **outcome differential** instead — retry the identical turn with the
+    // attachments withheld and observe whether the refusal goes away (ADR-0230)
+    // — which needs to understand no vendor format at all. The only
+    // classification kept here is [`Self::is_request_refusal`], which derives
+    // from the HTTP status the transport already mapped and reads none of the
+    // vendor's prose.
 }
 
 impl std::fmt::Display for ProviderError {
@@ -239,5 +272,51 @@ impl From<String> for HarnessError {
 impl From<ProviderError> for HarnessError {
     fn from(error: ProviderError) -> Self {
         Self::Provider(error)
+    }
+}
+
+#[cfg(test)]
+mod request_refusal_tests {
+    use super::*;
+
+    fn error(kind: ProviderErrorKind) -> ProviderError {
+        ProviderError::new("mock", kind, "anything")
+    }
+
+    #[test]
+    fn request_refusal_scopes_the_probe_to_refusals_of_our_own_request() {
+        // This is the only classification the image recovery consults, and it is
+        // derived from the HTTP status the transport already mapped — it reads
+        // none of the vendor's prose, which is the whole point (ADR-0230).
+        //
+        // A refusal of what we sent is the only failure a field *inside* the
+        // request could explain, so those kinds may arm the probe.
+        for kind in [
+            ProviderErrorKind::InvalidRequest,
+            ProviderErrorKind::Protocol,
+            ProviderErrorKind::Other,
+        ] {
+            assert!(error(kind).is_request_refusal(), "{kind:?}");
+        }
+
+        // The rest are excluded, and each for a reason:
+        // - ContextOverflow has its own recovery (compaction), and conflating the
+        //   two would make the harness withhold images for a too-long prompt;
+        // - Timeout / Upstream / RateLimited / Unavailable / Transport may have
+        //   been *processed* (the attempt can be billable), so re-sending them is
+        //   not the free experiment a validation refusal is;
+        // - Authentication / Decode cannot be caused by an attachment.
+        for kind in [
+            ProviderErrorKind::Transport,
+            ProviderErrorKind::Timeout,
+            ProviderErrorKind::RateLimited,
+            ProviderErrorKind::Authentication,
+            ProviderErrorKind::ContextOverflow,
+            ProviderErrorKind::Upstream,
+            ProviderErrorKind::Decode,
+            ProviderErrorKind::Unavailable,
+        ] {
+            assert!(!error(kind).is_request_refusal(), "{kind:?}");
+        }
     }
 }

@@ -1110,7 +1110,7 @@ log_path?: string | null, };
  */
 export type NamedFilterPolicy = "baseline" | "all";
 
-export type NoticeKind = "provider_retry" | "nudge_injected" | "review_alert" | "trust_changed" | "command_ack";
+export type NoticeKind = "provider_retry" | "nudge_injected" | "review_alert" | "trust_changed" | "command_ack" | "image_input_withheld";
 
 export type NoticeSeverity = "info" | "warning" | "error";
 
@@ -1239,6 +1239,15 @@ export type ProviderModelInfo = {
  */
 model: string, 
 /**
+ * Human-readable label the provider advertises for this model (models.dev
+ * `name`, Anthropic/Kimi `display_name`), when it advertises one. This is
+ * the label the model pickers lead with, falling back to `model` when it is
+ * absent. Purely presentational: it is never the identity, so frontends
+ * must keep the wire id visible beside it and key every config surface on
+ * `model`. `None` — the common case — means show the bare wire id.
+ */
+name?: string | null, 
+/**
  * Wire protocol id of the channel serving this model (`"openai"` |
  * `"anthropic"` | `"google"`).
  */
@@ -1277,13 +1286,19 @@ last_used_ms: number | null,
  * capability resolution (user overrides over the remote advertisement
  * over the static baseline), resolved daemon-side in
  * `Channel::capabilities()`. Frontends gate image affordances (composer
- * paste, vision-only tools) on this flag instead of re-resolving the
+ * paste, vision-only tools) on this field instead of re-resolving the
  * model in their own process: the client's static registry cannot see
  * the daemon's fitted-model overlay or per-route overrides, so a
  * client-side resolution would disagree with what the daemon actually
- * routes. `false`-defaulted so older snapshots gate conservatively.
+ * routes.
+ *
+ * **Three-valued** (ADR-0230): `Some(false)` means a layer declared that
+ * this route rejects images — the only value a frontend may gate on;
+ * `None` means *undeclared*, which older snapshots (and every route whose
+ * vendor advertises no vision field) deserialize to, so a frontend must
+ * treat it as "try it", never as text-only.
  */
-vision: boolean, 
+vision?: boolean | null, 
 /**
  * Effective context window in tokens for this route — the **full**
  * ADR-0149 capability resolution (ADR-0182). Guaranteed > 0 for valid
@@ -1533,6 +1548,24 @@ tls_us?: number,
  * the upload, so it is the anchor the latency timeline's TTFT uses.
  */
 request_sent_us?: number, 
+/**
+ * Request dispatch to the connection being ready to carry the request:
+ * the end of the last connection phase that was actually paid (`TLS` end
+ * when a handshake ran, `TCP` end otherwise), or the instant the pool
+ * handed the socket over.
+ *
+ * Distinct from [`Self::stream_ready_us`], which is the response head. A
+ * timeline that anchors its connection moment on the head renders that
+ * moment *after* the request was sent — the wrong order by construction.
+ */
+connected_us?: number, 
+/**
+ * What the transport observed about this attempt. Absent transport fields
+ * support a claim about the connection regime only when this says the
+ * transport was watching. A record written before this field existed
+ * decodes as `Unreported`, which is the truth about it.
+ */
+observation: TransportObservation, 
 /**
  * Dispatch to the first origin-emitted protocol frame of any class.
  */
@@ -1849,9 +1882,11 @@ context_window: number,
  */
 max_output_tokens: number | null, 
 /**
- * Whether the route accepts image attachments.
+ * Whether the route accepts image attachments, as declared by the
+ * resolution layers: `None` means **undeclared** (ADR-0230), never a
+ * client-side guess that images are unsupported.
  */
-vision: boolean, 
+vision?: boolean | null, 
 /**
  * Whether the route supports tool/function calling.
  */
@@ -2342,13 +2377,41 @@ origin?: EntryOrigin, hidden: boolean,
 created_at_ms: number, payload: EntryPayload, };
 
 /**
+ * How completely the owned transport observed this attempt.
+ *
+ * The ledger must never lose the difference between *measured* and
+ * *unmeasured*: a bare absent field cannot say whether a connection paid no
+ * setup cost or whether nothing was watching. Absent `dns_us`/`tcp_us`/
+ * `tls_us` reads as "reused a pooled socket" only in the second state below;
+ * in the first it asserts nothing at all.
+ */
+export type TransportObservation = "unreported" | "pooled_connection" | "cold_connection";
+
+/**
  * Transport-level timings an attempt observed, handed up by the egress.
  *
  * Deliberately separate from [`RequestPerformance`]: these come from the
  * socket and the HTTP layer, not from the protocol adapter, and a provider
  * that cannot supply them reports `None` rather than zero.
+ *
+ * The offsets here are measured from the transport's own dispatch, which the
+ * struct carries as a runtime-only anchor. A consumer that anchors its numbers
+ * elsewhere must re-anchor every offset before merging the two — and must drop
+ * the offsets entirely when no anchor came with them. The durations (`dns_us`,
+ * `tcp_us`, `tls_us`, `rtt_us`) are anchor-free and transfer either way.
  */
-export type TransportTimings = { dns_us?: number, tcp_us?: number, tls_us?: number, request_sent_us?: number, stream_ready_us?: number, rtt_us?: number, retransmits: number, };
+export type TransportTimings = { dns_us?: number, tcp_us?: number, tls_us?: number, 
+/**
+ * Transport dispatch to the connection being ready (see
+ * [`RequestPerformance::connected_us`]).
+ */
+connected_us?: number, request_sent_us?: number, stream_ready_us?: number, rtt_us?: number, 
+/**
+ * Retransmitted segments observed via `TCP_INFO`. Meaningful exactly when
+ * `rtt_us` is present: both come from the same sample, so a present `rtt_us`
+ * is what separates a measured zero from an unsampled socket.
+ */
+retransmits: number, observation: TransportObservation, };
 
 /**
  * Concrete domains for project asset trust.

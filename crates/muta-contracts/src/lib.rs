@@ -138,7 +138,9 @@ pub use token_ledger::{
     BeginRequestParams, MAX_PLAUSIBLE_STREAM_TPS, MIN_DEFENSIBLE_STREAM_SPAN_US,
     PerformanceTimingSource, RequestPerformance, RequestUsageKey, RequestUsageRecord,
     RequestUsageSource, RequestUsageStatus, StreamTokenSource, TokenSourceLedger,
-    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn, TransportTimings,
+    TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn, TransportObservation,
+    TransportTelemetry,
+    TransportTimings,
     TurnPerformanceSnapshot, UsageStatSink, latest_turn_performance,
 };
 pub mod usage_stats;

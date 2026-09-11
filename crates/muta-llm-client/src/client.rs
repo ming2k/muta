@@ -113,7 +113,7 @@ fn build_reqwest() -> reqwest::Client {
         .unwrap_or_else(|error| panic!("direct oracle transport unavailable: {error}"))
 }
 
-fn egress_from_env(timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
+fn egress_from_env() -> Arc<dyn Egress> {
     let choice = egress_choice(std::env::var(EGRESS_ENV).ok().as_deref());
     match choice {
         #[cfg(feature = "reqwest-oracle")]
@@ -123,16 +123,19 @@ fn egress_from_env(timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
             tracing::warn!(
                 "{EGRESS_ENV}=reqwest needs the `reqwest-oracle` feature; using the owned transport"
             );
-            owned_egress(timings)
+            owned_egress()
         }
-        EgressChoice::Owned => owned_egress(timings),
+        EgressChoice::Owned => owned_egress(),
     }
 }
 
 /// Build the direct owned egress.
-fn owned_egress(timings: crate::egress::TimingsSlot) -> Arc<dyn Egress> {
-    let built = crate::MutaNetEgress::new()
-        .map(|egress| Arc::new(egress.with_timings_slot(timings)) as Arc<dyn Egress>);
+///
+/// No telemetry slot is threaded here: an attempt's timings travel on the
+/// request that carries them into the transport and back out to its issuer
+/// (ADR-0232), so the transport holds no per-attempt state to be handed in.
+fn owned_egress() -> Arc<dyn Egress> {
+    let built = crate::MutaNetEgress::new().map(|egress| Arc::new(egress) as Arc<dyn Egress>);
     match built {
         Ok(egress) => egress,
         Err(error) => {
@@ -162,9 +165,6 @@ pub struct Client {
     #[cfg(feature = "reqwest-oracle")]
     http: reqwest::Client,
     egress: Arc<dyn Egress>,
-    /// Filled by the owned transport when an attempt's body ends; taken once
-    /// per attempt by whoever books it.
-    transport_timings: crate::egress::TimingsSlot,
     /// Overall timeout stamped on non-streaming requests; see
     /// `CHAT_REQUEST_TIMEOUT`. A field rather than a call-site constant so
     /// tests can shrink it and observe a stall without waiting out the
@@ -181,37 +181,27 @@ impl Client {
     /// Production uses the direct owned transport (ADR-0200). The optional
     /// `reqwest-oracle` build supports `MUTA_EGRESS=reqwest` for comparison.
     pub fn new() -> Self {
-        let transport_timings = crate::egress::timings_slot();
         Self {
             #[cfg(feature = "reqwest-oracle")]
             http: build_reqwest(),
-            egress: egress_from_env(Arc::clone(&transport_timings)),
-            transport_timings,
+            egress: egress_from_env(),
             request_timeout: CHAT_REQUEST_TIMEOUT,
         }
-    }
-
-    /// Take the transport-level timings of the most recent attempt.
-    ///
-    /// `None` when the egress could not observe them (or they were already
-    /// taken): a timing is attributed to exactly one attempt.
-    pub fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
-        self.transport_timings
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
     }
 
     /// Construct a client that executes requests through `egress`.
     ///
     /// The `reqwest` client is still constructed (protocols build request
     /// builders with it) but is only used as a builder factory.
+    ///
+    /// The client holds no telemetry state: an attempt's timings travel on the
+    /// request into the transport and back to the caller that issued it
+    /// (ADR-0232), so nothing here needs to be handed in or read out.
     pub fn with_egress(egress: Arc<dyn Egress>) -> Self {
         Self {
             #[cfg(feature = "reqwest-oracle")]
             http: build_reqwest(),
             egress,
-            transport_timings: crate::egress::timings_slot(),
             request_timeout: CHAT_REQUEST_TIMEOUT,
         }
     }

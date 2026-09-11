@@ -232,7 +232,12 @@ pub async fn run_app_loop(
             || app.provider_retry.is_some()
             || !app.pending_images.is_empty()
             || app.effort_ignition_epoch.is_some()
-            || app.input_drag_scroll.is_some();
+            || app.input_drag_scroll.is_some()
+            || (app.models_refreshing
+                && matches!(
+                    app.active_dialog(),
+                    Some(crate::surfaces::DialogKind::Models | crate::surfaces::DialogKind::Connections)
+                ));
 
         let is_typing_active = app.last_key_press.elapsed() < std::time::Duration::from_millis(150);
         let animation_draw = animating && !is_typing_active;

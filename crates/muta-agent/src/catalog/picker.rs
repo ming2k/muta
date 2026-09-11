@@ -245,6 +245,11 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
     let vision = caps.vision;
     let context_window = caps.context_window;
     let max_output_tokens = caps.max_output_tokens;
+    // The provider-published label for this route, when it advertises one.
+    // Bottom-up and presentation-only: it comes straight from the remote
+    // catalog, the client never invents or curates it, and an absent label
+    // leaves the surfaces on the wire id.
+    let name = channel.remote.as_ref().and_then(|remote| remote.name.clone());
     let effort_levels: Vec<String> = caps
         .effort_levels
         .iter()
@@ -266,6 +271,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
             let thinking_on = matches!(thinking, Some(ReasoningMode::Adaptive));
             ProviderModelInfo {
                 model: channel.model.clone(),
+                name,
                 protocol: muta_contracts::WireProtocol::AnthropicMessages
                     .as_str()
                     .to_string(),
@@ -288,6 +294,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
+                name,
                 protocol: muta_contracts::WireProtocol::ChatCompletions
                     .as_str()
                     .to_string(),
@@ -307,6 +314,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
+                name,
                 protocol: muta_contracts::WireProtocol::Responses.as_str().to_string(),
                 effort: effective,
                 thinking: None,
@@ -329,6 +337,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 .map(|default| (*effort).unwrap_or(default).as_str().to_string());
             ProviderModelInfo {
                 model: channel.model.clone(),
+                name,
                 protocol: muta_contracts::WireProtocol::GoogleGemini
                     .as_str()
                     .to_string(),
@@ -380,15 +389,22 @@ mod tests {
             ..Default::default()
         };
         let info = channel_model_info(&openai_channel("omen-alpha", Some(remote)));
-        assert!(info.vision, "remote vision advertisement must surface");
+        assert_eq!(
+            info.vision,
+            Some(true),
+            "remote vision advertisement must surface"
+        );
     }
 
     #[test]
-    fn channel_model_info_vision_defaults_conservatively_without_remote() {
-        // No remote metadata and no baseline entry: unknown route resolves to
-        // the conservative fallback (vision: false).
+    fn channel_model_info_leaves_vision_undeclared_without_evidence() {
+        // No remote metadata and no baseline entry: no layer declares image
+        // support, so the row carries `None` — *undeclared*, which a frontend
+        // must treat as "try it" rather than as text-only (ADR-0230). The old
+        // behavior coerced this to `false`, which silently stripped images for
+        // every endpoint that does not advertise a capability field.
         let info = channel_model_info(&openai_channel("unknown-relay-model", None));
-        assert!(!info.vision);
+        assert_eq!(info.vision, None);
     }
 
     #[test]
@@ -404,7 +420,7 @@ mod tests {
             vision: Some(false),
             ..Default::default()
         });
-        assert!(!channel_model_info(&channel).vision);
+        assert_eq!(channel_model_info(&channel).vision, Some(false));
 
         // And the inverse: a forced-on override over a text-only baseline.
         let mut channel = openai_channel("text-only-model", None);
@@ -412,12 +428,34 @@ mod tests {
             vision: Some(true),
             ..Default::default()
         });
-        assert!(channel_model_info(&channel).vision);
+        assert_eq!(channel_model_info(&channel).vision, Some(true));
     }
 
     #[test]
-    fn channel_model_info_surfaces_route_context_window_from_remote_metadata() {
-        // ADR-0182: Discovered models (like glm-5.3 on opencode-go) carry their
+    fn channel_model_info_surfaces_the_provider_published_label() {
+        // The relay names `deepseek-flash` "DeepSeek V4.1 Flash": the label
+        // rides to the frontend as a presentation-only annotation beside the
+        // id, which stays the identity.
+        let remote = muta_contracts::RemoteModelMetadata {
+            name: Some("DeepSeek V4.1 Flash".to_string()),
+            ..Default::default()
+        };
+        let info = channel_model_info(&openai_channel("deepseek-flash", Some(remote)));
+        assert_eq!(info.model, "deepseek-flash");
+        assert_eq!(info.name.as_deref(), Some("DeepSeek V4.1 Flash"));
+    }
+
+    #[test]
+    fn channel_model_info_omits_the_label_when_none_is_advertised() {
+        // The common case (stock OpenAI-compatible `/models`): no label at all,
+        // so the frontends fall back to the bare wire id.
+        let info = channel_model_info(&openai_channel("glm-5.2", None));
+        assert_eq!(info.model, "glm-5.2");
+        assert_eq!(info.name, None);
+    }
+
+    #[test]
+    fn channel_model_info_surfaces_route_context_window_from_remote_metadata() {        // ADR-0182: Discovered models (like glm-5.3 on opencode-go) carry their
         // remote context_window via ADR-0149 resolution into the picker snapshot.
         let remote = muta_contracts::RemoteModelMetadata {
             context_window: Some(1_000_000),

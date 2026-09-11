@@ -7,6 +7,188 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Transport telemetry now actually reaches the ledger, and the cold/pooled
+  distinction is a recorded fact rather than an inference.** The owned transport
+  always recorded a full per-request trace — DNS, TCP, TLS, the request write,
+  the response head, and `TCP_INFO` RTT/retransmits — but nothing turned that
+  trace into `RequestPerformance`: the timings slot had no writer, so **every**
+  attempt in the wild reported no connection phase. Two consequences visible to
+  users, both now gone. The Performance report's latency timeline called every
+  attempt `reused warm pool connection — no handshake`, including cold starts,
+  and the DNS/TCP/TLS breakdown it offers could never appear. The egress now
+  derives the trace's timings when the body ends, and a new
+  `RequestPerformance.observation` records whether the transport was watching at
+  all — so "the socket came from the pool" and "nothing observed the socket" are
+  different facts, and neither can be read off a field that merely happens to be
+  absent. Records written before this change decode as `unreported` and claim no
+  connection regime, which is the truth about them.
+
+  **The connection moment is now placed correctly.** A new
+  `RequestPerformance.connected_us` anchors the timeline's `Connected` row on
+  the end of the last connection phase actually paid (`TLS` end, else `TCP` end,
+  else the pool handing the socket over) instead of on the response head. The
+  old anchor put that row *after* `Request sent` — the timeline ran backwards —
+  so an attempt with no transport telemetry now draws no connection row at all
+  rather than a phantom at the wrong instant. `TCP_INFO`'s retransmit count is
+  rendered only where the socket was actually sampled: the RTT and the
+  retransmit count come from one sample, so a present RTT is what separates a
+  measured zero from an untouched field.
+
+  **The transport's offsets carry their own anchor.** `TransportTimings` gains a
+  runtime-only `dispatch_at` (deliberately outside the wire and persistence
+  contracts), and the agent re-anchors every offset from it — or refuses those
+  offsets outright when either clock is missing, since a number measured from one
+  epoch and rendered against another is worse than no number. The durations are
+  anchor-free and transfer either way (`wire v13`, additive: two optional
+  `RequestPerformance` fields plus the `TransportObservation` enum).
+
+- **Transport telemetry is now owned by the attempt that caused it, not read out
+  of a transport-wide slot (ADR-0232).** A `TransportTelemetry` handle is created
+  by the attempt's owner, travels on the request
+  (`ModelRequest.transport_telemetry` → `RequestBuilder` → `RequestParts`) into
+  the transport that fills it, and is read back by that owner — after success, an
+  abandoned stream, or a failure. `Provider::take_transport_timings`,
+  `Client::take_transport_timings`, `Egress::timings_slot`, `TimingsSlot` and
+  `MutaNetEgress::with_timings_slot` are **deleted**, not repaired: a slot cannot
+  say whose numbers it holds, and one transport serves every attempt of a
+  provider (subagents share their parent's provider by `Arc`), so two attempts in
+  flight could claim each other's numbers. Handles cannot alias, because each
+  attempt creates its own and nothing else can reach it.
+
+- **A model row now leads with the provider's own name for it, falling back to
+  the wire id.** The Models picker (`/models`) and the web panel's model picker
+  draw the provider-published label when one exists — `DeepSeek V4.1 Flash` for
+  the wire id `deepseek-flash` — and the raw id when it does not. This is the
+  "use the name if there is one, the id if there isn't" rule: the label is read
+  bottom-up from whatever the provider already publishes and nothing is curated
+  client-side, so there is no name table to maintain or drift. models.dev
+  `name`, Anthropic/Kimi Code `display_name`, Gemini `displayName`, and
+  Copilot/Codex `name`/`display_name` are ingested; stock OpenAI-compatible
+  `/models` publishes nothing, so those rows are unchanged. A label that merely
+  repeats the id (`k3`) or is blank collapses to "no label" rather than drawing
+  the same string twice.
+
+  **The wire id never disappears behind a name.** It rides along as a dim suffix
+  in the padding the label leaves unused, because the id is the string that
+  actually goes on the wire and into `hidden_models`, favorites, route settings,
+  and every config surface — a name-first list must not hide the value the user
+  has to type. The suffix only fills blank padding, so it never shortens the
+  label or breaks tabular alignment; on a cramped terminal it drops and the
+  label stands alone. Search matches the rendered label (highlighting it), the
+  id behind it, and the provider name; rows kept alive by an alias render
+  unhighlighted. Row ordering still keys on the wire id. `RemoteModelMetadata.name`
+  and `ProviderModelInfo.name` are additive (`wire v13`; the minimum served
+  version stays 12, since a v12 peer simply omits the label).
+
+### Changed
+
+- **An undeclared route is no longer treated as text-only.** Model vision now
+  resolves as a **three-valued** capability — `Some(true)` / `Some(false)` /
+  `None` meaning *no layer declared anything* — from the registry baseline
+  through the fitted overlay and the route-project capabilities a frontend
+  reads. Previously every chain ended in `unwrap_or(false)`, so an endpoint that
+  simply does not advertise a vision field (the common case on relays, and every
+  id the registry has never heard of) was resolved as "text-only", its images
+  were **silently stripped** before the request, and `read_image` was dropped
+  from its tool pool. Unknown routes now keep their images and their tools: the
+  provider answers if it cannot take them, instead of the client quietly
+  removing pixels it cannot prove are unusable (ADR-0230).
+- Image stripping is now **one shared projection across all four transports**
+  (`muta-llm-client::vision`). It used to exist only in the OpenAI
+  chat-completions and Responses builders, so an Anthropic or Google route that
+  declared no image input failed the whole turn on an `image`/`inline_data`
+  part, while the same route on OpenAI degraded silently. Only a route that
+  *declared* `false` has attachments projected away; the prose always survives.
+- The composer refuses an image paste **only when the route declared it rejects
+  images**, and the toast names the escape hatch (`set Vision in the model
+  editor to override`, the ADR-0149 layer-1 override). Undeclared routes accept
+  the paste. The capability hint list likewise advertises `vision` only when a
+  layer actually declared it.
+- `ProviderModelInfo.vision` is now `Option<bool>` (absent = undeclared) and
+  omits itself when undeclared. Both wire directions degrade to the previous
+  semantics — an older peer reads an absent field as `false`, a newer peer reads
+  an old peer's `false` as declared-false — so the protocol version does not
+  move for this change.
+- **A model that cannot see images can no longer brick a session.** Because the
+  transcript is append-only, an image pasted while a multimodal model was active
+  stays in history forever — so switching to a model that does not accept images
+  used to fail *every* later request on that route, including purely textual
+  follow-ups, with `/retry` re-sending the identical doomed request. The
+  provider's refusal is now *learned*, and **no vendor's error text is read to
+  do it**: a refusal of the request itself (`ProviderError::is_request_refusal`,
+  derived from the HTTP status) while attachments are present is simply
+  **probed** — the identical turn is re-sent with the attachments withheld, and
+  only a *successful* retry latches the route. A disproved probe latches nothing
+  and surfaces the original refusal rather than the failure of the harness's own
+  modified request. This is cheap because it is scoped to validation refusals,
+  which are rejected before inference and therefore consume no tokens (the
+  ledger records them as `Failed` with no counts) — unlike timeouts, 5xx, or 429,
+  which may have been processed and are excluded. A latched route is held in a
+  `RouteFingerprint`-keyed suppression (so switching models disarms it) and the
+  same turn is retried with the attachments projected out of the request
+  checkpoint — one probe per round, outside the transient-retry budget,
+  mirroring the context-overflow compaction recovery. An `ImageInputWithheld`
+  notice tells the user what happened, that the images remain in history, and
+  how to force them back on (`Vision` in the model editor). The durable
+  transcript is never rewritten. `NoticeKind` gains `image_input_withheld`
+  (`wire v13`).
+
+### Fixed
+
+- **The activity bar no longer sits on `finalizing response` while the harness
+  aggregates a year of usage history.** The bar stays up until the round tail
+  publishes the idle `HarnessState` snapshot, and between `RoundCompleted` and
+  the round's return the harness was calling
+  `UsageStatsStore::report(200)` — a 20 MB JSON deserialize and fold over
+  ~25 000 records, i.e. **~85–110 ms release / ~410–430 ms debug** — and then
+  computing the *same* report again in the tail. The aggregate is now fetched
+  **on demand when the `/usage` overlay opens** (`AgentRequest::QueryUsageStats`
+  — the path it was always built around, with its own `loading` state), and the
+  compute runs on the blocking pool instead of the session driver's async
+  worker. A controlled A/B with the removed calls re-inserted at the same two
+  points, on a real corpus: bar dwell **434/474/435 ms → 35.6/14.7/13.1 ms**
+  (debug) and **122.5/97.9 ms → 2.7/2.9/9.3 ms** (release).
+  `TokenUsageReport` — the genuinely live, in-memory per-session ledger
+  snapshot — stays a round-boundary push, so ADR-0209's notification-driven
+  contract is narrowed for this one 400-day historical aggregate rather than
+  dropped (see ADR-0209's 2026-09-11 addendum). `/usage` now refreshes on each
+  open instead of reusing its first snapshot forever; the previous numbers stay
+  on screen while the refresh is in flight, so there is no loading flash.
+- **Everything now goes through the one persistence door, and no round-tail write
+  can lose 5 s to a lock it is about to be denied.** `DatabaseEngine` is
+  crate-private: every durable mutation is an actor command on
+  `PersistenceHandle`, every read is a `DbReader` obtained from that same handle,
+  and a source-scanning guard test
+  (`crates/muta-persistence/tests/one_door.rs`) fails the run on any new bypass.
+  35 out-of-door `DatabaseEngine::open` call sites across 13 files in two crates
+  are gone — nine of them whole-blob **writers** (usage statistics, workspace
+  trust, connection usage, route settings, the task ledger, the daemon's history
+  front door, session persistence for a pinned path, entry garbage collection)
+  that raced the single writer for the SQLite write lock and, on losing, burned
+  the full 5 s `busy_timeout` and then **dropped the record**
+  (`could not persist usage day to sqlite: database is locked`; 1474 occurrences
+  in one day's daemon log). That write sits between `StreamEnd` and the idle
+  snapshot, which is why the symptom surfaced as the activity bar sitting on
+  `finalizing response` for seconds after the answer had finished streaming.
+  Removed with it: the raw `connection()`/`connection_mut()` accessors, the
+  second in-memory constructor, the engine-level `set_json`/`save_session_full`
+  writers, and six hand-rolled blocking bridges. The one surviving bridge
+  (`PersistenceHandle::run_blocking`) is runtime-flavor aware — `block_in_place`
+  on a multi-thread runtime, `spawn` + `join` elsewhere — and the supervisor now
+  refuses to be hosted on a current-thread runtime it could be blocked out of:
+  that pair used to deadlock every synchronous verb under `#[tokio::test]`
+  (16 hanging session tests), and three verbs that called
+  `blocking_send`/`blocking_recv` directly instead panicked with *"Cannot block
+  the current thread from within a runtime"*. Both halves are pinned by four
+  new tests covering current-thread, multi-thread, single-worker, and
+  blocking-pool callers. The usage report also opens one reader per report
+  instead of one per day file. Note this fixes the *lock-shaped* stall and the
+  silent record loss; it does not by itself move work off the round boundary —
+  the inline `report(200)` sweep was that separate fix, and it is the entry
+  directly above this one.
+
 ## [0.45.3] - 2026-09-10
 
 ### Changed

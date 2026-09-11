@@ -1399,3 +1399,99 @@ fn test_history_ranking_prefers_exact_word_over_scattered_and_applies_recency() 
     assert!(rows[0].1.score > rows[3].1.score);
     assert!(rows[1].1.score > rows[3].1.score);
 }
+
+#[tokio::test]
+async fn ctrl_c_clears_history_recall_and_resets_draft() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    app.record_input_history("prior command".to_string(), Vec::new(), Vec::new());
+    let rows = app.current_session_history();
+
+    app.input = "draft text".to_string();
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "prior command");
+    assert!(app.history_index.is_some());
+    assert_eq!(app.history_draft, "draft text");
+
+    // Edit the recalled text
+    app.input.push_str(" --flag");
+
+    let (copy_tx, _copy_rx) = tokio::sync::mpsc::unbounded_channel();
+    let copy_pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    // Pressing Ctrl-C clears the recalled / edited text and exits recall mode
+    crate::event_loop::handle_ctrl_c(&mut app, "session-a", &copy_tx, &copy_pending);
+
+    assert_eq!(app.input, "");
+    assert_eq!(app.history_index, None);
+    assert_eq!(app.history_draft, "");
+}
+
+#[test]
+fn esc_preserves_recalled_history_and_interrupts_when_running() {
+    use crate::keymap::Key;
+    use crate::session::{ViewKeys, resolve_chat_surface_key};
+
+    let mut keys = ViewKeys {
+        is_responding: false,
+        composer_send_mode: Default::default(),
+        completion_kind: crate::completion::CompletionKind::None,
+        completion_dismissed: false,
+        has_trigger_text: false,
+        suggestion_count: 0,
+        suggestion_index: None,
+        has_exact_suggestion: false,
+        in_history_recall: true,
+        surface_overrides: Default::default(),
+        focused_target: false,
+        transcript_focused: false,
+    };
+
+    let mut input = "recalled command with edits".to_string();
+    let mut cursor = input.len();
+
+    // Idle session: Esc does NOT clear or cancel recall
+    let action = resolve_chat_surface_key(Key::ESC, &keys, &mut input, &mut cursor);
+    assert_eq!(action, None, "Esc must not clear or cancel history recall");
+    assert_eq!(input, "recalled command with edits");
+
+    // Responding session: Esc resolves to Interrupt rather than clearing recall
+    keys.is_responding = true;
+    let action = resolve_chat_surface_key(Key::ESC, &keys, &mut input, &mut cursor);
+    assert_eq!(
+        action,
+        Some(crate::input::InputAction::Interrupt),
+        "Esc while running must interrupt rather than clear history recall"
+    );
+    assert_eq!(input, "recalled command with edits");
+}
+
+#[tokio::test]
+async fn history_search_overlay_does_not_dim_composer() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.record_input_history("existing entry".to_string(), Vec::new(), Vec::new());
+
+    // 1. Draw normal frame (no dialog)
+    let mut terminal = mutx_engine::TestTerminal::new(80, 24);
+    terminal.draw(|f| {
+        crate::event_loop::render_frame(&mut app, f, "session-a");
+    });
+    // The composer bottom row is within the last rows (e.g. y = 22)
+    let normal_cell = terminal.buffer().get(10, 22).cloned().expect("cell");
+
+    // 2. Open HistorySearch
+    app.open_dialog(crate::surfaces::DialogKind::HistorySearch);
+    let mut terminal_hist = mutx_engine::TestTerminal::new(80, 24);
+    terminal_hist.draw(|f| {
+        crate::event_loop::render_frame(&mut app, f, "session-a");
+    });
+    let hist_cell = terminal_hist.buffer().get(10, 22).cloned().expect("cell");
+
+    // Composer cells must not be dimmed when history search is open
+    assert_eq!(
+        hist_cell.bg, normal_cell.bg,
+        "composer background should not be dimmed when history search is open"
+    );
+}

@@ -184,6 +184,10 @@ fn compose_frame(
     let chrome_hidden = is_fullscreen_scene;
     let recess = if is_fullscreen_scene {
         Recess::Takeover
+    } else if app.surfaces.active_overlay()
+        == Some(OverlaySurface::Dialog(DialogKind::HistorySearch))
+    {
+        Recess::None
     } else if has_overlay {
         Recess::Dim
     } else {
@@ -865,6 +869,7 @@ fn compose_frame(
                             connection_info_scroll: &mut app.connection_info_scroll,
                             spinner_phase,
                             connection_info_standalone: app.connection_info_standalone,
+                            refreshing: app.models_refreshing,
                         },
                         &app.theme,
                         &app.selection,
@@ -884,6 +889,8 @@ fn compose_frame(
                             scroll: &mut app.model_scroll,
                             follow_selection: app.model_modal_follow,
                             search: app.model_search,
+                            refreshing: app.models_refreshing,
+                            spinner_phase,
                         },
                         &app.theme,
                     ))
@@ -913,6 +920,7 @@ fn compose_frame(
                     let app_ctx = crate::keymap::AppContext {
                         active_scene: app.current_scene(),
                         has_overlay: app.surfaces.active_overlay().is_some(),
+                        active_dialog: app.surfaces.underlying_dialog(),
                         is_responding: viewed_running,
                         has_input: !app.input.is_empty(),
                         has_selection: !matches!(
@@ -1068,6 +1076,10 @@ fn compose_frame(
                     let app_ctx = crate::keymap::AppContext {
                         active_scene: app.current_scene(),
                         has_overlay: app.surfaces.active_overlay().is_some(),
+                        active_dialog: app
+                            .surfaces
+                            .underlying_dialog()
+                            .or_else(|| app.active_dialog()),
                         is_responding: viewed_running,
                         has_input: !app.input.is_empty(),
                         has_selection: !matches!(

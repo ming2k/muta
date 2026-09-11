@@ -410,6 +410,183 @@ fn context_overflow_detection() {
     );
 }
 
+/// Stands in for the transport: publishes known timings into whatever handle
+/// the request carries, then reports failure on the first attempt and success on
+/// the second — so one *turn* produces two attempts that must not share
+/// telemetry.
+struct TelemetryPublishingProvider(AtomicUsize);
+
+#[async_trait]
+impl Provider for TelemetryPublishingProvider {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+        Err(muta_contracts::ProviderError::new(
+            "mock",
+            muta_contracts::ProviderErrorKind::Other,
+            "non-streaming path should not be used",
+        ))
+    }
+
+    async fn stream_chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
+        Ok(Box::pin(stream::empty()))
+    }
+
+    async fn stream_chat_events(
+        &self,
+        request: muta_contracts::ModelRequest,
+    ) -> Result<
+        futures::stream::BoxStream<
+            'static,
+            Result<ProviderStreamEvent, muta_contracts::ProviderError>,
+        >,
+        muta_contracts::ProviderError,
+    > {
+        // What the owned transport does: fill the handle it was handed, without
+        // ever asking whose attempt it was serving.
+        let cold = self.0.fetch_add(1, Ordering::SeqCst) == 0;
+        request
+            .transport_telemetry
+            .publish(muta_contracts::TransportTimings {
+                dns_us: cold.then_some(12_000),
+                tls_us: cold.then_some(90_000),
+                tcp_us: Some(if cold { 40_000 } else { 7_000 }),
+                connected_us: Some(45_000),
+                request_sent_us: Some(60_000),
+                stream_ready_us: Some(120_000),
+                rtt_us: Some(42_000),
+                retransmits: if cold { 3 } else { 0 },
+                observation: if cold {
+                    muta_contracts::TransportObservation::ColdConnection
+                } else {
+                    muta_contracts::TransportObservation::PooledConnection
+                },
+                dispatch_at: Some(std::time::Instant::now()),
+            });
+
+        if cold {
+            Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::TextDelta("partial".to_string())),
+                Err(muta_contracts::ProviderError::new(
+                    "mock",
+                    muta_contracts::ProviderErrorKind::RateLimited,
+                    "rate limited",
+                )
+                .retryable(Some(1))),
+            ])))
+        } else {
+            Ok(Box::pin(stream::iter(vec![
+                Ok(ProviderStreamEvent::TextDelta("done".to_string())),
+                Ok(ProviderStreamEvent::Completed(
+                    muta_contracts::ProviderCompletionMeta::default(),
+                )),
+            ])))
+        }
+    }
+}
+
+/// ADR-0232: the transport's timings reach the attempt that caused them.
+///
+/// One turn, two attempts — the first fails transiently and is retried, and a
+/// retry reuses the turn's assembled request. Each attempt must therefore carry
+/// its *own* telemetry: the retry's `PooledConnection` may not overwrite the
+/// first attempt's `ColdConnection`, and the first attempt's settled record may
+/// not pick up the retry's numbers. That holds only because the handle is created
+/// per attempt rather than inherited from the shared request.
+#[tokio::test]
+async fn each_attempt_carries_its_own_transport_telemetry_across_a_retry() {
+    let directory =
+        std::env::temp_dir().join(format!("muta-telemetry-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("create test directory");
+    let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let agent = Arc::new(Agent::new(
+        Arc::new(TelemetryPublishingProvider(AtomicUsize::new(0))),
+        Vec::new(),
+        muta_agent::AgentIdentity::default(),
+    ));
+    let ledger = muta_contracts::TokenSourceLedger::shared();
+    agent.install_token_ledger(ledger.clone());
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let session_id = session.id().await;
+
+    execute_round(
+        RoundContext {
+            agent,
+            tx,
+            token: CancellationToken::new(),
+            session_id: session_id.clone(),
+            session: session.clone(),
+            projection: ContextProjectionSettings {
+                budget: muta_contracts::CompactionPolicy::default().resolve(100_000),
+                preserve_rounds: 6,
+                summarize: false,
+                prune: false,
+                prune_protect_tokens: 0,
+            },
+            retry_max_attempts: 3,
+            retry_base_ms: 1,
+            retry_max_ms: 10,
+            emit_round_completed: false,
+            in_flight_draft: None,
+        },
+        RoundInput {
+            prompt: "hello".to_string(),
+            hidden: false,
+            display_prompt: None,
+            sent_at_ms: None,
+            images: Vec::new(),
+            driver: muta_agent::orchestration::RoundDriver::Fresh,
+        },
+    )
+    .await
+    .unwrap();
+    while rx.try_recv().is_ok() {}
+
+    let attempts = ledger.records_for_session(&session_id);
+    assert_eq!(attempts.len(), 2, "one turn, two attempts: {attempts:#?}");
+
+    let first = attempts[0]
+        .performance
+        .expect("the first attempt must keep its telemetry");
+    assert_eq!(
+        first.observation,
+        muta_contracts::TransportObservation::ColdConnection,
+        "the retry must not overwrite the first attempt's regime"
+    );
+    assert_eq!(first.tcp_us, Some(40_000));
+    assert_eq!(first.retransmits, 3);
+    assert!(first.tcp_info_sampled());
+    // The offsets arrive anchored on the transport's dispatch and are re-anchored
+    // onto this attempt's clock, so the ladder can only have advanced.
+    let connected = first.connected_us.expect("connect instant");
+    let sent = first.request_sent_us.expect("upload anchor");
+    let ready = first.stream_ready_us.expect("head anchor");
+    assert!(
+        connected <= sent && sent <= ready,
+        "the attempt's ladder must advance: {connected} → {sent} → {ready}"
+    );
+
+    let second = attempts[1]
+        .performance
+        .expect("the retry must keep its own telemetry");
+    assert_eq!(
+        second.observation,
+        muta_contracts::TransportObservation::PooledConnection
+    );
+    assert_eq!(second.tcp_us, Some(7_000), "the retry's own TCP phase");
+    assert_eq!(second.retransmits, 0, "the retry's own socket sample");
+    assert_eq!(second.dns_us, None);
+
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 #[tokio::test]
 async fn turn_retries_transient_provider_failure_before_tool_activity() {
     let directory = std::env::temp_dir().join(format!("muta-retry-test-{}", uuid::Uuid::new_v4()));
@@ -1602,4 +1779,352 @@ fn unix_epoch_ms_for_test() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(u64::MAX)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Route image refusal (ADR-0230)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A provider that refuses the first N requests the way a relay that cannot take
+/// attachments does, then serves every later request — while recording how many
+/// attachments each request carried.
+///
+/// `rejection` is the vendor's error text. The harness never reads it: the
+/// recovery is decided by the *outcome* of retrying without the attachments
+/// (ADR-0230), so these tests can use prose the harness has no knowledge of.
+struct ImageRejectingProvider {
+    /// Attachment count seen per request, in order. Its length is also the
+    /// attempt counter.
+    images_per_request: Arc<Mutex<Vec<usize>>>,
+    rejection: &'static str,
+    /// How many requests to refuse; `usize::MAX` for a route that never works.
+    rejections: usize,
+}
+
+#[async_trait]
+impl Provider for ImageRejectingProvider {
+    async fn chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+        Err(muta_contracts::ProviderError::new(
+            "mock",
+            muta_contracts::ProviderErrorKind::Other,
+            "non-streaming path should not be used",
+        ))
+    }
+
+    async fn stream_chat(
+        &self,
+        _request: muta_contracts::ModelRequest,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+        muta_contracts::ProviderError,
+    > {
+        Ok(Box::pin(stream::empty()))
+    }
+
+    async fn stream_chat_events(
+        &self,
+        request: muta_contracts::ModelRequest,
+    ) -> Result<
+        futures::stream::BoxStream<
+            'static,
+            Result<ProviderStreamEvent, muta_contracts::ProviderError>,
+        >,
+        muta_contracts::ProviderError,
+    > {
+        let images = request
+            .messages
+            .iter()
+            .filter_map(|message| message.images.as_ref().map(Vec::len))
+            .sum::<usize>();
+        let attempt = {
+            let mut log = self
+                .images_per_request
+                .lock()
+                .expect("image log lock poisoned");
+            log.push(images);
+            log.len()
+        };
+        if attempt <= self.rejections {
+            let error = muta_contracts::ProviderError::new(
+                "mock",
+                muta_contracts::ProviderErrorKind::InvalidRequest,
+                self.rejection,
+            )
+            .with_status(400);
+            return Ok(Box::pin(stream::iter(vec![Err(error)])));
+        }
+        Ok(Box::pin(stream::iter(vec![
+            Ok(ProviderStreamEvent::TextDelta("read it".to_string())),
+            Ok(ProviderStreamEvent::Completed(
+                muta_contracts::ProviderCompletionMeta::default(),
+            )),
+        ])))
+    }
+}
+
+/// Switching to a model that cannot see images must not brick the session
+/// (ADR-0230).
+///
+/// The durable transcript keeps the image the user pasted while a multimodal
+/// model was active — history is append-only (ADR-0186), so no projection may
+/// rewrite it. What changes is the *request*: the refusal teaches the harness
+/// that this route cannot take attachments (because withholding them made the
+/// identical turn succeed), and later requests stop carrying them.
+#[tokio::test]
+async fn image_refusal_is_learned_and_the_round_continues_without_images() {
+    let directory = std::env::temp_dir().join(format!("muta-image-learn-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("create test directory");
+    let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let images_per_request = Arc::new(Mutex::new(Vec::new()));
+    let agent = Arc::new(Agent::new(
+        Arc::new(ImageRejectingProvider {
+            images_per_request: Arc::clone(&images_per_request),
+            rejection: "mock HTTP 400: unknown variant `image_url`, expected `text`",
+            rejections: 1,
+        }),
+        Vec::new(),
+        muta_agent::AgentIdentity::default(),
+    ));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let session_id = session.id().await;
+    let images = vec![muta_contracts::ImagePart {
+        mime: "image/png".to_string(),
+        data: "aGk=".to_string(),
+    }];
+
+    execute_round(
+        image_round_context(&agent, tx.clone(), &session, &session_id),
+        image_round_input("what is in this picture?", images.clone()),
+    )
+    .await
+    .expect("the round must recover, not fail");
+
+    // Attempt 1 carried the image; the learned retry carried none.
+    assert_eq!(
+        *images_per_request.lock().expect("image log lock poisoned"),
+        vec![1, 0],
+        "attempt 1 carries the attachment, the probed retry carries none"
+    );
+
+    // The image is still in the durable window: withholding is a projection,
+    // never a history rewrite.
+    let window = session.model_window().await;
+    assert!(
+        window.iter().any(|message| message
+            .images
+            .as_ref()
+            .is_some_and(|images| !images.is_empty())),
+        "the transcript must keep the pasted image: {window:?}"
+    );
+
+    // The user is told what happened, and how to override it.
+    let notices = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|response| match response {
+            AgentResponse::Round {
+                event: RoundEvent::Notice(notice),
+                ..
+            } => Some(notice),
+            _ => None,
+        })
+        .filter(|notice| notice.kind == muta_contracts::NoticeKind::ImageInputWithheld)
+        .collect::<Vec<_>>();
+    assert_eq!(notices.len(), 1, "exactly one withholding notice");
+    assert!(
+        notices[0]
+            .body
+            .as_deref()
+            .is_some_and(|body| body.contains("history") && body.contains("model editor")),
+        "the notice must explain that history keeps the image and name the override: {:?}",
+        notices[0].body
+    );
+    assert!(agent.images_withheld_from_current_route());
+
+    // A second round on the same route must not walk into the wall again.
+    execute_round(
+        image_round_context(&agent, tx, &session, &session_id),
+        image_round_input("and now, in words?", Vec::new()),
+    )
+    .await
+    .expect("a latched route must complete without another refusal");
+
+    assert_eq!(
+        *images_per_request.lock().expect("image log lock poisoned"),
+        vec![1, 0, 0],
+        "the second round sends one request, already without the history's image"
+    );
+}
+
+/// Recognition must not depend on any vendor's error format (ADR-0230).
+///
+/// This provider refuses with prose the harness has no knowledge of — the shape
+/// of every relay whose wording nobody anticipated. The recovery rests entirely
+/// on the differential probe: retry the identical turn without the attachments
+/// and observe the outcome. Recognition by *experiment*, not by reading the
+/// vendor's envelope.
+#[tokio::test]
+async fn an_unrecognized_refusal_is_probed_and_confirmed_by_outcome() {
+    let directory = std::env::temp_dir().join(format!("muta-image-probe-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("create test directory");
+    let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let images_per_request = Arc::new(Mutex::new(Vec::new()));
+    let agent = Arc::new(Agent::new(
+        Arc::new(ImageRejectingProvider {
+            images_per_request: Arc::clone(&images_per_request),
+            rejection: "mock HTTP 400: unsupported content type for the second message part",
+            rejections: 1,
+        }),
+        Vec::new(),
+        muta_agent::AgentIdentity::default(),
+    ));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let session_id = session.id().await;
+
+    execute_round(
+        image_round_context(&agent, tx, &session, &session_id),
+        image_round_input(
+            "describe it",
+            vec![muta_contracts::ImagePart {
+                mime: "image/png".to_string(),
+                data: "aGk=".to_string(),
+            }],
+        ),
+    )
+    .await
+    .expect("the probe must recover a refusal whose wording means nothing to us");
+
+    assert_eq!(
+        *images_per_request.lock().expect("image log lock poisoned"),
+        vec![1, 0],
+        "the probe re-sent the same turn without the attachments"
+    );
+    assert!(
+        agent.images_withheld_from_current_route(),
+        "a successful probe is the evidence that latches the route"
+    );
+
+    // The notice reports the empirical finding, not a claim about what the
+    // provider said: the harness never read the provider's wording.
+    let notices = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|response| match response {
+            AgentResponse::Round {
+                event: RoundEvent::Notice(notice),
+                ..
+            } => Some(notice),
+            _ => None,
+        })
+        .filter(|notice| notice.kind == muta_contracts::NoticeKind::ImageInputWithheld)
+        .collect::<Vec<_>>();
+    assert_eq!(notices.len(), 1);
+    assert!(
+        notices[0]
+            .body
+            .as_deref()
+            .is_some_and(|body| body.contains("retrying it without the attachments succeeded")),
+        "the notice must describe the empirical finding: {:?}",
+        notices[0].body
+    );
+}
+
+/// When the probe **disproves** the hypothesis, nothing may be latched and the
+/// user must see the refusal of the request they actually composed (ADR-0230).
+///
+/// The refusal here is unrelated to images — it recurs with the attachments
+/// withheld — and its text even *mentions* `image_url`, exactly like a relay
+/// that echoes part of the payload it rejected. That is deliberate: it proves no
+/// amount of vendor prose can latch anything, because only the probe's outcome
+/// is evidence (INV-VISION-6). Were text allowed to decide, this route would
+/// silently lose every future image.
+#[tokio::test]
+async fn an_unrelated_refusal_is_not_blamed_on_images() {
+    let directory =
+        std::env::temp_dir().join(format!("muta-image-disprove-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).expect("create test directory");
+    let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
+    let images_per_request = Arc::new(Mutex::new(Vec::new()));
+    let agent = Arc::new(Agent::new(
+        Arc::new(ImageRejectingProvider {
+            images_per_request: Arc::clone(&images_per_request),
+            rejection: "mock HTTP 400: invalid tool schema for 'write'; the payload echoes \
+                        image_url parts",
+            rejections: usize::MAX,
+        }),
+        Vec::new(),
+        muta_agent::AgentIdentity::default(),
+    ));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let session_id = session.id().await;
+
+    let error = execute_round(
+        image_round_context(&agent, tx, &session, &session_id),
+        image_round_input(
+            "describe it",
+            vec![muta_contracts::ImagePart {
+                mime: "image/png".to_string(),
+                data: "aGk=".to_string(),
+            }],
+        ),
+    )
+    .await
+    .expect_err("an unrelated refusal must remain terminal");
+
+    assert!(
+        error
+            .to_string()
+            .contains("invalid tool schema for 'write'"),
+        "the original refusal must surface, got: {error}"
+    );
+    assert!(
+        !agent.images_withheld_from_current_route(),
+        "a disproved hypothesis must not latch anything"
+    );
+    assert_eq!(
+        *images_per_request.lock().expect("image log lock poisoned"),
+        vec![1, 0],
+        "exactly one probe, and no further retries"
+    );
+}
+
+/// The `RoundContext` every ADR-0230 test runs with: a tight retry budget so a
+/// probe is unmistakable in the request log.
+fn image_round_context(
+    agent: &Arc<Agent>,
+    tx: mpsc::UnboundedSender<AgentResponse>,
+    session: &Arc<SessionStore>,
+    session_id: &str,
+) -> RoundContext {
+    RoundContext {
+        agent: Arc::clone(agent),
+        tx,
+        token: CancellationToken::new(),
+        session_id: session_id.to_string(),
+        session: Arc::clone(session),
+        projection: ContextProjectionSettings {
+            budget: muta_contracts::CompactionPolicy::default().resolve(100_000),
+            preserve_rounds: 6,
+            summarize: false,
+            prune: false,
+            prune_protect_tokens: 0,
+        },
+        retry_max_attempts: 3,
+        retry_base_ms: 1,
+        retry_max_ms: 10,
+        emit_round_completed: false,
+        in_flight_draft: None,
+    }
+}
+
+/// The `RoundInput` every ADR-0230 test runs with: a fresh round carrying
+/// `images`.
+fn image_round_input(prompt: &str, images: Vec<muta_contracts::ImagePart>) -> RoundInput {
+    RoundInput {
+        prompt: prompt.to_string(),
+        hidden: false,
+        display_prompt: None,
+        sent_at_ms: None,
+        images,
+        driver: muta_agent::orchestration::RoundDriver::Fresh,
+    }
 }

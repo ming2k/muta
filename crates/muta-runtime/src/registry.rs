@@ -1166,30 +1166,24 @@ impl SessionRegistry {
     /// (ADR-0187), not by a filesystem scan.
     pub fn spawn_storage_maintenance(self: &Arc<Self>) {
         let dirs = muta_persistence::paths::get();
-        let db_path = dirs.db_file();
         let blobs = muta_persistence::blobs::BlobStore::new(dirs.blobs_dir());
         let usage = muta_persistence::usage_stats::UsageStatsStore::new();
         tokio::task::spawn_blocking(move || {
-            let (count, bytes, entries) =
-                match muta_persistence::db::DatabaseEngine::open(&db_path, None) {
-                    Ok(engine) => {
-                        let (count, bytes) = engine
-                        .collect_blob_garbage(&blobs)
-                        .unwrap_or_else(|error| {
-                            tracing::warn!(%error, "blob garbage collection failed; skipping pass");
-                            (0, 0)
-                        });
-                        let entries = engine.collect_entry_garbage().unwrap_or_else(|error| {
-                        tracing::warn!(%error, "entry garbage collection failed; skipping pass");
-                        0
-                    });
-                        (count, bytes, entries)
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "could not open database for storage maintenance");
-                        (0, 0, 0)
-                    }
-                };
+            let handle = muta_persistence::db::get_persistence_handle();
+            // The blob sweep is a filesystem pass, so it runs here against a
+            // reader snapshot instead of holding up the writer (ADR-0231);
+            // the entry DELETE is a real mutation and goes through the actor.
+            let (count, bytes) = match handle.reader().and_then(|r| r.live_blob_hashes()) {
+                Ok(live) => blobs.retain_only(&live),
+                Err(error) => {
+                    tracing::warn!(%error, "blob garbage collection failed; skipping pass");
+                    (0, 0)
+                }
+            };
+            let entries = handle.collect_entry_garbage_blocking().unwrap_or_else(|error| {
+                tracing::warn!(%error, "entry garbage collection failed; skipping pass");
+                0
+            });
             let days = usage.prune_old_days();
             if count > 0 || entries > 0 || days > 0 {
                 tracing::info!(
@@ -1755,17 +1749,21 @@ fn lookup_latest_session(
     filter: &muta_contracts::WorkspaceFilter,
     persona: Option<&str>,
 ) -> Option<String> {
-    let engine =
-        muta_persistence::db::DatabaseEngine::open(&muta_persistence::paths::get().db_file(), None)
-            .ok()?;
-    engine.latest_session(filter, persona).ok().flatten()
+    muta_persistence::db::get_persistence_handle()
+        .reader()
+        .ok()?
+        .latest_session(filter, persona)
+        .ok()
+        .flatten()
 }
 
 fn lookup_session_workspace(id: &str) -> Option<SessionBinding> {
-    let engine =
-        muta_persistence::db::DatabaseEngine::open(&muta_persistence::paths::get().db_file(), None)
-            .ok()?;
-    let (workspace, persona) = engine.lookup_session_workspace(id).ok().flatten()?;
+    let (workspace, persona) = muta_persistence::db::get_persistence_handle()
+        .reader()
+        .ok()?
+        .lookup_session_workspace(id)
+        .ok()
+        .flatten()?;
     Some(SessionBinding { workspace, persona })
 }
 

@@ -1524,3 +1524,26 @@ fn dashboard_reopen_keeps_selection_and_log() {
     assert_eq!(app.modal_index, 3, "dock selection retained");
     assert_eq!(app.host_console_log.len(), 1, "cockpit log retained");
 }
+
+#[test]
+fn help_modal_over_dialog_dismiss_restores_underlying_dialog() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_dialog(crate::surfaces::DialogKind::Sessions);
+    app.modal_index = 2;
+
+    // Opening Help over Sessions dialog
+    app.open_dialog(crate::surfaces::DialogKind::Help);
+    assert_eq!(app.active_dialog(), Some(crate::surfaces::DialogKind::Help));
+    assert_eq!(
+        app.surfaces.underlying_dialog(),
+        Some(crate::surfaces::DialogKind::Sessions)
+    );
+
+    // Dismissing Help restores Sessions dialog with preserved index
+    assert!(app.dismiss_surface());
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Sessions)
+    );
+    assert_eq!(app.modal_index, 2, "Sessions selection index is preserved");
+}

@@ -859,6 +859,7 @@ fn notice_topic_labels_cover_the_contract_vocabulary() {
         (muta_contracts::NoticeKind::ReviewAlert, "review"),
         (muta_contracts::NoticeKind::TrustChanged, "trust"),
         (muta_contracts::NoticeKind::CommandAck, "command"),
+        (muta_contracts::NoticeKind::ImageInputWithheld, "images"),
     ] {
         assert_eq!(notice_topic_label(kind), label);
     }

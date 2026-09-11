@@ -78,9 +78,12 @@ impl std::str::FromStr for WireProtocol {
 /// [`ModelCapabilities::for_channel`] for request-time behavior.
 #[derive(Debug, Clone, Copy)]
 pub struct Model {
-    /// Wire model id sent in API requests, e.g. `"glm-5.2"`. This is also the
-    /// only label the UI ever renders for a model — id-first by policy, so
-    /// every surface shows the same string the user must type/see on the wire.
+    /// Wire model id sent in API requests, e.g. `"glm-5.2"`. This is the
+    /// model's identity: it is what goes on the wire, what every config surface
+    /// (favorites, `hidden_models`, route settings) keys on, and what the user
+    /// types. Model pickers lead with a provider-published display label when
+    /// one exists (see [`crate::model::RemoteModelMetadata::name`]) and fall
+    /// back to this id when it does not, keeping the id visible either way.
     pub id: &'static str,
     /// Model family for grouping, e.g. `"glm"`, `"gpt"`, `"google"`.
     pub family: &'static str,
@@ -143,6 +146,20 @@ pub struct RemoteModelMetadata {
     /// Provider's model-family label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,
+    /// Human-readable label the provider publishes for this model (models.dev
+    /// `name`, Anthropic/Kimi `display_name`, Gemini `displayName`), e.g.
+    /// `"DeepSeek V4.1 Flash"` for the wire id `deepseek-flash`.
+    ///
+    /// **Presentation only, and never required.** The wire id stays the model's
+    /// identity everywhere — favorites, `hidden_models`, route settings, usage
+    /// recency, and every config surface key on the id. Surfaces render this as
+    /// a secondary annotation beside the id and accept it as a search alias, so
+    /// a user who knows the brand name can find the model without the client
+    /// ever implying that the name is what to type on the wire. `None` (the
+    /// common case: OpenAI-compatible `/models` and Gemini advertise no label)
+    /// means the surface shows the bare id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Maximum full request context in tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<usize>,
@@ -180,7 +197,16 @@ pub struct ModelCapabilities {
     pub max_output_tokens: Option<u32>,
     pub thinking: ReasoningSupport,
     pub tool_call: bool,
-    pub vision: bool,
+    /// Effective image-input support for this route, as a **three-valued**
+    /// resolution of the layers in ADR-0149.
+    ///
+    /// - `Some(true)` — a layer declared image support;
+    /// - `Some(false)` — a layer declared that images are *not* accepted;
+    /// - `None` — **no layer declared anything**. The route is *unknown*, not
+    ///   text-only, and the client policy is permissive: an undeclared route is
+    ///   attempted rather than silently stripped, because vision is the one
+    ///   capability most vendors do not advertise (ADR-0230).
+    pub vision: Option<bool>,
     /// The effort ladder this channel honors, as [`crate::EffortLevel`] so a
     /// provider-advertised tier outside the [`crate::Effort`] vocabulary is preserved
     /// and stamped through (ADR-0065). Built in `for_channel` from the remote
@@ -206,12 +232,22 @@ pub struct RouteCapabilities {
     /// Maximum generation tokens, when declared or configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
-    /// Whether the route accepts image attachments.
-    pub vision: bool,
+    /// Whether the route accepts image attachments, as declared by the
+    /// resolution layers: `None` means **undeclared** (ADR-0230), never a
+    /// client-side guess that images are unsupported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
     /// Whether the route supports tool/function calling.
     pub tool_call: bool,
     /// Extended thinking / reasoning support mode.
     pub thinking: ReasoningSupport,
+}
+
+impl RouteCapabilities {
+    /// Unknown is permissive (ADR-0230): only an explicit `Some(false)` vetoes images.
+    pub const fn accepts_images(&self) -> bool {
+        !matches!(self.vision, Some(false))
+    }
 }
 
 impl ModelCapabilities {
@@ -224,6 +260,25 @@ impl ModelCapabilities {
             tool_call: self.tool_call,
             thinking: self.thinking,
         }
+    }
+
+    /// Whether image attachments may be put on the wire for this route.
+    ///
+    /// **Unknown is permissive** (ADR-0230): only an explicit `Some(false)`
+    /// vetoes images. A route whose layers never declared vision support is
+    /// attempted, because the alternative — silently dropping the pixels and
+    /// letting the model answer about an image it never saw — is the one
+    /// failure mode the user cannot detect. A provider that rejects images
+    /// says so loudly; a client that strips them says nothing at all.
+    pub const fn accepts_images(&self) -> bool {
+        !matches!(self.vision, Some(false))
+    }
+
+    /// Whether some layer actually **declared** image support (either way).
+    /// `false` means the route is undeclared — the state a gate must not treat
+    /// as "text-only" (that is what [`Self::accepts_images`] answers).
+    pub const fn vision_declared(&self) -> bool {
+        self.vision.is_some()
     }
 }
 
@@ -579,6 +634,15 @@ impl ModelCapabilities {
     /// applied here — capability overrides are the user's per-route choices
     /// and are stamped on by [`Self::apply_overrides`] at the catalog
     /// derivation site, keeping this function a pure baseline⊕remote merge.
+    ///
+    /// **Vision stays three-valued** (ADR-0230): the baseline layer only
+    /// contributes a vision declaration when the id is actually *known*
+    /// ([`declared_vision`]) — a baseline miss or a fitted entry whose endpoint
+    /// said nothing leaves `vision: None` (undeclared), rather than coercing
+    /// the absence of information into `Some(false)`. That coercion was the
+    /// bug: every relay endpoint that does not advertise a capability field
+    /// made its models look text-only, which silently stripped images and
+    /// dropped the vision-gated tools.
     pub fn for_channel(model_id: &str, remote: Option<&RemoteModelMetadata>) -> Self {
         let baseline = resolve(model_id);
         let remote = remote.cloned().unwrap_or_default();
@@ -594,7 +658,7 @@ impl ModelCapabilities {
             max_output_tokens: remote.max_output_tokens,
             thinking: remote.thinking.unwrap_or(baseline.thinking),
             tool_call: remote.tool_call.unwrap_or(baseline.tool_call),
-            vision: remote.vision.unwrap_or(baseline.vision),
+            vision: remote.vision.or_else(|| declared_vision(model_id)),
             effort_levels: remote.effort_levels.unwrap_or_else(|| {
                 baseline
                     .effort_levels
@@ -629,7 +693,7 @@ impl ModelCapabilities {
             self.tool_call = tool_call;
         }
         if let Some(vision) = user.vision {
-            self.vision = vision;
+            self.vision = Some(vision);
         }
         self
     }
@@ -665,7 +729,7 @@ mod capability_tests {
         let effective = ModelCapabilities::for_channel("gpt-4o", Some(&remote));
 
         assert_eq!(effective.context_window, 64_000);
-        assert!(!effective.vision);
+        assert_eq!(effective.vision, Some(false));
         assert!(!effective.tool_call);
         // The provider omitted reasoning, so the local baseline remains
         // (no baseline is registered for this id in core's own tests, so the
@@ -724,9 +788,34 @@ pub fn model_by_id(id: &str) -> Option<&'static Model> {
     baseline_models().find(|m| m.id == id)
 }
 
+/// The **declared** image-input support for `id`, from the layer that owns a
+/// baseline: `Some(_)` when the static registry (or a runtime-fitted entry
+/// whose endpoint advertised the field) declares it, `None` when no layer
+/// declares anything (ADR-0230).
+///
+/// This is the baseline layer of [`ModelCapabilities::for_channel`]'s vision
+/// resolution, and the reason vision must not be read through
+/// [`resolve`]'s `Model::vision`: `resolve` answers "will this route accept
+/// images" with a permissive default — a *policy*, not a declaration — so it
+/// conflates "vetted text-only" with "nobody knows".
+pub fn declared_vision(id: &str) -> Option<bool> {
+    if let Some(model) = model_by_id(id) {
+        // A vetted baseline entry is a declaration: the registry is maintained
+        // by hand and must cite its source (ADR-0149 checklist).
+        return Some(model.vision);
+    }
+    fitted_entry(id).and_then(|entry| entry.declared_vision)
+}
+
 /// A conservative fallback for model ids no registered baseline knows (local
 /// models, user-defined relays, unreleased models). Assumes tool calling (the
 /// harness depends on it) and nothing else.
+///
+/// `vision: true` is the **permissive policy default** described on
+/// [`ModelCapabilities::accepts_images`] (ADR-0230), not a capability claim: an
+/// unknown route is attempted with images rather than silently having them
+/// stripped. Whether anything was actually *declared* is answered by
+/// [`declared_vision`], which is `None` here.
 pub fn fallback_model(_id: &str) -> Model {
     Model {
         id: "",
@@ -734,7 +823,7 @@ pub fn fallback_model(_id: &str) -> Model {
         context_window: 128_000,
         thinking: ReasoningSupport::None,
         tool_call: false,
-        vision: false,
+        vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: &[],
@@ -752,24 +841,16 @@ pub fn resolve(id: &str) -> Model {
         // A trusted provider may have refreshed the baseline's live effort
         // ladder via `register_fitted_models` (stored under the baseline's
         // own id); every other field stays vetted.
-        if let Some(overridden) = fitted_models()
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(model.id)
-        {
+        if let Some(overridden) = fitted_entry(model.id) {
             return Model {
-                effort_levels: overridden.effort_levels,
+                effort_levels: overridden.model.effort_levels,
                 ..*model
             };
         }
         return *model;
     }
-    if let Some(model) = fitted_models()
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(id)
-    {
-        return *model;
+    if let Some(entry) = fitted_entry(id) {
+        return entry.model;
     }
     fallback_model(id)
 }
@@ -798,8 +879,9 @@ pub struct FittedModel {
     pub context_window: usize,
     /// The endpoint advertises reasoning (a `reasoning_content` stream).
     pub reasoning: bool,
-    /// The endpoint advertises image inputs.
-    pub vision: bool,
+    /// The endpoint advertises image inputs. `None` = it said nothing, which
+    /// stays undeclared rather than becoming a text-only claim (ADR-0230).
+    pub vision: Option<bool>,
     /// Wire protocol the feeding provider speaks for this model.
     pub protocol: WireProtocol,
     /// Advertised reasoning-effort levels (any order; stored ascending via
@@ -807,15 +889,43 @@ pub struct FittedModel {
     pub effort_levels: Vec<crate::effort::Effort>,
 }
 
+/// One entry of the runtime-fitted overlay: the resolved [`Model`] view the
+/// lookup machinery returns, plus what the feeding endpoint actually
+/// **declared** about image input.
+///
+/// The two are deliberately separate (ADR-0230). `model.vision` is the
+/// permissive *policy* view (`true` when undeclared, so image-bearing requests
+/// are attempted rather than silently stripped), while `declared_vision` is the
+/// honest three-valued fact the capability resolution consumes — collapsing
+/// them is how "the endpoint said nothing" became "this model is text-only".
+#[derive(Debug, Clone)]
+struct FittedEntry {
+    /// The resolved model view `resolve` returns for this id.
+    model: Model,
+    /// Image-input declaration: `Some(true)`/`Some(false)` when the endpoint
+    /// advertised it, `None` when it did not.
+    declared_vision: Option<bool>,
+}
+
 /// Process-wide overlay of runtime-fitted models. Populated at startup from
 /// persisted discovery results and refreshed after a live fetch (the feeding
 /// layer lives in `muta_agent::catalog`).
 static FITTED_MODELS: std::sync::OnceLock<
-    std::sync::RwLock<std::collections::HashMap<&'static str, Model>>,
+    std::sync::RwLock<std::collections::HashMap<&'static str, FittedEntry>>,
 > = std::sync::OnceLock::new();
 
-fn fitted_models() -> &'static std::sync::RwLock<std::collections::HashMap<&'static str, Model>> {
+fn fitted_models()
+-> &'static std::sync::RwLock<std::collections::HashMap<&'static str, FittedEntry>> {
     FITTED_MODELS.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// The fitted overlay entry for `id`, if a trusted provider advertised it.
+fn fitted_entry(id: &str) -> Option<FittedEntry> {
+    fitted_models()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+        .cloned()
 }
 
 /// Register (or replace) runtime-fitted models. An id a registered baseline
@@ -847,9 +957,12 @@ pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
             if !levels.is_empty() && baseline.effort_levels != levels.as_slice() {
                 overlay.insert(
                     baseline.id,
-                    Model {
-                        effort_levels: Box::leak(levels.into_boxed_slice()),
-                        ..*baseline
+                    FittedEntry {
+                        model: Model {
+                            effort_levels: Box::leak(levels.into_boxed_slice()),
+                            ..*baseline
+                        },
+                        declared_vision: Some(baseline.vision),
                     },
                 );
             }
@@ -858,22 +971,28 @@ pub fn register_fitted_models(models: impl IntoIterator<Item = FittedModel>) {
         let id: &'static str = Box::leak(fitted.id.into_boxed_str());
         overlay.insert(
             id,
-            Model {
-                id,
-                family: Box::leak(fitted.family.into_boxed_str()),
-                context_window: fitted.context_window,
-                thinking: if fitted.reasoning {
-                    ReasoningSupport::ReasoningContent
-                } else {
-                    ReasoningSupport::None
+            FittedEntry {
+                model: Model {
+                    id,
+                    family: Box::leak(fitted.family.into_boxed_str()),
+                    context_window: fitted.context_window,
+                    thinking: if fitted.reasoning {
+                        ReasoningSupport::ReasoningContent
+                    } else {
+                        ReasoningSupport::None
+                    },
+                    // Unknown remote ids remain plain-text-only until the source
+                    // or user explicitly declares tool support (ADR-0203).
+                    tool_call: false,
+                    // Permissive *policy* view: an endpoint that advertised no
+                    // vision field must not be read as text-only (ADR-0230).
+                    // `declared_vision` below keeps what was actually said.
+                    vision: fitted.vision.unwrap_or(true),
+                    protocol: fitted.protocol,
+                    model_guidance: "",
+                    effort_levels: Box::leak(levels.into_boxed_slice()),
                 },
-                // Unknown remote ids remain plain-text-only until the source
-                // or user explicitly declares tool support (ADR-0203).
-                tool_call: false,
-                vision: fitted.vision,
-                protocol: fitted.protocol,
-                model_guidance: "",
-                effort_levels: Box::leak(levels.into_boxed_slice()),
+                declared_vision: fitted.vision,
             },
         );
     }
@@ -928,7 +1047,11 @@ mod tests {
         let caps =
             ModelCapabilities::for_channel("fixture-alpha", Some(&remote)).apply_overrides(&user);
         // Layer 1 wins:
-        assert!(!caps.vision, "user Some(false) must beat remote Some(true)");
+        assert_eq!(
+            caps.vision,
+            Some(false),
+            "user Some(false) must beat remote Some(true)"
+        );
         assert_eq!(caps.family, "user-family");
         assert_eq!(caps.max_output_tokens, Some(4_096));
         // Fall-through to layer 2:
@@ -1063,7 +1186,25 @@ mod tests {
         assert_eq!(m.context_window, 128_000);
         assert!(!m.reasoning());
         assert!(!m.tool_call);
-        assert!(!m.vision);
+        // `Model::vision` is a *policy* view, not a claim: the fallback
+        // permits images so an undeclared route is attempted (ADR-0230). What
+        // was actually declared is `declared_vision`, which stays `None`.
+        assert!(m.vision);
+        assert_eq!(declared_vision("some-local-model"), None);
+        // The capability resolution carries the undeclared state through, and
+        // the policy helper reads it permissively rather than as text-only.
+        let caps = ModelCapabilities::for_channel("some-local-model", None);
+        assert_eq!(caps.vision, None);
+        assert!(!caps.vision_declared());
+        assert!(caps.accepts_images());
+    }
+
+    #[test]
+    fn declared_vision_reports_only_real_declarations() {
+        // A vetted baseline entry is a declaration in both directions.
+        assert_eq!(declared_vision("fixture-alpha"), Some(true));
+        // Nothing in the layers declares an unknown id.
+        assert_eq!(declared_vision("mystery-relay-model"), None);
     }
 
     #[test]
@@ -1073,7 +1214,7 @@ mod tests {
             family: "kimi-code".to_string(),
             context_window: 2_000_000,
             reasoning: true,
-            vision: true,
+            vision: Some(true),
             protocol: WireProtocol::ChatCompletions,
             // Unsorted input with a duplicate: stored ascending, deduped.
             effort_levels: vec![
@@ -1100,7 +1241,7 @@ mod tests {
             family: "bogus".to_string(),
             context_window: 1,
             reasoning: false,
-            vision: false,
+            vision: Some(false),
             protocol: WireProtocol::GoogleGemini,
             effort_levels: vec![crate::effort::Effort::Max],
         }]);
@@ -1125,7 +1266,7 @@ mod tests {
             family: "fixture".to_string(),
             context_window: 0,
             reasoning: false,
-            vision: false,
+            vision: Some(false),
             protocol: WireProtocol::ChatCompletions,
             effort_levels: Vec::new(),
         }]);

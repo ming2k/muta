@@ -240,6 +240,19 @@ pub struct Agent {
     context_prune_threshold_tokens: Arc<std::sync::Mutex<usize>>,
     /// Optional mid-turn model-context projection gate.
     context_projection_gate: Arc<std::sync::Mutex<Option<Arc<dyn ContextProjectionGate>>>>,
+    /// Learned per-route image-input suppression (ADR-0230): the
+    /// [`RouteFingerprint`](muta_contracts::RouteFingerprint) of the route on
+    /// which a provider rejected image input, once the harness has seen that
+    /// rejection.
+    ///
+    /// History keeps its images forever (ADR-0186 — the transcript is
+    /// append-only), so a session that pasted an image while a multimodal model
+    /// was active would otherwise fail *every* subsequent request on a
+    /// text-only route, with `/retry` re-sending the identical doomed request.
+    /// The cure is a projection fact, not a history rewrite: remember the route,
+    /// and stop *sending* images on it. Stored as a fingerprint rather than a
+    /// plain flag so switching models clears it by construction.
+    images_suppressed: Arc<std::sync::RwLock<Option<String>>>,
     /// Opt-in hard-stop budget (ADR-0018): abort a round after this many ReAct
     /// turns. Seeded from `Config::master.hard_stop_turns` (default `0`
     /// = uncapped, matching ADR-0009) and mutated at runtime via
@@ -555,6 +568,31 @@ pub(crate) struct StreamingRoundState {
 }
 
 impl StreamingRoundState {
+    /// Apply `project` to the checkpointed request of the current turn, if one
+    /// is armed. Returns `false` when no request is checkpointed (the turn had
+    /// not reached assembly yet, so the next attempt assembles afresh).
+    ///
+    /// This is the narrow way to change *what is sent* on a retry without
+    /// invalidating the checkpoint: the request stays the same turn's
+    /// projection — same history, same tool schemas, same accounting — and only
+    /// the projected field changes. It exists for the image-input recovery
+    /// (ADR-0230): a provider that rejects an attachment must be retried without
+    /// it, and clearing `pending_request` instead would re-run the turn's
+    /// preparation and TurnStart hooks, which the checkpoint exists to prevent.
+    ///
+    /// The durable request-projection archive (ADR-0218) is written once per
+    /// logical invocation from the freshly assembled request, so a projection
+    /// applied here intentionally post-dates — and therefore differs from — that
+    /// record; the withholding is reported to the user and the log instead.
+    pub(crate) fn project_pending_request(
+        &mut self,
+        project: impl FnOnce(&mut muta_contracts::ModelRequest) -> usize,
+    ) -> Option<usize> {
+        self.pending_request.as_mut().map(project)
+    }
+}
+
+impl StreamingRoundState {
     /// How many complete ReAct turns this round has committed — the ordinal
     /// the *next* turn would take (0-based `turn_index`). `/retry` captures
     /// this into a [`muta_contracts::RetryPoint`] so the resumed round
@@ -691,9 +729,11 @@ struct RequestAccountingGuard {
     /// First provider stream event of *any* kind (including preamble frames).
     /// Distinct from `first_output_at`, which waits for content.
     first_frame_at: Option<std::time::Instant>,
-    /// The provider, so the attempt can take the transport's own timings when
-    /// it settles (ADR-0200).
-    provider: Arc<dyn Provider>,
+    /// This attempt's telemetry handle (ADR-0232). Created here, stamped onto
+    /// the request this attempt dispatches, and read back when it settles — so
+    /// the transport's timings reach the attempt that caused them, including
+    /// when a shared provider is running several attempts at once.
+    transport_telemetry: muta_contracts::TransportTelemetry,
 }
 
 impl RequestAccountingGuard {
@@ -745,8 +785,14 @@ impl RequestAccountingGuard {
             output_events: 0,
             generation_ms: 0,
             first_frame_at: None,
-            provider: Arc::clone(&agent.provider),
+            transport_telemetry: muta_contracts::TransportTelemetry::new(),
         }
+    }
+
+    /// This attempt's telemetry handle, to be stamped onto the request the
+    /// attempt dispatches. A retry must take a fresh one.
+    fn transport_telemetry(&self) -> muta_contracts::TransportTelemetry {
+        self.transport_telemetry.clone()
     }
 
     /// Start the monotonic request clock at the provider-call boundary.
@@ -879,19 +925,37 @@ impl RequestAccountingGuard {
         let span = |start: Option<std::time::Instant>, end: Option<std::time::Instant>| {
             Some(end?.saturating_duration_since(start?).as_micros() as u64)
         };
-        // The transport's own phases, when the egress could observe them. Taken
-        // once per attempt, so a timing can never be attributed twice.
-        let transport = self.provider.take_transport_timings().unwrap_or_default();
+        // The transport's own phases, read from this attempt's own handle. Read
+        // (not taken) because the settled record and the live snapshot are built
+        // from the same attempt; the handle belongs to this attempt alone, so a
+        // second read can only ever return this attempt's numbers.
+        let transport = self.transport_telemetry.read().unwrap_or_default();
+        // The transport reports its offsets from its own dispatch. Shift them
+        // onto this attempt's anchor, and refuse them outright when either
+        // anchor is missing: a number measured from one epoch and rendered
+        // against another is worse than no number. Durations need no anchor, so
+        // the phases and the `TCP_INFO` sample transfer either way.
+        let anchor_shift_us = match (self.started_at, transport.dispatch_at) {
+            (Some(started), Some(dispatch)) => dispatch
+                .checked_duration_since(started)
+                .map(|delta| delta.as_micros() as u64),
+            _ => None,
+        };
+        let anchored = |transport_offset_us: Option<u64>| match (anchor_shift_us, transport_offset_us)
+        {
+            (Some(shift), Some(offset)) => Some(shift.saturating_add(offset)),
+            _ => None,
+        };
         muta_contracts::RequestPerformance {
             dns_us: transport.dns_us,
             tcp_us: transport.tcp_us,
             tls_us: transport.tls_us,
-            request_sent_us: transport.request_sent_us,
+            request_sent_us: anchored(transport.request_sent_us),
+            connected_us: anchored(transport.connected_us),
             first_frame_us: offset(self.first_frame_at),
             rtt_us: transport.rtt_us,
             retransmits: transport.retransmits,
-            stream_ready_us: transport
-                .stream_ready_us
+            stream_ready_us: anchored(transport.stream_ready_us)
                 .or_else(|| offset(self.stream_ready_at)),
             ttft_us: offset(self.first_output_at),
             stream_us: span(self.first_output_at, self.last_output_at),
@@ -902,6 +966,7 @@ impl RequestAccountingGuard {
             output_events: self.output_events,
             timing_source: muta_contracts::PerformanceTimingSource::ClientObserved,
             stream_token_source: muta_contracts::StreamTokenSource::Cl100k,
+            observation: transport.observation,
             ..Default::default()
         }
     }
@@ -1151,6 +1216,7 @@ mod steering;
 mod tools_admin;
 
 pub(crate) use rounds::ToolResultRecord;
+pub(crate) use state::strip_images;
 
 /// Render a missing runtime grant without conflating it with project asset
 /// trust. This is returned when no interactive approver is available.

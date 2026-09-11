@@ -185,24 +185,41 @@ currently-active pair is **not** pinned to the top of the list; it keeps its
 natural section position and is identified by its `●` glyph (the modal also
 opens with the cursor on it).
 
-Rows are **id-first**: the wire model id is the label (upstream discovery only
-guarantees the id, so the list never mixes curated display names with raw
-ids). Borrows the composer input as a fuzzy filter over the model id (a query
-that matches only the provider name keeps its rows, unhighlighted); the
-filtered results keep the same three-section grouping.
+Rows are **name-first, id-fallback**. The label is the provider's own name for
+the model when it publishes one (`DeepSeek V4.1 Flash` for the wire id
+`deepseek-flash`), and the raw wire id when it publishes none — the common case,
+since stock OpenAI-compatible and Gemini catalogues advertise no label. The label
+is read bottom-up from whatever the provider already publishes and is never
+curated client-side, so there is no name table to drift.
+
+Because the id is the string that actually goes on the wire and into
+`hidden_models`/favorites/route settings, a name-first row keeps it visible as a
+dim suffix rather than hiding it behind the name. The suffix only fills the
+padding the label leaves unused, so it never shortens the label, never breaks
+tabular alignment with label-less rows, and never widens the row; when the
+identity column is cramped the suffix drops and the label stands alone. The id
+is always the identity regardless of what is drawn: activation, favoriting,
+hiding, and every config surface key on it.
+
+Borrows the composer input as a fuzzy filter over the rendered label, the wire
+id behind it, and the provider name. Highlighting indexes the rendered label
+only; a row kept alive by an id or provider-name alias renders unhighlighted.
+The filtered results keep the same three-section grouping, and rows still order
+by the wire id — the stable identity — not by the label.
 
 ```text
-╭───────────────────────────────────────────────╮
-│ Models  ❯ opus                                │  ← header (real caret here)
+╭───────────────────────────────────────────────────────────────╮
+│ Models  ❯ v4.1                                │  ← header (real caret here)
 │                                               │
 │ FAVORITES                                     │  ← dim label (not selectable)
-│  ●  claude-opus-4-8   · anthropic  ◆ think on │  ← selected → brand bg
+│  ●  Claude Opus 4.8   claude-opus-4-8  · anthropic  ◆ think on │
 │                                               │
 │ RECENT                                        │
 │  ●  gpt-4o           · openai                 │
 │                                               │
 │ ALL MODELS                                    │
-│  ●  gemini-3-pro     · google                 │
+│  ●  DeepSeek V4.1 Flash   deepseek-flash  · opencode-go       │
+│  ●  gemini-3-pro          · google            │
 │  …                                            │
 │                                               │
 │ type to filter · ↑↓ navigate · enter activate │

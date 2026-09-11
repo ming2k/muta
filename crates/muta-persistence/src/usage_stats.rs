@@ -52,10 +52,22 @@ struct DayFile {
 }
 
 /// The append-only, day-partitioned usage store.
+///
+/// Every read and write goes through the single-writer actor (ADR-0231):
+/// `record` / `prune_old_days` are mutations and therefore serialize with
+/// every other write to the unified database, while `all_records` reads
+/// through a snapshot connection. Before this routing the store opened a
+/// connection per day file, so whenever the writer held the lock the record
+/// was simply dropped with "database is locked" after burning the 5 s busy
+/// timeout.
 #[derive(Debug, Clone, Default)]
 pub struct UsageStatsStore {
     /// Root override for tests. Production resolves via [`paths::get`].
     root: Option<PathBuf>,
+    /// The actor this store writes through. `None` resolves lazily to the
+    /// process-wide handle; an overridden root gets a store-private actor so
+    /// a sandbox never touches the real database.
+    handle: Option<crate::db::PersistenceHandle>,
 }
 
 impl UsageStatsStore {
@@ -65,8 +77,11 @@ impl UsageStatsStore {
 
     /// Bind the store to an explicit root directory (tests / sandboxes).
     pub fn with_root(root: PathBuf) -> Self {
+        let root = root.join("usage");
+        let handle = crate::db::PersistenceHandle::spawn(root.join("usage.db"), None);
         Self {
-            root: Some(root.join("usage")),
+            root: Some(root),
+            handle: Some(handle),
         }
     }
 
@@ -76,12 +91,16 @@ impl UsageStatsStore {
             .unwrap_or_else(|| paths::get().data_dir.join("usage"))
     }
 
-    fn db_path(&self) -> PathBuf {
-        if let Some(ref r) = self.root {
-            r.join("usage.db")
-        } else {
-            paths::get().db_file()
-        }
+    /// The single-writer actor for this store's database.
+    fn handle(&self) -> crate::db::PersistenceHandle {
+        self.handle
+            .clone()
+            .unwrap_or_else(crate::db::get_persistence_handle)
+    }
+
+    /// A read snapshot for this store's database.
+    fn reader(&self) -> Option<crate::db::DbReader> {
+        self.handle().reader().ok()
     }
 
     fn daily_dir(&self) -> PathBuf {
@@ -94,35 +113,37 @@ impl UsageStatsStore {
         dir.join(format!("{day}.json"))
     }
 
-    fn read_day(&self, day: &str) -> DayFile {
+    /// Read one day bucket. `reader` lets a caller sweep several days over a
+    /// single connection; `None` opens one for this call.
+    fn read_day(&self, day: &str, reader: Option<&crate::db::DbReader>) -> DayFile {
         let legacy = self.day_file(day);
         if legacy.exists() {
             if let Ok(content) = std::fs::read_to_string(&legacy)
                 && let Ok(parsed) = serde_json::from_str::<DayFile>(&content)
             {
-                if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path(), None) {
-                    let _ = engine.set_json(&format!("usage:day:{day}"), &parsed);
-                }
+                let _ = self
+                    .handle()
+                    .set_json_blocking(&format!("usage:day:{day}"), &parsed);
                 return parsed;
             }
             return DayFile::default();
         }
 
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path(), None) {
-            let key = format!("usage:day:{day}");
-            if let Ok(Some(day_file)) = engine.get_json::<DayFile>(&key) {
+        let key = format!("usage:day:{day}");
+        if let Some(reader) = reader {
+            if let Ok(Some(day_file)) = reader.get_json::<DayFile>(&key) {
                 return day_file;
             }
+        } else if let Ok(Some(day_file)) = self.handle().reader().and_then(|r| r.get_json(&key)) {
+            return day_file;
         }
         DayFile::default()
     }
 
+    /// Persist one day bucket through the actor.
     fn persist_day(&self, day: &str, day_file: &DayFile) -> Result<(), String> {
-        let db_path = self.db_path();
-        let engine = crate::db::DatabaseEngine::open(&db_path, None)
-            .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
-        engine
-            .set_json(&format!("usage:day:{day}"), day_file)
+        self.handle()
+            .set_json_blocking(&format!("usage:day:{day}"), day_file)
             .map_err(|e| format!("could not persist usage day to sqlite: {e}"))
     }
 
@@ -132,14 +153,11 @@ impl UsageStatsStore {
         if days.len() <= RETAINED_DAYS {
             return 0;
         }
-        let db_path = self.db_path();
-        let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) else {
-            return 0;
-        };
+        let handle = self.handle();
         let mut removed = 0;
         for day in days.into_iter().skip(RETAINED_DAYS) {
             let key = format!("usage:day:{day}");
-            if engine.delete_kv(&key).unwrap_or(false) {
+            if handle.delete_kv_blocking(key).unwrap_or(false) {
                 removed += 1;
             }
             let _ = std::fs::remove_file(self.day_file(&day));
@@ -159,7 +177,7 @@ impl UsageStatsStore {
             return Ok(());
         }
         let day = day_key_from_epoch_ms(recorded_at_ms);
-        let mut day_file = self.read_day(&day);
+        let mut day_file = self.read_day(&day, None);
         upsert_record(
             &mut day_file,
             UsageStatRecord {
@@ -192,7 +210,7 @@ impl UsageStatsStore {
                 });
         }
         for (day, records) in by_day {
-            let mut day_file = self.read_day(&day);
+            let mut day_file = self.read_day(&day, None);
             for entry in records {
                 upsert_record(&mut day_file, entry);
             }
@@ -209,9 +227,13 @@ impl UsageStatsStore {
             let start = days.len() - REPORT_DAY_WINDOW;
             days.drain(..start);
         }
+        // One snapshot for the whole sweep: a report reads up to
+        // `REPORT_DAY_WINDOW` day blobs, and opening a connection per day
+        // dominated the cost.
+        let reader = self.reader();
         let mut out = Vec::new();
         for day in days {
-            out.extend(self.read_day(&day).records);
+            out.extend(self.read_day(&day, reader.as_ref()).records);
         }
         out
     }
@@ -223,10 +245,9 @@ impl UsageStatsStore {
 
     /// Day keys present in SQLite (and any legacy disk cache), newest first.
     fn list_days(&self) -> Vec<String> {
-        let db_path = self.db_path();
         let mut days = Vec::new();
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None)
-            && let Ok(keys) = engine.list_kv_keys_with_prefix("usage:day:")
+        if let Some(reader) = self.reader()
+            && let Ok(keys) = reader.list_kv_keys_with_prefix("usage:day:")
         {
             for key in keys {
                 if let Some(day) = key.strip_prefix("usage:day:")

@@ -368,7 +368,9 @@ async fn openrouter_stream_uses_gateway_dialect_and_returns_replay_artifacts() {
         max_output_tokens: Some(235_929),
         thinking: muta_contracts::ReasoningSupport::ReasoningContent,
         tool_call: true,
-        vision: true,
+        // `vision` is three-valued (ADR-0230); this fixture declares support
+        // explicitly rather than leaving it undeclared.
+        vision: Some(true),
         effort_levels: vec![
             muta_contracts::Effort::None.into(),
             muta_contracts::Effort::Medium.into(),
@@ -1018,9 +1020,11 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
         .expect("anthropic discovery succeeds");
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
     assert_eq!(ids, vec!["claude-opus-4-8", "claude-sonnet-5"]);
-    // Capability fields stay None on this shape (a display_name may ride
-    // along in the payload but is not consumed — id-first policy).
+    // Capability fields stay None on this shape. The `display_name` the
+    // endpoint advertises is captured verbatim as the presentation-only label.
     assert_eq!(models[0].context_window, None);
+    assert_eq!(models[0].name.as_deref(), Some("Opus"));
+    assert_eq!(models[1].name.as_deref(), Some("Sonnet"));
 }
 
 #[tokio::test]

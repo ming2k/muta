@@ -428,11 +428,23 @@ pub struct RankedModel {
     pub section: ModelSection,
     /// Canonical id of the provider serving this model (its snapshot row id).
     pub provider_id: String,
-    /// Wire model id to activate. This is also the rendered label and the
-    /// fuzzy-match target: the picker is id-first by policy — upstream
-    /// discovery only guarantees the wire id, so every row shows the same
-    /// kind of label (never a mix of curated names and raw ids).
+    /// Wire model id to activate — the identity, and the string that goes on
+    /// the wire, appears in `hidden_models`/favorites/route settings, and is
+    /// what the user types in config. It is the *fallback* label: a row leads
+    /// with [`Self::name`] when the provider publishes one, and with this id
+    /// when it does not. Either way the id stays searchable.
     pub model: String,
+    /// The provider's own human-readable label for this model (`DeepSeek V4.1
+    /// Flash` for the wire id `deepseek-flash`), when the catalog advertises
+    /// one.
+    ///
+    /// Optional by construction and **never** the identity: it is the row's
+    /// primary label when present (so the list reads in the provider's own
+    /// vocabulary), while the wire id rides along beside it so the string the
+    /// user must actually type stays learnable. `None` — the common case, since
+    /// stock OpenAI-compatible and Gemini catalogues publish nothing — renders
+    /// the bare id exactly as before.
+    pub name: Option<String>,
     /// The provider's display name, rendered as the dim `· <provider>` suffix
     /// so identical model ids served by different instances stay
     /// distinguishable in the flat list.
@@ -455,9 +467,11 @@ pub struct RankedModel {
     pub last_used_ms: Option<u64>,
     /// Context window limit in tokens (ADR-0182).
     pub context_window: usize,
-    /// The fuzzy match against the model id, or `None` in browse mode (empty
-    /// query) — and also when the row was included because its PROVIDER name
-    /// matched the query but the model id did not (shown unhighlighted).
+    /// The fuzzy match against the row's **rendered label** (the provider's
+    /// name when it publishes one, else the wire id), or `None` in browse mode
+    /// (empty query) — and also when the row was included only via an alias
+    /// match (its PROVIDER name, or the wire id behind a name label) rather
+    /// than the drawn label, in which case there is nothing to highlight.
     pub m: Option<fuzzy::FuzzyMatch>,
 }
 
@@ -594,13 +608,14 @@ pub fn providers_filtered_from(
 /// 3. **All models** — ALL available models across ready providers (including favorites
 ///    and recent models), ASCII by model id (provider label as the stable tiebreaker).
 ///
-/// Fuzzy filtering matches `query` against the model **id** (the rendered
-/// label — the picker is id-first: upstream discovery only guarantees the
-/// wire id, so every row shows the same kind of label). When the id does not
-/// match but the PROVIDER name fuzzy-matches, that provider's models are
-/// included unhighlighted (`m = None`) so "show me everything Anthropic
-/// serves" works from the same search box. Match positions always index onto
-/// the model id's characters only. The sectioned ordering is applied in
+/// Fuzzy filtering matches `query` against the model's **rendered label** — the
+/// provider's own name for it when the catalog advertises one, else the wire id.
+/// When the label does not match but the wire id behind it does, the row is kept
+/// unhighlighted (`m = None`); likewise when the PROVIDER name fuzzy-matches, all
+/// of that provider's models are included unhighlighted, so "show me everything
+/// Anthropic serves" works from the same search box. Match positions always index
+/// onto the rendered label's characters only, because that is what is drawn. The
+/// sectioned ordering is applied in
 /// search mode too, so filtered results keep the same visual grouping.
 pub fn models_flat_filtered_from(
     picker: &ProviderPickerSnapshot,
@@ -629,14 +644,23 @@ pub fn models_flat_filtered_from(
                     model: model.clone(),
                     ..ProviderModelInfo::default()
                 });
+            // The row's rendered label: the provider's own name for the model
+            // when it publishes one, else the wire id. The highlight positions
+            // index THIS string, because it is what the user is looking at.
+            let display = info.name.as_deref().unwrap_or(model.as_str());
             let m = if query.is_empty() {
                 None
             } else {
-                match fuzzy::fuzzy_match(model, query) {
+                match fuzzy::fuzzy_match(display, query) {
                     Some(m) => Some(m),
-                    // Id missed: keep the row only via the provider-name
-                    // fallback, and then without highlight positions.
-                    None if provider_matches => None,
+                    // The label missed. The row is still worth showing — and
+                    // without highlight positions, since the query matched
+                    // something other than what is drawn — when it matched the
+                    // wire id behind a name label (`deepseek-flash` still finds
+                    // the row labelled "DeepSeek V4.1 Flash") or the provider
+                    // itself (`Anthropic` lists everything that connection
+                    // serves).
+                    None if provider_matches || fuzzy::fuzzy_match(model, query).is_some() => None,
                     None => continue,
                 }
             };
@@ -644,6 +668,7 @@ pub fn models_flat_filtered_from(
                 section: ModelSection::All,
                 provider_id: prow.id.clone(),
                 model: model.clone(),
+                name: info.name.clone(),
                 provider_label: prow.name.clone(),
                 effort: info.effort,
                 thinking: info.thinking,
@@ -805,13 +830,14 @@ mod tests {
     fn info(model: &str) -> ProviderModelInfo {
         ProviderModelInfo {
             model: model.to_string(),
+            name: None,
             protocol: String::new(),
             effort: None,
             thinking: None,
             effort_levels: Vec::new(),
             favorite: false,
             last_used_ms: None,
-            vision: false,
+            vision: Some(false),
             context_window: 128_000,
             max_output_tokens: None,
         }
@@ -852,9 +878,11 @@ mod tests {
 
     #[test]
     fn flat_rows_show_the_raw_wire_id() {
-        // Id-first policy: the picker never renders curated display names.
-        // Known and unknown ids alike surface as their raw wire id — the row
-        // label IS `model`, so there is no label mapping left to drift.
+        // The id-fallback half of the policy: with no provider label the row
+        // leads with the raw wire id, and there is no client-side name mapping
+        // to drift. (The label half is
+        // `flat_rows_carry_the_provider_label_only_when_advertised`; either way
+        // `model` is what gets activated.)
         let snapshot = sample();
         let rows = models_flat_filtered_from(&snapshot, "", "", "");
         let glm = rows
@@ -862,6 +890,7 @@ mod tests {
             .find(|r| r.model == "glm-5.2")
             .expect("relay pair present");
         assert_eq!(glm.provider_label, "My Relay");
+        assert_eq!(glm.name, None, "nothing was advertised to label with");
         // The rendered label is the id itself (verified via the fuzzy match
         // target): matching "glm-5.2" hits positions inside the id.
         assert!(
@@ -1406,6 +1435,64 @@ mod tests {
             rows.iter().all(|r| r.m.is_none()),
             "provider-name fallback rows are unhighlighted"
         );
+    }
+
+    #[test]
+    fn flat_fuzzy_matches_the_name_label_and_keeps_the_id_as_an_alias() {
+        // A relay's wire id (`deepseek-flash`) says nothing about "V4.1", and a
+        // name-first list leads with the name — so the query is matched against
+        // the RENDERED label and the highlight indexes that label. The id stays
+        // reachable as an alias (unhighlighted, since it is not what is drawn).
+        let mut snapshot = sample();
+        for prow in &mut snapshot.rows {
+            if prow.id == "my-relay" {
+                let mut i = info("deepseek-flash");
+                i.name = Some("DeepSeek V4.1 Flash".to_string());
+                prow.models = vec!["deepseek-flash".to_string()];
+                prow.model_info = vec![i];
+            }
+        }
+
+        // The marketed name matches the drawn label → highlighted.
+        let rows = models_flat_filtered_from(&snapshot, "", "", "v4.1");
+        assert_eq!(rows.len(), 1, "only the labelled model matches: {rows:?}");
+        assert_eq!(rows[0].model, "deepseek-flash", "the id stays the identity");
+        assert_eq!(rows[0].name.as_deref(), Some("DeepSeek V4.1 Flash"));
+        assert!(
+            rows[0].m.is_some(),
+            "the highlight indexes the rendered label"
+        );
+
+        // The wire id still finds the row, just unhighlighted.
+        let rows = models_flat_filtered_from(&snapshot, "", "", "deepseek-flash");
+        assert_eq!(rows.len(), 1, "the id remains an alias: {rows:?}");
+        assert!(rows[0].m.is_none(), "nothing in the label to highlight");
+
+        let rows = models_flat_filtered_from(&snapshot, "", "", "v9.9");
+        assert!(rows.is_empty(), "no row matches: {rows:?}");
+    }
+
+    #[test]
+    fn flat_rows_carry_the_provider_label_only_when_advertised() {
+        // `name` is optional by construction: a model with no advertised label
+        // surfaces `None` (the renderer then leads with the bare id), one with a
+        // label surfaces it verbatim.
+        let mut snapshot = sample();
+        for prow in &mut snapshot.rows {
+            let ids: Vec<String> = prow.models.clone();
+            prow.model_info = ids.iter().map(|m| info(m)).collect();
+        }
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
+        assert!(rows.iter().all(|r| r.name.is_none()));
+
+        if let Some(prow) = snapshot.rows.iter_mut().find(|p| p.id == "my-relay") {
+            let mut i = info("glm-5.2");
+            i.name = Some("GLM-5.2 (Agentic)".to_string());
+            prow.model_info = vec![i];
+        }
+        let rows = models_flat_filtered_from(&snapshot, "", "", "");
+        let glm = rows.iter().find(|r| r.model == "glm-5.2").expect("row");
+        assert_eq!(glm.name.as_deref(), Some("GLM-5.2 (Agentic)"));
     }
 
     #[test]

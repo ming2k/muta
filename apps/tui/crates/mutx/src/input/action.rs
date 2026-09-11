@@ -161,8 +161,10 @@ pub enum InputAction {
     /// Open the usage-statistics overlay (`/usage`, ADR-0122): daily token
     /// totals, per-model breakdown, and the recent request event log, from
     /// the durable cross-session store. Intercepted locally; the handler
-    /// issues `AgentRequest::QueryUsageStats` so the overlay populates from
-    /// the daemon-side store.
+    /// issues `AgentRequest::QueryUsageStats` on every open, so the overlay
+    /// always reflects the daemon-side store (the report is fetched on demand,
+    /// never pushed — see ADR-0209's 2026-09-11 addendum). While the reply is
+    /// in flight the previously rendered numbers stay on screen.
     OpenUsage,
     /// Open the MCP manager modal: a centered, selectable list of every
     /// configured MCP server with `Space` toggle and `r` reconnect. Reached via

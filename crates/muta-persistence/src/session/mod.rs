@@ -535,28 +535,21 @@ pub struct SessionStore {
     persist_gate: Mutex<()>,
 }
 
-/// Write `data` authoritatively to the SQLite database at `db_path`.
-fn persist_to(db_path: &Path, data: &SessionData, _blob_store: &BlobStore) -> Result<(), String> {
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let data = data.clone();
-    let mut data = data;
+/// Write `data` authoritatively through the single-writer actor (ADR-0231).
+///
+/// There is no path where a session write opens its own connection: the caller
+/// passes the handle that owns this database — the process-wide one in
+/// production, the store-private one for a path-pinned instance.
+fn persist_to(
+    writer: &crate::db::PersistenceHandle,
+    data: &SessionData,
+    _blob_store: &BlobStore,
+) -> Result<(), String> {
+    let mut data = data.clone();
     data.checksum = Some(compute_checksum(&data)?);
-
-    let dirs = paths::get();
-    if db_path == dirs.db_file() {
-        crate::db::get_persistence_handle()
-            .save_session_blocking(data)
-            .map_err(|e| format!("failed to save session to sqlite: {e}"))
-    } else {
-        let engine = crate::db::DatabaseEngine::open(db_path, None)
-            .map_err(|e| format!("failed to open sqlite db {}: {e}", db_path.display()))?;
-        engine
-            .save_session_full(&data)
-            .map_err(|e| format!("failed to save session to sqlite: {e}"))?;
-        Ok(())
-    }
+    writer
+        .save_session_blocking(data)
+        .map_err(|e| format!("failed to save session to sqlite: {e}"))
 }
 
 /// Load the session for `session_id` directly from SQLite (SSOT).
@@ -564,23 +557,20 @@ fn persist_to(db_path: &Path, data: &SessionData, _blob_store: &BlobStore) -> Re
 /// schema) loads as a brand-new empty session — ADR-0186 retires legacy
 /// content instead of migrating it.
 fn load_or_seed(
-    db_path: &Path,
+    reader: Option<&crate::db::DbReader>,
+    writer: Option<&crate::db::PersistenceHandle>,
     session_id: &str,
     blob_store: &BlobStore,
     workspace: Option<&muta_contracts::WorkspaceBinding>,
     persona: Option<&str>,
     legacy_file: Option<&Path>,
 ) -> SessionData {
-    let engine_opt = crate::db::DatabaseEngine::open(db_path, None).ok();
-
     // Path alias in kv_store maps a legacy snapshot path to its session id.
-    let mapped_id = if let Some(path) = legacy_file {
-        if let Some(ref engine) = engine_opt {
-            let key = format!("path:{}", path.display());
-            engine.get_kv(&key).ok().flatten()
-        } else {
-            None
-        }
+    let mapped_id = if let (Some(path), Some(reader)) = (legacy_file, reader) {
+        reader
+            .get_kv(&format!("path:{}", path.display()))
+            .ok()
+            .flatten()
     } else {
         None
     };
@@ -588,8 +578,8 @@ fn load_or_seed(
     let target_id = mapped_id.as_deref().unwrap_or(session_id);
 
     // Primary path: load directly from SQLite (SSOT).
-    if let Some(ref engine) = engine_opt
-        && let Ok(Some(mut data)) = engine.load_session_full(target_id)
+    if let Some(reader) = reader
+        && let Ok(Some(mut data)) = reader.load_session_full(target_id)
     {
         if let Err(error) = load_session_blobs(&mut data, blob_store) {
             tracing::warn!(error = %error, "could not load session blobs from sqlite");
@@ -608,9 +598,14 @@ fn load_or_seed(
             uuid::Uuid::new_v4().to_string()
         };
     if let Some(path) = legacy_file
-        && let Some(ref engine) = engine_opt
+        && let Some(writer) = writer
     {
-        let _ = engine.set_kv(&format!("path:{}", path.display()), &id);
+        // Durably awaited: the alias is what keeps a legacy path resolving to
+        // the same session id across reloads, so it must be visible before
+        // this constructor returns. Safe to block here because the actor
+        // always owns a thread or worker of its own (see
+        // `PersistenceHandle::spawn`).
+        let _ = writer.set_kv_blocking(format!("path:{}", path.display()), id.clone());
     }
     SessionData {
         id,
@@ -1297,17 +1292,18 @@ fn truncate_summary_to_token_budget(text: String, max_tokens: usize) -> String {
 /// line per session and a summary.
 pub async fn run_doctor(project_root: Option<&std::path::Path>) -> Result<(), String> {
     let db_path = paths::get().db_file();
-    let engine = crate::db::DatabaseEngine::open(&db_path, None)
+    let reader = crate::db::get_persistence_handle()
+        .reader()
         .map_err(|e| format!("cannot open {}: {e}", db_path.display()))?;
     let mut examined = 0usize;
     let mut corrupt = 0usize;
     let filter = project_root.map(|p| muta_contracts::WorkspaceFilter::Path(p.to_path_buf()));
-    for session in engine
+    for session in reader
         .list_sessions(filter.as_ref())
         .map_err(|e| e.to_string())?
     {
         examined += 1;
-        match engine.load_session_full(&session.id) {
+        match reader.load_session_full(&session.id) {
             Ok(Some(data)) => println!(
                 "ok       {} (schema {}, {} entries)",
                 session.id,

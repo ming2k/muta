@@ -187,6 +187,11 @@ fn from_dev_model(m: DevModel) -> DiscoveredModel {
         picker_enabled: None,
         protocol: None,
         family: m.family.clone(),
+        // models.dev publishes a human label for every entry (`name`). It is
+        // presentation-only: the id above stays the identity, and an entry
+        // whose label merely repeats the id collapses to `None` downstream in
+        // `DiscoveredModel::remote_metadata`.
+        name: (!m.name.trim().is_empty()).then(|| m.name.clone()),
         context_window: m.limit.context.map(|c| c as usize),
         max_output_tokens: m.limit.output.map(|o| o as u32),
         reasoning,
@@ -400,6 +405,30 @@ mod tests {
         );
         // Wire format is intentionally not asserted from models.dev.
         assert_eq!(dm.protocol, None);
+    }
+
+    #[test]
+    fn the_relay_label_rides_along_beside_the_wire_id() {
+        // The case the label exists for: the relay publishes an opaque id
+        // (`deepseek-flash`) for a model it names `DeepSeek V4.1 Flash`. The id
+        // stays the identity; the label rides along so a search for `v4.1` can
+        // reach the row.
+        let catalog = snapshot();
+        let models = provider_slice(&catalog, "opencode-go").expect("opencode-go exists");
+        let flash = models
+            .iter()
+            .find(|m| m.id == "deepseek-flash")
+            .expect("relay still serves deepseek-flash");
+        assert_eq!(flash.name, "DeepSeek V4.1 Flash");
+        let mapped = from_dev_model(flash.clone());
+        assert_eq!(mapped.id, "deepseek-flash");
+        assert_eq!(mapped.name.as_deref(), Some("DeepSeek V4.1 Flash"));
+        // ...and it reaches the discovery snapshot, which is what the picker
+        // reads. `family` is the models.dev grouping, never the label.
+        assert_eq!(
+            mapped.remote_metadata().name.as_deref(),
+            Some("DeepSeek V4.1 Flash")
+        );
     }
 
     #[test]

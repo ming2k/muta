@@ -34,7 +34,7 @@ pub const MAX_RETAINED_REQUEST_PROJECTIONS: usize = 64;
 
 /// Initialize and return a connection to the SQLite database.
 /// Configures WAL mode, synchronous=NORMAL for robustness, busy timeout, and turns on foreign keys.
-pub fn initialize_db(db_path: &Path) -> Result<Connection> {
+pub(crate) fn initialize_db(db_path: &Path) -> Result<Connection> {
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -47,7 +47,8 @@ pub fn initialize_db(db_path: &Path) -> Result<Connection> {
 }
 
 /// Initialize an in-memory SQLite database for testing and ephemeral workflows.
-pub fn initialize_in_memory_db() -> Result<Connection> {
+#[cfg(test)]
+pub(crate) fn initialize_in_memory_db() -> Result<Connection> {
     let mut conn = Connection::open_in_memory()?;
     configure_connection(&mut conn)?;
     migrate_schema(&mut conn)?;
@@ -1438,7 +1439,7 @@ struct EntryEnvelope<'a> {
 }
 
 /// Authoritative relational database access object for Muta persistence.
-pub struct DatabaseEngine {
+pub(crate) struct DatabaseEngine {
     conn: Connection,
     /// CAS store used to offload oversized entry bodies at insert time
     /// (ADR-0187): only rows this transaction inserts are offloaded, so the
@@ -1478,7 +1479,7 @@ struct FastOriginProbe {
 
 impl DatabaseEngine {
     /// Open or create a database engine on a file path.
-    pub fn open(db_path: &Path, blob_store: Option<BlobStore>) -> Result<Self> {
+    pub(crate) fn open(db_path: &Path, blob_store: Option<BlobStore>) -> Result<Self> {
         let conn = initialize_db(db_path)?;
         let engine = Self { conn, blob_store };
         if db_path == crate::paths::get().db_file() {
@@ -1487,8 +1488,11 @@ impl DatabaseEngine {
         Ok(engine)
     }
 
-    /// Open an in-memory database engine for testing.
-    pub fn open_in_memory() -> Result<Self> {
+    /// Open an in-memory database engine. Test-only: the shipped surface has
+    /// no way to name a connection — every real read and write goes through
+    /// the handle's two doors (ADR-0231).
+    #[cfg(test)]
+    pub(crate) fn open_in_memory() -> Result<Self> {
         let conn = initialize_in_memory_db()?;
         Ok(Self {
             conn,
@@ -1496,20 +1500,10 @@ impl DatabaseEngine {
         })
     }
 
-    /// Get inner connection reference.
-    pub fn connection(&self) -> &Connection {
-        &self.conn
-    }
-
-    /// Get inner connection mutable reference.
-    pub fn connection_mut(&mut self) -> &mut Connection {
-        &mut self.conn
-    }
-
     // Session Operations
 
     /// Create or update a session record.
-    pub fn upsert_session(&self, session: &SessionRecord) -> Result<()> {
+    pub(crate) fn upsert_session(&self, session: &SessionRecord) -> Result<()> {
         self.conn.execute(
             r#"
             INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, persona, msg_count, last_user_prompt, digest)
@@ -1543,7 +1537,7 @@ impl DatabaseEngine {
     }
 
     /// Retrieve a single session by id.
-    pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
+    pub(crate) fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
         self.conn
             .query_row(
                 "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, persona, msg_count, last_user_prompt, digest FROM sessions WHERE id = ?1",
@@ -1555,7 +1549,7 @@ impl DatabaseEngine {
 
     /// List sessions, optionally filtered by a derived grouping (ADR-0226),
     /// sorted by `updated_at_s` descending.
-    pub fn list_sessions(
+    pub(crate) fn list_sessions(
         &self,
         filter: Option<&muta_contracts::WorkspaceFilter>,
     ) -> Result<Vec<SessionRecord>> {
@@ -1596,24 +1590,23 @@ impl DatabaseEngine {
     }
 
     /// Delete a session and cascade all its events, messages, and command records.
-    pub fn delete_session(&self, session_id: &str) -> Result<bool> {
+    pub(crate) fn delete_session(&self, session_id: &str) -> Result<bool> {
         let affected = self
             .conn
             .execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
         Ok(affected > 0)
     }
 
-    /// Reclaim blob-store entries no session references (ADR-0187). The live
-    /// set is the durable `blob_refs` ledger, maintained transactionally with
-    /// the saves that introduce references; a blob absent from it cannot be
-    /// reached by any load path.
-    pub fn collect_blob_garbage(&self, blob_store: &BlobStore) -> Result<(usize, u64)> {
+    /// The live blob set: every hash the durable `blob_refs` ledger still
+    /// references. Read-only, so a blob-store sweep runs on the caller's
+    /// thread against this snapshot and never holds up the writer.
+    pub(crate) fn live_blob_hashes(&self) -> Result<std::collections::HashSet<String>> {
         let mut stmt = self.conn.prepare("SELECT DISTINCT hash FROM blob_refs")?;
-        let live: std::collections::HashSet<String> = stmt
+        let live = stmt
             .query_map([], |row| row.get::<_, String>(0))?
             .filter_map(Result::ok)
             .collect();
-        Ok(blob_store.retain_only(&live))
+        Ok(live)
     }
 
     /// Reclaim transcript entries no session membership references
@@ -1622,7 +1615,7 @@ impl DatabaseEngine {
     /// `entry_memberships` makes the two tables' agreement structural, and
     /// entry insert + membership insert share one transaction, so a GC pass
     /// can never observe the half of a pair. Returns the rows reclaimed.
-    pub fn collect_entry_garbage(&self) -> Result<usize> {
+    pub(crate) fn collect_entry_garbage(&self) -> Result<usize> {
         let reclaimed = self.conn.execute(
             "DELETE FROM entries WHERE NOT EXISTS (
                 SELECT 1 FROM entry_memberships m WHERE m.entry_id = entries.id
@@ -1637,9 +1630,10 @@ impl DatabaseEngine {
     /// the session's memberships and directives, and the entries themselves
     /// (upsert — facts are shared by identity across forks).
     ///
-    /// Full mode rewrites every membership, projection, and blob reference
-    /// from `data`. It is the authoritative write for rebuilds, forks, and
-    /// any transcript whose generation the store has not seen.
+    /// Write `data` authoritatively (full rewrite). Test-only: the one
+    /// production writer is `PersistenceCommand::SaveSession`, which selects
+    /// append vs. rewrite by generation (ADR-0187/0231).
+    #[cfg(test)]
     pub(crate) fn save_session_full(&self, data: &crate::session::SessionData) -> Result<()> {
         self.save_session_inner(data, true, &[])
     }
@@ -2317,19 +2311,12 @@ impl DatabaseEngine {
     /// runtime's Archivist tools, ADR-0208): the full persisted
     /// [`crate::session::SessionData`] for one session, checksum-verified,
     /// or `None` when the id is unknown.
-    pub fn load_session_full_public(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<crate::session::SessionData>> {
-        self.load_session_full(session_id)
-    }
-
     /// One persisted session's projected transcript tail plus metadata, as
     /// plain wire-serializable rows (ADR-0208): the read path the Archivist's
     /// `archivist_read_session` tool serves. [`SessionTranscriptView`] keeps
     /// `SessionData`'s fields private while exposing exactly the projection
     /// the retrieval plane needs.
-    pub fn read_session_transcript(
+    pub(crate) fn read_session_transcript(
         &self,
         session_id: &str,
         tail: usize,
@@ -2361,7 +2348,7 @@ impl DatabaseEngine {
     }
 
     /// Resolve a session ID prefix (4+ hex chars) to matching full session IDs.
-    pub fn resolve_session_prefix(
+    pub(crate) fn resolve_session_prefix(
         &self,
         prefix: &str,
         filter: Option<&muta_contracts::WorkspaceFilter>,
@@ -2405,7 +2392,7 @@ impl DatabaseEngine {
     /// exact id, regardless of the caller (ADR-0226). Used to lazily resume a
     /// session from any client and re-apply its persona.
     #[allow(clippy::type_complexity)]
-    pub fn lookup_session_workspace(
+    pub(crate) fn lookup_session_workspace(
         &self,
         session_id: &str,
     ) -> Result<Option<(Option<muta_contracts::WorkspaceBinding>, Option<String>)>> {
@@ -2435,7 +2422,7 @@ impl DatabaseEngine {
 
     /// List session summaries for a derived grouping, sorted by `updated_at_s`
     /// descending.
-    pub fn list_session_summaries(
+    pub(crate) fn list_session_summaries(
         &self,
         filter: Option<&muta_contracts::WorkspaceFilter>,
         active_id: &str,
@@ -2481,7 +2468,7 @@ impl DatabaseEngine {
 
     /// The most recent non-subagent session matching `filter`, optionally
     /// restricted to a staffing persona (ADR-0226). Backs `--resume`.
-    pub fn latest_session(
+    pub(crate) fn latest_session(
         &self,
         filter: &muta_contracts::WorkspaceFilter,
         persona: Option<&str>,
@@ -2541,7 +2528,7 @@ impl DatabaseEngine {
     }
 
     /// Retrieve full session detail for on-demand inspection.
-    pub fn get_session_detail(
+    pub(crate) fn get_session_detail(
         &self,
         session_id: &str,
         active_id: &str,
@@ -2567,7 +2554,7 @@ impl DatabaseEngine {
     /// terminal; the manual flag is retained in the signature for the command
     /// surface but no longer stored. A single-row UPDATE: the transcript and
     /// working state are untouched, so no load/save round trip is needed.
-    pub fn rename_session(
+    pub(crate) fn rename_session(
         &self,
         session_id: &str,
         title: Option<&str>,
@@ -2585,7 +2572,7 @@ impl DatabaseEngine {
     // Typed JSON KV Helpers (ADR-0168)
 
     /// Set (or overwrite) a key in the unified KV store.
-    pub fn set_kv(&self, key: &str, value: &str) -> Result<()> {
+    pub(crate) fn set_kv(&self, key: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO kv_store (key, value, updated_at) VALUES (?1, ?2, strftime('%s','now')) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -2595,7 +2582,7 @@ impl DatabaseEngine {
     }
 
     /// Fetch a key from the unified KV store.
-    pub fn get_kv(&self, key: &str) -> Result<Option<String>> {
+    pub(crate) fn get_kv(&self, key: &str) -> Result<Option<String>> {
         self.conn
             .query_row(
                 "SELECT value FROM kv_store WHERE key = ?1",
@@ -2606,7 +2593,7 @@ impl DatabaseEngine {
     }
 
     /// Delete a key from the unified KV store.
-    pub fn delete_kv(&self, key: &str) -> Result<bool> {
+    pub(crate) fn delete_kv(&self, key: &str) -> Result<bool> {
         let affected = self
             .conn
             .execute("DELETE FROM kv_store WHERE key = ?1", params![key])?;
@@ -2614,7 +2601,7 @@ impl DatabaseEngine {
     }
 
     /// Record a slash-command invocation in the durable command ledger.
-    pub fn record_command(&self, cmd: &muta_contracts::CommandRecord) -> Result<()> {
+    pub(crate) fn record_command(&self, cmd: &muta_contracts::CommandRecord) -> Result<()> {
         let id = format!(
             "{}:{}:{}",
             cmd.name,
@@ -2649,7 +2636,7 @@ impl DatabaseEngine {
     /// `(session, round, turn)`, so a re-recorded logical invocation replaces
     /// its row. After the insert, the per-session archive is trimmed to the
     /// newest [`MAX_RETAINED_REQUEST_PROJECTIONS`] rows.
-    pub fn insert_request_projection(
+    pub(crate) fn insert_request_projection(
         &self,
         session_id: &str,
         record: &muta_contracts::RequestProjection,
@@ -2685,7 +2672,7 @@ impl DatabaseEngine {
     /// Load a session's request-projection archive in capture order, oldest
     /// first, capped at `limit`. Undecodable payloads are skipped with a log,
     /// never surfaced as history.
-    pub fn load_request_projections(
+    pub(crate) fn load_request_projections(
         &self,
         session_id: &str,
         limit: usize,
@@ -2713,7 +2700,7 @@ impl DatabaseEngine {
     }
 
     /// List keys with a given prefix, ordered descending.
-    pub fn list_kv_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+    pub(crate) fn list_kv_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
         let pattern = format!("{prefix}%");
         let mut stmt = self
             .conn
@@ -2742,7 +2729,7 @@ impl DatabaseEngine {
     /// bypass by quoting inline (`"retry OR fail"` is preserved verbatim when
     /// the caller already supplies balanced quotes... no — every word is
     /// quoted; phrase operators are intentionally not reachable here).
-    pub fn search_history(
+    pub(crate) fn search_history(
         &self,
         query: &str,
         filter: Option<&muta_contracts::WorkspaceFilter>,
@@ -2758,7 +2745,7 @@ impl DatabaseEngine {
     /// multi-word hits float up. Callers fall back to this only after the
     /// strict search comes back empty, so the widened net never replaces a
     /// precise hit.
-    pub fn search_history_relaxed(
+    pub(crate) fn search_history_relaxed(
         &self,
         query: &str,
         filter: Option<&muta_contracts::WorkspaceFilter>,
@@ -2828,7 +2815,7 @@ impl DatabaseEngine {
     // Typed JSON KV Helpers (ADR-0168)
 
     /// Retrieve and deserialize a JSON value from `kv_store`.
-    pub fn get_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
+    pub(crate) fn get_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
         if let Some(raw) = self.get_kv(key)? {
             match serde_json::from_str::<T>(&raw) {
                 Ok(val) => Ok(Some(val)),
@@ -2842,17 +2829,10 @@ impl DatabaseEngine {
         }
     }
 
-    /// Serialize and persist a JSON value to `kv_store`.
-    pub fn set_json<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
-        let serialized = serde_json::to_string(value)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        self.set_kv(key, &serialized)
-    }
-
     // Authoritative Input History Operations (ADR-0168 / SSOT)
 
     /// Record a prompt into `input_history`, respecting `dedup` and the global `HISTORY_CAP`.
-    pub fn record_input_history(
+    pub(crate) fn record_input_history(
         &self,
         entry: &muta_contracts::HistoryEntry,
         dedup: bool,
@@ -2916,7 +2896,7 @@ impl DatabaseEngine {
     }
 
     /// Load the newest prompt history entries up to `limit`.
-    pub fn load_input_history(&self, limit: usize) -> Result<Vec<muta_contracts::HistoryEntry>> {
+    pub(crate) fn load_input_history(&self, limit: usize) -> Result<Vec<muta_contracts::HistoryEntry>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT text, session_id, workspace, created_at_ms
@@ -2946,7 +2926,7 @@ impl DatabaseEngine {
     }
 
     /// Persist or batch-merge a list of history entries into SQLite.
-    pub fn save_input_history(
+    pub(crate) fn save_input_history(
         &self,
         entries: &[muta_contracts::HistoryEntry],
         dedup: bool,
@@ -3013,7 +2993,7 @@ impl DatabaseEngine {
     }
 
     /// Delete all prompt history records.
-    pub fn clear_input_history(&self) -> Result<()> {
+    pub(crate) fn clear_input_history(&self) -> Result<()> {
         self.conn.execute("DELETE FROM input_history", [])?;
         Ok(())
     }
@@ -3021,7 +3001,7 @@ impl DatabaseEngine {
     /// Delete a specific prompt history record by text and timestamp.
     /// If `created_at_ms` is non-zero, matches both text and timestamp;
     /// otherwise falls back to text match. Returns the number of deleted rows.
-    pub fn delete_input_history_entry(&self, text: &str, created_at_ms: u64) -> Result<usize> {
+    pub(crate) fn delete_input_history_entry(&self, text: &str, created_at_ms: u64) -> Result<usize> {
         let deleted = if created_at_ms > 0 {
             self.conn.execute(
                 "DELETE FROM input_history WHERE text = ?1 AND created_at_ms = ?2",
@@ -3035,7 +3015,7 @@ impl DatabaseEngine {
     }
 
     /// Migrate legacy history.json files into SQLite and purge them from disk.
-    pub fn migrate_legacy_input_history(&self) -> usize {
+    pub(crate) fn migrate_legacy_input_history(&self) -> usize {
         let mut candidates = Vec::new();
         let muta_state = crate::paths::get().state_dir;
         candidates.push(muta_state.join("history.json"));
@@ -3095,6 +3075,180 @@ impl DatabaseEngine {
     }
 
     // Legacy Flat-File Migration (ADR-0168)
+}
+
+// ---------------------------------------------------------------------------
+// The read door (ADR-0231)
+// ---------------------------------------------------------------------------
+
+/// The **only** way to read the unified store.
+///
+/// `DatabaseEngine` is crate-private, so no other module — in this crate or in
+/// any other — can name a SQLite connection, let alone open one on a path of
+/// its own choosing. Readers are handed out by the same handle that owns the
+/// writer ([`PersistenceHandle::reader`]), which is what makes "every mutation
+/// goes through the single-writer actor, every read through the handle" a
+/// type-level invariant instead of a convention someone has to remember.
+///
+/// A reader is a short-lived connection snapshot: WAL readers neither block
+/// the writer nor are blocked by it. Open one per read *session* (one per tool
+/// call, one per report) rather than one per query inside a loop.
+///
+/// The method surface is deliberately an allow-list. Widening read reach is a
+/// reviewable act in this file, not an incidental side effect of adding a
+/// `pub fn` to the engine.
+pub struct DbReader {
+    engine: DatabaseEngine,
+    db_path: PathBuf,
+}
+
+impl DbReader {
+    fn new(engine: DatabaseEngine, db_path: PathBuf) -> Self {
+        Self { engine, db_path }
+    }
+
+    /// The database file this reader is bound to.
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
+    }
+
+    // -- sessions ----------------------------------------------------------
+
+    /// One session's header row, if it exists.
+    pub fn get_session(&self, session_id: &str) -> Result<Option<SessionRecord>> {
+        self.engine.get_session(session_id)
+    }
+
+    /// Sessions matching a derived grouping, newest first.
+    pub fn list_sessions(
+        &self,
+        filter: Option<&muta_contracts::WorkspaceFilter>,
+    ) -> Result<Vec<SessionRecord>> {
+        self.engine.list_sessions(filter)
+    }
+
+    /// Picker-facing summaries for a derived grouping, newest first.
+    pub fn list_session_summaries(
+        &self,
+        filter: Option<&muta_contracts::WorkspaceFilter>,
+        active_id: &str,
+    ) -> Result<Vec<crate::session::SessionSummary>> {
+        self.engine.list_session_summaries(filter, active_id)
+    }
+
+    /// The most recently updated session id in `filter`, optionally narrowed
+    /// to one persona (the `--resume` resolution leg).
+    pub fn latest_session(
+        &self,
+        filter: &muta_contracts::WorkspaceFilter,
+        persona: Option<&str>,
+    ) -> Result<Option<String>> {
+        self.engine.latest_session(filter, persona)
+    }
+
+    /// A session's inherited workspace binding plus its persona.
+    pub fn lookup_session_workspace(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(Option<muta_contracts::WorkspaceBinding>, Option<String>)>> {
+        self.engine.lookup_session_workspace(session_id)
+    }
+
+    /// Resolve an id prefix to every matching session id.
+    pub fn resolve_session_prefix(
+        &self,
+        prefix: &str,
+        filter: Option<&muta_contracts::WorkspaceFilter>,
+    ) -> Result<Vec<String>> {
+        self.engine.resolve_session_prefix(prefix, filter)
+    }
+
+    /// Full detail for one session (the session-info sub-view).
+    pub fn get_session_detail(
+        &self,
+        session_id: &str,
+        active_id: &str,
+    ) -> Result<Option<muta_contracts::SessionDetail>> {
+        self.engine.get_session_detail(session_id, active_id)
+    }
+
+    /// One session's raw durable data (the load path of `SessionStore`).
+    pub(crate) fn load_session_full(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<crate::session::SessionData>> {
+        self.engine.load_session_full(session_id)
+    }
+
+    /// A session's projected transcript tail as wire rows (the Archivist's
+    /// read tool).
+    pub fn read_session_transcript(
+        &self,
+        session_id: &str,
+        tail: usize,
+    ) -> Result<Option<SessionTranscriptView>> {
+        self.engine.read_session_transcript(session_id, tail)
+    }
+
+    /// Every blob hash the durable reference ledger still mentions. The sweep
+    /// that consumes this is a *filesystem* pass, so it runs on the caller's
+    /// thread rather than blocking the writer.
+    pub fn live_blob_hashes(&self) -> Result<std::collections::HashSet<String>> {
+        self.engine.live_blob_hashes()
+    }
+
+    // -- recall / history --------------------------------------------------
+
+    /// BM25 search over every persisted transcript entry (strict AND form).
+    pub fn search_history(
+        &self,
+        query: &str,
+        filter: Option<&muta_contracts::WorkspaceFilter>,
+        limit: usize,
+    ) -> Result<Vec<HistorySearchResult>> {
+        self.engine.search_history(query, filter, limit)
+    }
+
+    /// [`Self::search_history`] with the words OR-joined (recall fallback).
+    pub fn search_history_relaxed(
+        &self,
+        query: &str,
+        filter: Option<&muta_contracts::WorkspaceFilter>,
+        limit: usize,
+    ) -> Result<Vec<HistorySearchResult>> {
+        self.engine.search_history_relaxed(query, filter, limit)
+    }
+
+    /// The prompt history, oldest first, capped at `limit`.
+    pub fn load_input_history(&self, limit: usize) -> Result<Vec<muta_contracts::HistoryEntry>> {
+        self.engine.load_input_history(limit)
+    }
+
+    /// Archived request projections for one session, oldest first.
+    pub fn load_request_projections(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<muta_contracts::RequestProjection>> {
+        self.engine.load_request_projections(session_id, limit)
+    }
+
+    // -- typed key/value ---------------------------------------------------
+
+    /// A raw key-value entry.
+    pub fn get_kv(&self, key: &str) -> Result<Option<String>> {
+        self.engine.get_kv(key)
+    }
+
+    /// A JSON-encoded key-value entry.
+    pub fn get_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
+        self.engine.get_json(key)
+    }
+
+    /// Every key with the given prefix.
+    pub fn list_kv_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        self.engine.list_kv_keys_with_prefix(prefix)
+    }
 }
 
 // Asynchronous Persistence Actor (Single-Writer Pattern, supervised — ADR-0196)
@@ -3227,7 +3381,7 @@ fn unix_ms() -> u64 {
 }
 
 /// Command variants dispatched to the single-writer persistence actor.
-pub enum PersistenceCommand {
+pub(crate) enum PersistenceCommand {
     SaveSession {
         data: Box<crate::session::SessionData>,
         /// `true`: rewrite every membership/projection/blob reference from
@@ -3290,6 +3444,11 @@ pub enum PersistenceCommand {
         created_at_ms: u64,
         ack: Option<oneshot::Sender<Result<usize, PersistenceError>>>,
     },
+    /// Reclaim transcript entries no session membership references
+    /// (ADR-0187).
+    CollectEntryGarbage {
+        ack: oneshot::Sender<Result<usize, PersistenceError>>,
+    },
     /// Test-only: the writer acks and then exits its loop, simulating actor
     /// death so the supervisor's respawn path is exercisable (ADR-0196 D6).
     #[cfg(test)]
@@ -3349,6 +3508,10 @@ impl PersistenceCommand {
                 let res = guarded(|| engine.delete_kv(&key));
                 let _ = ack.send(res);
             }
+            Self::CollectEntryGarbage { ack } => {
+                let res = guarded(|| engine.collect_entry_garbage());
+                let _ = ack.send(res);
+            }
             Self::RecordInputHistory { entry, dedup, ack } => {
                 let res = guarded(|| engine.record_input_history(&entry, dedup));
                 if let Some(ack) = ack {
@@ -3401,10 +3564,13 @@ impl PersistenceCommand {
             | Self::ClearInputHistory { ack } => {
                 let _ = ack.send(Err(error));
             }
-            Self::DeleteSession { ack, .. } | Self::RenameSession { ack, .. } => {
+            | Self::DeleteSession { ack, .. } | Self::RenameSession { ack, .. } => {
                 let _ = ack.send(Err(error));
             }
             Self::DeleteKV { ack, .. } => {
+                let _ = ack.send(Err(error));
+            }
+            Self::CollectEntryGarbage { ack } => {
                 let _ = ack.send(Err(error));
             }
             Self::RecordInputHistory { ack, .. } => {
@@ -3614,6 +3780,15 @@ pub struct PersistenceHandle {
 
 static GLOBAL_HANDLE: OnceLock<PersistenceHandle> = OnceLock::new();
 
+impl fmt::Debug for PersistenceHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PersistenceHandle")
+            .field("db_path", &self.db_path)
+            .field("health", &self.health.borrow())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Get or initialize the global shared [`PersistenceHandle`].
 pub fn get_persistence_handle() -> PersistenceHandle {
     GLOBAL_HANDLE
@@ -3639,22 +3814,30 @@ impl PersistenceHandle {
         let (health_tx, health_rx) = watch::channel(WriterHealth::Healthy);
 
         let run = run_supervisor(front_rx, db_path.clone(), blob_store.clone(), health_tx);
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                runtime.spawn(run);
-            }
-            Err(_) => {
-                std::thread::Builder::new()
-                    .name("muta-persistence-supervisor".into())
-                    .spawn(move || {
-                        let runtime = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()
-                            .expect("failed to build persistence supervisor runtime");
-                        runtime.block_on(run);
-                    })
-                    .expect("failed to spawn persistence supervisor thread");
-            }
+        // Only a multi-thread runtime can host the supervisor: a
+        // current-thread runtime is a *single* thread, so a caller that blocks
+        // on an ack (every sync verb goes through
+        // `PersistenceHandle::run_blocking`) would starve the very supervisor
+        // that owes it the ack. A dedicated thread covers both that case and
+        // the no-runtime case (library callers, tests).
+        let runtime_host = tokio::runtime::Handle::try_current()
+            .ok()
+            .filter(|handle| {
+                handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+            });
+        if let Some(handle) = runtime_host {
+            handle.spawn(run);
+        } else {
+            std::thread::Builder::new()
+                .name("muta-persistence-supervisor".into())
+                .spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("failed to build persistence supervisor runtime");
+                    runtime.block_on(run);
+                })
+                .expect("failed to spawn persistence supervisor thread");
         }
 
         Self {
@@ -3708,32 +3891,15 @@ impl PersistenceHandle {
         data: crate::session::SessionData,
     ) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        let supervisor = self.supervisor.clone();
-        let run_blocking = move || {
-            supervisor
-                .blocking_send(PersistenceCommand::SaveSession {
-                    data: Box::new(data),
-                    full: true,
-                    usage_upserts: Vec::new(),
-                    ack: ack_tx,
-                })
-                .map_err(|_| PersistenceError::WriterDown)?;
-            ack_rx
-                .blocking_recv()
-                .map_err(|_| PersistenceError::WriterDown)?
-        };
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-                tokio::task::block_in_place(run_blocking)
-            } else {
-                std::thread::spawn(run_blocking).join().map_err(|_| {
-                    PersistenceError::Poisoned("persistence blocking bridge panicked".into())
-                })?
-            }
-        } else {
-            run_blocking()
-        }
+        self.run_blocking(
+            PersistenceCommand::SaveSession {
+                data: Box::new(data),
+                full: true,
+                usage_upserts: Vec::new(),
+                ack: ack_tx,
+            },
+            ack_rx,
+        )
     }
 
     /// Asynchronously upsert a session record.
@@ -3863,34 +4029,10 @@ impl PersistenceHandle {
         ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
     }
 
-    /// Synchronously set a key-value entry on a blocking thread.
+    /// Synchronously set a key-value entry.
     pub fn set_kv_blocking(&self, key: String, value: String) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        let supervisor = self.supervisor.clone();
-        let run_blocking = move || {
-            supervisor
-                .blocking_send(PersistenceCommand::SetKV {
-                    key,
-                    value,
-                    ack: ack_tx,
-                })
-                .map_err(|_| PersistenceError::WriterDown)?;
-            ack_rx
-                .blocking_recv()
-                .map_err(|_| PersistenceError::WriterDown)?
-        };
-
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-                tokio::task::block_in_place(run_blocking)
-            } else {
-                std::thread::spawn(run_blocking).join().map_err(|_| {
-                    PersistenceError::Poisoned("persistence blocking bridge panicked".into())
-                })?
-            }
-        } else {
-            run_blocking()
-        }
+        self.run_blocking(PersistenceCommand::SetKV { key, value, ack: ack_tx }, ack_rx)
     }
 
     /// Asynchronously set a JSON-serializable value in the key-value store.
@@ -3946,16 +4088,14 @@ impl PersistenceHandle {
         dedup: bool,
     ) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.supervisor
-            .blocking_send(PersistenceCommand::RecordInputHistory {
+        self.run_blocking(
+            PersistenceCommand::RecordInputHistory {
                 entry,
                 dedup,
                 ack: Some(ack_tx),
-            })
-            .map_err(|_| PersistenceError::WriterDown)?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|_| PersistenceError::WriterDown)?
+            },
+            ack_rx,
+        )
     }
 
     /// Save multiple input history entries synchronously, waiting for SQLite actor confirmation.
@@ -3965,27 +4105,20 @@ impl PersistenceHandle {
         dedup: bool,
     ) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.supervisor
-            .blocking_send(PersistenceCommand::SaveInputHistory {
+        self.run_blocking(
+            PersistenceCommand::SaveInputHistory {
                 entries,
                 dedup,
                 ack: ack_tx,
-            })
-            .map_err(|_| PersistenceError::WriterDown)?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|_| PersistenceError::WriterDown)?
+            },
+            ack_rx,
+        )
     }
 
     /// Clear all input history entries from SQLite.
     pub fn clear_input_history_blocking(&self) -> Result<(), PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.supervisor
-            .blocking_send(PersistenceCommand::ClearInputHistory { ack: ack_tx })
-            .map_err(|_| PersistenceError::WriterDown)?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|_| PersistenceError::WriterDown)?
+        self.run_blocking(PersistenceCommand::ClearInputHistory { ack: ack_tx }, ack_rx)
     }
 
     /// Best-effort asynchronous delete of an input history record by text and timestamp.
@@ -4009,21 +4142,98 @@ impl PersistenceHandle {
         created_at_ms: u64,
     ) -> Result<usize, PersistenceError> {
         let (ack_tx, ack_rx) = oneshot::channel();
-        self.supervisor
-            .blocking_send(PersistenceCommand::DeleteInputHistoryEntry {
+        self.run_blocking(
+            PersistenceCommand::DeleteInputHistoryEntry {
                 text: text.to_string(),
                 created_at_ms,
                 ack: Some(ack_tx),
-            })
-            .map_err(|_| PersistenceError::WriterDown)?;
-        ack_rx
-            .blocking_recv()
-            .map_err(|_| PersistenceError::WriterDown)?
+            },
+            ack_rx,
+        )
     }
 
-    /// Open a lightweight read-only connection snapshot for querying.
-    pub fn open_reader(&self) -> Result<DatabaseEngine> {
-        DatabaseEngine::open(&self.db_path, self.blob_store.clone())
+    /// Open a reader against this handle's database (ADR-0231).
+    ///
+    /// This is the **only** way to obtain a connection snapshot: the engine
+    /// type is crate-private, so a caller cannot open one on a path of its own
+    /// choosing. Reads never need the actor — WAL readers run concurrently
+    /// with the writer — so this returns immediately instead of queueing
+    /// behind a slow write.
+    pub fn reader(&self) -> Result<DbReader> {
+        Ok(DbReader::new(
+            DatabaseEngine::open(&self.db_path, self.blob_store.clone())?,
+            self.db_path.clone(),
+        ))
+    }
+
+    /// Synchronously delete a key-value entry on a blocking thread.
+    pub fn delete_kv_blocking(&self, key: String) -> Result<bool, PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.run_blocking(PersistenceCommand::DeleteKV { key, ack: ack_tx }, ack_rx)
+    }
+
+    /// Reclaim transcript entries no session references (ADR-0187): the
+    /// periodic storage-maintenance sweep. Routed through the actor so the
+    /// DELETE serializes with every other write.
+    pub async fn collect_entry_garbage(&self) -> Result<usize, PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
+            .send(PersistenceCommand::CollectEntryGarbage { ack: ack_tx })
+            .await
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
+    }
+
+    /// Synchronous [`Self::collect_entry_garbage`] for a blocking maintenance
+    /// pass.
+    pub fn collect_entry_garbage_blocking(&self) -> Result<usize, PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.run_blocking(
+            PersistenceCommand::CollectEntryGarbage { ack: ack_tx },
+            ack_rx,
+        )
+    }
+
+    /// The one blocking bridge for every synchronous verb (ADR-0196).
+    ///
+    /// On a **multi-thread runtime** `block_in_place` is preferred: it parks
+    /// this worker and hands its core back, so the runtime keeps making
+    /// progress and no thread is spawned. On a **current-thread runtime** there
+    /// is no other worker that could drive the supervisor, so the wait must
+    /// move off this thread entirely: `spawn` + `join`.
+    ///
+    /// That second branch is only deadlock-free *because*
+    /// [`PersistenceHandle::spawn`] guarantees the supervisor owns a thread of
+    /// its own whenever the caller's runtime is current-thread — the two
+    /// decisions are coupled and must move together. (The previous version of
+    /// this bridge took the thread path only for `!MultiThread` but left the
+    /// supervisor as a task on that same current-thread runtime, so the `join`
+    /// blocked the only thread that could ever serve the ack: every sync verb
+    /// deadlocked under `#[tokio::test]`.)
+    fn run_blocking<T: Send + 'static>(
+        &self,
+        command: PersistenceCommand,
+        ack_rx: oneshot::Receiver<Result<T, PersistenceError>>,
+    ) -> Result<T, PersistenceError> {
+        let supervisor = self.supervisor.clone();
+        let run = move || {
+            supervisor
+                .blocking_send(command)
+                .map_err(|_| PersistenceError::WriterDown)?;
+            ack_rx
+                .blocking_recv()
+                .map_err(|_| PersistenceError::WriterDown)?
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle)
+                if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
+            {
+                tokio::task::block_in_place(run)
+            }
+            _ => std::thread::spawn(run).join().map_err(|_| {
+                PersistenceError::Poisoned("persistence blocking bridge panicked".into())
+            })?,
+        }
     }
 }
 
@@ -4533,7 +4743,7 @@ mod tests {
             )
             .unwrap();
 
-        let (count, _) = engine.collect_blob_garbage(&blob_store).unwrap();
+        let (count, _) = blob_store.retain_only(&engine.live_blob_hashes().unwrap());
         assert_eq!(count, 1);
         assert!(
             blob_store.get(&referenced).is_some(),
@@ -4772,7 +4982,7 @@ mod tests {
             assert_eq!(health, WriterHealth::Healthy);
 
             // The respawned writer owns a real engine: the value is there.
-            let reader = handle.open_reader().unwrap();
+            let reader = handle.reader().unwrap();
             assert_eq!(reader.get_kv("after").unwrap().as_deref(), Some("v"));
         }
 

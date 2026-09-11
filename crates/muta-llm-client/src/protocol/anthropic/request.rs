@@ -69,6 +69,13 @@ pub fn body_with_capabilities(
         cache_plan,
     } = input;
 
+    // Image projection is shared across transports (ADR-0230): Anthropic used
+    // to emit `image` blocks unconditionally, so a route that declares no image
+    // input failed the whole turn on a request the client could have projected
+    // correctly. The prose always survives; only the pixels are dropped.
+    let (messages, _dropped_images) =
+        crate::vision::project_images_for_route(model_id, messages, capabilities);
+
     let tool_specs = tool_specs.map(|specs| {
         json!(
             specs

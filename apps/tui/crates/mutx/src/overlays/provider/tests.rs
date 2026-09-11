@@ -581,13 +581,14 @@ fn preset_chooser_highlights_the_focused_row_with_a_background_fill() {
 fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
     let info = |model: &str, favorite: bool, used: Option<u64>| muta_contracts::ProviderModelInfo {
         model: model.to_string(),
+        name: None,
         protocol: String::new(),
         effort: None,
         thinking: None,
         effort_levels: Vec::new(),
         favorite,
         last_used_ms: used,
-        vision: false,
+        vision: Some(false),
         context_window: 128_000,
         max_output_tokens: None,
     };
@@ -653,6 +654,8 @@ fn render_models_modal(modal_index: usize, query: &str, search: bool) -> String 
                 scroll: &mut scroll,
                 follow_selection: true,
                 search,
+                refreshing: false,
+                spinner_phase: 0,
             },
             &theme,
         );
@@ -685,6 +688,94 @@ fn models_modal_renders_three_labeled_sections() {
     assert!(favorites < sonnet && sonnet < recent);
     assert!(recent < gpt55 && gpt55 < opus && opus < all);
     assert!(all < gemini && gemini < gpt54);
+}
+
+#[test]
+fn models_modal_leads_with_the_provider_label_and_keeps_the_id_visible() {
+    // A relay's opaque wire id (`deepseek-flash` for "DeepSeek V4.1 Flash")
+    // is unrecognisable, so the row leads with the provider's own name. The id
+    // must NOT disappear though — it is the string that goes on the wire and
+    // into config — so it rides along as a dim suffix. A model whose endpoint
+    // publishes nothing leads with its bare id.
+    let text = render_labelled_models_modal(110);
+
+    let labelled = text
+        .lines()
+        .find(|line| line.contains("DeepSeek V4.1 Flash"))
+        .expect("labelled row renders");
+    assert!(
+        labelled.contains("gemini-3-pro"),
+        "the wire id stays visible behind the name: {labelled:?}"
+    );
+
+    let bare = text
+        .lines()
+        .find(|line| line.contains("gpt-5.4"))
+        .expect("unlabelled row renders");
+    assert!(
+        !bare.contains("DeepSeek"),
+        "a row with no advertised label leads with its id: {bare:?}"
+    );
+}
+
+#[test]
+fn models_modal_drops_the_id_suffix_that_has_no_room_instead_of_crowding_the_label() {
+    // The id suffix only ever fills the identity column's leftover padding, so
+    // on a cramped terminal it vanishes rather than truncating the label or
+    // overflowing the provider column.
+    let narrow = render_labelled_models_modal(60);
+    let row = narrow
+        .lines()
+        .find(|line| line.contains("DeepSeek V4.1 Flash"))
+        .expect("row renders");
+    assert!(
+        !row.contains("gemini-3-pro"),
+        "no room for the suffix means no suffix: {row:?}"
+    );
+
+    // The wider render proves the two differ only by the suffix, so the
+    // assertion above is about the suffix and not about a missing row.
+    let wide = render_labelled_models_modal(110);
+    assert!(wide.contains("gemini-3-pro"));
+}
+
+/// Render the Models modal with one provider-published model label at a given
+/// terminal width. Returns the buffer text.
+fn render_labelled_models_modal(width: u16) -> String {
+    let theme = Theme::default();
+    let mut picker = sectioned_snapshot();
+    for prow in &mut picker.rows {
+        if let Some(info) = prow
+            .model_info
+            .iter_mut()
+            .find(|info| info.model == "gemini-3-pro")
+        {
+            info.name = Some("DeepSeek V4.1 Flash".to_string());
+        }
+    }
+    let ranked = crate::providers::models_flat_filtered_from(&picker, "openai", "gpt-5.5", "");
+    let mut terminal = mutx_engine::TestTerminal::new(width, 40);
+    terminal.draw(|f| {
+        let mut scroll = 0;
+        draw_models_modal(
+            f,
+            crate::overlays::provider::models::ModelsModalProps {
+                models: &ranked,
+                current_provider: "openai",
+                current_model: "gpt-5.5",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: true,
+                search: false,
+                refreshing: false,
+                spinner_phase: 0,
+            },
+            &theme,
+        );
+    });
+    buffer_text(&terminal)
 }
 
 #[test]
@@ -755,6 +846,8 @@ fn models_modal_empty_state_centered_copy_and_footer() {
                 scroll: &mut scroll,
                 follow_selection: false,
                 search: false,
+                refreshing: false,
+                spinner_phase: 0,
             },
             &theme,
         );
@@ -765,6 +858,36 @@ fn models_modal_empty_state_centered_copy_and_footer() {
     assert!(text.contains("Configured models will appear here"));
     assert!(text.contains("add connection"));
     assert!(text.contains("close"));
+}
+
+#[test]
+fn models_modal_refreshing_state_renders_spinner_and_indicator() {
+    let theme = Theme::default();
+    let mut terminal = mutx_engine::TestTerminal::new(72, 24);
+    terminal.draw(|f| {
+        let mut scroll = 0;
+        draw_models_modal(
+            f,
+            crate::overlays::provider::models::ModelsModalProps {
+                models: &[],
+                current_provider: "",
+                current_model: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                refreshing: true,
+                spinner_phase: 1,
+            },
+            &theme,
+        );
+    });
+    let text = buffer_text(&terminal);
+    assert!(text.contains("Models"));
+    assert!(text.contains("refreshing…"));
+    assert!(text.contains("Refreshing models…"));
 }
 
 #[test]
@@ -785,6 +908,8 @@ fn models_modal_search_empty_state() {
                 scroll: &mut scroll,
                 follow_selection: false,
                 search: true,
+                refreshing: false,
+                spinner_phase: 0,
             },
             &theme,
         );
@@ -847,6 +972,7 @@ fn connections_modal_empty_state_centered_copy_and_footer() {
                 connection_info_scroll: &mut 0,
                 spinner_phase: 0,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -885,6 +1011,7 @@ fn connections_modal_search_empty_state() {
                 connection_info_scroll: &mut 0,
                 spinner_phase: 0,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -962,6 +1089,7 @@ fn connections_modal_detail_view_renders_info_and_usage() {
                 connection_info_scroll: &mut 0,
                 spinner_phase: 0,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -1002,6 +1130,7 @@ fn connections_modal_detail_view_renders_info_and_usage() {
                 connection_info_scroll: &mut 8,
                 spinner_phase: 0,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -1095,6 +1224,7 @@ fn connections_modal_detail_view_renders_periodic_quota_with_progress_bar() {
                 connection_info_scroll: &mut 8,
                 spinner_phase: 0,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -1154,6 +1284,7 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
                 connection_info_scroll: &mut 0,
                 spinner_phase: 2,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -1186,6 +1317,7 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
                 connection_info_scroll: &mut 6,
                 spinner_phase: 2,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -1220,37 +1352,40 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
         model_info: vec![
             muta_contracts::ProviderModelInfo {
                 model: "gemini-3.7-flash".to_string(),
+                name: None,
                 protocol: "google".to_string(),
                 effort: Some("high".to_string()),
                 thinking: None,
                 effort_levels: Vec::new(),
                 favorite: false,
                 last_used_ms: None,
-                vision: false,
+                vision: Some(false),
                 context_window: 1_000_000,
                 max_output_tokens: None,
             },
             muta_contracts::ProviderModelInfo {
                 model: "gemini-3.1-pro".to_string(),
+                name: None,
                 protocol: "google".to_string(),
                 effort: None,
                 thinking: None,
                 effort_levels: Vec::new(),
                 favorite: false,
                 last_used_ms: None,
-                vision: false,
+                vision: Some(false),
                 context_window: 1_000_000,
                 max_output_tokens: None,
             },
             muta_contracts::ProviderModelInfo {
                 model: "claude-3-7-sonnet".to_string(),
+                name: None,
                 protocol: "anthropic".to_string(),
                 effort: Some("max".to_string()),
                 thinking: Some(true),
                 effort_levels: Vec::new(),
                 favorite: false,
                 last_used_ms: None,
-                vision: false,
+                vision: Some(false),
                 context_window: 200_000,
                 max_output_tokens: None,
             },
@@ -1343,6 +1478,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 connection_info_scroll: &mut 0,
                 spinner_phase: 0,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -1381,6 +1517,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 connection_info_scroll: &mut info_scroll,
                 spinner_phase: 0,
                 connection_info_standalone: false,
+                refreshing: false,
             },
             &theme,
             &selection,
@@ -1443,6 +1580,7 @@ fn connections_modal_standalone_detail_renders_single_level_header() {
                 connection_info_scroll: &mut 0,
                 spinner_phase: 0,
                 connection_info_standalone: true, // standalone = true
+                refreshing: false,
             },
             &theme,
             &selection,

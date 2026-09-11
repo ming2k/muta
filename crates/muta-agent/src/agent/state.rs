@@ -6,6 +6,34 @@
 
 use super::*;
 
+/// Whether any message in `messages` carries an inline image attachment.
+pub(crate) fn carries_images(messages: &[Message]) -> bool {
+    messages.iter().any(|message| {
+        message
+            .images
+            .as_ref()
+            .is_some_and(|images| !images.is_empty())
+    })
+}
+
+/// Strip every inline image attachment from `messages`, returning how many were
+/// dropped. Text content is untouched.
+///
+/// The unconditional half of the image projection (ADR-0230): callers decide
+/// *whether* the route can be given attachments and use
+/// [`Agent::project_images_away_if_unusable`] for that. The image-cause probe
+/// calls this directly, because it deliberately withholds attachments from a
+/// route that has not been latched — testing that hypothesis is the experiment.
+pub(crate) fn strip_images(messages: &mut [Message]) -> usize {
+    let mut dropped = 0usize;
+    for message in messages.iter_mut() {
+        if let Some(images) = message.images.take() {
+            dropped += images.len();
+        }
+    }
+    dropped
+}
+
 impl Agent {
     /// Start configuring an agent from a flat tool list.
     pub fn builder(
@@ -88,7 +116,7 @@ impl Agent {
         let tools = muta_contracts::ToolSelection::unrestricted();
         let capabilities = provider.model_capabilities();
         let seed_model = muta_contracts::Model {
-            vision: capabilities.vision,
+            vision: capabilities.accepts_images(),
             ..muta_contracts::resolve_model(&provider.model())
         };
         let resolved_tools = Arc::new(std::sync::RwLock::new(toolset.resolve_for(
@@ -143,6 +171,7 @@ impl Agent {
             ),
             context_prune_threshold_tokens: Arc::new(std::sync::Mutex::new(0)),
             context_projection_gate: Arc::new(std::sync::Mutex::new(None)),
+            images_suppressed: Arc::new(std::sync::RwLock::new(None)),
             hard_stop_turns: Arc::new(std::sync::Mutex::new(0)),
             doom_guard_config: Arc::new(std::sync::RwLock::new(
                 muta_contracts::DoomGuardConfig::default(),
@@ -230,7 +259,7 @@ impl Agent {
         // `read_image`) from a relay model that is in fact vision-capable.
         let capabilities = self.provider.model_capabilities();
         let model = muta_contracts::Model {
-            vision: capabilities.vision,
+            vision: capabilities.accepts_images(),
             ..muta_contracts::resolve_model(&self.provider.model())
         };
         let tools = self.tools.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -308,6 +337,12 @@ impl Agent {
     /// — and every estimate built on it — reuses those bytes. The weights
     /// cache makes the resulting request cheap to re-estimate; nothing in
     /// this path can stall the executor behind filesystem reads.
+    ///
+    /// Image visibility is decided **here, per request** (ADR-0230), never on
+    /// the durable transcript: a route that declares no image input, or one the
+    /// harness has already seen reject an image, has its attachments projected
+    /// away for this request only. That is what makes switching to a text-only
+    /// model mid-session survivable even when the history carries images.
     pub(crate) fn model_request(&self, messages: &[Message]) -> muta_contracts::ModelRequest {
         // One clone of the provider-relevant window: system rows are rare, so
         // filtering first halves the per-turn memcpy of the old
@@ -325,6 +360,7 @@ impl Agent {
         crate::conversation_context::inject_mentioned_skills(&self.skills_registry, &mut enriched);
         crate::agent::remove_empty_assistant_messages(&mut enriched);
         enriched.retain(|message| !message.is_command_echo());
+        self.project_images_away_if_unusable(&mut enriched);
 
         // `E_n` (the request-local temporary context) is empty by default
         // (ADR-0213/ADR-0214/ADR-0217): code structure is delivered on demand
@@ -364,6 +400,98 @@ impl Agent {
                 &self.provider.route_fingerprint(),
                 self.provider.continuation_mode(),
             )
+    }
+
+    /// Project inline images away when this route cannot be given them
+    /// (ADR-0230). Two independent reasons qualify, and both are *projection*
+    /// facts rather than history edits:
+    ///
+    /// - the route **declared** no image input (the wire builders strip these
+    ///   too, for callers that bypass the harness — this keeps a single
+    ///   observable behavior regardless of transport);
+    /// - the harness has already **learned** that this route rejects them
+    ///   ([`Self::suppress_images_for_current_route`]).
+    ///
+    /// Returns the number of attachments dropped, so a caller can report it.
+    /// Only the pixels go: the prose of each message is preserved verbatim, so
+    /// the conversation still reads correctly to a text-only model.
+    ///
+    /// The image-cause *probe* uses [`strip_images`] instead: it must withhold
+    /// attachments from a route that is not yet latched, because testing that
+    /// hypothesis is the point of the experiment.
+    pub(crate) fn project_images_away_if_unusable(&self, messages: &mut [Message]) -> usize {
+        // The overwhelmingly common case is a request with no attachments at
+        // all: answer it with one scan and no capability lookup, so the
+        // per-request projection stays free for text-only traffic.
+        if !carries_images(messages) {
+            return 0;
+        }
+        let declared_false = !self.provider.model_capabilities().accepts_images();
+        let learned = self.images_suppressed_for_current_route();
+        if !declared_false && !learned {
+            return 0;
+        }
+        let dropped = strip_images(messages);
+        tracing::debug!(
+            model = %self.provider.model(),
+            dropped,
+            declared_false,
+            learned,
+            "projecting images away from a request this route cannot take them on"
+        );
+        dropped
+    }
+
+    /// Whether images are currently being withheld from the active route,
+    /// whether because the route declared no image input or because a rejection
+    /// taught us so.
+    pub fn images_withheld_from_current_route(&self) -> bool {
+        !self.provider.model_capabilities().accepts_images()
+            || self.images_suppressed_for_current_route()
+    }
+
+    /// Whether a *learned* suppression is armed for the **current** route.
+    ///
+    /// The latch is keyed by [`muta_contracts::RouteFingerprint`], so a model or
+    /// endpoint switch disarms it by construction: the correction belongs to the
+    /// route that demonstrated it, never to the model id in the abstract
+    /// (ADR-0149/ADR-0230).
+    pub fn images_suppressed_for_current_route(&self) -> bool {
+        let current = self.provider.route_fingerprint();
+        self.images_suppressed
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_deref()
+            == Some(current.0.as_str())
+    }
+
+    /// Learn that the active route rejects image input, and withhold images
+    /// from it from now on (ADR-0230).
+    ///
+    /// Called when a provider refuses a request with an image-shaped error while
+    /// that request carried attachments. Recording it as a *route* fact is what
+    /// keeps a session alive across a model switch that leaves images in the
+    /// durable history: the transcript is append-only (ADR-0186), so the only
+    /// thing that may change is what a request projects.
+    ///
+    /// Returns `true` when this call armed the latch (i.e. the route was not
+    /// already suppressed), so the caller can decide whether to retry.
+    pub fn suppress_images_for_current_route(&self) -> bool {
+        let current = self.provider.route_fingerprint();
+        let mut guard = self
+            .images_suppressed
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        if guard.as_deref() == Some(current.0.as_str()) {
+            return false;
+        }
+        tracing::info!(
+            model = %self.provider.model(),
+            provider = %self.provider.provider_id(),
+            "route rejected image input; withholding images from this route"
+        );
+        *guard = Some(current.0);
+        true
     }
 
     /// Weights for an assembled request through the session-wide

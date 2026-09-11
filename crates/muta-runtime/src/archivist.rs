@@ -22,9 +22,17 @@ use async_trait::async_trait;
 use muta_agent::mesh::MeshTracker;
 use muta_agent::{Agent, AgentIdentity};
 use muta_contracts::{MeshAddress, MeshEnvelope, MeshMessage, MeshStation, Tool};
-use muta_paths::paths;
-use muta_persistence::db::DatabaseEngine;
+use muta_persistence::db::{DbReader, get_persistence_handle};
 use serde_json::json;
+
+/// A read snapshot of the unified store, obtained from the single-writer
+/// handle (ADR-0231): the lookup and recall tools never open a connection of
+/// their own.
+fn read_store() -> Result<DbReader, String> {
+    get_persistence_handle()
+        .reader()
+        .map_err(|e| format!("could not open session store: {e}"))
+}
 
 /// Build the Archivist agent for this daemon instance: a Root-posture agent
 /// addressed as `hypervisor/archivist` with the retrieval toolset plus the
@@ -148,16 +156,15 @@ impl Tool for ArchivistInstructSessionTool {
         // The id may be a prefix the search tools surfaced; resolve it
         // against the durable store first so delegation fails honestly
         // instead of mis-addressing an unrelated session.
-        let engine = DatabaseEngine::open(&paths::get().db_file(), None)
-            .map_err(|e| format!("could not open session store: {e}"))?;
-        let resolved = if engine
+        let reader = read_store()?;
+        let resolved = if reader
             .get_session(session_id)
             .map_err(|e| format!("session lookup failed: {e}"))?
             .is_some()
         {
             session_id.to_string()
         } else {
-            engine
+            reader
                 .resolve_session_prefix(session_id, None)
                 .map_err(|e| format!("session resolve failed: {e}"))?
                 .into_iter()
@@ -234,18 +241,17 @@ impl Tool for ArchivistSearchHistoryTool {
         let limit = args["limit"].as_u64().unwrap_or(20).clamp(1, 100) as usize;
         let filter = workspace.map(|w| muta_contracts::WorkspaceFilter::Path(w.into()));
 
-        let engine = DatabaseEngine::open(&paths::get().db_file(), None)
-            .map_err(|e| format!("could not open session store: {e}"))?;
+        let reader = read_store()?;
         // Two-stage recall (ADR-0208 Layer 3, deterministic leg): strict
         // AND first; an empty strict result widens to OR so a gist whose
         // words never co-occur still recalls candidates.
         let mut relaxed = false;
-        let mut hits = engine
+        let mut hits = reader
             .search_history(query, filter.as_ref(), limit)
             .map_err(|e| format!("history search failed: {e}"))?;
         if hits.is_empty() {
             relaxed = true;
-            hits = engine
+            hits = reader
                 .search_history_relaxed(query, filter.as_ref(), limit)
                 .map_err(|e| format!("history search failed: {e}"))?;
         }
@@ -313,9 +319,8 @@ impl Tool for ArchivistListSessionsTool {
         let limit = args["limit"].as_u64().unwrap_or(50).clamp(1, 500) as usize;
         let filter = workspace.map(|w| muta_contracts::WorkspaceFilter::Path(w.into()));
 
-        let engine = DatabaseEngine::open(&paths::get().db_file(), None)
-            .map_err(|e| format!("could not open session store: {e}"))?;
-        let rows = engine
+        let reader = read_store()?;
+        let rows = reader
             .list_sessions(filter.as_ref())
             .map_err(|e| format!("session listing failed: {e}"))?;
 
@@ -384,18 +389,17 @@ impl Tool for ArchivistReadSessionTool {
             .ok_or("Missing 'session_id' argument")?;
         let tail = args["tail_messages"].as_u64().unwrap_or(20).clamp(1, 200) as usize;
 
-        let engine = DatabaseEngine::open(&paths::get().db_file(), None)
-            .map_err(|e| format!("could not open session store: {e}"))?;
+        let reader = read_store()?;
         // Resolve prefix → full id first (the search tools surface ids; a
         // user may quote a shortened one).
-        let resolved = if engine
+        let resolved = if reader
             .get_session(session_id)
             .map_err(|e| format!("session lookup failed: {e}"))?
             .is_some()
         {
             session_id.to_string()
         } else {
-            engine
+            reader
                 .resolve_session_prefix(session_id, None)
                 .map_err(|e| format!("session resolve failed: {e}"))?
                 .into_iter()
@@ -406,7 +410,7 @@ impl Tool for ArchivistReadSessionTool {
         // Full transcript tail (the same projection session resume renders),
         // field-private behind the persistence view so the Archivist reads
         // exactly what a human would see.
-        let view = engine
+        let view = reader
             .read_session_transcript(&resolved, tail)
             .map_err(|e| format!("session read failed: {e}"))?
             .ok_or_else(|| format!("session '{resolved}' not found"))?;

@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::surfaces::SceneKind;
+use crate::surfaces::{DialogKind, SceneKind};
 
 // Canonical key vocabulary and display formatting
 
@@ -347,6 +347,13 @@ impl Key {
         }
     }
 
+    pub const fn plain(c: char) -> Self {
+        Self {
+            modifiers: KeyModifiers::NONE,
+            code: KeyCode::Char(c),
+        }
+    }
+
     pub fn from_event(event: KeyEvent) -> Self {
         let mut code = event.code;
         let mut modifiers = event.modifiers;
@@ -649,6 +656,61 @@ pub enum CommandId {
     PermissionsClearAll,
     ProviderAddConnection,
     RedrawScreen,
+
+    // Dialog Actions: Sessions
+    SessionOpenSelected,
+    SessionDeleteSelected,
+    SessionCreateNew,
+    SessionOpenInfo,
+
+    // Dialog Actions: Models
+    ModelSelect,
+    ModelEnterSearch,
+    ModelToggleFavorite,
+    ModelBlock,
+    ModelEditSettings,
+    ModelRefresh,
+
+    // Dialog Actions: Connections
+    ConnectionOpenDetail,
+    ConnectionEnterSearch,
+    ConnectionOpenPreset,
+    ConnectionOpenCustom,
+    ConnectionEdit,
+    ConnectionRefresh,
+    ConnectionDelete,
+
+    // Dialog Actions: MCP
+    McpToggleServer,
+    McpReconnectServer,
+
+    // Dialog Actions: Permissions
+    PermissionToggleRule,
+
+    // Dialog Actions: Queue
+    QueueRecallItem,
+    QueueDeleteItem,
+    QueueMoveItemUp,
+    QueueMoveItemDown,
+
+    // Dialog Actions: Telemetry
+    TelemetryTabOverview,
+    TelemetryTabActivity,
+    TelemetryPrevTab,
+    TelemetryNextTab,
+    TelemetryInspectDetail,
+
+    // Dialog Actions: Skills
+    SkillsToggleDetail,
+
+    // Dialog Actions: Asides
+    AsideFocus,
+    AsideClose,
+    AsideRefresh,
+
+    // Dialog Actions: History Search
+    HistorySearchInsert,
+    HistorySearchDelete,
 }
 
 /// Scope context where a command is applicable.
@@ -657,6 +719,7 @@ pub enum Scope {
     Global,
     Session,
     Composer,
+    Dialog(DialogKind),
 }
 
 /// Category of the command for palette grouping and help presentation.
@@ -714,6 +777,7 @@ pub enum Availability {
 pub struct AppContext {
     pub active_scene: SceneKind,
     pub has_overlay: bool,
+    pub active_dialog: Option<DialogKind>,
     pub is_responding: bool,
     pub has_input: bool,
     pub has_selection: bool,
@@ -1203,6 +1267,481 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Force full TUI terminal redraw and layout sync",
     },
+
+    // Dialog Actions: Sessions
+    CommandSpec {
+        id: CommandId::SessionOpenSelected,
+        label: "Open Session",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Sessions),
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Open the highlighted session",
+    },
+    CommandSpec {
+        id: CommandId::SessionDeleteSelected,
+        label: "Delete Session",
+        hint: "d",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Sessions),
+        bindings: &[Key::plain('d')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Dangerous,
+        description: "Delete the selected session permanently",
+    },
+    CommandSpec {
+        id: CommandId::SessionCreateNew,
+        label: "New Session",
+        hint: "n",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Sessions),
+        bindings: &[Key::plain('n')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Create a new session",
+    },
+    CommandSpec {
+        id: CommandId::SessionOpenInfo,
+        label: "Session Info",
+        hint: "i",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Sessions),
+        bindings: &[Key::plain('i')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "View session details, token usage, and history",
+    },
+
+    // Dialog Actions: Models
+    CommandSpec {
+        id: CommandId::ModelSelect,
+        label: "Select Model",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Models),
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Activate the highlighted model",
+    },
+    CommandSpec {
+        id: CommandId::ModelEnterSearch,
+        label: "Search Models",
+        hint: "/",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Models),
+        bindings: &[Key::plain('/')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Filter models by name or id",
+    },
+    CommandSpec {
+        id: CommandId::ModelToggleFavorite,
+        label: "Toggle Favorite",
+        hint: "*",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Models),
+        bindings: &[Key::plain('*')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Star or unstar model as favorite",
+    },
+    CommandSpec {
+        id: CommandId::ModelBlock,
+        label: "Block Model",
+        hint: "x",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Models),
+        bindings: &[Key::plain('x')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Cautious,
+        description: "Block or unblock model from routing",
+    },
+    CommandSpec {
+        id: CommandId::ModelEditSettings,
+        label: "Model Settings",
+        hint: "e",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Models),
+        bindings: &[Key::plain('e')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Configure per-model temperature and options",
+    },
+    CommandSpec {
+        id: CommandId::ModelRefresh,
+        label: "Refresh Models",
+        hint: "r",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Models),
+        bindings: &[Key::plain('r')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Fetch updated model list from provider",
+    },
+
+    // Dialog Actions: Connections
+    CommandSpec {
+        id: CommandId::ConnectionOpenDetail,
+        label: "Connection Details",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Connections),
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "View connection configuration and status",
+    },
+    CommandSpec {
+        id: CommandId::ConnectionEnterSearch,
+        label: "Search Connections",
+        hint: "/",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Connections),
+        bindings: &[Key::plain('/')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Filter connections by name",
+    },
+    CommandSpec {
+        id: CommandId::ConnectionOpenPreset,
+        label: "Add Preset Connection",
+        hint: "a",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Connections),
+        bindings: &[Key::plain('a')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Add a provider connection from curated presets",
+    },
+    CommandSpec {
+        id: CommandId::ConnectionOpenCustom,
+        label: "Add Custom Connection",
+        hint: "c",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Connections),
+        bindings: &[Key::plain('c')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Add an OpenAI-compatible custom endpoint",
+    },
+    CommandSpec {
+        id: CommandId::ConnectionEdit,
+        label: "Edit Provider",
+        hint: "e",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Connections),
+        bindings: &[Key::plain('e')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Edit provider credentials and base URL",
+    },
+    CommandSpec {
+        id: CommandId::ConnectionRefresh,
+        label: "Refresh Provider Models",
+        hint: "r",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Connections),
+        bindings: &[Key::plain('r')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Refresh models published by connection",
+    },
+    CommandSpec {
+        id: CommandId::ConnectionDelete,
+        label: "Delete Provider",
+        hint: "Shift-d",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Connections),
+        bindings: &[Key::plain('D')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Dangerous,
+        description: "Remove custom provider connection",
+    },
+
+    // Dialog Actions: MCP
+    CommandSpec {
+        id: CommandId::McpToggleServer,
+        label: "Toggle MCP Server",
+        hint: "Space",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Mcp),
+        bindings: &[Key::plain(' ')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Enable or disable highlighted MCP server",
+    },
+    CommandSpec {
+        id: CommandId::McpReconnectServer,
+        label: "Reconnect Server",
+        hint: "r",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Mcp),
+        bindings: &[Key::plain('r')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Restart and reconnect highlighted MCP server",
+    },
+
+    // Dialog Actions: Permissions
+    CommandSpec {
+        id: CommandId::PermissionToggleRule,
+        label: "Toggle Permission Rule",
+        hint: "Space",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Permissions),
+        bindings: &[Key::plain(' ')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Toggle rule allow / deny status",
+    },
+
+    // Dialog Actions: Queue
+    CommandSpec {
+        id: CommandId::QueueRecallItem,
+        label: "Recall Queued Message",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Queue),
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Recall queued message back into composer",
+    },
+    CommandSpec {
+        id: CommandId::QueueDeleteItem,
+        label: "Delete Queued Message",
+        hint: "Shift-d",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Queue),
+        bindings: &[Key::plain('D')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Dangerous,
+        description: "Remove highlighted message from outgoing queue",
+    },
+    CommandSpec {
+        id: CommandId::QueueMoveItemUp,
+        label: "Move Up in Queue",
+        hint: "Shift-k",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Queue),
+        bindings: &[Key::plain('K')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Move highlighted message earlier in dispatch order",
+    },
+    CommandSpec {
+        id: CommandId::QueueMoveItemDown,
+        label: "Move Down in Queue",
+        hint: "Shift-j",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Queue),
+        bindings: &[Key::plain('J')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Move highlighted message later in dispatch order",
+    },
+
+    // Dialog Actions: Telemetry
+    CommandSpec {
+        id: CommandId::TelemetryTabOverview,
+        label: "Telemetry Overview Tab",
+        hint: "1",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Telemetry),
+        bindings: &[Key::plain('1')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Show session token and cost overview",
+    },
+    CommandSpec {
+        id: CommandId::TelemetryTabActivity,
+        label: "Telemetry Activity Tab",
+        hint: "2",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Telemetry),
+        bindings: &[Key::plain('2')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Show per-round model generation activity",
+    },
+    CommandSpec {
+        id: CommandId::TelemetryPrevTab,
+        label: "Previous Telemetry Tab",
+        hint: "[",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Telemetry),
+        bindings: &[Key::plain('['), Key::plain('h')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Switch to previous telemetry tab",
+    },
+    CommandSpec {
+        id: CommandId::TelemetryNextTab,
+        label: "Next Telemetry Tab",
+        hint: "]",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Telemetry),
+        bindings: &[Key::plain(']'), Key::plain('l')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Switch to next telemetry tab",
+    },
+    CommandSpec {
+        id: CommandId::TelemetryInspectDetail,
+        label: "Inspect Attempt Details",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Telemetry),
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Inspect individual round attempt breakdown",
+    },
+
+    // Dialog Actions: Skills
+    CommandSpec {
+        id: CommandId::SkillsToggleDetail,
+        label: "Toggle Skill Details",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Skills),
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Expand or collapse skill documentation",
+    },
+
+    // Dialog Actions: Asides
+    CommandSpec {
+        id: CommandId::AsideFocus,
+        label: "Focus Aside",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Asides),
+        bindings: &[Key::ENTER],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Open and focus highlighted aside thread",
+    },
+    CommandSpec {
+        id: CommandId::AsideClose,
+        label: "Close Aside",
+        hint: "Shift-d",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Asides),
+        bindings: &[Key::plain('D')],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Dangerous,
+        description: "Close highlighted aside conversation",
+    },
+    CommandSpec {
+        id: CommandId::AsideRefresh,
+        label: "Refresh Asides",
+        hint: "F5",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::Asides),
+        bindings: &[Key::F5],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L1FocusRegion,
+        danger: DangerLevel::Safe,
+        description: "Reload active aside threads list",
+    },
+
+    // Dialog Actions: History Search
+    CommandSpec {
+        id: CommandId::HistorySearchInsert,
+        label: "Insert History Entry",
+        hint: "Enter",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::HistorySearch),
+        bindings: &[Key::ENTER, Key::TAB],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Safe,
+        description: "Insert selected prompt history into composer",
+    },
+    CommandSpec {
+        id: CommandId::HistorySearchDelete,
+        label: "Delete History Entry",
+        hint: "Shift-Delete",
+        category: CommandCategory::Actions,
+        scope: Scope::Dialog(DialogKind::HistorySearch),
+        bindings: &[Key::SHIFT_DELETE],
+        slash: None,
+        availability: avail_always,
+        disclosure: DisclosurePriority::L0Footer,
+        danger: DangerLevel::Dangerous,
+        description: "Permanently delete prompt from history",
+    },
 ];
 
 // Registry Lookup & Derivation Utilities
@@ -1638,7 +2177,12 @@ pub fn resolve_global_key(key: Key) -> Option<CommandId> {
 pub fn commands_for_palette(ctx: &AppContext) -> Vec<(&'static CommandSpec, Availability)> {
     COMMAND_REGISTRY
         .iter()
-        .filter(|cmd| cmd.disclosure >= DisclosurePriority::L2Palette || cmd.scope == Scope::Global)
+        .filter(|cmd| {
+            if let Scope::Dialog(dialog) = cmd.scope {
+                return ctx.active_dialog == Some(dialog);
+            }
+            cmd.disclosure >= DisclosurePriority::L2Palette || cmd.scope == Scope::Global
+        })
         .map(|cmd| (cmd, (cmd.availability)(ctx)))
         .collect()
 }

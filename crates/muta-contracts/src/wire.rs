@@ -48,7 +48,11 @@ use serde::{Deserialize, Serialize};
 /// `user_initiated` flag is gone because every catalog refresh is user-initiated.
 /// v12 (ADR-0228): web proxy configuration/update/view fields are removed.
 /// Older peers must not mistake an ignored proxy update for a successful one.
-pub const PROTOCOL_VERSION: u32 = 12;
+/// v13: `ProviderModelInfo.name` — the provider-published display label for a
+/// model (models.dev `name`, Anthropic/Kimi `display_name`, Gemini
+/// `displayName`). Additive and optional: a v12 peer simply renders the wire id
+/// with no annotation, so the minimum served version does not move.
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// Minimum served wire protocol version. ADR-0228 requires direct network
 /// access and rejects peers that can still submit application proxy settings.

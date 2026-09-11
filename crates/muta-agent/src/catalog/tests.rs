@@ -200,7 +200,7 @@ fn declared_extra_model_rides_the_preset_route_with_declared_capabilities() {
     // unregistered id (ADR-0149: user declaration is the remote layer).
     let capabilities = channel.capabilities();
     assert_eq!(capabilities.context_window, 500_000);
-    assert!(capabilities.vision);
+    assert_eq!(capabilities.vision, Some(true));
     // Undeclared fields fall through (no max_output_tokens declared).
     assert_eq!(capabilities.max_output_tokens, None);
 }
@@ -1064,7 +1064,7 @@ fn sync_fitted_model_registry_overlays_fitted_ids() {
             FittedModelInfo {
                 context_window: 262_144,
                 reasoning: true,
-                vision: true,
+                vision: Some(true),
                 efforts: vec!["max".to_string()],
             },
         );

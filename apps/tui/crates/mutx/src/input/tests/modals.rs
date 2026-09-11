@@ -216,3 +216,72 @@ fn mouse_selection_drag_tracks_within_selectable_modals() {
         "Active drag inside selectable modal should update selection coordinates"
     );
 }
+
+#[test]
+fn question_mark_in_dialog_browse_mode_opens_help() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Sessions)),
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::OpenHelp);
+}
+
+#[test]
+fn question_mark_in_dialog_search_mode_inserts_char() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let modal_keys = ModalKeys {
+        model_searching: true,
+        ..Default::default()
+    };
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Models)),
+            ..Default::default()
+        },
+        &modal_keys,
+        &SheetKeys::default(),
+        &ViewKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::InsertChar('?'));
+    assert_eq!(input, "?");
+    assert_eq!(cursor, 1);
+}
+
+#[test]
+fn question_mark_in_help_modal_closes_modal() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Help)),
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &ViewKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::CloseModal);
+}

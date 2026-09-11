@@ -131,6 +131,19 @@ pub(crate) fn resolve_modal_key(
     }
 
     match key.code {
+        KeyCode::Char('?')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
+        {
+            if overlay == Some(OverlaySurface::Dialog(DialogKind::Help)) {
+                return Some(InputAction::CloseModal);
+            }
+            if !modal_claims_composer_line(overlay, scene, keys) {
+                return Some(InputAction::OpenHelp);
+            }
+            return None;
+        }
         KeyCode::Enter if !key.modifiers.contains(KeyModifiers::ALT) => {
             return Some(if let Some(overlay) = overlay {
                 match overlay {

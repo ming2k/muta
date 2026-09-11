@@ -11,6 +11,48 @@
 > - **M4 completed** (`Shared In-Memory Daemon Authority`): `SessionDriver`'s owned `config: Config` and `provider_usage: ConnectionUsage` have been replaced by shared `SharedConfig` (`Arc<tokio::sync::RwLock<Config>>`) and `SharedConnectionUsage` (`Arc<tokio::sync::RwLock<ConnectionUsage>>`) handles owned authoritatively by `SessionRegistry` and bound to all sessions via `BootstrapParams`. Split-brain memory divergence and disk-as-IPC re-reads are permanently eradicated.
 > - **M5 completed** (`Full Elimination of Destructive View Wiping & Polling`): Eradicated destructive `app.token_report = None` and `app.usage_stats = None` on dialog entry in `surfaces.rs` and `actions.rs`; frontends act as pure functional views of the reactive store.
 
+> **Implementation addendum (2026-09-11, narrows the M1 push for the cross-session aggregate).**
+>
+> The M1 push covered two different reports and they do not deserve the same
+> treatment:
+>
+> - **`AgentResponse::TokenUsageReport` (per-session ledger snapshot) stays a
+>   proactive round-boundary push.** It is built from in-memory ledger state, it
+>   is what "live token accrual without polling" actually means, and it is what
+>   the Telemetry / Session Stats overlays render.
+> - **`AgentResponse::UsageStatsReport` (cross-session, 400-day aggregate) is no
+>   longer pushed at round boundaries; it is fetched on demand when the `/usage`
+>   overlay opens — the path `AgentRequest::QueryUsageStats` was always built
+>   for, including its `loading` state.**
+>
+> Why the split. The aggregate folds *every day blob in the report window* —
+> `UsageStatsStore::report(200)` is a 20 MB JSON deserialize + fold over ~25 000
+> records, measured at **~85–110 ms release / ~410–430 ms debug** on a real
+> corpus. It was computed **twice per round**, and the first of the two sat
+> inside `execute_round` *between* `RoundCompleted` and the function's return —
+> i.e. on the critical path to the tail's idle `HarnessState` snapshot, which is
+> what clears the activity bar off `finalizing response`. A controlled A/B on the
+> same corpus (the removed calls re-inserted at the same two points) puts the
+> bar's dwell time at **434/474/435 ms → 35.6/14.7/13.1 ms** in debug and
+> **122.5/97.9 ms → 2.7/2.9/9.3 ms** in release.
+>
+> The trade is deliberate and one-directional: **an open `/usage` overlay no
+> longer live-updates while it stays open**; it refreshes on each open, and the
+> previously displayed numbers stay on screen during the refresh (no loading
+> flash). This does not re-introduce the destructive `usage_stats = None` wipe
+> that M5 removed. A 400-day historical aggregate whose totals move by ~0.004%
+> per round has nothing live about it, and its cost is *structural* — the records
+> live as JSON blobs in the KV store, so the read+parse floor (~64 ms of the
+> ~85–110 ms) cannot be optimized away without moving the ledger to relational
+> rows. That relocation, not a push, is the follow-up if per-round liveness for
+> this overlay is ever wanted. The compute also now runs on the blocking pool
+> rather than the session driver's async worker.
+>
+> M5's "frontends are pure views of a reactive store" therefore holds with one
+> documented exception: this overlay is a **pull-on-open** view, refreshed by the
+> same authoritative daemon, of an immutable-by-day archive — not a poll and not
+> a client-side cache.
+
 ---
 
 ## 1. Context & Problem Statement

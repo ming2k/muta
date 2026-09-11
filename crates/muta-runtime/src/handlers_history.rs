@@ -2,18 +2,24 @@
 //! the daemon is the source of truth for the shared SQLite store, and the
 //! frontend reaches it only through these wire requests — it never opens the
 //! database directly.
+//!
+//! Every access goes through the single-writer actor (ADR-0231): reads take a
+//! reader snapshot off the handle, writes are actor commands. This module used
+//! to open its own engine per request, racing the writer for the SQLite write
+//! lock.
 
 use tokio::sync::mpsc::UnboundedSender;
 
 use muta_contracts::events::AgentResponse;
-use muta_paths::paths;
+use muta_persistence::db::get_persistence_handle;
 
 /// `AgentRequest::QueryInputHistory`: load the persisted prompt history.
 pub fn query_input_history(resp_tx: &UnboundedSender<AgentResponse>) {
-    let rows = muta_persistence::db::DatabaseEngine::open(&paths::get().db_file(), None)
+    let rows = get_persistence_handle()
+        .reader()
         .ok()
-        .and_then(|engine| {
-            engine
+        .and_then(|reader| {
+            reader
                 .load_input_history(muta_contracts::history::HISTORY_CAP)
                 .ok()
         })
@@ -21,16 +27,9 @@ pub fn query_input_history(resp_tx: &UnboundedSender<AgentResponse>) {
     let _ = resp_tx.send(AgentResponse::InputHistory(rows));
 }
 
-/// `AgentRequest::RecordInputHistory`: lock + merge entries into the shared
-/// store.
+/// `AgentRequest::RecordInputHistory`: merge entries into the shared store.
 pub fn record_input_history(entries: Vec<muta_contracts::HistoryEntry>, dedup: bool) {
-    let result = muta_persistence::db::DatabaseEngine::open(&paths::get().db_file(), None)
-        .map_err(|e| format!("could not open sqlite db: {e}"))
-        .and_then(|engine| {
-            engine
-                .save_input_history(&entries, dedup)
-                .map_err(|e| format!("could not save input history to sqlite: {e}"))
-        });
+    let result = get_persistence_handle().save_input_history_blocking(entries, dedup);
     if let Err(error) = result {
         tracing::warn!(%error, "input history record failed");
     }
@@ -39,13 +38,7 @@ pub fn record_input_history(entries: Vec<muta_contracts::HistoryEntry>, dedup: b
 /// `AgentRequest::DeleteInputHistoryEntry`: remove one row by content and
 /// timestamp.
 pub fn delete_input_history_entry(text: &str, created_at_ms: u64) {
-    let result = muta_persistence::db::DatabaseEngine::open(&paths::get().db_file(), None)
-        .map_err(|e| format!("could not open sqlite db: {e}"))
-        .and_then(|engine| {
-            engine
-                .delete_input_history_entry(text, created_at_ms)
-                .map_err(|e| format!("could not delete input history entry: {e}"))
-        });
+    let result = get_persistence_handle().delete_input_history_entry_blocking(text, created_at_ms);
     if let Err(error) = result {
         tracing::warn!(%error, "input history delete failed");
     }
@@ -87,16 +80,17 @@ pub fn search_history(
     const MAX_LIMIT: usize = 100;
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let filter = workspace.map(|w| muta_contracts::WorkspaceFilter::Path(w.into()));
-    let hits = muta_persistence::db::DatabaseEngine::open(&paths::get().db_file(), None)
+    let hits = get_persistence_handle()
+        .reader()
         .map_err(|e| format!("could not open sqlite db: {e}"))
-        .and_then(|engine| {
-            let strict = engine
+        .and_then(|reader| {
+            let strict = reader
                 .search_history(query, filter.as_ref(), limit)
                 .map_err(|e| format!("history search failed: {e}"))?;
             if !strict.is_empty() {
                 return Ok(strict);
             }
-            engine
+            reader
                 .search_history_relaxed(query, filter.as_ref(), limit)
                 .map_err(|e| format!("history search failed: {e}"))
         })

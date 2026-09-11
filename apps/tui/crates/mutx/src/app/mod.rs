@@ -1146,6 +1146,8 @@ pub struct App {
     /// / last-used). Drives the `/models` and `/connections` pickers' rendering
     /// and sort order. Refreshed from the response listener each frame.
     pub provider_picker: ProviderPickerSnapshot,
+    /// Whether an asynchronous model list refresh is currently in flight.
+    pub models_refreshing: bool,
     /// Theme.
     pub theme: Theme,
     /// Terminal capability profile (ADR-0180).

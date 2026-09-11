@@ -123,6 +123,12 @@ pub fn build_session_context(
 /// Heuristic model-capability hints for the Tools / Mcp / Skills / Permissions
 /// managers. The live provider exposes the channel-scoped capability view, so
 /// a provider's remote catalogue can override a static model baseline.
+///
+/// Vision is listed only when some layer **declared** it (ADR-0230): these
+/// hints are read as a statement about the route, and an undeclared route has
+/// nothing to state. (The *request* path is permissive instead — an undeclared
+/// route still carries images — but that is `accepts_images`, a policy rather
+/// than a claim.)
 pub fn derive_capabilities(capabilities: &muta_contracts::ModelCapabilities) -> Vec<String> {
     let mut caps = Vec::new();
     if capabilities.tool_call {
@@ -131,7 +137,7 @@ pub fn derive_capabilities(capabilities: &muta_contracts::ModelCapabilities) -> 
     if capabilities.reasoning() {
         caps.push("reasoning".to_string());
     }
-    if capabilities.vision {
+    if capabilities.vision == Some(true) {
         caps.push("vision".to_string());
     }
     caps

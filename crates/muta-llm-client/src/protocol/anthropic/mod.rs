@@ -207,13 +207,16 @@ impl AnthropicMessagesProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
+        telemetry: &muta_contracts::TransportTelemetry,
     ) -> Result<crate::egress::HttpResponse, ProviderError> {
         let auth = self
             .endpoint
             .resolve_auth()
             .await
             .map_err(|e| ProviderError::authentication("Anthropic", e))?;
-        let mut req = self.build_request_for_auth(body, &auth);
+        let mut req = self
+            .build_request_for_auth(body, &auth)
+            .with_telemetry(telemetry.clone());
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
@@ -230,7 +233,9 @@ impl AnthropicMessagesProvider {
                 .force_refresh_auth_after(&auth.token)
                 .await
                 .map_err(|error| ProviderError::authentication("Anthropic", error))?;
-            let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
+            let mut retry_req = self
+                .build_request_for_auth(body, &refreshed_auth)
+                .with_telemetry(telemetry.clone());
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
             }
@@ -279,10 +284,6 @@ impl Provider for AnthropicMessagesProvider {
         true
     }
 
-    fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
-        self.client.take_transport_timings()
-    }
-
     async fn chat(
         &self,
         request: ModelRequest,
@@ -293,6 +294,7 @@ impl Provider for AnthropicMessagesProvider {
             mut messages,
             tool_specs,
             temporary_context,
+            transport_telemetry,
             ..
         } = request;
         messages.extend(temporary_context);
@@ -310,7 +312,7 @@ impl Provider for AnthropicMessagesProvider {
             &self.capabilities,
         );
 
-        let resp = self.send_request(&body, false).await?;
+        let resp = self.send_request(&body, false, &transport_telemetry).await?;
         let response_json: serde_json::Value = decode_response_json(resp, "Anthropic").await?;
 
         let assembled = response::assemble_message(&response_json)
@@ -348,6 +350,7 @@ impl Provider for AnthropicMessagesProvider {
             mut messages,
             tool_specs,
             temporary_context,
+            transport_telemetry,
             ..
         } = request;
         messages.extend(temporary_context);
@@ -365,7 +368,7 @@ impl Provider for AnthropicMessagesProvider {
             &self.capabilities,
         );
 
-        let response = self.send_request(&body, true).await?;
+        let response = self.send_request(&body, true, &transport_telemetry).await?;
 
         // Reuse the shared SSE byte reassembly; each payload is one Anthropic
         // event JSON. Map to text deltas only (this is the simple stream path).
@@ -387,6 +390,7 @@ impl Provider for AnthropicMessagesProvider {
             mut messages,
             tool_specs,
             temporary_context,
+            transport_telemetry,
             ..
         } = request;
         messages.extend(temporary_context);
@@ -404,7 +408,7 @@ impl Provider for AnthropicMessagesProvider {
             &self.capabilities,
         );
 
-        let response = self.send_request(&body, true).await?;
+        let response = self.send_request(&body, true, &transport_telemetry).await?;
 
         let sig_stash = signature::SignatureStash::shared();
         let terminal_stash = sig_stash.clone();

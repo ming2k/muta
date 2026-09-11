@@ -93,14 +93,19 @@ pub fn body_with_capabilities(
     // the tool-trace projection must retain without looking for local calls.
     let remote_call_ids = remote_parent_call_ids(&messages, delivery);
 
-    // Fold system instructions and legacy messages into `instructions`, strip
-    // images on non-vision models (the Responses API rejects `input_image` on them),
-    // and project a remote continuation down to only the locally new suffix.
+    // Fold system instructions and legacy messages into `instructions`,
+    // project images for this route's declared support (the Responses API
+    // rejects `input_image` on a route without it), and project a remote
+    // continuation down to only the locally new suffix. The image policy is
+    // shared with every other transport (`crate::vision`, ADR-0230): only a
+    // route that *declared* no image input loses its attachments.
+    let (messages, _dropped_images) =
+        crate::vision::project_images_for_route(model_id, messages, capabilities);
     let mut instructions = input_instructions
         .map(|b| b.render_combined())
         .unwrap_or_default();
     let mut working: Vec<Message> = Vec::with_capacity(messages.len());
-    for (index, mut m) in messages.into_iter().enumerate() {
+    for (index, m) in messages.into_iter().enumerate() {
         match m.role {
             Role::System => {
                 if !instructions.is_empty() {
@@ -114,9 +119,6 @@ pub fn body_with_capabilities(
                     && index < *input_start
                 {
                     continue;
-                }
-                if !capabilities.vision {
-                    m.images = None;
                 }
                 working.push(m);
             }
@@ -824,6 +826,46 @@ mod tests {
             content[1]["image_url"],
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         );
+    }
+
+    #[test]
+    fn declared_text_only_route_projects_remote_continuation_images_away() {
+        // ADR-0230: the projection runs before the delivery split, so an image
+        // carried by the locally-new suffix of a remote continuation is dropped
+        // for a route that declared no image input — the Responses API 400s on
+        // `input_image` outright.
+        let mut msg = Message::new(Role::User, "look at this");
+        msg.images = Some(vec![muta_contracts::message::ImagePart {
+            mime: "image/png".to_string(),
+            data: "aGk=".to_string(),
+        }]);
+
+        let remote = muta_contracts::RemoteModelMetadata {
+            vision: Some(false),
+            ..Default::default()
+        };
+        let caps = muta_contracts::ModelCapabilities::for_channel("gpt-4o", Some(&remote));
+
+        let payload = body_with_capabilities(
+            vec![msg],
+            test_body_input(
+                "gpt-4o",
+                false,
+                None,
+                None,
+                &DEFAULT_DELIVERY,
+                false,
+                &DEFAULT_CACHE_PLAN,
+            ),
+            &caps,
+        )
+        .unwrap();
+
+        let content = payload["input"][0]["content"]
+            .as_array()
+            .expect("content array");
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "input_text");
     }
 
     #[test]

@@ -326,6 +326,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         provider_delete_focus: crate::ProviderDeleteChoice::default(),
         key_status: HashMap::new(),
         provider_picker: ProviderPickerSnapshot::default(),
+        models_refreshing: false,
         theme: Theme::default(),
         profile: mutx_engine::TerminalProfile::direct_color(),
         logo: None,

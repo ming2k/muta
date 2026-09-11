@@ -356,14 +356,13 @@ impl App {
         self.active_model_info()
             .map(|info| info.route_capabilities())
             .unwrap_or_else(|| {
-                let m = muta_contracts::model::resolve(&self.current_model);
-                muta_contracts::RouteCapabilities {
-                    context_window: m.context_window,
-                    max_output_tokens: None,
-                    vision: m.vision,
-                    tool_call: m.tool_call,
-                    thinking: m.thinking,
-                }
+                // No daemon row yet (startup, or a route the snapshot has not
+                // refreshed): the baseline layer alone, resolved through the
+                // same three-valued merge the daemon uses, so an id no layer
+                // knows stays *undeclared* rather than being reported as a
+                // text-only claim (ADR-0230).
+                muta_contracts::ModelCapabilities::for_channel(&self.current_model, None)
+                    .to_route_capabilities()
             })
     }
 
@@ -379,10 +378,16 @@ impl App {
         }
     }
 
-    /// Whether the active route accepts image input. Uses daemon-projected
-    /// capabilities from ProviderModelInfo, falling back to static registry.
+    /// Whether images would travel to the active route.
+    ///
+    /// **Permissive on undeclared** (ADR-0230): `true` unless a layer declared
+    /// that the route rejects images. This answers the *request* policy, not
+    /// "was vision advertised" — a gate that must be certain should read
+    /// [`Self::active_route_capabilities`]`.vision` and treat `None` as
+    /// unknown. Uses daemon-projected capabilities from `ProviderModelInfo`,
+    /// falling back to the baseline layers when the snapshot has not mounted.
     pub fn active_model_supports_vision(&self) -> bool {
-        self.active_route_capabilities().vision
+        self.active_route_capabilities().accepts_images()
     }
 
     /// Whether the provider with this snapshot id is user-defined (not a

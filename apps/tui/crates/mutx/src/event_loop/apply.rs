@@ -331,6 +331,7 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
         }
         AppMutation::ProviderPicker(snapshot) => {
             app.provider_picker = snapshot;
+            app.models_refreshing = false;
             true
         }
         AppMutation::SessionsOverview(sessions) => {
@@ -388,6 +389,7 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             true
         }
         AppMutation::NoticeToast { severity, text } => {
+            app.copy_toast_until = None;
             app.notice_toast_severity = severity;
             app.notice_toast_message = text;
             app.notice_toast_until =

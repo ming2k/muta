@@ -122,9 +122,16 @@ pub fn token_usage(
 /// [`AgentResponse::UsageStatsReport`]. Pure read over `data/usage/`;
 /// independent of the live ledger and of any session, so it reflects days
 /// whose sessions were long since deleted.
-pub fn usage_stats(resp_tx: &mpsc::UnboundedSender<AgentResponse>, event_cap: usize) {
-    let store = muta_persistence::usage_stats::UsageStatsStore::new();
-    let report = store.report(event_cap);
+pub async fn usage_stats(resp_tx: &mpsc::UnboundedSender<AgentResponse>, event_cap: usize) {
+    // Aggregating the report window is a CPU-bound deserialize + fold over
+    // every day blob (~85-110 ms with a year of history), so it runs on the
+    // blocking pool: opening the overlay must never stall the session
+    // driver's async worker.
+    let report = tokio::task::spawn_blocking(move || {
+        muta_persistence::usage_stats::UsageStatsStore::new().report(event_cap)
+    })
+    .await
+    .unwrap_or_default();
     let _ = resp_tx.send(AgentResponse::UsageStatsReport { report });
 }
 

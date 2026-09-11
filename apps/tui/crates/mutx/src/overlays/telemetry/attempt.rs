@@ -210,34 +210,45 @@ pub(crate) fn build_attempt_inspector_body(
         muted(theme),
     );
 
-    // Connection + upload fold into one milestone: the transport either reused
-    // a pooled socket (nothing to show) or paid a cold-start handshake. The
-    // per-phase costs (DNS/TCP/TLS) only matter when they exist.
-    let is_reused = match perf {
-        Some(p) => p.dns_us.is_none() && p.tcp_us.is_none() && p.tls_us.is_none(),
-        None => true,
-    };
-    let connect_detail = if is_reused {
-        ("reused warm pool connection".to_string(), good(theme))
-    } else {
-        let p = perf.unwrap_or_default();
-        let phases: Vec<String> = [
-            p.dns_us.map(|us| format!("DNS {}", fmt_duration_us(us))),
-            p.tcp_us.map(|us| format!("TCP {}", fmt_duration_us(us))),
-            p.tls_us.map(|us| format!("TLS {}", fmt_duration_us(us))),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        (format!("cold start: {}", phases.join(" + ")), accent(theme))
-    };
-    timeline.node(
-        perf.and_then(|p| p.stream_ready_us)
-            .map(|us| base_ms + us_to_s(us)),
-        "Connected",
-        connect_detail.0,
-        connect_detail.1,
-    );
+    // Connection: only the transport can place this moment, and only it can say
+    // which regime the attempt ran under. A pooled socket really did pay
+    // nothing; a cold start paid its phases and the ladder names them; with no
+    // transport telemetry there is no connection moment to draw, and drawing one
+    // from the response head would put it after the request was sent.
+    //
+    // Anchored on `connected_us` — the end of the last phase actually paid —
+    // never on `stream_ready_us`, which is the response head and lands after
+    // `Request sent` by construction.
+    if let Some(perf) = perf
+        && perf.pooled_connection().is_some()
+        && let Some(connected_us) = perf.connected_us
+    {
+        let (detail, style) = if perf.pooled_connection() == Some(true) {
+            (
+                "reused pooled connection — no handshake".to_string(),
+                good(theme),
+            )
+        } else {
+            let phases: Vec<String> = [
+                perf.dns_us.map(|us| format!("DNS {}", fmt_duration_us(us))),
+                perf.tcp_us.map(|us| format!("TCP {}", fmt_duration_us(us))),
+                perf.tls_us.map(|us| format!("TLS {}", fmt_duration_us(us))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            (
+                format!("cold start: {}", phases.join(" + ")),
+                accent(theme),
+            )
+        };
+        timeline.node(
+            Some(base_ms + us_to_s(connected_us)),
+            "Connected",
+            detail,
+            style,
+        );
+    }
 
     // Upload: dispatch → last byte handed to the kernel.
     let sent_us = perf.and_then(|p| p.request_sent_us);
@@ -355,15 +366,19 @@ pub(crate) fn build_attempt_inspector_body(
     lines.extend(timeline.lines);
 
     // One socket summary line only — RTT and retransmits live here, not in
-    // per-node details.
+    // per-node details. Both come from the same `TCP_INFO` sample, so a present
+    // RTT is exactly what separates a measured zero retransmit count from a
+    // socket nobody ever sampled.
     let rtt_us = perf.and_then(|p| p.rtt_us);
-    let retransmits = perf.map(|p| p.retransmits).unwrap_or(0);
-    if rtt_us.is_some() || retransmits > 0 {
-        let rtt = rtt_us.map(fmt_duration_us).unwrap_or_else(|| "–".into());
+    if let Some(rtt_us) = rtt_us {
+        let retransmits = perf.map(|p| p.retransmits).unwrap_or(0);
         lines.push(Line::from(vec![
             Span::styled(GUTTER, Style::default()),
             Span::styled(
-                format!("socket: RTT {rtt} · retransmits {retransmits}"),
+                format!(
+                    "socket: RTT {} · retransmits {retransmits}",
+                    fmt_duration_us(rtt_us)
+                ),
                 Style::default().fg(theme.text_muted),
             ),
         ]));

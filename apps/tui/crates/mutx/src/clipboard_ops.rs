@@ -16,13 +16,39 @@ use crate::clipboard::{self, ClipboardRead, CopyOutcome};
 use crate::composer_attachments::{image_chip, paste_chip, paste_line_count, should_chip_paste};
 use crate::surfaces::{DialogKind, OverlaySurface, SceneKind, SheetKind};
 
-/// Whether the currently active model route accepts image input.
+/// Which layer, if any, **declared** whether the active route takes images.
+/// `None` = undeclared: the client must not gate on it (ADR-0230).
 ///
-/// The authority is the **daemon-built picker snapshot** (ADR-0182): its
-/// per-model `vision` flag is the full ADR-0149 resolution computed on the
-/// route the daemon will actually serve.
-pub(crate) fn active_model_supports_vision(app: &App) -> bool {
-    app.active_model_supports_vision()
+/// This is the paste gate's question, and it is deliberately not
+/// [`App::active_model_supports_vision`]: that one answers the permissive
+/// *request* policy ("would images travel?"), while a paste may only be
+/// refused when a layer actually said the route rejects them. The authority is
+/// still the daemon-built picker snapshot (ADR-0182) — the full ADR-0149
+/// resolution for the route the daemon will serve — merely read as a
+/// declaration rather than as a policy.
+pub(crate) fn active_route_vision_declaration(app: &App) -> Option<bool> {
+    app.active_route_capabilities().vision
+}
+
+/// The escape hatch named in the paste rejection: a declared text-only route is
+/// the user's own `CapabilityOverrides::vision` decision away from accepting
+/// images (ADR-0149 layer 1).
+const VISION_OVERRIDE_HINT: &str = "set Vision in the model editor to override";
+
+/// Suffix for a successful image paste on a route whose image support **no
+/// layer declared**.
+///
+/// The paste is accepted — deliberately, since vendors rarely publish this
+/// capability (ADR-0230) — but an accepted paste is not a promise that the
+/// model will see the picture. Saying so up front costs one parenthetical and
+/// is the difference between a user who understands the next failure and one
+/// who thinks the client lost their image.
+fn vision_unverified_suffix(app: &App) -> &'static str {
+    if active_route_vision_declaration(app).is_none() {
+        " (image support unverified for this model)"
+    } else {
+        ""
+    }
 }
 
 /// Bound on each clipboard operation. A stuck reader must never freeze the
@@ -104,17 +130,19 @@ pub(super) fn apply_clipboard_paste(app: &mut App, read: ClipboardRead) {
 fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
     match read {
         ClipboardRead::Image { data, mime } => {
-            // If the current model route doesn't accept image input, reject
-            // the paste with a toast rather than silently dropping it — the
-            // user should know why their paste didn't take.
-            if !active_model_supports_vision(app) {
+            // Only a route that *declared* no image support refuses the paste,
+            // and it says how to change that (ADR-0230). An undeclared route
+            // attaches the image and lets the provider answer: whether a vendor
+            // accepts images is exactly the kind of fact most of them do not
+            // publish, so the client must not guess it on their behalf.
+            if active_route_vision_declaration(app) == Some(false) {
                 app.copy_toast_message = format!(
-                    "{} does not support images — paste ignored",
+                    "{} does not support images — paste ignored ({VISION_OVERRIDE_HINT})",
                     app.current_model,
                 );
                 app.copy_toast_failed = true;
                 app.copy_toast_until =
-                    Some(std::time::Instant::now() + Duration::from_millis(2000));
+                    Some(std::time::Instant::now() + Duration::from_millis(2500));
                 return;
             }
             let raw_size = data.len();
@@ -132,8 +160,9 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
             let n = app.pending_images.len();
             insert_chip_at_cursor(app, &image_chip(n, raw_size));
             app.copy_toast_message = format!(
-                "{n} image{} attached — enter to send",
-                if n == 1 { "" } else { "s" }
+                "{n} image{} attached — enter to send{}",
+                if n == 1 { "" } else { "s" },
+                vision_unverified_suffix(app),
             );
             app.copy_toast_failed = false;
             app.copy_toast_until = Some(std::time::Instant::now() + Duration::from_millis(1800));
@@ -202,7 +231,8 @@ fn apply_composer_paste(app: &mut App, read: ClipboardRead) {
 /// Paste of file references (files copied in a file manager). Image files are
 /// staged as `[Image #N]` attachments through the same pipeline as image-data
 /// pastes; non-image files are skipped and reported in the toast rather than
-/// silently dropped, matching the vision-rejection behavior above.
+/// silently dropped, and only a route that declared no image support blocks the
+/// image (ADR-0230), with the same override hint as the image-data paste.
 fn apply_composer_files_paste(app: &mut App, paths: Vec<std::path::PathBuf>) {
     let mut attached: Option<usize> = None;
     let mut skipped = 0usize;
@@ -213,7 +243,7 @@ fn apply_composer_files_paste(app: &mut App, paths: Vec<std::path::PathBuf>) {
             skipped += 1;
             continue;
         };
-        if !active_model_supports_vision(app) {
+        if active_route_vision_declaration(app) == Some(false) {
             vision_blocked = true;
             break;
         }
@@ -232,8 +262,9 @@ fn apply_composer_files_paste(app: &mut App, paths: Vec<std::path::PathBuf>) {
         (Some(_), 0, false) => {
             let n = app.pending_images.len();
             format!(
-                "{n} image{} attached — enter to send",
-                if n == 1 { "" } else { "s" }
+                "{n} image{} attached — enter to send{}",
+                if n == 1 { "" } else { "s" },
+                vision_unverified_suffix(app),
             )
         }
         (Some(_), skipped, false) => {
@@ -254,7 +285,7 @@ fn apply_composer_files_paste(app: &mut App, paths: Vec<std::path::PathBuf>) {
             )
         }
         (_, _, true) => format!(
-            "{} does not support images — paste ignored",
+            "{} does not support images — paste ignored ({VISION_OVERRIDE_HINT})",
             app.current_model,
         ),
     };

@@ -63,6 +63,30 @@ pub(crate) fn unix_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// The user-facing explanation for withholding image attachments (ADR-0230).
+///
+/// One wording, because there is one kind of evidence: the probe's outcome. The
+/// harness deliberately does **not** read the vendor's error text to decide
+/// whether images were the cause — every vendor formats that differently — so it
+/// states the empirical finding instead of attributing a claim to the provider
+/// that it may never have made.
+fn image_withheld_notice(model: &str) -> muta_contracts::AgentNotice {
+    muta_contracts::AgentNotice::new(
+        NoticeKind::ImageInputWithheld,
+        NoticeSeverity::Warning,
+        format!("{model} cannot take images — continuing without them"),
+        NoticeSource::Harness,
+    )
+    .with_body(format!(
+        "A request to {model} was refused; retrying it without the attachments succeeded, so the \
+         images were the cause. They were left out of the retried request — and of later requests \
+         on this route. The images stay in this session's history and reappear when you switch \
+         back to a model that accepts them. To force images onto this route anyway, set Vision to \
+         \"force on\" for it in the model editor."
+    ))
+    .with_surface(NoticeSurface::Toast)
+}
+
 pub struct ProxyProvider {
     pub holder: Arc<RwLock<Arc<dyn Provider>>>,
     /// Whether `/debug trace` is armed. Read on every call so the
@@ -945,11 +969,6 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                     report,
                 });
             }
-            let store = muta_persistence::usage_stats::UsageStatsStore::new();
-            let usage_report = store.report(200);
-            let _ = context.tx.send(AgentResponse::UsageStatsReport {
-                report: usage_report,
-            });
         }
     });
 }
@@ -1254,6 +1273,14 @@ pub async fn execute_round(
     let mut attempt: usize = 0;
     let retry_limit = retry_max_attempts.clamp(1, 60);
     let mut compacted_after_overflow = false;
+    // An in-flight **image-cause probe** (ADR-0230): `true` means the attempt now
+    // running had its attachments withheld speculatively, because a request
+    // refusal occurred while they were attached. If that attempt succeeds, images
+    // were the cause and the route is latched; if it fails, the hypothesis is
+    // disproved, nothing is latched, and the refusal of the request the user
+    // actually composed is what surfaces. No vendor text is consulted at any
+    // point — the probe's outcome is the evidence.
+    let mut image_probe = false;
     // Faults the retry loop recovered from, in order. Fed the durable
     // `RetryResolution` (and the live `RetryResolved` event) when the round
     // ultimately completes — the success-side mirror of a round interrupt.
@@ -1329,7 +1356,22 @@ pub async fn execute_round(
             )
             .await;
 
-        let Err(error) = result else {
+        let Err(mut error) = result else {
+            // The probe is confirmed by its *outcome* (ADR-0230): the identical
+            // turn succeeded once the attachments were withheld, which is
+            // evidence enough to latch the route — the vendor never had to
+            // explain itself in a format we can parse.
+            if std::mem::take(&mut image_probe) {
+                agent.suppress_images_for_current_route();
+                let _ = tx.send(round_response(
+                    &session_id,
+                    RoundEvent::Notice(image_withheld_notice(&agent.provider.model())),
+                ));
+                tracing::warn!(
+                    model = %agent.provider.model(),
+                    "confirmed by retry: this route refuses image input; withheld from now on"
+                );
+            }
             break result;
         };
         if let Err(error) = persist_request_usage(&agent, &session, &session_id).await {
@@ -1362,6 +1404,83 @@ pub async fn execute_round(
                 }
                 attempt = attempt.saturating_sub(1);
                 continue;
+            }
+        }
+
+        // An image refusal is *information*, not a wall (ADR-0230).
+        //
+        // Vision is the capability vendors do not reliably publish, so an
+        // undeclared route is attempted with images. When the provider refuses
+        // for that reason, the failure must not end the round: the durable
+        // transcript keeps its images (ADR-0186 forbids rewriting history), so
+        // the identical request would fail forever — and `/retry` would re-send
+        // it unchanged. So the route learns, the *same* turn is re-projected
+        // without attachments, and the conversation continues.
+        //
+        // **How the refusal is recognized is deliberately not a parsing
+        // problem.** Every vendor formats its error envelope differently, and
+        // their prose drifts, so recognition rests on the only two facts we
+        // control: the request was refused (`is_request_refusal`), and it
+        // carried attachments. From there the round loop runs the experiment —
+        // retry the identical turn without the attachments. **Success is the
+        // only evidence**, and no vendor error text is parsed anywhere: the
+        // classification that remains (`is_request_refusal`) is derived from the
+        // HTTP status the transport already mapped (INV-VISION-6).
+        if !agent.images_suppressed_for_current_route()
+            && let HarnessError::Provider(provider_error) = &error
+            && provider_error.is_request_refusal()
+            && round_history.iter().any(|message| {
+                message
+                    .images
+                    .as_ref()
+                    .is_some_and(|images| !images.is_empty())
+            })
+        {
+            // The armed checkpoint is what the retry re-sends, so re-project
+            // *it* — the turn's history, tools, hooks, and accounting stay
+            // exactly as assembled, and only the attachments disappear. The strip
+            // is unconditional (`strip_images`): the route is not latched yet,
+            // because withholding them to see what happens IS the experiment. It
+            // must actually happen, or the "retry" would be byte-identical and
+            // prove nothing.
+            let stripped = streaming_round
+                .project_pending_request(|request| {
+                    crate::agent::strip_images(&mut request.messages)
+                })
+                .unwrap_or(0);
+            if stripped == 0 {
+                // Nothing to withhold — the checkpoint carried no attachments
+                // (the refusal arrived before assembly, say). Re-sending would be
+                // byte-identical, so this is not an experiment; fall through to
+                // the ordinary error path.
+            } else if !image_probe {
+                // Hypothesis armed. Note what the round is now running: an
+                // experiment whose *outcome* is the evidence. Nothing here reads
+                // the provider's error text, so no vendor format can mislead the
+                // recovery — and no wording can withhold a capability by itself.
+                image_probe = true;
+                if streamed_text.swap(false, Ordering::SeqCst) {
+                    let _ = tx.send(round_response(&session_id, RoundEvent::StreamDiscard));
+                }
+                tracing::warn!(
+                    model = %agent.provider.model(),
+                    withheld = stripped,
+                    "request refused while carrying attachments; probing without them"
+                );
+                // A recovery, not a fault: a learned limitation must not consume
+                // the transient-fault budget, exactly like the overflow
+                // compaction above.
+                attempt = attempt.saturating_sub(1);
+                continue;
+            } else if std::mem::take(&mut image_probe) {
+                // The probe failed, so images were *not* the cause. Surface the
+                // refusal of the request the user actually composed rather than
+                // a second failure of the harness's own modified probe.
+                tracing::warn!(
+                    model = %agent.provider.model(),
+                    "retrying without images did not help; the refusal is not about them"
+                );
+                error = HarnessError::Provider(provider_error.clone());
             }
         }
 
@@ -1597,11 +1716,15 @@ pub async fn execute_round(
                 report,
             });
         }
-        let store = muta_persistence::usage_stats::UsageStatsStore::new();
-        let usage_report = store.report(200);
-        let _ = tx.send(AgentResponse::UsageStatsReport {
-            report: usage_report,
-        });
+        // The cross-session usage aggregate is deliberately NOT computed here.
+        // It folds every day blob in the 400-day window (~85-110 ms release,
+        // ~410-430 ms debug against a year of history) and this point is
+        // between `RoundCompleted` and this function's return — i.e. on the
+        // critical path to the tail's idle snapshot, which is what clears the
+        // activity bar off `finalizing response`. The `/usage` overlay fetches
+        // it on demand instead (`AgentRequest::QueryUsageStats`), which is the
+        // path it was always designed around; live telemetry is carried by the
+        // in-memory `TokenUsageReport` above.
     }
     Ok(RoundCompletion::Completed)
 }

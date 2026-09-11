@@ -89,12 +89,13 @@ impl SessionStore {
     /// the key-addressed `request_projections` table on demand; it is not held
     /// in `SessionData`.
     pub async fn request_projections(&self) -> Vec<muta_contracts::RequestProjection> {
-        let db_path = self.db_path.clone();
+        let handle = self.writer.clone();
         let session_id = self.id().await;
         tokio::task::spawn_blocking(move || {
-            crate::db::DatabaseEngine::open(&db_path, None)
-                .and_then(|engine| {
-                    engine.load_request_projections(
+            handle
+                .reader()
+                .and_then(|reader| {
+                    reader.load_request_projections(
                         &session_id,
                         crate::db::MAX_RETAINED_REQUEST_PROJECTIONS,
                     )
@@ -272,7 +273,7 @@ impl SessionStore {
                 !empty_unpersisted,
             )
         };
-        persist_subagent_children(&self.db_path, &self.blob_store, &children);
+        persist_subagent_children(&self.writer, &self.blob_store, &children);
         if should_persist {
             self.persist_off_runtime(path, data, self.blob_store.clone())
                 .await?;
@@ -353,7 +354,7 @@ impl SessionStore {
             };
             (state.path.clone(), data, children)
         };
-        persist_subagent_children(&self.db_path, &self.blob_store, &children);
+        persist_subagent_children(&self.writer, &self.blob_store, &children);
         self.persist_off_runtime(path, data, self.blob_store.clone())
             .await
     }
@@ -483,7 +484,7 @@ impl SessionStore {
             };
             (state.path.clone(), data, children, usage_upserts)
         };
-        persist_subagent_children(&self.db_path, &self.blob_store, &children);
+        persist_subagent_children(&self.writer, &self.blob_store, &children);
         self.persist_with_usage(path, data, usage_upserts).await
     }
 
@@ -546,7 +547,7 @@ impl SessionStore {
             (parent_id, child, fork_child_id, child_path)
         };
         // Blocking I/O stays outside the session lock.
-        persist_to(&self.db_path, &child, &self.blob_store)?;
+        persist_to(&self.writer, &child, &self.blob_store)?;
 
         let mut state = self.state.lock().await;
         // Repoint this store at the child; the parent state is already current.
@@ -579,7 +580,7 @@ impl SessionStore {
             (parent_id, side, side_id)
         };
         // Blocking I/O stays outside the session lock.
-        persist_to(&self.db_path, &side, &self.blob_store)?;
+        persist_to(&self.writer, &side, &self.blob_store)?;
         Ok((side_id, parent_id))
     }
 
@@ -590,15 +591,16 @@ impl SessionStore {
         let workspace = self.workspace.clone();
         let persona = self.persona.clone();
         let blob_store = BlobStore::new(self.blob_store.root().to_path_buf());
-        let engine = crate::db::DatabaseEngine::open(&db_path, None).map_err(|e| e.to_string())?;
-        let data = if let Some(data) = engine
+        let reader = self.writer.reader().map_err(|e| e.to_string())?;
+        let data = if let Some(data) = reader
             .load_session_full(side_id)
             .map_err(|e| e.to_string())?
         {
             data
         } else if side_path.exists() {
             load_or_seed(
-                &db_path,
+                Some(&reader),
+                Some(&self.writer),
                 side_id,
                 &blob_store,
                 workspace.as_ref(),
@@ -643,7 +645,7 @@ impl SessionStore {
             (state.data.clone(), id)
         };
         // Blocking I/O stays outside the session lock.
-        persist_to(&self.db_path, &data, &self.blob_store)?;
+        persist_to(&self.writer, &data, &self.blob_store)?;
         Ok(id)
     }
 
@@ -664,7 +666,7 @@ impl SessionStore {
             (state.data.clone(), messages)
         };
         // Blocking I/O stays outside the session lock.
-        persist_to(&self.db_path, &data, &self.blob_store)?;
+        persist_to(&self.writer, &data, &self.blob_store)?;
         Ok(messages)
     }
 }
@@ -724,9 +726,13 @@ fn admit_subagent_children(state: &mut SessionData, candidates: &[Message]) -> V
 /// Persist admitted subagent sessions. Called after the session lock is
 /// released; failures leave the parent entry's pointer dangling, which the
 /// load path reports rather than silently dropping the run.
-fn persist_subagent_children(db_path: &Path, blob_store: &BlobStore, subagents: &[SessionData]) {
+fn persist_subagent_children(
+    writer: &crate::db::PersistenceHandle,
+    blob_store: &BlobStore,
+    subagents: &[SessionData],
+) {
     for subagent in subagents {
-        if let Err(error) = crate::session::persist_to(db_path, subagent, blob_store) {
+        if let Err(error) = crate::session::persist_to(writer, subagent, blob_store) {
             tracing::warn!(%error, subagent = %subagent.id, "could not persist subagent session; nested transcript is dropped");
         }
     }

@@ -86,7 +86,7 @@ impl Tool for GetOutlineTool {
     }
 
     fn description(&self) -> &str {
-        "Inspect the top-level syntactic symbols (functions, structs, traits, classes, interfaces) of a source file without reading the full implementation body. The outline is a bounded syntactic summary of the bytes read at call time, not a semantic, type, or dependency analysis; each result reports the source version it describes."
+        "Fast overview of top-level code symbols (functions, structs, traits, classes) in a source file without reading full implementations. Best for locating targets in large files before using read_text. Supported: rs, ts, js, py, c, cpp, go."
     }
 
     fn parameters(&self) -> serde_json::Value {

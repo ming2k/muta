@@ -989,3 +989,66 @@ async fn connection_detail_refresh_action_queries_active_detail_id() {
         _ => panic!("Expected QueryConnectionDetail request"),
     }
 }
+
+#[tokio::test]
+async fn models_modal_refresh_action_provides_feedback_and_deduplicates() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    app.tx = tx;
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    app.open_dialog(crate::surfaces::DialogKind::Models);
+    assert!(!app.models_refreshing);
+
+    // First press: initiates refresh, sets models_refreshing, shows toast, sends request
+    let flow = crate::event_loop::actions::dispatch_action_for_test(
+        &mut app,
+        &runtime,
+        crate::input::InputAction::RefreshProviderModels,
+        "s1",
+    )
+    .await;
+
+    assert_eq!(flow, crate::event_loop::actions::ActionFlow::Handled);
+    assert!(app.models_refreshing);
+    assert_eq!(app.copy_toast_message, "Refreshing models…");
+    assert!(app.copy_toast_until.is_some());
+
+    let req = rx.try_recv().expect("should send refresh request");
+    assert!(matches!(req, muta_contracts::AgentRequest::RefreshProviderModels));
+
+    // Second press while refreshing: warns already in progress, does not send duplicate request
+    let flow2 = crate::event_loop::actions::dispatch_action_for_test(
+        &mut app,
+        &runtime,
+        crate::input::InputAction::RefreshProviderModels,
+        "s1",
+    )
+    .await;
+
+    assert_eq!(flow2, crate::event_loop::actions::ActionFlow::Handled);
+    assert!(app.models_refreshing);
+    assert_eq!(app.copy_toast_message, "Model refresh already in progress…");
+    assert!(rx.try_recv().is_err(), "should not send duplicate request");
+
+    // When ProviderPicker snapshot arrives, models_refreshing resets to false
+    crate::event_loop::apply::apply(
+        &mut app,
+        &runtime,
+        crate::event_loop::AppMutation::ProviderPicker(muta_contracts::ProviderPickerSnapshot::default()),
+    );
+    assert!(!app.models_refreshing);
+
+    // When NoticeToast arrives, local copy toast is cleared so server notice is visible
+    app.copy_toast_until = Some(std::time::Instant::now() + std::time::Duration::from_secs(10));
+    crate::event_loop::apply::apply(
+        &mut app,
+        &runtime,
+        crate::event_loop::AppMutation::NoticeToast {
+            severity: crate::model::document::NoticeSeverity::Info,
+            text: "Model list refreshed (up to date)".to_string(),
+        },
+    );
+    assert!(app.copy_toast_until.is_none());
+    assert_eq!(app.notice_toast_message, "Model list refreshed (up to date)");
+}

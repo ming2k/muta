@@ -399,9 +399,10 @@ async fn run_inner(
     // and non-fatal.
     {
         use muta_contracts::JobSpec;
-        let dirs = muta_persistence::paths::get();
         let registry_for_rehost = Arc::clone(&registry);
-        crate::task_ledger::rehost_all(&dirs.db_file(), move |row| {
+        crate::task_ledger::rehost_all(
+            &muta_persistence::db::get_persistence_handle(),
+            move |row| {
             let JobSpec::Process {
                 command,
                 restart: Some(_policy),

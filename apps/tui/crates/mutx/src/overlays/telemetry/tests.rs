@@ -7,7 +7,7 @@ use super::tables::{build_rounds_table, build_turns_table};
 use crate::render::Theme;
 use muta_contracts::{
     RequestPerformance, RequestUsageKey, RequestUsageRecord, RequestUsageSource,
-    RequestUsageStatus, TokenSourceReport, TokenSourceRow,
+    RequestUsageStatus, TokenSourceReport, TokenSourceRow, TransportObservation,
 };
 
 #[test]
@@ -173,14 +173,22 @@ fn test_build_attempt_inspector_waterfall_nodes() {
             cache_read_tokens: 3000,
             cache_write_tokens: 0,
             performance: Some(RequestPerformance {
-                stream_ready_us: Some(120_000),
-                ttft_us: Some(280_000),
+                connected_us: Some(150_000),
+                request_sent_us: Some(400_000),
+                stream_ready_us: Some(500_000),
+                ttft_us: Some(680_000),
                 stream_us: Some(3_000_000),
                 output_events: 10,
                 tail_us: Some(25_000),
                 e2e_us: Some(3_425_000),
                 streamed_output_tokens: 300,
                 first_output_tokens: 0,
+                dns_us: Some(20_000),
+                tcp_us: Some(40_000),
+                tls_us: Some(90_000),
+                rtt_us: Some(42_000),
+                retransmits: 0,
+                observation: TransportObservation::ColdConnection,
                 ..Default::default()
             }),
             e2e_duration_ms: 3500,
@@ -234,6 +242,23 @@ fn test_build_attempt_inspector_waterfall_nodes() {
     ] {
         assert!(full_text.contains(moment), "missing moment: {moment}");
     }
+    // The connection moment is the cold start this record actually paid, named
+    // with its phases rather than claimed as a pool hit.
+    assert!(full_text.contains("cold start: DNS 20ms + TCP 40ms + TLS 90ms"));
+    assert!(!full_text.contains("reused"));
+    // And it sits *before* the request was sent: anchoring it on the response
+    // head (the old behaviour) put it after, which made the timeline run
+    // backwards. Position, not just presence, is the property being held.
+    let connected_at = full_text.find("Connected").expect("connection moment");
+    let sent_at = full_text.find("Request sent").expect("upload moment");
+    let ready_at = full_text.find("Server started").expect("head moment");
+    assert!(
+        connected_at < sent_at && sent_at < ready_at,
+        "the ladder must advance: Connected {connected_at} → Request sent {sent_at} → \
+         Server started {ready_at}"
+    );
+    // `TCP_INFO` sampled this record, so the retransmit count is a measurement.
+    assert!(full_text.contains("socket: RTT 42ms · retransmits 0"));
     // No decorative glyphs or connector lines may return.
     for line in &lines {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
@@ -244,11 +269,86 @@ fn test_build_attempt_inspector_waterfall_nodes() {
         );
         if text.contains("First token") {
             assert!(
-                text.contains("+0.16s"),
+                text.contains("+0.18s"),
                 "First token row must carry its interval: {text:?}"
             );
         }
     }
+}
+
+/// A record with no transport telemetry has no connection moment, and inventing
+/// one from the response head is what made the ladder misorder itself.
+#[test]
+fn test_attempt_inspector_omits_a_connection_moment_it_cannot_place() {
+    let theme = Theme::from_color_scheme("dark", &Default::default());
+    let rounds = vec![TelemetryRound {
+        round_number: 1,
+        prompt_tokens: 4000,
+        completion_tokens: 300,
+        cache_read_tokens: 0,
+        total_tokens: 4300,
+        turns_count: 1,
+        e2e_duration_ms: 3_500,
+        attempts: vec![TelemetryAttempt {
+            round: 1,
+            turn: 1,
+            attempt: 1,
+            model: "claude-3-7-sonnet".to_string(),
+            provider: "anthropic".to_string(),
+            status: RequestUsageStatus::Completed,
+            prompt_tokens: 4000,
+            completion_tokens: 300,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            performance: Some(RequestPerformance {
+                stream_ready_us: Some(120_000),
+                ttft_us: Some(280_000),
+                stream_us: Some(3_000_000),
+                output_events: 10,
+                tail_us: Some(25_000),
+                e2e_us: Some(3_425_000),
+                streamed_output_tokens: 300,
+                first_output_tokens: 0,
+                // Observation stays `Unreported`: nothing watched the socket.
+                ..Default::default()
+            }),
+            e2e_duration_ms: 3500,
+            started_at_ms: 200,
+        }],
+    }];
+
+    let full_text: String = build_attempt_inspector_body(
+        &rounds,
+        1,
+        1,
+        ContextUsageProps {
+            window_tokens: Some(200_000),
+            ..Default::default()
+        },
+        100,
+        Some(0),
+        &theme,
+    )
+    .iter()
+    .map(|line| {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    assert!(!full_text.contains("Connected"), "{full_text}");
+    assert!(!full_text.contains("reused"), "{full_text}");
+    assert!(!full_text.contains("cold start"), "{full_text}");
+    // The rest of the ladder is unaffected: the head moment still carries its
+    // own timestamp through `Server started`.
+    assert!(full_text.contains("Server started"), "{full_text}");
+    assert!(full_text.contains("headers 120ms from dispatch"), "{full_text}");
+    // An unsampled socket shows no retransmit claim at all: a zero here would
+    // read as a clean socket rather than an untouched field.
+    assert!(!full_text.contains("retransmits"), "{full_text}");
 }
 
 #[test]

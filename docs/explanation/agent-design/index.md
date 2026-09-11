@@ -103,7 +103,7 @@ deep-dive references, read as a pair:
     two layers operate on.
 15. [Network telemetry, TTFT, and streaming TPS](network-telemetry-and-tps.md) —
     how muta measures latency and throughput from the client boundary: the
-    OSI/TCP observability matrix, why Packet 5 ACK is inaudible, the 9-stage
+    kernel/user observability matrix, why Packet 5 ACK is inaudible, the 9-stage
     latency timeline (Enter to turn end), kernel `TCP_INFO` polling, and the
     single-rate doctrine.
 16. [Prompt caching](prompt-caching.md) — the cost counterpart to token

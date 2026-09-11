@@ -14,8 +14,9 @@ rows (see [Input box](input-box.md#the-hint-row)). Long-lived **session** state
 
 ## Appearance
 
-Reasoning model, fixed-effort (Kimi K3's single `max` tier always shows; the
-id-first policy renders the wire id `k3`):
+Reasoning model, fixed-effort (Kimi K3's single `max` tier always shows; the bar
+reports the live route by its wire id — `k3` — unlike the Models picker, which
+leads with a provider-published name when one exists):
 
 ```text
  k3 max @kimi-code                        89.2k (8%) Ctrl+O   47.8 tok/s Ctrl+S

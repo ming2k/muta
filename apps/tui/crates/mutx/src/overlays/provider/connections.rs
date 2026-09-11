@@ -36,6 +36,7 @@ pub struct ConnectionsModalProps<'a> {
     pub connection_info_scroll: &'a mut usize,
     pub spinner_phase: usize,
     pub connection_info_standalone: bool,
+    pub refreshing: bool,
 }
 
 /// Draw the **Connections** modal — the provider-instance management surface (`/connections`).
@@ -60,6 +61,7 @@ pub fn draw_connections_modal(
         connection_info_scroll,
         spinner_phase,
         connection_info_standalone,
+        refreshing,
     } = props;
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme, true, true);
@@ -67,6 +69,7 @@ pub fn draw_connections_modal(
     let header_rect = f.header;
 
     // `a add` opens the preset chooser and `Enter details` drills into connection info/usage.
+    let refresh_label = if refreshing { "refreshing…" } else { "refresh" };
     let browse_hints: [FooterHint; 8] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
@@ -74,7 +77,7 @@ pub fn draw_connections_modal(
         FooterHint::secondary("a", "preset"),
         FooterHint::secondary("c", "custom"),
         FooterHint::secondary("e", "edit"),
-        FooterHint::secondary("r", "refresh"),
+        FooterHint::secondary("r", refresh_label),
         FooterHint::key_always(crate::keymap::Key::ESC, "close"),
     ];
     let browse_extra: [FooterHintWithBand; 1] = [FooterHintWithBand {
@@ -155,7 +158,27 @@ pub fn draw_connections_modal(
         return area;
     }
 
-    modal_header(frame, header_rect, "Connections", theme);
+    if refreshing {
+        let spin = theme.glyphs.spinner_frame(spinner_phase);
+        let header = [
+            crate::elevation::HeaderPart::title("Connections"),
+            crate::elevation::HeaderPart::Text {
+                text: "  ",
+                accent: false,
+            },
+            crate::elevation::HeaderPart::Text {
+                text: spin,
+                accent: true,
+            },
+            crate::elevation::HeaderPart::Text {
+                text: " refreshing…",
+                accent: false,
+            },
+        ];
+        modal_header_parts(frame, header_rect, &header, theme);
+    } else {
+        modal_header(frame, header_rect, "Connections", theme);
+    }
 
     let (search_rect, body_rect) = split_search_body(f.body, search);
     if let Some(search_rect) = search_rect {

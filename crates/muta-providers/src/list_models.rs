@@ -188,6 +188,11 @@ pub struct DiscoveredModel {
     pub protocol: Option<WireProtocol>,
     /// Provider model family, when advertised.
     pub family: Option<String>,
+    /// Human-readable label the endpoint publishes for this model, when it
+    /// advertises one (`name`/`display_name`/`displayName`). Presentation
+    /// only — never identity, and never required: the surfaces fall back to
+    /// the wire id when this is `None`.
+    pub name: Option<String>,
     /// Advertised context window in tokens (Kimi's `context_length`, or
     /// Copilot's `capabilities.limits.max_context_window_tokens`).
     pub context_window: Option<usize>,
@@ -220,6 +225,12 @@ impl DiscoveredModel {
         RemoteModelMetadata {
             protocol: self.protocol,
             family: self.family.clone(),
+            name: self
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty() && *name != self.id.as_str())
+                .map(str::to_string),
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
             thinking: self.thinking.or_else(|| {
@@ -594,6 +605,11 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                     picker_enabled: Some(listed),
                     protocol: Some(WireProtocol::Responses),
                     family: None,
+                    name: entry
+                        .get("display_name")
+                        .or_else(|| entry.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     context_window,
                     max_output_tokens: None,
                     reasoning: Some(reasoning),
@@ -677,6 +693,15 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
         picker_enabled: None,
         protocol: None,
         family: None,
+        // Anthropic publishes `display_name`, Kimi `display_name`, and
+        // OpenRouter a plain `name`; the stock OpenAI `/models` shape carries
+        // none of them. Any of the three is accepted — the first one present
+        // wins, and absence is normal.
+        name: entry
+            .get("display_name")
+            .or_else(|| entry.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         context_window: entry
             .get("context_length")
             .and_then(Value::as_u64)
@@ -784,6 +809,11 @@ fn copilot_model_from_capabilities(
             .get("family")
             .and_then(Value::as_str)
             .map(str::to_string),
+        name: entry
+            .get("name")
+            .or_else(|| entry.get("display_name"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         context_window: limits
             .and_then(|l| l.get("max_context_window_tokens"))
             .and_then(Value::as_u64)
@@ -847,6 +877,13 @@ fn parse_google_models(json: &Value) -> Vec<DiscoveredModel> {
                     .and_then(Value::as_str)
                     .map(|name| DiscoveredModel {
                         id: name.strip_prefix("models/").unwrap_or(name).to_string(),
+                        // Gemini's model resource carries the label in
+                        // `displayName` (`name` is the `models/<id>` path), so
+                        // the display label must not be read from `name` here.
+                        name: entry
+                            .get("displayName")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         ..DiscoveredModel::default()
                     })
             })
@@ -899,6 +936,11 @@ fn parse_antigravity_models_map(
             picker_enabled: Some(true),
             protocol: None,
             family: Some("google".to_string()),
+            name: mdata
+                .get("displayName")
+                .or_else(|| mdata.get("display_name"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
             context_window,
             max_output_tokens,
             reasoning,
@@ -1475,8 +1517,8 @@ mod tests {
     #[test]
     fn parses_anthropic_data_ids() {
         // Anthropic's /v1/models returns the same {data:[{id}]} shape; no
-        // capability fields are advertised (a display_name may ride along —
-        // it is not consumed: the UI is id-first by policy).
+        // capability fields are advertised. The `display_name` it rides along
+        // is ingested as the presentation-only label (never the identity).
         let json = serde_json::json!({
             "data": [
                 { "id": "claude-opus-4-8", "display_name": "Claude Opus 4.8" },
@@ -1489,6 +1531,58 @@ mod tests {
         assert_eq!(got, vec!["claude-opus-4-8", "claude-sonnet-5"]);
         assert_eq!(models[0].context_window, None);
         assert_eq!(models[0].reasoning, None);
+        assert_eq!(models[0].name.as_deref(), Some("Claude Opus 4.8"));
+    }
+
+    #[test]
+    fn openai_data_models_carry_no_label_when_the_endpoint_publishes_none() {
+        // The stock OpenAI-compatible `/models` shape is `{id, object,
+        // created, owned_by}` — no label. Absence must stay `None` (the
+        // surfaces then render the bare id), not an empty string.
+        let json = serde_json::json!({
+            "data": [
+                { "id": "glm-5.2", "object": "model", "owned_by": "zhipu" }
+            ]
+        });
+        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        assert_eq!(models[0].id, "glm-5.2");
+        assert_eq!(models[0].name, None);
+        assert_eq!(models[0].remote_metadata().name, None);
+    }
+
+    #[test]
+    fn a_label_repeating_the_id_collapses_to_none() {
+        // Kimi advertises `display_name` equal to the id (`"k3"`), and a
+        // models.dev entry may repeat its id as `name`. Storing that would
+        // render the same string twice on the row, so it collapses to "no
+        // label" and the surfaces show the bare id.
+        let json = serde_json::json!({
+            "data": [
+                { "id": "k3", "display_name": "k3" },
+                { "id": "glm-5.2", "display_name": "  " }
+            ]
+        });
+        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        assert_eq!(models[0].name.as_deref(), Some("k3"));
+        assert_eq!(models[0].remote_metadata().name, None);
+        assert_eq!(models[1].remote_metadata().name, None);
+    }
+
+    #[test]
+    fn google_display_name_is_read_from_display_name_not_the_resource_path() {
+        // Gemini's `name` is the resource path (`models/gemini-2.5-pro`) that
+        // becomes the id; the human label is a separate `displayName` field.
+        // Reading the label from `name` would echo the id back.
+        let json = serde_json::json!({
+            "models": [{
+                "name": "models/gemini-2.5-pro",
+                "displayName": "Gemini 2.5 Pro",
+                "supportedGenerationMethods": ["generateContent"]
+            }]
+        });
+        let models = parse_models(DiscoveryProtocol::Google, &json);
+        assert_eq!(models[0].id, "gemini-2.5-pro");
+        assert_eq!(models[0].name.as_deref(), Some("Gemini 2.5 Pro"));
     }
 
     #[test]

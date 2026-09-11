@@ -113,6 +113,26 @@ pub struct BodyInput<'a> {
 
 /// Build the Google `generateContent` request body from a message list.
 pub fn body(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
+    body_inner(messages, input)
+}
+
+/// Build the request body with the channel's resolved capabilities, projecting
+/// image parts for this route (ADR-0230). The provider calls this; [`body`]
+/// remains the entry point for standalone callers and tests that have no
+/// channel view. `model` is the wire id, used only to label the projection's
+/// diagnostic log.
+pub fn body_with_capabilities(
+    model: &str,
+    messages: Vec<Message>,
+    input: BodyInput<'_>,
+    capabilities: &muta_contracts::ModelCapabilities,
+) -> Value {
+    let (messages, _dropped_images) =
+        crate::vision::project_images_for_route(model, messages, capabilities);
+    body_inner(messages, input)
+}
+
+fn body_inner(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
     let mut system = Vec::new();
     if let Some(instructions) = input.instructions
         && !instructions.is_empty()
@@ -765,6 +785,57 @@ mod tests {
             include_thoughts,
             thinking,
         }
+    }
+
+    /// Route capabilities with only the vision declaration varied.
+    fn caps_with_vision(vision: Option<bool>) -> muta_contracts::ModelCapabilities {
+        muta_contracts::ModelCapabilities {
+            family: "google".into(),
+            context_window: 1_000_000,
+            max_output_tokens: None,
+            thinking: muta_contracts::ReasoningSupport::None,
+            tool_call: true,
+            vision,
+            effort_levels: Vec::new(),
+        }
+    }
+
+    fn image_message(text: &str) -> Message {
+        Message::new(Role::User, text).with_images(vec![muta_contracts::ImagePart {
+            mime: "image/png".to_string(),
+            data: "aGk=".to_string(),
+        }])
+    }
+
+    #[test]
+    fn declared_text_only_route_projects_inline_data_away() {
+        // Google's `inline_data` used to be emitted unconditionally, so a route
+        // without image input failed the whole turn (ADR-0230).
+        let body = body_with_capabilities(
+            "gemini-test",
+            vec![image_message("look")],
+            test_body_input(None, false, None),
+            &caps_with_vision(Some(false)),
+        );
+
+        let parts = body["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["text"], "look");
+        assert!(body["contents"][0]["parts"][0].get("inline_data").is_none());
+    }
+
+    #[test]
+    fn undeclared_route_keeps_inline_data() {
+        let body = body_with_capabilities(
+            "gemini-test",
+            vec![image_message("look")],
+            test_body_input(None, false, None),
+            &caps_with_vision(None),
+        );
+
+        let parts = body["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts[1]["inline_data"]["mime_type"], "image/png");
+        assert_eq!(parts[1]["inline_data"]["data"], "aGk=");
     }
 
     #[test]

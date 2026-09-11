@@ -635,7 +635,7 @@ async fn subagent_children_become_subagent_sessions_with_pointer() {
 
     // The parent's tool entry carries a SubagentRef into a Subagent-kind
     // session whose transcript holds the child messages.
-    let engine = crate::db::DatabaseEngine::open(&dir.join("muta.db"), None).unwrap();
+    let reader = store.writer.reader().unwrap();
     let subagent_id = {
         let state = store.state_lock_for_test().await;
         let entry = state
@@ -651,7 +651,7 @@ async fn subagent_children_become_subagent_sessions_with_pointer() {
             .expect("tool entry must carry a subagent pointer");
         entry.session_id
     };
-    let subagent = engine.load_session_full(&subagent_id).unwrap().unwrap();
+    let subagent = reader.load_session_full(&subagent_id).unwrap().unwrap();
     assert_eq!(
         subagent.fork_kind,
         muta_contracts::SessionForkKind::Subagent
@@ -672,7 +672,7 @@ async fn subagent_children_become_subagent_sessions_with_pointer() {
     let _ = child_messages;
 
     // Subagent sessions never surface in the picker.
-    let summaries = engine
+    let summaries = reader
         .list_session_summaries(None, &store.id().await)
         .unwrap();
     assert!(!summaries.iter().any(|summary| summary.id == subagent_id));

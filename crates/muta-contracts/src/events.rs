@@ -897,6 +897,18 @@ pub enum NoticeKind {
     /// had spoken. See ADR-0050 for the durable-vs-ephemeral boundary — the
     /// command *invocation* stays durable; this *reply* is ephemeral.
     CommandAck,
+    /// Image attachments were withheld from a request because the route cannot
+    /// take them (ADR-0230): either a layer declared no image input, or the
+    /// provider rejected an image-bearing request and the harness learned the
+    /// route's limit.
+    ///
+    /// Deliberately first-class rather than folded into
+    /// [`NoticeKind::ProviderRetry`]: this is not a transient fault to wait out
+    /// but a durable fact about the route, and the user's remedy differs
+    /// (switch model, or set the `Vision` override in the model editor). The
+    /// transcript keeps its images either way — only the request projection
+    /// drops them.
+    ImageInputWithheld,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
@@ -1694,6 +1706,14 @@ pub enum ConnectStatus {
 pub struct ProviderModelInfo {
     /// Wire model id. Mirrors an entry in [`ProviderPickerRow::models`].
     pub model: String,
+    /// Human-readable label the provider advertises for this model (models.dev
+    /// `name`, Anthropic/Kimi `display_name`), when it advertises one. This is
+    /// the label the model pickers lead with, falling back to `model` when it is
+    /// absent. Purely presentational: it is never the identity, so frontends
+    /// must keep the wire id visible beside it and key every config surface on
+    /// `model`. `None` — the common case — means show the bare wire id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Wire protocol id of the channel serving this model (`"openai"` |
     /// `"anthropic"` | `"google"`).
     pub protocol: String,
@@ -1723,13 +1743,19 @@ pub struct ProviderModelInfo {
     /// capability resolution (user overrides over the remote advertisement
     /// over the static baseline), resolved daemon-side in
     /// `Channel::capabilities()`. Frontends gate image affordances (composer
-    /// paste, vision-only tools) on this flag instead of re-resolving the
+    /// paste, vision-only tools) on this field instead of re-resolving the
     /// model in their own process: the client's static registry cannot see
     /// the daemon's fitted-model overlay or per-route overrides, so a
     /// client-side resolution would disagree with what the daemon actually
-    /// routes. `false`-defaulted so older snapshots gate conservatively.
-    #[serde(default)]
-    pub vision: bool,
+    /// routes.
+    ///
+    /// **Three-valued** (ADR-0230): `Some(false)` means a layer declared that
+    /// this route rejects images — the only value a frontend may gate on;
+    /// `None` means *undeclared*, which older snapshots (and every route whose
+    /// vendor advertises no vision field) deserialize to, so a frontend must
+    /// treat it as "try it", never as text-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
     /// Effective context window in tokens for this route — the **full**
     /// ADR-0149 capability resolution (ADR-0182). Guaranteed > 0 for valid
     /// channels; 0 indicates an unresolved fallback.

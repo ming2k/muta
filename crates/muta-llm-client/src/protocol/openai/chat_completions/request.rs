@@ -118,28 +118,13 @@ pub fn body_with_capabilities(
         }
     }
 
-    // If the model doesn't support vision, strip inline images so the API
-    // doesn't reject the request with "unknown variant `image_url`". The
-    // text content is preserved — the model just doesn't see the pixels.
-    let messages: Vec<Message> = if capabilities.vision {
-        messages
-    } else {
-        messages
-            .into_iter()
-            .map(|mut m| {
-                if m.images.is_some() {
-                    tracing::debug!(
-                        target: "muta_contracts::provider",
-                        model = %model_id,
-                        vision = false,
-                        "stripping images from message — model does not support vision",
-                    );
-                    m.images = None;
-                }
-                m
-            })
-            .collect()
-    };
+    // A route that declared no image input has its attachments dropped (text
+    // survives; the model simply does not see the pixels, and OpenAI rejects
+    // `image_url` outright). The policy lives in `crate::vision` so all four
+    // transports project identically, and an *undeclared* route keeps its
+    // images instead of losing them silently (ADR-0230).
+    let (messages, _dropped_images) =
+        crate::vision::project_images_for_route(model_id, messages, capabilities);
 
     // OpenAI rejects any `tool` message whose `tool_call_id` does not match
     // a `tool_call` on a preceding assistant message. Drop orphan tool
@@ -369,6 +354,59 @@ mod tests {
         }
     }
 
+    /// Route capabilities with only the vision declaration varied, for the
+    /// image-projection tests below.
+    fn caps_with_vision(vision: Option<bool>) -> muta_contracts::ModelCapabilities {
+        muta_contracts::ModelCapabilities {
+            family: "test".into(),
+            context_window: 200_000,
+            max_output_tokens: None,
+            thinking: muta_contracts::ReasoningSupport::None,
+            tool_call: true,
+            vision,
+            effort_levels: Vec::new(),
+        }
+    }
+
+    fn image_message(text: &str) -> Message {
+        Message::new(Role::User, text).with_images(vec![muta_contracts::ImagePart {
+            mime: "image/png".to_string(),
+            data: "aGk=".to_string(),
+        }])
+    }
+
+    #[test]
+    fn declared_text_only_route_strips_image_parts() {
+        let body = body_with_capabilities(
+            vec![image_message("look")],
+            test_body_input("test-model", false, None, None, &DEFAULT_CACHE_PLAN),
+            &caps_with_vision(Some(false)),
+        );
+
+        // The prose survives as a plain string; the `image_url` part is gone, so
+        // the API cannot reject the request for it.
+        assert_eq!(body["messages"][0]["content"], "look");
+    }
+
+    #[test]
+    fn undeclared_route_keeps_image_parts() {
+        // ADR-0230: an endpoint that advertises no vision field must not have
+        // its images silently stripped — the request goes out as-is and a
+        // provider that cannot take it says so.
+        let body = body_with_capabilities(
+            vec![image_message("look")],
+            test_body_input("test-model", false, None, None, &DEFAULT_CACHE_PLAN),
+            &caps_with_vision(None),
+        );
+
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(
+            body["messages"][0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,aGk="
+        );
+    }
+
     #[test]
     fn request_filters_empty_assistant_history() {
         let body = super::body(
@@ -434,7 +472,7 @@ mod tests {
             max_output_tokens: Some(235_929),
             thinking: muta_contracts::ReasoningSupport::ReasoningContent,
             tool_call: true,
-            vision: true,
+            vision: Some(true),
             effort_levels: vec![
                 Effort::None.into(),
                 Effort::Medium.into(),

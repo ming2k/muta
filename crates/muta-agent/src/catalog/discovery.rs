@@ -630,7 +630,7 @@ fn fitted_model_info(model: &muta_providers::DiscoveredModel) -> FittedModelInfo
     FittedModelInfo {
         context_window: model.context_window.unwrap_or(0),
         reasoning: model.reasoning.unwrap_or(false),
-        vision: model.vision.unwrap_or(false),
+        vision: model.vision,
         efforts: model.effort_levels.clone().unwrap_or_default(),
     }
 }

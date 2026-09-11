@@ -332,6 +332,20 @@ impl SurfaceRouter {
         self.active_overlay().and_then(OverlaySurface::dialog)
     }
 
+    /// If an overlay is active, return the overlay immediately underneath the top overlay, if any.
+    pub fn underlying_overlay(&self) -> Option<OverlaySurface> {
+        if self.overlay_stack.len() >= 2 {
+            self.overlay_stack.get(self.overlay_stack.len() - 2).copied()
+        } else {
+            None
+        }
+    }
+
+    /// If an overlay is active, return the dialog immediately underneath the top overlay, if any.
+    pub fn underlying_dialog(&self) -> Option<DialogKind> {
+        self.underlying_overlay().and_then(OverlaySurface::dialog)
+    }
+
     /// The active sheet, if the top overlay is a sheet.
     pub fn active_sheet(&self) -> Option<SheetKind> {
         self.active_overlay().and_then(OverlaySurface::sheet)

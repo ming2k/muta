@@ -110,11 +110,9 @@ pub(crate) fn live_chat_hints(
 ) -> Vec<LiveHint> {
     use crate::keymap::Key;
     let hints: &[LiveHint] = match state {
-        HintState::Idle | HintState::Command => &[LiveHint::action(Key::ENTER, "send")],
-        HintState::Recall => &[
-            LiveHint::nav(Key::ESC, "draft"),
-            LiveHint::action(Key::ENTER, "send"),
-        ],
+        HintState::Idle | HintState::Command | HintState::Recall => {
+            &[LiveHint::action(Key::ENTER, "send")]
+        }
         HintState::Running(crate::app::ComposerSendMode::Steer) => &[
             LiveHint::nav(toggle_mode_key, "follow-up mode"),
             LiveHint::action(Key::ENTER, "send steer"),
@@ -391,17 +389,15 @@ fn resolve_tab(keys: &ViewKeys) -> Option<InputAction> {
 }
 
 /// Esc on the Session view. Priority order mirrors the pre-ADR-0172 central
-/// arm: dismiss an open completion first, then cancel the inline history
-/// recall (ADR-0192 — the recall pointer is a transient navigation state
-/// that must be escapable), then clear step focus, then interrupt a running
-/// round. (Subagent and Side own their own Esc exits in
+/// arm: dismiss an open completion first, then clear step focus, then interrupt
+/// a running round. Inline history recall is preserved across Esc (so edits
+/// are not lost and interrupt is not intercepted; Ctrl-c clears the input).
+/// (Subagent and Side own their own Esc exits in
 /// [`resolve_subagent_key`] / [`resolve_side_key`].)
 fn resolve_esc(keys: &ViewKeys) -> Option<InputAction> {
     if keys.completion_kind != crate::completion::CompletionKind::None && !keys.completion_dismissed
     {
         Some(InputAction::CloseCompletion)
-    } else if keys.in_history_recall {
-        Some(InputAction::CancelHistoryRecall)
     } else if keys.focused_target || keys.transcript_focused {
         Some(InputAction::ClearFocusedTarget)
     } else if keys.completion_kind != crate::completion::CompletionKind::None
@@ -1067,31 +1063,24 @@ mod tests {
     /// ADR-0192: Esc while the inline ↑/↓ pointer sits on a history row
     /// cancels the recall (restoring the stashed draft) — the recall state
     /// must be escapable by the universal "get me back" chord, and the
-    /// advertised hint (`Esc draft`) must be a live resolver arm.
+    /// Esc does not cancel inline history recall (Ctrl-C clears instead).
+    /// When running/responding, Esc resolves to Interrupt without getting intercepted.
     #[test]
-    fn esc_cancels_inline_history_recall() {
+    fn esc_does_not_cancel_inline_history_recall() {
         let mut c = ctx(Mode::Idle, |_| {});
         c.in_history_recall = true;
         assert_eq!(
             resolve_chat_surface_key(crate::keymap::Key::ESC, &c, &mut String::new(), &mut 0),
-            Some(InputAction::CancelHistoryRecall)
+            None
         );
-        // A dismissed completion popup must not outrank the recall exit:
-        // the pointer state is the more urgent escape.
-        let mut c = ctx(Mode::Idle, |c| {
-            c.completion_kind = crate::completion::CompletionKind::Slash;
-            c.completion_dismissed = true;
-        });
+
+        // When running/responding, Esc resolves to Interrupt rather than clearing recall
+        let mut c = ctx(Mode::Running, |_| {});
         c.in_history_recall = true;
+        c.is_responding = true;
         assert_eq!(
             resolve_chat_surface_key(crate::keymap::Key::ESC, &c, &mut String::new(), &mut 0),
-            Some(InputAction::CancelHistoryRecall)
-        );
-        // Without the pointer the resolver keeps its ordinary arms.
-        let c = ctx(Mode::Idle, |_| {});
-        assert_ne!(
-            resolve_chat_surface_key(crate::keymap::Key::ESC, &c, &mut String::new(), &mut 0),
-            Some(InputAction::CancelHistoryRecall)
+            Some(InputAction::Interrupt)
         );
     }
 

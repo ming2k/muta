@@ -35,6 +35,60 @@ fn body_input<'a>(provider: &'a AnthropicMessagesProvider, stream: bool) -> Body
     }
 }
 
+/// Route capabilities with only the vision declaration varied.
+fn caps_with_vision(vision: Option<bool>) -> muta_contracts::ModelCapabilities {
+    muta_contracts::ModelCapabilities {
+        family: "claude".into(),
+        context_window: 200_000,
+        max_output_tokens: None,
+        thinking: muta_contracts::ReasoningSupport::None,
+        tool_call: true,
+        vision,
+        effort_levels: Vec::new(),
+    }
+}
+
+fn image_message(text: &str) -> Message {
+    Message::new(Role::User, text).with_images(vec![muta_contracts::ImagePart {
+        mime: "image/png".to_string(),
+        data: "aGk=".to_string(),
+    }])
+}
+
+#[test]
+fn declared_text_only_route_projects_image_blocks_away() {
+    // Anthropic `image` blocks were emitted unconditionally before ADR-0230, so
+    // a route that declares no image input failed the whole turn.
+    let provider =
+        AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
+    let body = request::body_with_capabilities(
+        vec![image_message("look")],
+        body_input(&provider, false),
+        &caps_with_vision(Some(false)),
+    );
+
+    let blocks = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0]["type"], "text");
+    assert_eq!(blocks[0]["text"], "look");
+}
+
+#[test]
+fn undeclared_route_keeps_image_blocks() {
+    let provider =
+        AnthropicMessagesProvider::new("k".to_string(), "minimax-m3".to_string(), "https://x");
+    let body = request::body_with_capabilities(
+        vec![image_message("look")],
+        body_input(&provider, false),
+        &caps_with_vision(None),
+    );
+
+    let blocks = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(blocks[1]["type"], "image");
+    assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+    assert_eq!(blocks[1]["source"]["data"], "aGk=");
+}
+
 #[test]
 fn request_body_lifts_system_to_top_level() {
     let provider =

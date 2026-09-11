@@ -2069,6 +2069,7 @@ pub async fn run_tui(
         provider_delete_focus: ProviderDeleteChoice::default(),
         key_status: HashMap::new(),
         provider_picker: ProviderPickerSnapshot::default(),
+        models_refreshing: false,
         theme: Theme::resolve_with_profile(
             &tui_config.color_scheme,
             &tui_config.custom_color_scheme,
@@ -2308,10 +2309,10 @@ mod streaming_appends_tests {
 /// file returns `None`, leaving the built-in wordmark in place.
 fn load_user_logo() -> Option<Vec<String>> {
     let path = muta_paths::paths::get().logo_file();
-    let raw = std::fs::read_to_string(&path).ok()?;
+    let content = std::fs::read_to_string(&path).ok()?;
     // Re-use the renderer's parser so the clamp stays defined in one place.
     // The parser already strips CRLF/trailing blanks and truncates to the box.
-    render::parse_logo(&raw)
+    render::parse_logo(&content)
 }
 
 #[cfg(test)]

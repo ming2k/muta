@@ -71,9 +71,9 @@ pub struct ConnectionUsage {
 impl ConnectionUsage {
     /// Load from SQLite database (SSOT), with one-time migration and cleanup of any legacy state file.
     pub fn load() -> Self {
-        let db_path = paths::get().db_file();
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) {
-            if let Ok(Some(mut usage)) = engine.get_json::<Self>("state:connection_usage") {
+        let handle = crate::db::get_persistence_handle();
+        if let Ok(reader) = handle.reader() {
+            if let Ok(Some(mut usage)) = reader.get_json::<Self>("state:connection_usage") {
                 usage.ensure_legacy_migrated();
                 return usage;
             }
@@ -83,7 +83,7 @@ impl ConnectionUsage {
                     && let Ok(mut usage) = serde_json::from_str::<Self>(&content)
                 {
                     usage.ensure_legacy_migrated();
-                    let _ = engine.set_json("state:connection_usage", &usage);
+                    let _ = handle.set_json_blocking("state:connection_usage", &usage);
                     let _ = std::fs::remove_file(&legacy_path);
                     let _ = std::fs::remove_file(
                         paths::get().state_dir.join("connection_usage.json.lock"),
@@ -174,11 +174,8 @@ impl ConnectionUsage {
                     .insert(connection_id.clone(), model.clone());
             }
         }
-        let db_path = paths::get().db_file();
-        let engine = crate::db::DatabaseEngine::open(&db_path, None)
-            .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
-        engine
-            .set_json("state:connection_usage", &merged)
+        crate::db::get_persistence_handle()
+            .set_json_blocking("state:connection_usage", &merged)
             .map_err(|e| format!("could not persist connection usage to sqlite: {e}"))
     }
 
@@ -248,11 +245,8 @@ impl ConnectionUsage {
 
     /// Persist this usage state directly and atomically to SQLite (SSOT).
     pub fn save_exact(&self) -> Result<(), String> {
-        let db_path = paths::get().db_file();
-        let engine = crate::db::DatabaseEngine::open(&db_path, None)
-            .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
-        engine
-            .set_json("state:connection_usage", self)
+        crate::db::get_persistence_handle()
+            .set_json_blocking("state:connection_usage", self)
             .map_err(|e| format!("could not persist usage store to sqlite: {e}"))
     }
 

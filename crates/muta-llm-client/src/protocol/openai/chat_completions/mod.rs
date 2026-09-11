@@ -187,13 +187,16 @@ impl OpenAiChatCompletionsProvider {
         &self,
         body: &serde_json::Value,
         is_stream: bool,
+        telemetry: &muta_contracts::TransportTelemetry,
     ) -> Result<crate::egress::HttpResponse, ProviderError> {
         let auth = self
             .endpoint
             .resolve_auth()
             .await
             .map_err(|e| ProviderError::authentication(self.label(), e))?;
-        let mut req = self.build_request_for_auth(body, &auth);
+        let mut req = self
+            .build_request_for_auth(body, &auth)
+            .with_telemetry(telemetry.clone());
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
@@ -211,7 +214,9 @@ impl OpenAiChatCompletionsProvider {
                 .force_refresh_auth_after(&auth.token)
                 .await
                 .map_err(|error| ProviderError::authentication(self.label(), error))?;
-            let mut retry_req = self.build_request_for_auth(body, &refreshed_auth);
+            let mut retry_req = self
+                .build_request_for_auth(body, &refreshed_auth)
+                .with_telemetry(telemetry.clone());
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
             }
@@ -255,10 +260,6 @@ impl Provider for OpenAiChatCompletionsProvider {
         true
     }
 
-    fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
-        self.client.take_transport_timings()
-    }
-
     async fn chat(
         &self,
         request: ModelRequest,
@@ -272,6 +273,7 @@ impl Provider for OpenAiChatCompletionsProvider {
             mut messages,
             tool_specs,
             temporary_context,
+            transport_telemetry,
             ..
         } = request;
         messages.extend(temporary_context);
@@ -290,7 +292,7 @@ impl Provider for OpenAiChatCompletionsProvider {
         );
 
         let label = self.label();
-        let resp = self.send_request(&body, false).await?;
+        let resp = self.send_request(&body, false, &transport_telemetry).await?;
         let response_json: serde_json::Value = decode_response_json(resp, label).await?;
 
         if let Some(err) = response_json.get("error") {
@@ -343,6 +345,7 @@ impl Provider for OpenAiChatCompletionsProvider {
             mut messages,
             tool_specs,
             temporary_context,
+            transport_telemetry,
             ..
         } = request;
         messages.extend(temporary_context);
@@ -360,7 +363,7 @@ impl Provider for OpenAiChatCompletionsProvider {
             &self.capabilities,
         );
 
-        let response = self.send_request(&body, true).await?;
+        let response = self.send_request(&body, true, &transport_telemetry).await?;
 
         let stream = crate::sse::data_payloads(response, self.label()).map(|item| {
             let data = item?;
@@ -386,6 +389,7 @@ impl Provider for OpenAiChatCompletionsProvider {
             mut messages,
             tool_specs,
             temporary_context,
+            transport_telemetry,
             ..
         } = request;
         messages.extend(temporary_context);
@@ -403,7 +407,7 @@ impl Provider for OpenAiChatCompletionsProvider {
             &self.capabilities,
         );
 
-        let response = self.send_request(&body, true).await?;
+        let response = self.send_request(&body, true, &transport_telemetry).await?;
 
         // Tool-call echo filter shared between the body and the end-of-stream
         // flush: it suppresses any content that mirrors a native tool call

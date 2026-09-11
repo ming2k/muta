@@ -102,6 +102,18 @@ impl ToolSpec {
 pub struct ModelRequest {
     #[serde(skip)]
     pub turn_context: Arc<ProviderTurnContext>,
+    /// The telemetry handle of the attempt issuing this request (ADR-0232).
+    ///
+    /// Created by the attempt's owner immediately before dispatch and filled by
+    /// the transport that executes it. Runtime-only, like [`Self::turn_context`]:
+    /// not serialized, not persisted, never on the wire — a monotonic clock
+    /// reading is meaningful only inside the process that took it.
+    ///
+    /// A retry reuses the turn's assembled request, so the owner must stamp a
+    /// *fresh* handle onto the per-attempt clone it dispatches. Sharing one
+    /// across attempts would attribute one attempt's timings to another.
+    #[serde(skip)]
+    pub transport_telemetry: crate::TransportTelemetry,
     /// Structured instruction manifest (tiers: Base, Session, Task, Ephemeral).
     #[serde(default, skip_serializing_if = "crate::InstructionBundle::is_empty")]
     pub instructions: crate::InstructionBundle,
@@ -140,6 +152,7 @@ impl ModelRequest {
     pub fn new(messages: Vec<Message>) -> Self {
         Self {
             turn_context: Arc::default(),
+            transport_telemetry: crate::TransportTelemetry::default(),
             instructions: crate::InstructionBundle::default(),
             messages,
             temporary_context: Vec::new(),
@@ -158,6 +171,7 @@ impl ModelRequest {
     pub fn ephemeral(messages: Vec<Message>) -> Self {
         Self {
             turn_context: Arc::default(),
+            transport_telemetry: crate::TransportTelemetry::default(),
             instructions: crate::InstructionBundle::default(),
             messages,
             temporary_context: Vec::new(),
@@ -195,6 +209,7 @@ impl ModelRequest {
         tool_specs.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
             turn_context: Arc::default(),
+            transport_telemetry: crate::TransportTelemetry::default(),
             instructions: crate::InstructionBundle::default(),
             messages,
             temporary_context: Vec::new(),
@@ -222,6 +237,7 @@ impl ModelRequest {
         tool_specs.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
             turn_context: Arc::default(),
+            transport_telemetry: crate::TransportTelemetry::default(),
             instructions,
             messages,
             temporary_context: Vec::new(),
@@ -476,15 +492,6 @@ pub trait Provider: Send + Sync {
     /// parse usage from their HTTP responses.
     fn usage_supported(&self) -> bool {
         false
-    }
-
-    /// Transport-level timings for the most recent attempt, when the egress
-    /// could observe them (ADR-0200).
-    ///
-    /// Taken once per attempt: the second call returns `None`, so a timing
-    /// cannot be attributed to two turns.
-    fn take_transport_timings(&self) -> Option<crate::TransportTimings> {
-        None
     }
 }
 

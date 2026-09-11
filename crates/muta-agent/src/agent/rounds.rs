@@ -396,6 +396,13 @@ impl Agent {
                 request_projection,
             );
             request_accounting.start_request();
+            // Stamp this attempt's own telemetry handle onto the request it
+            // dispatches (ADR-0232). The turn's assembled request is reused by
+            // retries, so the handle is assigned per attempt rather than
+            // inherited: the transport fills the handle it is handed, and the
+            // attempt that handed it over is the only reader.
+            let mut attempt_request = request.clone();
+            attempt_request.transport_telemetry = request_accounting.transport_telemetry();
             // Race the model request against cancellation so an interrupt
             // while we're waiting on the network resolves promptly instead of
             // blocking until the first stream chunk arrives. The idle-timeout
@@ -407,7 +414,7 @@ impl Agent {
                 _ = cancel.cancelled() => return Err(HarnessError::Interrupted),
                 result = tokio::time::timeout(
                     STREAM_IDLE_TIMEOUT,
-                    self.provider.stream_chat_events(request.clone()),
+                    self.provider.stream_chat_events(attempt_request),
                 ) => match result {
                     Ok(Ok(stream)) => {
                         request_accounting.mark_stream_ready();

@@ -26,6 +26,7 @@ pub struct RequestBuilder {
     headers: HeaderMap,
     body: Option<Bytes>,
     timeout: Option<Duration>,
+    telemetry: muta_contracts::TransportTelemetry,
 }
 
 impl RequestBuilder {
@@ -36,7 +37,19 @@ impl RequestBuilder {
             headers: HeaderMap::new(),
             body: None,
             timeout: None,
+            telemetry: muta_contracts::TransportTelemetry::new(),
         }
+    }
+
+    /// Attach the attempt's telemetry handle (ADR-0232).
+    ///
+    /// The transport publishes this attempt's timings into `telemetry`, which
+    /// belongs to whoever issued the attempt. A builder left without one carries
+    /// a fresh empty handle, so its timings are simply unobserved rather than
+    /// attributed somewhere unintended.
+    pub fn with_telemetry(mut self, telemetry: muta_contracts::TransportTelemetry) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     /// Add a header. An invalid name or value is a programming error in the
@@ -106,6 +119,7 @@ impl RequestBuilder {
             headers: self.headers,
             body: self.body,
             timeout: self.timeout,
+            telemetry: self.telemetry,
         })
     }
 }

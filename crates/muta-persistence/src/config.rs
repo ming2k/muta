@@ -276,9 +276,12 @@ pub struct FittedModelInfo {
     /// The endpoint advertises reasoning (e.g. a `reasoning_content` stream).
     #[serde(default)]
     pub reasoning: bool,
-    /// The endpoint advertises image inputs.
-    #[serde(default)]
-    pub vision: bool,
+    /// The endpoint advertises image inputs. `None` (also what an older cache
+    /// entry without the field deserializes to) means *undeclared*: the
+    /// endpoint said nothing, and the route must not be treated as
+    /// text-only (ADR-0230).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision: Option<bool>,
     /// Advertised reasoning-effort tiers, as named by the provider.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub efforts: Vec<String>,
@@ -1848,7 +1851,7 @@ deepseek = "new-key"
                 FittedModelInfo {
                     context_window: 262_144,
                     reasoning: true,
-                    vision: true,
+                    vision: Some(true),
                     efforts: vec!["max".to_string()],
                 },
             );

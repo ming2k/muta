@@ -93,6 +93,30 @@ pub enum StreamTokenSource {
     Cl100k,
 }
 
+/// How completely the owned transport observed this attempt.
+///
+/// The ledger must never lose the difference between *measured* and
+/// *unmeasured*: a bare absent field cannot say whether a connection paid no
+/// setup cost or whether nothing was watching. Absent `dns_us`/`tcp_us`/
+/// `tls_us` reads as "reused a pooled socket" only in the second state below;
+/// in the first it asserts nothing at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum TransportObservation {
+    /// No transport telemetry reached the ledger: the attempt did not run on
+    /// the owned transport, or it ended before the trace was sealed. Every
+    /// transport field is unmeasured, and no connection regime may be claimed.
+    #[default]
+    Unreported,
+    /// The transport watched the attempt and recorded no connection phases: the
+    /// socket came from the keep-alive pool.
+    PooledConnection,
+    /// The transport watched the attempt and observed connection setup
+    /// (`DNS` and/or `TCP` and/or `TLS`).
+    ColdConnection,
+}
+
 /// High-resolution performance telemetry for one concrete provider attempt.
 ///
 /// Every duration is a monotonic offset measured in microseconds. Optional
@@ -121,6 +145,23 @@ pub struct RequestPerformance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub request_sent_us: Option<u64>,
+    /// Request dispatch to the connection being ready to carry the request:
+    /// the end of the last connection phase that was actually paid (`TLS` end
+    /// when a handshake ran, `TCP` end otherwise), or the instant the pool
+    /// handed the socket over.
+    ///
+    /// Distinct from [`Self::stream_ready_us`], which is the response head. A
+    /// timeline that anchors its connection moment on the head renders that
+    /// moment *after* the request was sent — the wrong order by construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub connected_us: Option<u64>,
+    /// What the transport observed about this attempt. Absent transport fields
+    /// support a claim about the connection regime only when this says the
+    /// transport was watching. A record written before this field existed
+    /// decodes as `Unreported`, which is the truth about it.
+    #[serde(default)]
+    pub observation: TransportObservation,
     /// Dispatch to the first origin-emitted protocol frame of any class.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -194,6 +235,12 @@ pub struct RequestPerformance {
 /// Deliberately separate from [`RequestPerformance`]: these come from the
 /// socket and the HTTP layer, not from the protocol adapter, and a provider
 /// that cannot supply them reports `None` rather than zero.
+///
+/// The offsets here are measured from the transport's own dispatch, which the
+/// struct carries as a runtime-only anchor. A consumer that anchors its numbers
+/// elsewhere must re-anchor every offset before merging the two — and must drop
+/// the offsets entirely when no anchor came with them. The durations (`dns_us`,
+/// `tcp_us`, `tls_us`, `rtt_us`) are anchor-free and transfer either way.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub struct TransportTimings {
@@ -206,6 +253,11 @@ pub struct TransportTimings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tls_us: Option<u64>,
+    /// Transport dispatch to the connection being ready (see
+    /// [`RequestPerformance::connected_us`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub connected_us: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub request_sent_us: Option<u64>,
@@ -215,8 +267,61 @@ pub struct TransportTimings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rtt_us: Option<u64>,
+    /// Retransmitted segments observed via `TCP_INFO`. Meaningful exactly when
+    /// `rtt_us` is present: both come from the same sample, so a present `rtt_us`
+    /// is what separates a measured zero from an unsampled socket.
     #[serde(default)]
     pub retransmits: u32,
+    #[serde(default)]
+    pub observation: TransportObservation,
+    /// Runtime-only anchor: the instant the transport dispatched this request.
+    ///
+    /// Offsets in this struct are relative to it. It is deliberately outside the
+    /// wire and persistence contracts — a monotonic clock instant is meaningful
+    /// only inside the process that read it, so serializing one would invite a
+    /// reader to subtract across processes and invent precision. A consumer that
+    /// anchors its numbers elsewhere must re-anchor every offset by it, and must
+    /// leave the offsets alone when it is absent; the durations (`dns_us`,
+    /// `tcp_us`, `tls_us`, `rtt_us`) are anchor-free and transfer either way.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub dispatch_at: Option<std::time::Instant>,
+}
+
+/// The transport telemetry of one attempt, owned by whoever issued it.
+///
+/// A handle is created by the attempt's owner *before* the call is dispatched,
+/// travels on the request, and is filled by the transport that executed it. The
+/// owner reads it back after the call returns — success or failure — so the
+/// telemetry of an attempt always reaches the attempt that caused it (ADR-0232).
+///
+/// This replaces a single slot per transport. A slot cannot say whose numbers it
+/// holds, and one transport serves every attempt of a provider (subagents share
+/// their parent's provider by `Arc`), so concurrent attempts aliased. Handles
+/// cannot alias: each attempt creates its own, and nothing else can reach it.
+#[derive(Debug, Clone, Default)]
+pub struct TransportTelemetry(std::sync::Arc<std::sync::Mutex<Option<TransportTimings>>>);
+
+impl TransportTelemetry {
+    /// A fresh, empty handle.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Publish the attempt's timings. Called by the transport that executed it,
+    /// once, when the trace is sealed (body end, abandonment, or failure).
+    pub fn publish(&self, timings: TransportTimings) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = Some(timings);
+    }
+
+    /// The attempt's timings, or `None` when nothing was observed.
+    ///
+    /// Non-destructive: `TransportTimings` is `Copy`, and the owner may need to
+    /// read it more than once (the settled record and the live snapshot are
+    /// built from the same attempt). `None` means *unobserved* — never "pooled".
+    pub fn read(&self) -> Option<TransportTimings> {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner())
+    }
 }
 
 /// Minimum duration of an observed streaming span required for the streaming
@@ -266,6 +371,37 @@ impl RequestPerformance {
             return None;
         }
         Some(tps)
+    }
+
+    /// Whether the egress reported transport-level telemetry for this attempt.
+    ///
+    /// Read from the recorded [`TransportObservation`], never inferred from an
+    /// absent field: silence about `dns_us`/`tcp_us`/`tls_us` is evidence of a
+    /// pooled socket only *once* something was watching the socket. Read from
+    /// silence it fabricated a warm pool for every cold handshake.
+    pub fn transport_observed(self) -> bool {
+        self.observation != TransportObservation::Unreported
+    }
+
+    /// Whether the attempt reused a pooled connection, as far as the transport
+    /// reported it.
+    ///
+    /// Three states, not two: `Some(true)` — observed, and no setup was paid;
+    /// `Some(false)` — observed, and connection phases were paid; `None` — no
+    /// transport telemetry, so a reuse and a handshake are equally unevidenced.
+    /// `None` is never a claim of reuse.
+    pub fn pooled_connection(self) -> Option<bool> {
+        match self.observation {
+            TransportObservation::PooledConnection => Some(true),
+            TransportObservation::ColdConnection => Some(false),
+            TransportObservation::Unreported => None,
+        }
+    }
+
+    /// Whether `TCP_INFO` sampled this attempt's socket, and therefore whether
+    /// [`Self::retransmits`] is a measurement rather than an untouched zero.
+    pub fn tcp_info_sampled(self) -> bool {
+        self.rtt_us.is_some()
     }
 }
 
@@ -380,11 +516,12 @@ impl TurnPerformanceSnapshot {
         self.performance.ttft_us.map(|us| us as f64 / 1_000.0)
     }
 
-    /// Whether the network attempt reused a pooled connection.
-    pub fn is_reused(self) -> bool {
-        self.performance.dns_us.is_none()
-            && self.performance.tcp_us.is_none()
-            && self.performance.tls_us.is_none()
+    /// Whether the network attempt reused a pooled connection: `Some(true)`
+    /// when the transport reported one, `Some(false)` when it reported a cold
+    /// start, `None` when nothing was reported. See
+    /// [`RequestPerformance::pooled_connection`].
+    pub fn pooled_connection(self) -> Option<bool> {
+        self.performance.pooled_connection()
     }
 }
 
@@ -1719,6 +1856,96 @@ mod tests {
         // A span the attempt never recorded → no rate.
         let untimed = RequestPerformance::default();
         assert_eq!(untimed.stream_tps(100), None);
+    }
+
+    #[test]
+    fn a_silent_transport_never_claims_a_pooled_connection() {
+        // Nothing reported: no reuse and no handshake may be asserted. This is
+        // the shape every record in the wild had, which is why the timeline
+        // used to read "reused warm pool connection" for every cold handshake.
+        // A timing measured by the agent says nothing about the connection: an
+        // absent `dns_us` here means nobody watched the socket, not that there
+        // was nothing to watch. This is the record shape every attempt in the
+        // wild had, and the reason the timeline used to call them all "reused
+        // warm pool connection".
+        let silent = RequestPerformance {
+            stream_ready_us: Some(120_000),
+            ttft_us: Some(300_000),
+            stream_us: Some(1_000_000),
+            output_events: 10,
+            ..Default::default()
+        };
+        assert!(!silent.transport_observed());
+        assert_eq!(silent.pooled_connection(), None);
+        assert_eq!(
+            TurnPerformanceSnapshot {
+                performance: silent,
+                ..Default::default()
+            }
+            .pooled_connection(),
+            None
+        );
+
+        // Observed, and no setup paid: a real pooled socket.
+        let pooled = RequestPerformance {
+            connected_us: Some(390_000),
+            request_sent_us: Some(400_000),
+            stream_ready_us: Some(500_000),
+            observation: TransportObservation::PooledConnection,
+            ..Default::default()
+        };
+        assert!(pooled.transport_observed());
+        assert_eq!(pooled.pooled_connection(), Some(true));
+
+        // Observed, and setup paid: a real cold start.
+        let cold = RequestPerformance {
+            dns_us: Some(20_000),
+            tcp_us: Some(40_000),
+            tls_us: Some(90_000),
+            connected_us: Some(150_000),
+            request_sent_us: Some(400_000),
+            observation: TransportObservation::ColdConnection,
+            ..Default::default()
+        };
+        assert_eq!(cold.pooled_connection(), Some(false));
+
+        // Observed, and the socket was sampled: `retransmits` is a measurement.
+        let sampled = RequestPerformance {
+            rtt_us: Some(42_000),
+            observation: TransportObservation::PooledConnection,
+            ..Default::default()
+        };
+        assert!(sampled.tcp_info_sampled());
+
+        // Observed, but no `TCP_INFO`: a zero retransmit count on this record
+        // would be an untouched field, not a clean socket. This is the pair the
+        // renderer keys on.
+        let unsampled = RequestPerformance {
+            observation: TransportObservation::ColdConnection,
+            retransmits: 0,
+            ..Default::default()
+        };
+        assert!(!unsampled.tcp_info_sampled());
+    }
+
+    #[test]
+    fn transport_observation_survives_a_json_round_trip_and_legacy_records_stay_unreported() {
+        let perf = RequestPerformance {
+            observation: TransportObservation::ColdConnection,
+            connected_us: Some(150_000),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&perf).expect("serialize");
+        let restored: RequestPerformance = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, perf);
+
+        // A record written before the field existed must not read as "observed":
+        // that would restore exactly the fabrication the field removes.
+        let legacy: RequestPerformance =
+            serde_json::from_str(r#"{"ttft_us":300000,"output_events":4}"#).expect("legacy");
+        assert_eq!(legacy.observation, TransportObservation::Unreported);
+        assert_eq!(legacy.pooled_connection(), None);
+        assert_eq!(legacy.connected_us, None);
     }
 
     #[test]

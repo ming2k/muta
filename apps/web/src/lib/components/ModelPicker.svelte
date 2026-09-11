@@ -11,6 +11,8 @@
 
   interface ModelEntry {
     id: string;
+    /** The provider's own label for the model, when it publishes one. */
+    name: string | null;
     provider: ProviderPickerRow;
     favorite: boolean;
     effort: string | null;
@@ -28,6 +30,7 @@
         const info = row.model_info?.find((m) => m.model === model);
         out.push({
           id: model,
+          name: info?.name ?? null,
           provider: row,
           favorite: info?.favorite ?? false,
           effort: info?.effort ?? null,
@@ -92,7 +95,10 @@
               : `${entry.provider.name} — no API key configured`}
           >
             <span class="star" class:favorite={entry.favorite}>{entry.favorite ? "★" : ""}</span>
-            <span class="model-name">{entry.id}</span>
+            <span class="model-name" class:wire={!entry.name}>{entry.name ?? entry.id}</span>
+            {#if entry.name}
+              <span class="model-id">{entry.id}</span>
+            {/if}
             <span class="provider-name">{entry.provider.name}</span>
             <span class="flags">
               {#if entry.effort}
@@ -218,11 +224,29 @@
     flex-shrink: 0;
   }
 
+  /* The row's label: the provider's own name for the model when it publishes
+     one, else the wire id. Not monospaced when it is a name — it is prose, and
+     a name-first list reads wrong in a code font. `.wire` restores the mono
+     face for the id-fallback rows so ids keep their familiar shape. */
   .model-name {
-    font-family: var(--font-mono);
     font-size: 13px;
     color: var(--text-primary);
     font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .model-name.wire {
+    font-family: var(--font-mono);
+  }
+
+  /* The wire id riding behind a name label. The id is what actually goes on the
+     wire and into config, so a name-first list must not hide it. */
+  .model-id {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

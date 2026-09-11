@@ -271,7 +271,8 @@ impl GoogleProvider {
 
         let mut req_builder = crate::request::RequestBuilder::new(http::Method::POST, &url)
             .headers(headers.clone())
-            .json(&body);
+            .json(&body)
+            .with_telemetry(request.transport_telemetry.clone());
         if let Some(t) = timeout {
             req_builder = req_builder.timeout(t);
         }
@@ -296,7 +297,8 @@ impl GoogleProvider {
             let mut retry_builder =
                 crate::request::RequestBuilder::new(http::Method::POST, &retry_url)
                     .headers(retry_headers)
-                    .json(&retry_body);
+                    .json(&retry_body)
+                    .with_telemetry(request.transport_telemetry.clone());
             if let Some(t) = timeout {
                 retry_builder = retry_builder.timeout(t);
             }
@@ -556,7 +558,12 @@ impl GoogleProvider {
             ..
         } = request;
         messages.extend(temporary_context);
-        let raw_body = request::body(
+        // Shared route-scoped image projection (ADR-0230): Google's
+        // `inline_data` parts were previously emitted unconditionally, so a
+        // route that declares no image input failed the turn instead of having
+        // the pixels projected away.
+        let raw_body = request::body_with_capabilities(
+            &self.endpoint.model,
             messages,
             request::BodyInput {
                 instructions: Some(&instructions),
@@ -564,6 +571,7 @@ impl GoogleProvider {
                 include_thoughts,
                 thinking,
             },
+            &self.capabilities,
         );
 
         let mut headers = http::header::HeaderMap::new();
@@ -692,10 +700,6 @@ impl Provider for GoogleProvider {
 
     fn usage_supported(&self) -> bool {
         true
-    }
-
-    fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
-        self.client.take_transport_timings()
     }
 
     async fn chat(

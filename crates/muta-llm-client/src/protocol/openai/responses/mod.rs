@@ -329,6 +329,7 @@ impl OpenAiResponsesProvider {
         body: &serde_json::Value,
         is_stream: bool,
         turn_context: &muta_contracts::ProviderTurnContext,
+        telemetry: &muta_contracts::TransportTelemetry,
     ) -> Result<crate::egress::HttpResponse, ProviderError> {
         let auth = self
             .endpoint
@@ -341,8 +342,9 @@ impl OpenAiResponsesProvider {
             self.endpoint.model,
             auth.account_id
         ));
-        let mut req =
-            self.build_request_for_auth(body, &auth, turn_state.get().map(String::as_str));
+        let mut req = self
+            .build_request_for_auth(body, &auth, turn_state.get().map(String::as_str))
+            .with_telemetry(telemetry.clone());
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
@@ -368,11 +370,13 @@ impl OpenAiResponsesProvider {
                     refreshed_auth.account_id
                 ));
             }
-            let mut retry_req = self.build_request_for_auth(
-                body,
-                &refreshed_auth,
-                turn_state.get().map(String::as_str),
-            );
+            let mut retry_req = self
+                .build_request_for_auth(
+                    body,
+                    &refreshed_auth,
+                    turn_state.get().map(String::as_str),
+                )
+                .with_telemetry(telemetry.clone());
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
             }
@@ -539,10 +543,6 @@ impl Provider for OpenAiResponsesProvider {
         true
     }
 
-    fn take_transport_timings(&self) -> Option<muta_contracts::TransportTimings> {
-        self.client.take_transport_timings()
-    }
-
     async fn chat(
         &self,
         request: ModelRequest,
@@ -551,9 +551,12 @@ impl Provider for OpenAiResponsesProvider {
             return self.collect_streaming_completion(request).await;
         }
         let label = self.label();
+        // `build_body` consumes the request, so the attempt's telemetry handle
+        // is lifted out first (ADR-0232).
+        let transport_telemetry = request.transport_telemetry.clone();
         let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, false)?;
-        let resp = self.send_request(&body, false, &turn_context).await?;
+        let resp = self.send_request(&body, false, &turn_context, &transport_telemetry).await?;
         let value: serde_json::Value = decode_response_json(resp, label).await?;
         if let Some(err) = value.get("error") {
             return Err(ProviderError::new(
@@ -601,9 +604,12 @@ impl Provider for OpenAiResponsesProvider {
         muta_contracts::ProviderError,
     > {
         let label = self.label();
+        // `build_body` consumes the request, so the attempt's telemetry handle
+        // is lifted out first (ADR-0232).
+        let transport_telemetry = request.transport_telemetry.clone();
         let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, true)?;
-        let resp = self.send_request(&body, true, &turn_context).await?;
+        let resp = self.send_request(&body, true, &turn_context, &transport_telemetry).await?;
         let stream = crate::sse::data_payloads(resp, label).map(|item| {
             let data = item?;
             let value = decode_stream_payload(&data, label)?;
@@ -625,9 +631,12 @@ impl Provider for OpenAiResponsesProvider {
         muta_contracts::ProviderError,
     > {
         let label = self.label();
+        // `build_body` consumes the request, so the attempt's telemetry handle
+        // is lifted out first (ADR-0232).
+        let transport_telemetry = request.transport_telemetry.clone();
         let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, true)?;
-        let resp = self.send_request(&body, true, &turn_context).await?;
+        let resp = self.send_request(&body, true, &turn_context, &transport_telemetry).await?;
         let model_catalog_etag = models_etag(&resp.headers);
 
         // One stateful parser threads the function-call item state across the
@@ -677,6 +686,11 @@ impl Provider for OpenAiResponsesProvider {
 mod stream_protocol_tests {
     use super::*;
 
+    /// A throwaway handle for tests that assert on routing, not telemetry.
+    fn telemetry() -> muta_contracts::TransportTelemetry {
+        muta_contracts::TransportTelemetry::new()
+    }
+
     #[tokio::test]
     async fn chatgpt_routing_state_is_sticky_only_within_one_round() {
         use mockito::{Matcher, Server};
@@ -709,7 +723,7 @@ mod stream_protocol_tests {
                 .with_header("x-codex-turn-state", response_token)
                 .create_async()
                 .await;
-            provider.send_request(&body, true, &round).await.unwrap();
+            provider.send_request(&body, true, &round, &telemetry()).await.unwrap();
             mock.assert_async().await;
             mock.remove_async().await;
         }
@@ -721,7 +735,12 @@ mod stream_protocol_tests {
             .create_async()
             .await;
         provider
-            .send_request(&body, true, &muta_contracts::ProviderTurnContext::default())
+            .send_request(
+                &body,
+                true,
+                &muta_contracts::ProviderTurnContext::default(),
+                &telemetry(),
+            )
             .await
             .unwrap();
         mock.assert_async().await;
@@ -759,7 +778,7 @@ mod stream_protocol_tests {
                 .with_header("x-codex-turn-state", "route-a")
                 .create_async()
                 .await;
-            let response = provider.send_request(&body, true, &round).await;
+            let response = provider.send_request(&body, true, &round, &telemetry()).await;
             assert_eq!(response.is_ok(), status == 200);
             mock.assert_async().await;
             mock.remove_async().await;
@@ -799,7 +818,7 @@ mod stream_protocol_tests {
                 .with_header("x-codex-turn-state", "route-a")
                 .create_async()
                 .await;
-            provider.send_request(&body, true, &round).await.unwrap();
+            provider.send_request(&body, true, &round, &telemetry()).await.unwrap();
             warmup.assert_async().await;
             warmup.remove_async().await;
             let rejected = server
@@ -824,7 +843,7 @@ mod stream_protocol_tests {
                 .with_status(200)
                 .create_async()
                 .await;
-            provider.send_request(&body, true, &round).await.unwrap();
+            provider.send_request(&body, true, &round, &telemetry()).await.unwrap();
             rejected.assert_async().await;
             retried.assert_async().await;
         }

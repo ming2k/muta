@@ -51,13 +51,16 @@ impl Default for PersistedWorkspaceSecurity {
 #[derive(Debug)]
 pub struct WorkspaceSecurityStore {
     db_path: PathBuf,
+    /// The single-writer actor bound to [`Self::db_path`] (ADR-0231): the
+    /// process-wide handle for the unified `muta.db`, or a store-private one
+    /// for a path-pinned (test / tooling) instance. Either way mutations are
+    /// serialized and a caller never opens its own connection.
+    handle: crate::db::PersistenceHandle,
 }
 
 impl WorkspaceSecurityStore {
     pub fn load() -> Self {
-        Self {
-            db_path: paths::get().db_file(),
-        }
+        Self::for_path(paths::get().db_file())
     }
 
     pub fn load_from(path: PathBuf) -> Self {
@@ -66,7 +69,16 @@ impl WorkspaceSecurityStore {
         } else {
             path
         };
-        Self { db_path }
+        Self::for_path(db_path)
+    }
+
+    fn for_path(db_path: PathBuf) -> Self {
+        let handle = if db_path == paths::get().db_file() {
+            crate::db::get_persistence_handle()
+        } else {
+            crate::db::PersistenceHandle::spawn(db_path.clone(), None)
+        };
+        Self { db_path, handle }
     }
 
     /// Compute the current, content-aware trust state for a workspace.
@@ -157,18 +169,12 @@ impl WorkspaceSecurityStore {
     }
 
     fn read_state(&self) -> Result<PersistedWorkspaceSecurity, String> {
-        let engine = match crate::db::DatabaseEngine::open(&self.db_path, None) {
-            Ok(e) => e,
-            Err(e) => {
-                return Err(format!(
-                    "cannot open sqlite db '{}': {e}",
-                    self.db_path.display()
-                ));
-            }
-        };
+        let reader = self.handle.reader().map_err(|e| {
+            format!("cannot open sqlite db '{}': {e}", self.db_path.display())
+        })?;
 
         if let Ok(Some(state)) =
-            engine.get_json::<PersistedWorkspaceSecurity>("state:workspace_security")
+            reader.get_json::<PersistedWorkspaceSecurity>("state:workspace_security")
         {
             if state.version != CURRENT_VERSION {
                 return Err(format!(
@@ -188,7 +194,9 @@ impl WorkspaceSecurityStore {
                 && let Ok(state) = serde_json::from_str::<PersistedWorkspaceSecurity>(&text)
                 && state.version == CURRENT_VERSION
             {
-                let _ = engine.set_json("state:workspace_security", &state);
+                let _ = self
+                    .handle
+                    .set_json_blocking("state:workspace_security", &state);
                 let _ = std::fs::remove_file(&legacy_json);
                 let _ = std::fs::remove_file(legacy_json.with_extension("json.lock"));
                 return Ok(state);
@@ -209,17 +217,9 @@ impl WorkspaceSecurityStore {
     }
 
     fn persist(&self, state: &PersistedWorkspaceSecurity) -> Result<(), String> {
-        if self.db_path == crate::paths::get().db_file() {
-            crate::db::get_persistence_handle()
-                .set_json_blocking("state:workspace_security", state)
-                .map_err(|e| format!("cannot persist workspace security state to sqlite: {e}"))
-        } else {
-            let engine = crate::db::DatabaseEngine::open(&self.db_path, None)
-                .map_err(|e| format!("cannot open sqlite db '{}': {e}", self.db_path.display()))?;
-            engine
-                .set_json("state:workspace_security", state)
-                .map_err(|e| format!("cannot persist workspace security state to sqlite: {e}"))
-        }
+        self.handle
+            .set_json_blocking("state:workspace_security", state)
+            .map_err(|e| format!("cannot persist workspace security state to sqlite: {e}"))
     }
 }
 

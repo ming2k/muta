@@ -4,6 +4,8 @@ use mutx_engine::{
     Frame, {Line, Span}, {Modifier, Style},
 };
 
+use unicode_width::UnicodeWidthStr;
+
 use super::super::common::truncate_ellipsis;
 use super::common::{
     draw_picker_search_row, match_set, place_picker_search_cursor, search_empty_body,
@@ -19,6 +21,15 @@ use crate::primitives::{
 use crate::providers::{ModelBodyLine, RankedModel, models_body_lines};
 use crate::render::Theme;
 
+/// The narrowest leftover space worth spending on the wire-id suffix that
+/// rides behind a provider-published name label. The suffix fills only what the
+/// label leaves unused in the identity column, so below this there is nothing
+/// legible to draw and the row shows the label alone — the mirror of a row whose
+/// provider published no label at all. The floor is deliberately above a bare
+/// fragment: `deep…` would read as a different model rather than as an
+/// abbreviation of `deepseek-flash`.
+const MIN_SUFFIX_BUDGET: usize = 10;
+
 /// Properties for rendering the Models modal.
 pub struct ModelsModalProps<'a> {
     pub models: &'a [RankedModel],
@@ -30,6 +41,8 @@ pub struct ModelsModalProps<'a> {
     pub scroll: &'a mut usize,
     pub follow_selection: bool,
     pub search: bool,
+    pub refreshing: bool,
+    pub spinner_phase: usize,
 }
 
 /// Draw the **Models** flat model picker modal (`/models`).
@@ -48,12 +61,15 @@ pub fn draw_models_modal(
         scroll,
         follow_selection,
         search,
+        refreshing,
+        spinner_phase,
     } = props;
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme, true, true);
 
     let header_rect = f.header;
 
+    let refresh_label = if refreshing { "refreshing…" } else { "refresh" };
     let browse_hints: [FooterHint; 8] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
@@ -61,7 +77,7 @@ pub fn draw_models_modal(
         FooterHint::secondary("*", "favorite"),
         FooterHint::secondary("x", "block"),
         FooterHint::secondary("e", "settings"),
-        FooterHint::secondary("r", "refresh"),
+        FooterHint::secondary("r", refresh_label),
         FooterHint::key_always(crate::keymap::Key::ESC, "close"),
     ];
     let search_hints: [FooterHint; 4] = [
@@ -70,8 +86,9 @@ pub fn draw_models_modal(
         FooterHint::key_primary(crate::keymap::Key::ENTER, "activate"),
         FooterHint::key_always(crate::keymap::Key::ESC, "clear search"),
     ];
-    let empty_hints: [FooterHint; 2] = [
+    let empty_hints: [FooterHint; 3] = [
         FooterHint::primary("a", "add connection"),
+        FooterHint::secondary("r", refresh_label),
         FooterHint::key_always(crate::keymap::Key::ESC, "close"),
     ];
     let (hints, extra): (&[FooterHint], &[FooterHintWithBand]) = if search {
@@ -82,7 +99,27 @@ pub fn draw_models_modal(
         (&browse_hints, &[])
     };
 
-    modal_header(frame, header_rect, "Models", theme);
+    if refreshing {
+        let spin = theme.glyphs.spinner_frame(spinner_phase);
+        let header = [
+            crate::elevation::HeaderPart::title("Models"),
+            crate::elevation::HeaderPart::Text {
+                text: "  ",
+                accent: false,
+            },
+            crate::elevation::HeaderPart::Text {
+                text: spin,
+                accent: true,
+            },
+            crate::elevation::HeaderPart::Text {
+                text: " refreshing…",
+                accent: false,
+            },
+        ];
+        crate::elevation::modal_header_parts(frame, header_rect, &header, theme);
+    } else {
+        modal_header(frame, header_rect, "Models", theme);
+    }
 
     let (search_rect, body_rect) = split_search_body(f.body, search);
     if let Some(search_rect) = search_rect {
@@ -90,7 +127,21 @@ pub fn draw_models_modal(
     }
 
     if models.is_empty() && !search {
-        let body = models_empty_body(theme);
+        let body = if refreshing {
+            let spin = theme.glyphs.spinner_frame(spinner_phase);
+            vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
+                    Span::styled(
+                        "Refreshing models…",
+                        Style::default().fg(theme.muted()),
+                    ),
+                ]),
+            ]
+        } else {
+            models_empty_body(theme)
+        };
         render_centered_body(frame, body_rect, body);
         if let Some(fo) = f.footer {
             render_modal_footer_with_more(frame, fo, hints, extra, theme);
@@ -190,12 +241,31 @@ pub(crate) fn model_list_body(
                     _ => String::new(),
                 };
 
-                let name_budget = ((body_width * 3) / 5).saturating_sub(GUTTER + 1).max(1);
-                let name = truncate_ellipsis(&rm.model, name_budget);
+                // The identity column is `body_width * 3 / 5` wide (the ratio
+                // group below starts there). The rendered label — the
+                // provider's own name for the model when it publishes one, else
+                // the wire id — owns that column, and is what the fuzzy
+                // highlight indexes. When the label is a name, the wire id
+                // still rides along as a dim suffix in whatever padding the
+                // label leaves unused: the id is the string that actually goes
+                // on the wire and into config, so a name-first list must not
+                // hide the value the user has to type. The suffix only fills
+                // blank padding, so it never shortens the label, never pushes
+                // the provider column out of alignment, and never widens the
+                // row; no room means no suffix.
+                let identity_budget = ((body_width * 3) / 5).saturating_sub(GUTTER + 1).max(1);
+                let display = truncate_ellipsis(
+                    rm.name.as_deref().unwrap_or(rm.model.as_str()),
+                    identity_budget,
+                );
+                let id_suffix = rm.name.as_deref().and_then(|_| {
+                    let budget = identity_budget.saturating_sub(display.as_str().width() + 1);
+                    (budget >= MIN_SUFFIX_BUDGET).then(|| truncate_ellipsis(&rm.model, budget))
+                });
 
                 let matched = match_set(rm.m.as_ref());
                 let mut identity = RowGroup::fixed();
-                for (char_idx, c) in name.chars().enumerate() {
+                for (char_idx, c) in display.chars().enumerate() {
                     let cs = if matched.contains(&char_idx) {
                         Style::default()
                             .bg(style.bg)
@@ -213,6 +283,20 @@ pub(crate) fn model_list_body(
                             style: cs,
                         },
                         0,
+                    );
+                }
+                // The wire id behind a name label, dimmed and set one column off
+                // the label so the pair reads as ONE identity column: the label
+                // is what the provider calls it, the id is what you type. It
+                // stays inside the identity group (never the provider column)
+                // so tabular alignment with label-less rows is preserved.
+                if let Some(id_suffix) = id_suffix {
+                    identity = identity.styled(
+                        RowStyledAtom {
+                            text: id_suffix,
+                            style: Style::default().bg(style.bg).fg(style.dim),
+                        },
+                        1,
                     );
                 }
 

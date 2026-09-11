@@ -38,6 +38,13 @@ pub struct RequestParts {
     /// Whole-request timeout, applied only to non-streaming requests by the
     /// caller (a streaming request must never carry one).
     pub timeout: Option<Duration>,
+    /// Where this attempt's transport telemetry goes (ADR-0232).
+    ///
+    /// The handle belongs to the attempt that issued the request: the transport
+    /// publishes into it and never needs to know which attempt it was serving.
+    /// A default handle absorbs the timings harmlessly, so a caller that does
+    /// not care about telemetry (a test, a probe) needs no ceremony.
+    pub telemetry: muta_contracts::TransportTelemetry,
 }
 
 /// A response: status, headers, and a body that has not been read yet.
@@ -143,14 +150,6 @@ impl Egress for ReqwestEgress {
 
 pub use owned::{MutaNetEgress, TraceSink};
 
-/// A slot the owned transport writes the last attempt's timings into.
-pub type TimingsSlot = std::sync::Arc<std::sync::Mutex<Option<muta_contracts::TransportTimings>>>;
-
-/// Build an empty timings slot.
-pub fn timings_slot() -> TimingsSlot {
-    std::sync::Arc::new(std::sync::Mutex::new(None))
-}
-
 /// Map an owned-transport failure onto the provider error the retry classifier
 /// reads, so both transports classify identically.
 fn net_error(label: &'static str, error: netune::NetError) -> ProviderError {
@@ -184,16 +183,134 @@ mod owned {
     use bytes::Bytes;
     use futures::StreamExt;
     use futures::stream::BoxStream;
-    use muta_contracts::ProviderError;
+    use muta_contracts::{ProviderError, TransportObservation, TransportTimings};
     use netune::{Connector, TcpConnector, TlsConnector};
     use netune_trace::{
-        AttemptRef, ConnectionInfo, EndpointRef, Fidelity, Recorder, RequestTrace, TraceId,
+        AttemptRef, ConnectionInfo, EndpointRef, EventKind, Fidelity, Recorder, RequestTrace,
+        TraceId, derive,
     };
 
     use super::{Egress, HttpResponse, RequestParts, net_error, timeout_error};
 
     /// Capacity of one request's trace ring on the owned path.
     const TRACE_CAPACITY: usize = 16_384;
+
+    /// The attempt's trace, sealed into the attempt's own telemetry handle when
+    /// the body ends — or when the caller drops the body early, which is the
+    /// common case for a streaming response.
+    ///
+    /// Deriving in `Drop` rather than at EOF is the whole point: a protocol
+    /// adapter stops reading as soon as it sees the provider's completion
+    /// marker, so an unfold that only recorded on `Ok(None)` would report
+    /// nothing for every streamed turn. Derivation is a pure function over the
+    /// events already in memory, so a partial trace yields partial timings —
+    /// each with its own verdict, never a fabricated number.
+    ///
+    /// `dispatch_at` is captured before the request is handed to the transport,
+    /// which makes every offset in [`TransportTimings`] a duration from a real
+    /// instant the caller can re-anchor against its own clock.
+    struct TimingsWriter {
+        /// The handle belonging to the attempt this request represents. The
+        /// writer never consults which attempt that was: it publishes into the
+        /// handle it was handed, which is what keeps concurrent attempts on one
+        /// shared transport from aliasing (ADR-0232).
+        telemetry: muta_contracts::TransportTelemetry,
+        recorder: Arc<Mutex<Recorder>>,
+        dispatch_at: std::time::Instant,
+        endpoint: EndpointRef,
+        sealed: bool,
+    }
+
+    impl TimingsWriter {
+        /// Derive and store the attempt's timings. Idempotent, because it runs
+        /// both when the body ends and again when the stream is dropped.
+        fn seal(&mut self) {
+            if self.sealed {
+                return;
+            }
+            self.sealed = true;
+            let log = self
+                .recorder
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .log()
+                .clone();
+            let trace = RequestTrace {
+                id: TraceId::new("egress"),
+                attempt: AttemptRef {
+                    round: 0,
+                    turn: 0,
+                    attempt: 0,
+                },
+                endpoint: self.endpoint.clone(),
+                // `derive` reads the reuse fact from the `ConnectReused` event,
+                // not from this struct, so the default costs the timings
+                // nothing. The sink path is the one that needs it filled.
+                connection: ConnectionInfo::default(),
+                fidelity: Fidelity::l1(),
+                log,
+            };
+            let derived = derive(&trace);
+
+            // A reading carries its own verdict; only a measured one may become
+            // a number. `observation` then separates "the transport watched and
+            // paid nothing" from "nobody was watching".
+            let measured = |reading: netune_trace::Reading<u64>| reading.value();
+            let phases = measured(derived.dns_us).is_some()
+                || measured(derived.tcp_us).is_some()
+                || measured(derived.tls_us).is_some();
+            let reuse_recorded = trace.log.first_of(EventKind::ConnectReused).is_some();
+            let observation = if phases {
+                TransportObservation::ColdConnection
+            } else if reuse_recorded {
+                TransportObservation::PooledConnection
+            } else {
+                // No connection event of either shape: either the attempt never
+                // reached the transport's dispatch, or it died before the
+                // connection was settled. Claiming a regime here would be
+                // exactly the fabrication this field exists to prevent.
+                TransportObservation::Unreported
+            };
+
+            // Connection ready: the end of the last phase actually paid, or the
+            // pool handing the socket over. Both are events in the log, so this
+            // is the trace's own statement rather than a sum of durations, which
+            // would silently absorb any gap between the phases and the write.
+            let connected_ns = trace
+                .log
+                .first_of(EventKind::TlsEnd)
+                .or_else(|| trace.log.first_of(EventKind::TcpEnd))
+                .or_else(|| trace.log.first_of(EventKind::ConnectReused))
+                .map(|event| event.at_ns);
+            let connected_us = connected_ns
+                .filter(|_| observation != TransportObservation::Unreported)
+                .map(|ns| ns / 1_000);
+
+            let timings = TransportTimings {
+                dns_us: measured(derived.dns_us),
+                tcp_us: measured(derived.tcp_us),
+                tls_us: measured(derived.tls_us),
+                connected_us,
+                request_sent_us: measured(derived.request_sent_us),
+                stream_ready_us: measured(derived.ttfb_us),
+                rtt_us: measured(derived.rtt_us),
+                retransmits: derived.retransmits.value().unwrap_or(0),
+                observation,
+                dispatch_at: Some(self.dispatch_at),
+            };
+
+            self.telemetry.publish(timings);
+        }
+    }
+
+    impl Drop for TimingsWriter {
+        /// The abandonment path: a protocol adapter that stops reading at the
+        /// provider's completion marker never reaches `Ok(None)`, so this is the
+        /// only place the common case can be sealed from.
+        fn drop(&mut self) {
+            self.seal();
+        }
+    }
 
     /// Called once per completed request with its trace.
     pub type TraceSink = Arc<dyn Fn(RequestTrace) + Send + Sync>;
@@ -205,17 +322,13 @@ mod owned {
     pub struct MutaNetEgress<C: Connector = TlsConnector<TcpConnector>> {
         client: netune::Client<C>,
         sink: Option<TraceSink>,
-        timings: super::TimingsSlot,
     }
 
     impl MutaNetEgress<TlsConnector<TcpConnector>> {
         /// The production configuration: platform trust store, direct.
         pub fn new() -> Result<Self, String> {
-            crate::network::direct_client(netune::ClientConfig::default()).map(|client| Self {
-                client,
-                sink: None,
-                timings: super::timings_slot(),
-            })
+            crate::network::direct_client(netune::ClientConfig::default())
+                .map(|client| Self { client, sink: None })
         }
     }
 
@@ -235,7 +348,6 @@ mod owned {
                     netune::ClientConfig::default(),
                 ),
                 sink: None,
-                timings: super::timings_slot(),
             }
         }
 
@@ -245,13 +357,7 @@ mod owned {
             self
         }
 
-        /// Write the attempt's timings into `slot` when its body ends.
-        pub fn with_timings_slot(mut self, slot: super::TimingsSlot) -> Self {
-            self.timings = slot;
-            self
-        }
     }
-
     #[async_trait::async_trait]
     impl<C: Connector> Egress for MutaNetEgress<C> {
         async fn send(&self, parts: RequestParts) -> Result<HttpResponse, ProviderError> {
@@ -273,7 +379,27 @@ mod owned {
             let deadline = parts
                 .timeout
                 .map(|timeout| tokio::time::Instant::now() + timeout);
+            // The dispatch origin for every offset this attempt reports. Taken
+            // before the request enters the transport so the trace's offsets and
+            // the caller's own stamps share one anchor.
+            let dispatch_at = std::time::Instant::now();
             let recorder = Arc::new(Mutex::new(Recorder::start(TRACE_CAPACITY)));
+            let endpoint = EndpointRef {
+                provider: parts.label.to_string(),
+                model: String::new(),
+                authority,
+            };
+            // Built before the request enters the transport, so every exit path
+            // seals what was observed: a connection that failed mid-handshake is
+            // exactly where the phases matter, and returning early on an error
+            // would discard the only record of how far it got.
+            let writer = TimingsWriter {
+                telemetry: parts.telemetry.clone(),
+                recorder: Arc::clone(&recorder),
+                dispatch_at,
+                endpoint: endpoint.clone(),
+                sealed: false,
+            };
             let send = self
                 .client
                 .send(&target, Arc::clone(&recorder), head, parts.body.clone());
@@ -288,12 +414,6 @@ mod owned {
             let headers = response.head.headers.clone();
 
             let sink = self.sink.clone();
-            let timings = Arc::clone(&self.timings);
-            let endpoint = EndpointRef {
-                provider: parts.label.to_string(),
-                model: String::new(),
-                authority,
-            };
             let label = parts.label;
             let body: BoxStream<'static, Result<Bytes, ProviderError>> = futures::stream::unfold(
                 (
@@ -303,10 +423,19 @@ mod owned {
                     endpoint,
                     deadline,
                     label,
-                    timings,
+                    writer,
                     false,
                 ),
-                |(mut body, recorder, sink, endpoint, deadline, label, timings, failed)| async move {
+                |(
+                    mut body,
+                    recorder,
+                    sink,
+                    endpoint,
+                    deadline,
+                    label,
+                    mut writer,
+                    failed,
+                )| async move {
                     if failed {
                         return None;
                     }
@@ -325,7 +454,7 @@ mod owned {
                     match chunk {
                         Ok(Some(chunk)) => Some((
                             Ok(chunk),
-                            (body, recorder, sink, endpoint, deadline, label, timings, false),
+                            (body, recorder, sink, endpoint, deadline, label, writer, false),
                         )),
                         Ok(None) => {
                             if let Some(sink) = sink {
@@ -347,11 +476,16 @@ mod owned {
                                     log,
                                 });
                             }
+                            // Seal at EOF as well as on drop: the body ending is
+                            // the one moment this attempt's timings are known to
+                            // be complete, and it does not depend on how long the
+                            // caller keeps the stream alive afterwards.
+                            writer.seal();
                             None
                         }
                         Err(error) => Some((
                             Err(net_error(label, error)),
-                            (body, recorder, sink, endpoint, deadline, label, timings, true),
+                            (body, recorder, sink, endpoint, deadline, label, writer, true),
                         )),
                     }
                 },
@@ -367,12 +501,12 @@ mod owned {
 
         async fn prewarm(&self, url: &str) -> Result<bool, ProviderError> {
             let (target, _) = netune::Target::from_url(url).map_err(|error| {
-                ProviderError::invalid_request("muta-net", format!("invalid prewarm url: {error}"))
+                ProviderError::invalid_request("netune", format!("invalid prewarm url: {error}"))
             })?;
             self.client
                 .prewarm(&target)
                 .await
-                .map_err(|error| net_error("muta-net", error))
+                .map_err(|error| net_error("netune", error))
         }
     }
 }

@@ -87,12 +87,18 @@ impl SessionStore {
         let workspace = Some(muta_contracts::WorkspaceBinding::new(sessions_dir.clone()));
         let db_path = sessions_dir.join("muta.db");
         let blob_store = BlobStore::new(sessions_dir.join("blobs"));
+        let writer = if db_path == paths::get().db_file() {
+            crate::db::get_persistence_handle()
+        } else {
+            crate::db::PersistenceHandle::spawn(db_path.clone(), Some(blob_store.clone()))
+        };
         let id_stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("default");
         let data = load_or_seed(
-            &db_path,
+            writer.reader().ok().as_ref(),
+            Some(&writer),
             id_stem,
             &blob_store,
             workspace.as_ref(),
@@ -100,11 +106,6 @@ impl SessionStore {
             Some(&path),
         );
         let defer_persist = !path.exists() && data.is_user_facing_empty();
-        let writer = if db_path == paths::get().db_file() {
-            crate::db::get_persistence_handle()
-        } else {
-            crate::db::PersistenceHandle::spawn(db_path.clone(), Some(blob_store.clone()))
-        };
         Self {
             workspace,
             persona: None,
@@ -255,15 +256,16 @@ impl SessionStore {
         if state.data.id == resolved {
             return Ok(());
         }
-        let db_path = self.db_path.clone();
         let workspace = self.workspace.clone();
         let persona = self.persona.clone();
         let blob_store = self.blob_store.clone();
+        let writer = self.writer.clone();
         let load_path = path.clone();
         let resolved_id = resolved.clone();
         let data = tokio::task::spawn_blocking(move || {
             load_or_seed(
-                &db_path,
+                writer.reader().ok().as_ref(),
+                Some(&writer),
                 &resolved_id,
                 &blob_store,
                 workspace.as_ref(),
@@ -362,12 +364,11 @@ impl SessionStore {
 
     pub async fn list(&self) -> Result<Vec<SessionSummary>, String> {
         let active_id = self.state.lock().await.data.id.clone();
-        let db_path = self.db_path.clone();
+        let writer = self.writer.clone();
         let filter = self.workspace_filter();
         tokio::task::spawn_blocking(move || {
-            let engine =
-                crate::db::DatabaseEngine::open(&db_path, None).map_err(|e| e.to_string())?;
-            engine
+            let reader = writer.reader().map_err(|e| e.to_string())?;
+            reader
                 .list_session_summaries(Some(&filter), &active_id)
                 .map_err(|e| e.to_string())
         })
@@ -382,11 +383,10 @@ impl SessionStore {
             let state = self.state.lock().await;
             self.resolve_session(id, &state)?
         };
-        let db_path = self.db_path.clone();
+        let writer = self.writer.clone();
         tokio::task::spawn_blocking(move || {
-            let engine =
-                crate::db::DatabaseEngine::open(&db_path, None).map_err(|e| e.to_string())?;
-            engine
+            let reader = writer.reader().map_err(|e| e.to_string())?;
+            reader
                 .get_session_detail(&resolved, &active_id)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("Session '{resolved}' not found."))
@@ -466,10 +466,10 @@ impl SessionStore {
             matches.push((active.data.id.clone(), active.path.clone()));
         }
 
-        // Query SQLite database
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&self.db_path, None) {
+        // Query the durable store through this store's reader (ADR-0231).
+        if let Ok(reader) = self.writer.reader() {
             let filter = self.workspace_filter();
-            if let Ok(found) = engine.resolve_session_prefix(input, Some(&filter)) {
+            if let Ok(found) = reader.resolve_session_prefix(input, Some(&filter)) {
                 for id in found {
                     if !matches.iter().any(|(m_id, _)| m_id == &id) {
                         let path = self.sessions_dir.join(format!("{id}.json"));
@@ -481,7 +481,7 @@ impl SessionStore {
             // check globally across the database in case of symlink or canonicalization variance.
             if matches.is_empty()
                 && input.len() >= 32
-                && let Ok(found) = engine.resolve_session_prefix(input, None)
+                && let Ok(found) = reader.resolve_session_prefix(input, None)
             {
                 for id in found {
                     if !matches.iter().any(|(m_id, _)| m_id == &id) {

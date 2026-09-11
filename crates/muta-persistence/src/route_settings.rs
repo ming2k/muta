@@ -89,9 +89,9 @@ impl RouteSettingsStore {
     }
 
     fn read_file() -> Self {
-        let db_path = paths::get().db_file();
-        if let Ok(engine) = crate::db::DatabaseEngine::open(&db_path, None) {
-            if let Ok(Some(file)) = engine.get_json::<RouteSettingsFile>("state:route_settings") {
+        let handle = crate::db::get_persistence_handle();
+        if let Ok(reader) = handle.reader() {
+            if let Ok(Some(file)) = reader.get_json::<RouteSettingsFile>("state:route_settings") {
                 return Self { file };
             }
             let legacy_path = paths::get().state_dir.join("route_settings.json");
@@ -99,7 +99,7 @@ impl RouteSettingsStore {
                 if let Ok(content) = fs::read_to_string(&legacy_path)
                     && let Ok(file) = serde_json::from_str::<RouteSettingsFile>(&content)
                 {
-                    let _ = engine.set_json("state:route_settings", &file);
+                    let _ = handle.set_json_blocking("state:route_settings", &file);
                     let _ = fs::remove_file(&legacy_path);
                     return Self { file };
                 }
@@ -130,13 +130,10 @@ impl RouteSettingsStore {
         }
     }
 
-    /// Persist atomically into SQLite (SSOT).
+    /// Persist atomically into SQLite (SSOT), through the single writer.
     pub fn save(&self) -> Result<(), String> {
-        let db_path = paths::get().db_file();
-        let engine = crate::db::DatabaseEngine::open(&db_path, None)
-            .map_err(|e| format!("could not open sqlite db {}: {e}", db_path.display()))?;
-        engine
-            .set_json("state:route_settings", &self.file)
+        crate::db::get_persistence_handle()
+            .set_json_blocking("state:route_settings", &self.file)
             .map_err(|e| format!("could not save route settings to sqlite: {e}"))
     }
 

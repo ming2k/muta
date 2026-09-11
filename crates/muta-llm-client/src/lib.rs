@@ -31,6 +31,7 @@ pub mod request;
 pub mod shadow;
 pub mod sse;
 pub mod transport;
+pub mod vision;
 
 // Re-export the shared substrate at the crate root so protocol modules and the
 // facade reach it as `crate::{Endpoint, ensure_success, …}` rather than through
@@ -51,6 +52,7 @@ pub use endpoint::{
 #[cfg(feature = "reqwest-oracle")]
 pub use transport::transport_error;
 pub use transport::{decode_response_json, ensure_success, retry_after_ms};
+pub use vision::project_images_for_route;
 
 // Re-export the concrete provider types at the crate root for ergonomic access
 // and stable intra-doc links.

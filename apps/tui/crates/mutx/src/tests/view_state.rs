@@ -82,7 +82,52 @@ fn composer_image_paste_rejected_when_model_lacks_vision() {
         "toast should say the model doesn't support images, got: {}",
         app.copy_toast_message,
     );
+    assert!(
+        app.copy_toast_message.contains("model editor"),
+        "the rejection must name the escape hatch (ADR-0149 layer-1 override), got: {}",
+        app.copy_toast_message,
+    );
     assert!(app.copy_toast_until.is_some());
+}
+
+#[test]
+fn composer_image_paste_accepted_when_model_vision_is_undeclared() {
+    // ADR-0230: an id no layer knows (no baseline entry, no picker row) is
+    // *undeclared*, not text-only. The paste must go through — the client has
+    // no grounds to refuse it, and the provider answers if it cannot take it.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.reset_to_conversation();
+    app.current_provider = "mock".to_string();
+    app.current_model = "mystery-relay-model".to_string();
+    app.input = String::new();
+    app.cursor_position = 0;
+
+    assert_eq!(
+        app.active_route_capabilities().vision,
+        None,
+        "an unknown id must stay undeclared rather than resolve to text-only"
+    );
+
+    clipboard_ops::apply_clipboard_paste(
+        &mut app,
+        crate::clipboard::ClipboardRead::Image {
+            data: vec![0x89, 0x50, 0x4e, 0x47],
+            mime: "image/png".to_string(),
+        },
+    );
+
+    assert_eq!(
+        app.pending_images.len(),
+        1,
+        "an undeclared route must not have its image paste rejected"
+    );
+    assert!(!app.copy_toast_failed);
+    assert!(
+        app.copy_toast_message.contains("unverified"),
+        "accepting a paste on an undeclared route must not read as a promise \
+         that the model will see the image, got: {}",
+        app.copy_toast_message,
+    );
 }
 
 #[test]
@@ -143,13 +188,14 @@ fn composer_image_paste_follows_picker_snapshot_vision() {
             models: vec!["omen-alpha".to_string()],
             model_info: vec![muta_contracts::ProviderModelInfo {
                 model: "omen-alpha".to_string(),
+                name: None,
                 protocol: "openai".to_string(),
                 effort: None,
                 thinking: None,
                 effort_levels: Vec::new(),
                 favorite: false,
                 last_used_ms: None,
-                vision: true,
+                vision: Some(true),
                 context_window: 128_000,
                 max_output_tokens: None,
             }],
@@ -200,13 +246,14 @@ fn active_model_context_window_follows_picker_snapshot_for_relay_models() {
             models: vec!["glm-5.3".to_string()],
             model_info: vec![muta_contracts::ProviderModelInfo {
                 model: "glm-5.3".to_string(),
+                name: None,
                 protocol: "openai".to_string(),
                 effort: None,
                 thinking: None,
                 effort_levels: Vec::new(),
                 favorite: false,
                 last_used_ms: None,
-                vision: false,
+                vision: Some(false),
                 context_window: 1_000_000,
                 max_output_tokens: Some(131_072),
             }],
@@ -245,13 +292,14 @@ fn composer_image_paste_snapshot_override_forces_off() {
             models: vec!["gpt-4o".to_string()],
             model_info: vec![muta_contracts::ProviderModelInfo {
                 model: "gpt-4o".to_string(),
+                name: None,
                 protocol: "openai".to_string(),
                 effort: None,
                 thinking: None,
                 effort_levels: Vec::new(),
                 favorite: false,
                 last_used_ms: None,
-                vision: false,
+                vision: Some(false),
                 context_window: 128_000,
                 max_output_tokens: None,
             }],

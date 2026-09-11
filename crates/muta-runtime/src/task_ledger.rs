@@ -7,10 +7,12 @@
 //! are re-spawned by the daemon at boot (the successor of ADR-0125's
 //! bespoke armed-schedule rehost machinery), while one-shot tasks merely
 //! keep their last outcome inspectable.
-
-use std::path::Path;
+//!
+//! Every access goes through the single-writer actor (ADR-0231): the ledger
+//! never opens a connection of its own.
 
 use muta_contracts::{BackgroundJobInfo, BackgroundJobOutcome, JobSpec, JobState};
+use muta_persistence::db::PersistenceHandle;
 
 const LEDGER_PREFIX: &str = "task:";
 
@@ -33,7 +35,7 @@ pub struct TaskLedgerRow {
 /// Persist a settled task's outcome (best-effort: the ledger must never
 /// break task execution).
 pub fn record_outcome(
-    engine: &mut muta_persistence::db::DatabaseEngine,
+    writer: &PersistenceHandle,
     outcome: &BackgroundJobOutcome,
     owner_session: Option<String>,
 ) {
@@ -47,8 +49,8 @@ pub fn record_outcome(
     };
     match serde_json::to_string(&row) {
         Ok(json) => {
-            if let Err(error) =
-                engine.set_kv(&format!("{LEDGER_PREFIX}{}", outcome.job_id.0), &json)
+            if let Err(error) = writer
+                .set_kv_blocking(format!("{LEDGER_PREFIX}{}", outcome.job_id.0), json)
             {
                 tracing::warn!(%error, job = %outcome.job_id.0, "task ledger write failed");
             }
@@ -60,8 +62,12 @@ pub fn record_outcome(
 }
 
 /// Load every ledger row whose key starts with the task prefix.
-pub fn load_all(engine: &mut muta_persistence::db::DatabaseEngine) -> Vec<TaskLedgerRow> {
-    let keys = match engine.list_kv_keys_with_prefix(LEDGER_PREFIX) {
+pub fn load_all(writer: &PersistenceHandle) -> Vec<TaskLedgerRow> {
+    let Ok(reader) = writer.reader() else {
+        tracing::warn!("task ledger scan failed: no reader");
+        return Vec::new();
+    };
+    let keys = match reader.list_kv_keys_with_prefix(LEDGER_PREFIX) {
         Ok(keys) => keys,
         Err(error) => {
             tracing::warn!(%error, "task ledger scan failed");
@@ -70,7 +76,7 @@ pub fn load_all(engine: &mut muta_persistence::db::DatabaseEngine) -> Vec<TaskLe
     };
     keys.iter()
         .filter_map(|key| {
-            engine
+            reader
                 .get_kv(key)
                 .ok()
                 .flatten()
@@ -82,15 +88,18 @@ pub fn load_all(engine: &mut muta_persistence::db::DatabaseEngine) -> Vec<TaskLe
 /// Prune ledger rows older than `max_age_days` days (settle timestamp comes
 /// from the row's id-unavailable path, so we use the state's duration-free
 /// created marker when present — pruning is best-effort housekeeping).
-pub fn prune(engine: &mut muta_persistence::db::DatabaseEngine, keep: &[String]) {
-    let keys = match engine.list_kv_keys_with_prefix(LEDGER_PREFIX) {
+pub fn prune(writer: &PersistenceHandle, keep: &[String]) {
+    let Ok(reader) = writer.reader() else {
+        return;
+    };
+    let keys = match reader.list_kv_keys_with_prefix(LEDGER_PREFIX) {
         Ok(keys) => keys,
         Err(_) => return,
     };
     for key in keys {
         let job = key.trim_start_matches(LEDGER_PREFIX).to_string();
         if !keep.contains(&job)
-            && let Err(error) = engine.delete_kv(&key)
+            && let Err(error) = writer.delete_kv_blocking(key.clone())
         {
             tracing::warn!(%error, key = %key, "task ledger prune failed");
         }
@@ -117,19 +126,11 @@ pub fn rehost_candidates(rows: &[TaskLedgerRow]) -> Vec<TaskLedgerRow> {
 /// Rehost every restartable service found in the ledger (best-effort; runs
 /// at daemon boot). `spawn` is the caller's spawn closure so this module
 /// stays decoupled from any one execution environment.
-pub fn rehost_all<F>(db_path: &Path, spawn: F)
+pub fn rehost_all<F>(writer: &PersistenceHandle, spawn: F)
 where
     F: Fn(TaskLedgerRow),
 {
-    let engine = match muta_persistence::db::DatabaseEngine::open(db_path, None) {
-        Ok(engine) => engine,
-        Err(error) => {
-            tracing::warn!(%error, "task rehost: could not open ledger db");
-            return;
-        }
-    };
-    let mut engine = engine;
-    let rows = load_all(&mut engine);
+    let rows = load_all(writer);
     let candidates = rehost_candidates(&rows);
     for row in candidates {
         tracing::info!(job = %row.job_id, "task rehost: respawning service with restart policy");
@@ -159,8 +160,12 @@ pub fn outcome_from_info(
 mod tests {
     use super::*;
 
-    fn engine() -> muta_persistence::db::DatabaseEngine {
-        muta_persistence::db::DatabaseEngine::open_in_memory().unwrap()
+    /// A store-private actor over a temp database: the same write path
+    /// production uses, without touching the user's real `muta.db`.
+    fn writer() -> (PersistenceHandle, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let handle = PersistenceHandle::spawn(tmp.path().join("muta.db"), None);
+        (handle, tmp)
     }
 
     fn outcome(restart: Option<muta_contracts::RestartPolicy>) -> BackgroundJobOutcome {
@@ -187,18 +192,18 @@ mod tests {
 
     #[test]
     fn record_then_load_roundtrips_and_flags_rehost_candidates() {
-        let mut engine = engine();
+        let (writer, _tmp) = writer();
 
         let with_policy = outcome(Some(muta_contracts::RestartPolicy {
             max_retries: 3,
             backoff_ms: 500,
         }));
-        record_outcome(&mut engine, &with_policy, None);
+        record_outcome(&writer, &with_policy, None);
 
         let without_policy = outcome(None);
-        record_outcome(&mut engine, &without_policy, None);
+        record_outcome(&writer, &without_policy, None);
 
-        let rows = load_all(&mut engine);
+        let rows = load_all(&writer);
         assert_eq!(rows.len(), 2, "both settles persisted");
         // Owner recorded when supplied (D5 ownership pass-through).
         assert!(
@@ -218,15 +223,15 @@ mod tests {
 
     #[test]
     fn prune_keeps_listed_jobs_only() {
-        let mut engine = engine();
+        let (writer, _tmp) = writer();
         let keep_me = outcome(None);
         let drop_me = outcome(None);
-        record_outcome(&mut engine, &keep_me, None);
-        record_outcome(&mut engine, &drop_me, None);
+        record_outcome(&writer, &keep_me, None);
+        record_outcome(&writer, &drop_me, None);
 
-        prune(&mut engine, std::slice::from_ref(&keep_me.job_id.0));
+        prune(&writer, std::slice::from_ref(&keep_me.job_id.0));
 
-        let rows = load_all(&mut engine);
+        let rows = load_all(&writer);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].job_id, keep_me.job_id.0);
     }

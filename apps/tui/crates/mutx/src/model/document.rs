@@ -118,6 +118,9 @@ pub enum SystemNoticeTopic {
     Review,
     TurnGuard,
     CommandAck,
+    /// Image attachments were withheld from a request because the route cannot
+    /// take them (ADR-0230).
+    Images,
     Custom(String),
 }
 
@@ -406,6 +409,7 @@ pub fn notice_topic_label(kind: muta_contracts::NoticeKind) -> &'static str {
         muta_contracts::NoticeKind::ReviewAlert => "review",
         muta_contracts::NoticeKind::TrustChanged => "trust",
         muta_contracts::NoticeKind::CommandAck => "command",
+        muta_contracts::NoticeKind::ImageInputWithheld => "images",
     }
 }
 
@@ -2104,6 +2108,9 @@ impl TranscriptMessage {
             }),
             muta_contracts::NoticeKind::CommandAck => Some(NoticeOrigin::System {
                 topic: SystemNoticeTopic::CommandAck,
+            }),
+            muta_contracts::NoticeKind::ImageInputWithheld => Some(NoticeOrigin::System {
+                topic: SystemNoticeTopic::Images,
             }),
         };
         let parts = NoticeParts {
