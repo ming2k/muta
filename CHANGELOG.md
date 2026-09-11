@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.2] - 2026-09-11
+
+### Added
+
+- **Multi-field fuzzy model filtering and column-matched highlighting.** The models picker modal now evaluates fuzzy matching across wire model ID, human-readable display name, and provider connection label simultaneously. Matched characters are highlighted in their respective columns.
+- **Bottom-anchored search input in models picker.** The search input bar is positioned at the bottom of the dialog body to avoid layout shift when toggling search mode. Match count is reflected in the header (`Models (N)`).
+- **Fast FTS triggers and persistence migration v16.** Migration 16 replaces unindexed FTS deletion triggers with indexed joins, eliminating table scans during membership updates.
+- **Preparing phase transition on tool finish.** Ensure phase transitions to `Preparing` rather than forging a `Reasoning` state when tool executions finish.
+
 ## [0.47.1] - 2026-09-11
 
 ### Added
@@ -7197,7 +7206,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.2...HEAD
+[0.47.2]: https://github.com/ming2k/muta/compare/v0.47.1...v0.47.2
 [0.47.1]: https://github.com/ming2k/muta/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/ming2k/muta/compare/v0.46.1...v0.47.0
 [0.46.1]: https://github.com/ming2k/muta/compare/v0.46.0...v0.46.1
