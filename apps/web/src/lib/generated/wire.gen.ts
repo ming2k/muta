@@ -701,10 +701,10 @@ readiness?: Readiness | null,
  */
 restart?: RestartPolicy | null, } | { "kind": "timer", 
 /**
- * ISO-ish local datetime or cron-style descriptor (5-field cron or
- * `in <duration>`), opaque to the fabric — the caller stores the
- * human form; the fabric stores the absolute epoch-milliseconds
- * `fire_at` computed at spawn time.
+ * Human-readable form the caller supplied (an ISO-ish local
+ * datetime or cron-style descriptor), opaque to the fabric; the
+ * fabric stores the absolute epoch-milliseconds `fire_at` computed
+ * at spawn time.
  */
 label?: string | null, 
 /**
@@ -716,7 +716,7 @@ fire_at_ms: number,
  */
 interval_ms?: number | null, 
 /**
- * The prompt delivered to the wake turn.
+ * The digest published on each fire.
  */
 prompt: string, };
 
@@ -1866,7 +1866,15 @@ paused_ms: number,
  * tokens/sec: `tps = output_tokens / generation_ms`. Falls back to the
  * round `active_ms()` only when no request completed measurably.
  */
-generation_ms: number, };
+generation_ms: number, 
+/**
+ * The durable session revision this completion follows (ADR-0236 D5): the
+ * authoritative commit was acknowledged at this revision before the
+ * completion was published. A client can order the completion against
+ * later session state and discard a stale replay instead of regressing a
+ * newer view. `0` for a completion emitted before this field existed.
+ */
+session_revision: number, };
 
 /**
  * Materialized, route-scoped capabilities evaluated daemon-side via ADR-0149.
