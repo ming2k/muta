@@ -8,7 +8,7 @@
 ## The problem
 
 The middle dot was drifting into a catch-all: it joined same-rank peers
-(`/skills · /repeat · /help`), container→member pairs at different levels
+(`/skills · /repeat · /models`), container→member pairs at different levels
 (`round 3 · turn 2`), and attribute→value pairs (`Thinking · 120 chars`) with
 the same glyph. When every relationship renders identically, the dot carries
 no information — and worse, it actively *misleads*: two peers look like one
@@ -32,7 +32,7 @@ TODOS 1/8 · write the docs   Ctrl+T expand   ↔↔   R3 segment: wide whitespa
 |------|------|--------------|--------|--------|
 | **R0** | Atomic | Parts of one value | No symbol — 0–1 space | `24.1 KB`, `3 tool calls`, `round 1`, `Ctrl+P block` |
 | **R1** | Modify | Trailing token is a state / measure / attribute of the leading one | ` · ` (space, middle dot, space) | `Thinking · 120 chars`, `↳ Completed · 3 calls · 1.2s`, `[Image #1 · 1.5 KB]`, `· blocked` |
-| **R2** | Enumerate | Same-rank peers | Plain whitespace, no glyph | `turn 2  sonnet`, `/skills  /repeat  /help`, `Ctrl+P block  Ctrl+Q expand` |
+| **R2** | Enumerate | Same-rank peers | Plain whitespace, no glyph | `turn 2  sonnet`, `/skills  /repeat  /models`, `Ctrl+P block  Ctrl+Q expand` |
 | **R3** | Segment | Cross-group boundary (content vs keycap legend, panel identity vs preview) | Plain whitespace, wide | `BAR_LEGEND_GAP_MIN` (6 cols) |
 | **↑** | Hierarchy | Container → member, tree parent → child | ` › ` inline breadcrumb; `↳` + indent for tree nesting | `round 3 › turn 2`, `Connections › keybindings` |
 
@@ -149,11 +149,9 @@ Migrated to whitespace / breadcrumb:
 
 - Queue-bar legend: `Ctrl+P block  Ctrl+Q expand` (R2).
 - Modal footer hints: `type filter  ↑↓ navigate  Enter activate` (R2).
-- Empty-state suggestions: `/skills  /repeat  /help` (R2).
-- Help copy: `copy  clear input  quit (×2)` (R2).
+- Empty-state suggestions: `/skills  /repeat  /models` (R2).
 - Skill metadata: `v1.2.3  local  #rust #tui` (R2).
 - Activity-modal detail: `round 3 › turn 2 · sonnet · 12s` (breadcrumb + R1).
-- Modal keybindings page: `Connections › keybindings` (breadcrumb).
 
 ## Source
 

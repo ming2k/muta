@@ -131,19 +131,6 @@ pub(crate) fn resolve_modal_key(
     }
 
     match key.code {
-        KeyCode::Char('?')
-            if !key
-                .modifiers
-                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
-        {
-            if overlay == Some(OverlaySurface::Dialog(DialogKind::Help)) {
-                return Some(InputAction::CloseModal);
-            }
-            if !modal_claims_composer_line(overlay, scene, keys) {
-                return Some(InputAction::OpenHelp);
-            }
-            return None;
-        }
         KeyCode::Enter if !key.modifiers.contains(KeyModifiers::ALT) => {
             return Some(if let Some(overlay) = overlay {
                 match overlay {
@@ -175,8 +162,7 @@ pub(crate) fn resolve_modal_key(
                         InputAction::OpenSelectedSession
                     }
                     OverlaySurface::Dialog(
-                        DialogKind::Help
-                        | DialogKind::Tools
+                        DialogKind::Tools
                         | DialogKind::Mcp
                         | DialogKind::Permissions
                         | DialogKind::SessionTree
@@ -224,9 +210,7 @@ pub(crate) fn resolve_modal_key(
                     OverlaySurface::Sheet(SheetKind::CustomProvider) => {
                         InputAction::ScrollCustomProvider { forward: false }
                     }
-                    OverlaySurface::Dialog(DialogKind::Help | DialogKind::UsageStats) => {
-                        InputAction::ScrollUp
-                    }
+                    OverlaySurface::Dialog(DialogKind::UsageStats) => InputAction::ScrollUp,
                     _ => return None,
                 }
             } else {
@@ -264,9 +248,7 @@ pub(crate) fn resolve_modal_key(
                     OverlaySurface::Sheet(SheetKind::CustomProvider) => {
                         InputAction::ScrollCustomProvider { forward: true }
                     }
-                    OverlaySurface::Dialog(DialogKind::Help | DialogKind::UsageStats) => {
-                        InputAction::ScrollDown
-                    }
+                    OverlaySurface::Dialog(DialogKind::UsageStats) => InputAction::ScrollDown,
                     _ => return None,
                 }
             } else {

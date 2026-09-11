@@ -47,8 +47,7 @@ Each call removes one limitation of the line-oriented terminal:
   Backspace) are reported distinctly. crossterm only emits the request
   when the terminal advertises support, so this is a no-op elsewhere.
   Multiplexers like tmux that don't forward Kitty flags strip this
-  disambiguation; `Ctrl+H` then reverts to the Backspace byte, so `?`
-  and `F1` are the portable help shortcuts.
+  disambiguation; `Ctrl+H` then reverts to the Backspace byte.
 
 ### Key collisions under tmux / screen
 
@@ -68,9 +67,9 @@ Because muta cannot tell the original keys apart from a single byte, the
 binding chosen for that byte wins for *all* of them. Concretely, under tmux
 without Kitty forwarding:
 
-- `Ctrl+H` and `Ctrl+Backspace` both open the help modal (`Ctrl+Backspace`
-  no longer deletes a word — use `Alt+Backspace` instead, which still
-  works).
+- `Ctrl+H` and `Ctrl+Backspace` are indistinguishable (`Ctrl+H` has no
+  binding; under tmux `Ctrl+Backspace` deletes one character rather than a
+  word — use `Alt+Backspace` instead, which still works).
 - `Ctrl+M` behaves as `Enter`, so `/models` is the reliable model-switch
   trigger.
 
@@ -105,8 +104,9 @@ Either way, reload with `tmux source ~/.tmux.conf` (or restart the server:
 option 1, `Ctrl+H` should print `^H` while `Ctrl+Backspace` prints a
 distinct CSI sequence rather than `^H`.
 
-If you can't change tmux, the in-app workaround is to prefer `?` and `F1`
-for help (no byte collision) and `Alt+Backspace` for word-delete.
+If you can't change tmux, the in-app workaround is to use `Alt+Backspace`
+for word-delete and `/models` for model switching (the collisions the app
+cannot disambiguate from a single byte).
 
 [tmux-kitty]: https://github.com/tmux/tmux/pull/4912
 

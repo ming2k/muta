@@ -1,7 +1,7 @@
 //! Authoritative Action & Command Registry — Single Source of Truth (SSOT).
 //!
-//! Every action, shortcut, command palette entry, slash command, F1 help item,
-//! and footer hint across the application is declared here as a [`CommandSpec`].
+//! Every action, shortcut, command palette entry, slash command, and footer
+//! hint across the application is declared here as a [`CommandSpec`].
 //!
 //! ## Core Architectural Principles
 //!
@@ -9,7 +9,7 @@
 //! 2. **Single input owner**: only one region/dialog owns focus at any moment.
 //! 3. **Visible, predictable, recoverable focus**: overlays trap focus, closing restores source.
 //! 4. **Single semantic origin**: one action has one semantic source.
-//! 5. **Unified derivation**: shortcuts, Help, Footer, and Command Palette are derived from this registry.
+//! 5. **Unified derivation**: shortcuts, Footer, and Command Palette are derived from this registry.
 //! 6. **Discovery over memorization**: rare actions are found via `Ctrl+L` Command Palette.
 //! 7. **No modal penetration**: overlays strictly isolate input from background views.
 //! 8. **Zero loss of printable characters**: typing in transcript bounces back to composer.
@@ -271,10 +271,6 @@ impl Key {
     pub const END: Key = Key {
         modifiers: KeyModifiers::NONE,
         code: KeyCode::End,
-    };
-    pub const F1: Key = Key {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::F(1),
     };
     pub const F5: Key = Key {
         modifiers: KeyModifiers::NONE,
@@ -617,8 +613,7 @@ impl Key {
 /// Exhaustive identifier for every executable command in the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandId {
-    // Global (6 Hard-Bound Shortcuts)
-    Help,
+    // Global (Hard-Bound Shortcuts)
     CommandPalette,
     CancelOrBack,
     InterruptTask,
@@ -722,7 +717,7 @@ pub enum Scope {
     Dialog(DialogKind),
 }
 
-/// Category of the command for palette grouping and help presentation.
+/// Category of the command for palette grouping and reference presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommandCategory {
     Global,
@@ -761,8 +756,8 @@ pub enum DisclosurePriority {
     L1FocusRegion,
     /// L2: Searchable through the `Ctrl+P` Command Palette.
     L2Palette,
-    /// L3: Full contextual reference visible only in F1 Help.
-    L3HelpOnly,
+    /// L3: Full contextual reference retained for exhaustive command coverage.
+    L3Reference,
 }
 
 /// Dynamic availability status for a command.
@@ -848,20 +843,7 @@ fn avail_queue_nonempty(ctx: &AppContext) -> Availability {
 // Static Command Registry Master Table
 
 pub static COMMAND_REGISTRY: &[CommandSpec] = &[
-    // 6 Canonical Global Bindings
-    CommandSpec {
-        id: CommandId::Help,
-        label: "Help",
-        hint: "F1",
-        category: CommandCategory::Global,
-        scope: Scope::Global,
-        bindings: &[Key::F1],
-        slash: Some("/help"),
-        availability: avail_always,
-        disclosure: DisclosurePriority::L0Footer,
-        danger: DangerLevel::Safe,
-        description: "Show context-sensitive help and key references",
-    },
+    // Canonical Global Bindings
     CommandSpec {
         id: CommandId::CommandPalette,
         label: "Command Palette",
@@ -1828,7 +1810,6 @@ impl LiveHint {
 /// config (ADR-0172 §"user-overridable schemes").
 fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
     match cmd {
-        CommandId::Help => Some(Key::F1),
         CommandId::CommandPalette => Some(Key::CTRL_P),
         CommandId::Quit => Some(Key::CTRL_C),
         CommandId::CopySelection => Some(Key::CTRL_SHIFT_C),
@@ -1848,13 +1829,11 @@ fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
 }
 
 /// The canonical resolution table (the hard-bound globals + the bar chords:
-/// F1 help, Ctrl+P/L palette, Ctrl+O session stats, Ctrl+N connection detail,
+/// Ctrl+P/L palette, Ctrl+O session stats, Ctrl+N connection detail,
 /// Ctrl+Q queue, Esc back, Ctrl+C quit, Ctrl+Shift+C copy), ignoring user
 /// overrides.
 fn canonical_global_key(key: Key) -> Option<CommandId> {
-    if key == Key::F1 {
-        Some(CommandId::Help)
-    } else if key == Key::CTRL_P || key == Key::CTRL_L {
+    if key == Key::CTRL_P || key == Key::CTRL_L {
         Some(CommandId::CommandPalette)
     } else if key == Key::CTRL_O {
         Some(CommandId::OpenTelemetry)
@@ -1876,7 +1855,6 @@ fn canonical_global_key(key: Key) -> Option<CommandId> {
 /// Map a config table key (snake_case command name) to its [`CommandId`].
 pub fn command_id_from_name(name: &str) -> Option<CommandId> {
     Some(match name.trim().to_ascii_lowercase().as_str() {
-        "help" => CommandId::Help,
         "command_palette" | "command-palette" | "palette" => CommandId::CommandPalette,
         "interrupt" | "interrupt_task" | "interrupt-task" => CommandId::InterruptTask,
         "quit" | "quit_muta" | "quit-muta" => CommandId::Quit,
@@ -2206,7 +2184,6 @@ mod tests {
 
     #[test]
     fn global_keys_resolve_correctly() {
-        assert_eq!(resolve_global_key(Key::F1), Some(CommandId::Help));
         assert_eq!(
             resolve_global_key(Key::CTRL_P),
             Some(CommandId::CommandPalette)
@@ -2295,7 +2272,7 @@ mod tests {
         assert_eq!(parse_key("ctrl-p"), Some(Key::CTRL_P));
         assert_eq!(parse_key("ctrl+shift+c"), Some(Key::CTRL_SHIFT_C));
         assert_eq!(parse_key("ctrl-shift-c"), Some(Key::CTRL_SHIFT_C));
-        assert_eq!(parse_key("f1"), Some(Key::F1));
+        assert_eq!(parse_key("f5"), Some(Key::F5));
         assert_eq!(parse_key("esc"), Some(Key::ESC));
         assert_eq!(
             parse_key("space"),
@@ -2328,7 +2305,6 @@ mod tests {
         assert_eq!(Key::ENTER.display(), "Enter");
         assert_eq!(Key::TAB.display(), "Tab");
         assert_eq!(Key::BACKTAB.display(), "⇧Tab");
-        assert_eq!(Key::F1.display(), "F1");
         assert_eq!(Key::F5.display(), "F5");
         assert_eq!(
             Key {
@@ -2394,10 +2370,12 @@ mod tests {
             Some(CommandId::OpenQueue)
         );
         // Unremapped commands keep their canonical behavior.
-        assert_eq!(resolve_global_key_with(Key::F1, &o), Some(CommandId::Help));
+        assert_eq!(
+            resolve_global_key_with(Key::CTRL_O, &o),
+            Some(CommandId::OpenTelemetry)
+        );
         // Effective binding follows the override for remapped commands.
         assert_eq!(o.effective_binding(CommandId::Quit), Some(ctrl_shift_q));
-        assert_eq!(o.effective_binding(CommandId::Help), Some(Key::F1));
         // A command with no canonical chord reports none — chrome renders no
         // keycap for it rather than a placeholder (ADR-0238).
         assert_eq!(o.effective_binding(CommandId::InterruptTask), None);
@@ -2537,7 +2515,6 @@ mod tests {
             find_by_slash("/settings").map(|c| c.id),
             Some(CommandId::NavigateSettings)
         );
-        assert_eq!(find_by_slash("/help").map(|c| c.id), Some(CommandId::Help));
         assert_eq!(
             find_by_slash("/commands").map(|c| c.id),
             Some(CommandId::CommandPalette)

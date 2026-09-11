@@ -258,7 +258,7 @@ fn mouse_selection_drag_tracks_within_selectable_modals() {
 }
 
 #[test]
-fn question_mark_in_dialog_browse_mode_opens_help() {
+fn question_mark_in_dialog_browse_mode_is_inert() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -275,7 +275,7 @@ fn question_mark_in_dialog_browse_mode_opens_help() {
         &SceneKeys::default(),
         &mut drag,
     );
-    assert_eq!(action, InputAction::OpenHelp);
+    assert_eq!(action, InputAction::None);
 }
 
 #[test]
@@ -303,25 +303,4 @@ fn question_mark_in_dialog_search_mode_inserts_char() {
     assert_eq!(action, InputAction::InsertChar('?'));
     assert_eq!(input, "?");
     assert_eq!(cursor, 1);
-}
-
-#[test]
-fn question_mark_in_help_modal_closes_modal() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let action = route_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        Dispatch {
-            overlay: Some(OverlaySurface::Dialog(DialogKind::Help)),
-            ..Default::default()
-        },
-        &ModalKeys::default(),
-        &SheetKeys::default(),
-        &SceneKeys::default(),
-        &mut drag,
-    );
-    assert_eq!(action, InputAction::CloseModal);
 }

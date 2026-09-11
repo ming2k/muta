@@ -8,7 +8,6 @@
 //! - [`mcp`] — MCP manager modal (per-server enable/reconnect surface)
 //! - [`permission`] — permission sheet + question modal
 //! - [`history`] — history search modal
-//! - [`help`] — help / keybindings modal
 //! - [`crate::views::settings`] — full-screen dual-pane settings view
 //! - [`toast`] — copy / armed-action notice bubbles
 //! - [`common`] — shared helpers (time formatting, truncation, caret, glyphs)
@@ -17,7 +16,6 @@ pub mod btw;
 pub mod command_palette;
 pub mod common;
 pub mod dashboard;
-pub mod help;
 pub mod history;
 pub mod mcp;
 pub mod permission;
@@ -46,7 +44,6 @@ pub use dashboard::{
 // is part of the module's public API surface.
 #[allow(unused_imports)]
 pub use dashboard::DashboardRects;
-pub use help::draw_help_modal;
 pub use history::draw_history_panel;
 // The old centered `/host` modal (`host.rs`) was superseded by the full-screen
 // `dashboard` surface and removed; `/host` now opens the dashboard.

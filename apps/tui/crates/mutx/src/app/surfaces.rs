@@ -66,7 +66,6 @@ impl App {
         if let Some(overlay) = self.surfaces.active_overlay() {
             match overlay {
                 OverlaySurface::Dialog(d) => match d {
-                    DialogKind::Help => Some((&mut self.help_scroll, None)),
                     DialogKind::Permissions => Some((&mut self.permissions_scroll, None)),
                     DialogKind::Telemetry => Some((&mut self.telemetry_scroll, None)),
                     DialogKind::UsageStats => Some((&mut self.usage_stats_scroll, None)),
@@ -383,7 +382,6 @@ impl App {
 
     fn reset_dialog_payload(&mut self, id: DialogKind) {
         match id {
-            DialogKind::Help => self.help_scroll = 0,
             DialogKind::Tools | DialogKind::Mcp => {
                 self.session_scroll = 0;
                 self.session_modal_follow = true;
@@ -513,7 +511,6 @@ impl App {
 
     fn dialog_scroll(&self, id: DialogKind) -> usize {
         match id {
-            DialogKind::Help => self.help_scroll,
             DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => self.session_scroll,
             DialogKind::Permissions => self.permissions_scroll,
             DialogKind::UsageStats => self.usage_stats_scroll,
@@ -530,7 +527,6 @@ impl App {
 
     fn apply_dialog_scroll(&mut self, id: DialogKind, scroll: usize) {
         match id {
-            DialogKind::Help => self.help_scroll = scroll,
             DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {
                 self.session_scroll = scroll;
             }

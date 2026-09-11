@@ -278,11 +278,11 @@ fn bracketed_paste_routes_in_free_text_modals() {
 
     let mut input = String::new();
     let mut cursor = 0;
-    let action = run_paste(payload, &mut input, &mut cursor, SurfaceFixture::Help);
+    let action = run_paste(payload, &mut input, &mut cursor, SurfaceFixture::UsageStats);
     assert_eq!(
         action,
         InputAction::None,
-        "bracketed paste should be dropped in Help"
+        "bracketed paste should be dropped in Usage stats"
     );
 
     let config_context = Dispatch {

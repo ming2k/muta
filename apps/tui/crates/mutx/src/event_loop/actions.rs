@@ -778,18 +778,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.delete_selected_history_entry();
             }
         }
-        input::InputAction::OpenHelp => {
-            if app.active_dialog() == Some(crate::surfaces::DialogKind::Help) {
-                modals::handle_close_modal(app, viewed_session_id);
-            } else {
-                enter_panel(
-                    app,
-                    crate::surfaces::DialogKind::Help,
-                    runtime,
-                    viewed_session_id,
-                );
-            }
-        }
         input::InputAction::OpenPermissions => {
             enter_panel(
                 app,
@@ -2598,25 +2586,28 @@ mod transcript_scroll_tests {
     #[test]
     fn wheel_spatial_routing_under_overlay_modal_isolates_backdrop() {
         let mut app = scrollable_app();
-        app.open_dialog(crate::surfaces::DialogKind::Help);
+        app.open_dialog(crate::surfaces::DialogKind::UsageStats);
         app.ui.begin(mutx_engine::Rect::new(0, 0, 80, 24));
         app.ui.mount(
             crate::ui::UiKey::Overlay(crate::surfaces::OverlaySurface::Dialog(
-                crate::surfaces::DialogKind::Help,
+                crate::surfaces::DialogKind::UsageStats,
             )),
             mutx_engine::Rect::new(10, 5, 60, 10),
         );
         app.ui.commit();
-        app.help_scroll = 5;
+        app.usage_stats_scroll = 5;
 
         // 1. Wheel on backdrop (x=2, y=2) outside modal_rect: absorbed, neither modal nor transcript scrolls
         handle_wheel(&mut app, false, 2, 2);
-        assert_eq!(app.help_scroll, 5, "modal scroll untouched on backdrop");
+        assert_eq!(
+            app.usage_stats_scroll, 5,
+            "modal scroll untouched on backdrop"
+        );
         assert_eq!(app.scroll, 100, "transcript scroll untouched on backdrop");
 
         // 2. Wheel inside modal (x=20, y=8): scrolls modal body
         handle_wheel(&mut app, false, 20, 8);
-        assert_eq!(app.help_scroll, 6, "modal scrolled inside modal_rect");
+        assert_eq!(app.usage_stats_scroll, 6, "modal scrolled inside modal_rect");
         assert_eq!(app.scroll, 100, "transcript scroll untouched");
     }
 
@@ -2780,14 +2771,6 @@ async fn execute_command_by_id(
     let copy_pending = ctx.copy_pending;
     use crate::keymap::CommandId;
     match cmd_id {
-        CommandId::Help => {
-            enter_panel(
-                app,
-                crate::surfaces::DialogKind::Help,
-                runtime,
-                viewed_session_id,
-            );
-        }
         CommandId::CommandPalette => {}
         CommandId::CancelOrBack => {
             if app.surfaces.active_overlay().is_some()

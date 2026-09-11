@@ -1955,7 +1955,6 @@ pub async fn run_tui(
         round_started_at: None,
         queue_scroll: 0,
         queue_modal_follow: true,
-        help_scroll: 0,
         pending_permission: None,
         active_sheet: None,
         pending_permission_depth: 0,

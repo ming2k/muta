@@ -6,7 +6,7 @@ use super::super::Theme;
 use super::super::design::MODAL_INNER_H_PADDING;
 use super::super::primitives::{
     ContentModalSpec, content_modal_area, content_modal_probe, modal_chrome_rows, modal_frame,
-    modal_header, render_modal_footer_with_more,
+    modal_header, render_modal_footer_with_extra,
 };
 use super::footer::{FooterHint, FooterHintWithBand};
 use super::scroll::ScrollBody;
@@ -58,7 +58,7 @@ pub(crate) fn draw_modal_page(frame: &mut Frame, page: ModalPage<'_>, theme: &Th
     }
     page.body.render(frame, f.body, theme);
     if let Some(footer) = f.footer {
-        render_modal_footer_with_more(
+        render_modal_footer_with_extra(
             frame,
             footer,
             page.footer_hints,

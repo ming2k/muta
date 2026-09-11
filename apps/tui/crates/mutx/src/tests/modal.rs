@@ -817,9 +817,9 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     }
 
     // Pure-content dialogs/scenes return a scroll ref but no follow flag.
-    app.open_dialog(crate::surfaces::DialogKind::Help);
-    let (s, f) = app.modal_scroll_field().expect("help scrolls");
-    assert!(f.is_none(), "help has no selection-follow flag");
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
+    let (s, f) = app.modal_scroll_field().expect("usage stats scrolls");
+    assert!(f.is_none(), "usage stats has no selection-follow flag");
     *s = 7;
 
     app.open_dialog(crate::surfaces::DialogKind::Permissions);
@@ -832,7 +832,7 @@ fn modal_scroll_field_resolves_every_scrollable_modal() {
     assert!(f.is_none(), "settings has no selection-follow flag");
     *s = 7;
 
-    assert_eq!(app.help_scroll, 7);
+    assert_eq!(app.usage_stats_scroll, 7);
     assert_eq!(app.permissions_scroll, 7);
 
     // Conversation and ModelEditor do not scroll their own body.
@@ -1324,7 +1324,7 @@ fn switching_picker_view_preserves_query_and_chat_draft_separately() {
     app.model_search = true;
     app.input = "claude".to_string();
 
-    app.open_dialog(crate::surfaces::DialogKind::Help);
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
     assert_eq!(
         app.input, "unsent chat",
         "switch restores the chat composer"
@@ -1406,7 +1406,7 @@ fn switching_away_from_queue_runs_exit_hook() {
     app.block_queue(sid);
     app.queue_exit_session = Some(sid.to_string());
 
-    app.open_dialog(crate::surfaces::DialogKind::Help);
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
 
     assert!(!app.is_queue_blocked(sid));
     assert!(app.queue_exit_session.is_none());
@@ -1522,20 +1522,23 @@ fn dashboard_reopen_keeps_selection_and_log() {
 }
 
 #[test]
-fn help_modal_over_dialog_dismiss_restores_underlying_dialog() {
+fn modal_over_dialog_dismiss_restores_underlying_dialog() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_dialog(crate::surfaces::DialogKind::Sessions);
     app.modal_index = 2;
 
-    // Opening Help over Sessions dialog
-    app.open_dialog(crate::surfaces::DialogKind::Help);
-    assert_eq!(app.active_dialog(), Some(crate::surfaces::DialogKind::Help));
+    // Opening Usage stats over the Sessions dialog
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::UsageStats)
+    );
     assert_eq!(
         app.surfaces.underlying_dialog(),
         Some(crate::surfaces::DialogKind::Sessions)
     );
 
-    // Dismissing Help restores Sessions dialog with preserved index
+    // Dismissing Usage stats restores the Sessions dialog with preserved index
     assert!(app.dismiss_surface());
     assert_eq!(
         app.active_dialog(),

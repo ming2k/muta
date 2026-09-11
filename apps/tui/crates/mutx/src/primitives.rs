@@ -18,7 +18,7 @@ use mutx_engine::{
 use super::Theme;
 pub(crate) use super::components::footer::{
     FooterHint, FooterHintWithBand, modal_footer_text, render_modal_footer,
-    render_modal_footer_with_more,
+    render_modal_footer_with_extra,
 };
 #[allow(unused_imports)]
 pub use super::components::inline_layout::{InlineSlot, SemanticLine};
@@ -197,7 +197,6 @@ impl FixedModalSpec {
 
     // The preset chooser shares the provider list's footprint.
     pub const PROVIDER: Self = Self::new(76, 80);
-    pub const HELP: Self = Self::new(66, 78);
     pub const SESSIONS: Self = Self::new(82, 78);
 }
 
@@ -520,7 +519,7 @@ pub(crate) fn hierarchical_breadcrumb<'a>(
 /// pickers) where every followed row is a peer and context on both sides is
 /// meaningful; pass `0` for decision sheets and content viewers whose
 /// `follow` is an absolute body line in mixed header+row content (the
-/// question / permission sheets) or that scroll manually (help / activity),
+/// question / permission sheets) or that scroll manually (activity),
 /// where edge-pinning reads better. A viewport too short for the band falls
 /// back to edge-pinning in either case.
 /// Resolve the effective scroll offset for a body of `total` lines in a
@@ -906,7 +905,7 @@ mod tests {
         for &cols in &[79u16, 80, 81, 119, 120, 121, 200] {
             let mut grid = mutx_engine::Grid::new(cols, 50);
             let frame = Frame::new(&mut grid);
-            let area = modal_area(&frame, FixedModalSpec::HELP);
+            let area = modal_area(&frame, FixedModalSpec::SESSIONS);
             assert_eq!(
                 area.width % 2,
                 0,
@@ -983,7 +982,7 @@ mod tests {
         for &rows in &[30u16, 40, 45, 50, 60] {
             let mut grid = mutx_engine::Grid::new(100, rows);
             let frame = Frame::new(&mut grid);
-            let area = modal_area(&frame, FixedModalSpec::HELP);
+            let area = modal_area(&frame, FixedModalSpec::SESSIONS);
             let top_gap = area.y;
             let bot_gap = rows.saturating_sub(area.y + area.height);
             assert!(

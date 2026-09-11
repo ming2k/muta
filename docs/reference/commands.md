@@ -2,7 +2,7 @@
 
 Built-in commands typed in the input box. The descriptions in this table are
 the canonical source of truth and match the slash-suggestion popup and the
-`/help` output exactly.
+completion list exactly.
 
 Project and user-defined commands are covered under
 [Custom commands](#custom-commands).
@@ -42,7 +42,6 @@ Project and user-defined commands are covered under
 | `/export` | Export the current conversation to the clipboard as Markdown |
 | `/debug trace [on\|off]` | Toggle per-project provider round-trip tracing for debugging |
 | `/debug preview` | Dry-run the next request body to a file (no provider call) |
-| `/help` | Show available commands and keybindings |
 | `/exit` | Exit the program (mirrors the app-wide double `Ctrl+C` quit gesture) |
 
 Several interactive management commands, including `/models`, `/connections`,
@@ -126,7 +125,7 @@ backend.
 | `/settings reload` | Re-read `config.toml` and apply changes live |
 
 `/config` is a hidden alias for `/settings`: it parses and dispatches
-identically but is not advertised in completion or `/help`, so new users are
+identically but is not advertised in completion, so new users are
 steered to the canonical spelling.
 
 The Settings overlay exposes Appearance and Layout. Appearance offers the

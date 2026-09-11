@@ -335,7 +335,7 @@ fn typing_while_focused_is_inert() {
 #[test]
 fn ctrl_arrows_page_scroll_modal_body() {
     let scrollable = [
-        SurfaceFixture::Help,
+        SurfaceFixture::UsageStats,
         SurfaceFixture::Config,
         SurfaceFixture::Telemetry,
         SurfaceFixture::Sessions,
@@ -807,11 +807,8 @@ fn ctrl_backspace_deletes_previous_word() {
 }
 
 #[test]
-fn f1_opens_help() {
-    // F1 is a portable help shortcut with no legacy control-byte
-    // collision, so it works under multiplexers (tmux) that strip the
-    // Kitty keyboard protocol — unlike Ctrl+H, which collapses to the
-    // Backspace byte (0x08) there.
+fn f1_is_inert() {
+    // F1 no longer opens a help surface; it must be a no-op.
     let mut input = String::new();
     let mut cursor = 0;
     let action = run_key(
@@ -822,7 +819,7 @@ fn f1_opens_help() {
         SurfaceFixture::None,
         false,
     );
-    assert_eq!(action, InputAction::OpenHelp);
+    assert_eq!(action, InputAction::None);
 }
 
 #[test]
@@ -1022,7 +1019,7 @@ fn ctrl_v_returns_paste_in_free_text_modals() {
         assert!(input.is_empty(), "Ctrl+V must not mutate the buffer itself");
     }
 
-    for modal in [SurfaceFixture::Help, SurfaceFixture::Sessions] {
+    for modal in [SurfaceFixture::UsageStats, SurfaceFixture::Sessions] {
         let mut input = String::new();
         let mut cursor = 0;
         let action = run_key(
@@ -1233,11 +1230,10 @@ fn text_modal_commands_resolve_and_consume_composer() {
 
 #[test]
 fn keybinding_modals_are_not_text_commands() {
-    // Ctrl+R / F1 open modals via keybindings, not by typing a slash
-    // command, so they must NOT be flagged: they consume no composer text and
-    // therefore have nothing to record in input history.
+    // Ctrl+R opens a modal via a keybinding, not by typing a slash
+    // command, so it must NOT be flagged: it consumes no composer text and
+    // therefore has nothing to record in input history.
     assert!(!InputAction::OpenHistory.is_text_modal_command());
-    assert!(!InputAction::OpenHelp.is_text_modal_command());
     // `/exit` resolves to Quit — it is not a replayable input, so it is
     // deliberately excluded from the recorded set.
     assert!(!InputAction::Quit.is_text_modal_command());
@@ -1438,7 +1434,7 @@ fn delete_key_eats_whole_attachment_chip() {
 
 #[test]
 fn delete_key_inert_outside_free_text() {
-    // In a read-only modal (Help) the Del key must do nothing — the
+    // In a read-only modal (Usage stats) the Del key must do nothing — the
     // `edits_input_field` gate keeps it from mutating the borrowed composer.
     let mut input = "hello".to_string();
     let mut cursor = 0;
@@ -1450,7 +1446,7 @@ fn delete_key_inert_outside_free_text() {
             &mut cursor,
             Dispatch {
                 overlay: Some(crate::surfaces::OverlaySurface::Dialog(
-                    crate::surfaces::DialogKind::Help
+                    crate::surfaces::DialogKind::UsageStats
                 )),
                 ..Default::default()
             },

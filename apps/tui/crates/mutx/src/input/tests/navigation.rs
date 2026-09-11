@@ -286,7 +286,7 @@ fn page_keys_scroll_question_modal_body() {
 #[test]
 fn page_keys_scroll_every_scrollable_modal_body() {
     let scrollable = [
-        SurfaceFixture::Help,
+        SurfaceFixture::UsageStats,
         SurfaceFixture::Permissions,
         SurfaceFixture::Config,
         SurfaceFixture::Telemetry,

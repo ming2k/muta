@@ -947,27 +947,6 @@ fn compose_frame(
                         &app.theme,
                     )
                 }
-                DialogKind::Help => {
-                    let app_ctx = crate::keymap::AppContext {
-                        has_overlay: app.surfaces.active_overlay().is_some(),
-                        active_dialog: app.surfaces.underlying_dialog(),
-                        is_responding: viewed_running,
-                        has_selection: !matches!(
-                            app.selection,
-                            crate::model::selection::SelectionState::None
-                        ),
-                        has_running_task: viewed_running,
-                        queue_count: app.pending_dispatch.len(),
-                    };
-                    Some(render::draw_help_modal(
-                        f,
-                        &mut app.help_scroll,
-                        &app_ctx,
-                        &app.theme,
-                        &app.selection,
-                        &mut layout_map,
-                    ))
-                }
                 DialogKind::Sessions => Some(render::draw_sessions_modal(
                     f,
                     crate::overlays::session::SessionsModalProps {

@@ -59,7 +59,7 @@ cargo build --release -p muta -p mutx
    ```
 2. Configure your model provider:
    Type `/models` in the prompt box to pick a provider and enter your API key.
-3. Start coding. Press `F1` at any time inside the TUI for keyboard shortcuts and help.
+3. Start coding. Press `Ctrl+P` (or type `/`) at any time inside the TUI to discover commands and shortcuts.
 
 ## Documentation
 

@@ -3,7 +3,7 @@
 //! - A [`SceneKind`] is an **independent full-screen workspace** (`Conversation`,
 //!   `Dashboard`, `Settings`, `TaskInspection`, `Aside`). Exactly one Scene is
 //!   active at any given moment.
-//! - A [`DialogKind`] names a **centered floating dialog** (Help, Tools, Mcp,
+//! - A [`DialogKind`] names a **centered floating dialog** (Tools, Mcp,
 //!   Models, Connections, etc.) that floats over whatever Scene is active.
 //! - A [`SheetKind`] names an **edge-anchored action prompt** (Permission,
 //!   Question, InputInjection, ModelEditor, etc.).
@@ -60,7 +60,6 @@ impl SceneKind {
 /// Centered, reference and management dialogs (ADR-0205).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DialogKind {
-    Help,
     Tools,
     Mcp,
     Skills,
@@ -79,8 +78,7 @@ pub enum DialogKind {
 
 impl DialogKind {
     /// Every dialog id that appears in the switcher's reference/discovery list.
-    pub const ALL: [DialogKind; 14] = [
-        DialogKind::Help,
+    pub const ALL: [DialogKind; 13] = [
         DialogKind::Tools,
         DialogKind::Mcp,
         DialogKind::Skills,
@@ -99,7 +97,6 @@ impl DialogKind {
     /// The label shown in the quick switcher and used for fuzzy matching.
     pub fn label(self) -> &'static str {
         match self {
-            DialogKind::Help => "Help / keys",
             DialogKind::Tools => "Tools",
             DialogKind::Mcp => "MCP servers",
             DialogKind::Skills => "Skills",
@@ -120,7 +117,6 @@ impl DialogKind {
     /// The secondary hint line in the switcher.
     pub fn hint(self) -> &'static str {
         match self {
-            DialogKind::Help => "F1",
             DialogKind::Tools => "/tools",
             DialogKind::Mcp => "/mcp",
             DialogKind::Skills => "/skills",
@@ -569,11 +565,11 @@ mod tests {
     fn first_open_initialises_once_and_returns_none() {
         let mut store = SurfaceStore::new();
         assert!(
-            store.open(DialogKind::Help).is_none(),
+            store.open(DialogKind::UsageStats).is_none(),
             "first open has no state"
         );
         store.save(
-            DialogKind::Help,
+            DialogKind::UsageStats,
             DialogState {
                 index: 3,
                 scroll: 12,
@@ -583,7 +579,9 @@ mod tests {
                 query_active: false,
             },
         );
-        let restored = store.open(DialogKind::Help).expect("state retained");
+        let restored = store
+            .open(DialogKind::UsageStats)
+            .expect("state retained");
         assert_eq!(
             (restored.index, restored.scroll, restored.follow),
             (3, 12, false)
@@ -604,10 +602,10 @@ mod tests {
     #[test]
     fn mru_order_tracks_focusing() {
         let mut store = SurfaceStore::new();
-        store.open(DialogKind::Help);
+        store.open(DialogKind::UsageStats);
         store.open(DialogKind::Tools);
-        store.open(DialogKind::Help);
-        assert_eq!(store.order(), &[DialogKind::Help, DialogKind::Tools]);
+        store.open(DialogKind::UsageStats);
+        assert_eq!(store.order(), &[DialogKind::UsageStats, DialogKind::Tools]);
     }
 
     #[test]

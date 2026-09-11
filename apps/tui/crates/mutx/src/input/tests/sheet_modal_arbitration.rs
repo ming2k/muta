@@ -43,7 +43,7 @@ fn route(dispatch: Dispatch, code: KeyCode) -> InputAction {
 #[test]
 fn esc_over_modal_never_rejects_the_permission_beneath() {
     for fixture in [
-        SurfaceFixture::Help,
+        SurfaceFixture::UsageStats,
         SurfaceFixture::Models,
         SurfaceFixture::Tools,
         SurfaceFixture::Queue,
@@ -65,7 +65,7 @@ fn esc_over_modal_never_rejects_the_permission_beneath() {
     // The canonical case: a plain dismissable browse modal — Esc closes it.
     assert_eq!(
         route(
-            overlaid(SurfaceFixture::Help, SheetKind::Permission),
+            overlaid(SurfaceFixture::UsageStats, SheetKind::Permission),
             KeyCode::Esc
         ),
         InputAction::CloseModal
@@ -87,12 +87,12 @@ fn esc_rejects_permission_only_while_it_is_the_foreground() {
 
 #[test]
 fn enter_over_modal_never_submits_the_permission_beneath() {
-    // Enter resolves the modal's own verb (Help closes); it must never
+    // Enter resolves the modal's own verb (Usage stats closes); it must never
     // reach the sheet's PermissionSubmit — a stray Enter while browsing
-    // the Help keymap would otherwise grant the tool call.
+    // the Usage stats view would otherwise grant the tool call.
     assert_eq!(
         route(
-            overlaid(SurfaceFixture::Help, SheetKind::Permission),
+            overlaid(SurfaceFixture::UsageStats, SheetKind::Permission),
             KeyCode::Enter
         ),
         InputAction::CloseModal
@@ -142,7 +142,7 @@ fn sheet_verbs_suspend_while_a_modal_is_open() {
     // (they fall through to the shared layers, which no-op them here).
     for code in [KeyCode::Left, KeyCode::Right, KeyCode::Tab] {
         assert_eq!(
-            route(overlaid(SurfaceFixture::Help, SheetKind::Permission), code),
+            route(overlaid(SurfaceFixture::UsageStats, SheetKind::Permission), code),
             InputAction::None,
             "sheet verb {code:?} must not fire through a coexisting modal"
         );
@@ -162,7 +162,7 @@ fn question_sheet_esc_and_printables_suspend_over_a_modal() {
     // Esc over a modal must not cancel the question beneath.
     assert_eq!(
         route(
-            overlaid(SurfaceFixture::Help, SheetKind::Question),
+            overlaid(SurfaceFixture::UsageStats, SheetKind::Question),
             KeyCode::Esc
         ),
         InputAction::CloseModal
@@ -178,7 +178,7 @@ fn question_sheet_esc_and_printables_suspend_over_a_modal() {
     // char arm is inert with no editable field.
     assert_eq!(
         route(
-            overlaid(SurfaceFixture::Help, SheetKind::Question),
+            overlaid(SurfaceFixture::UsageStats, SheetKind::Question),
             KeyCode::Char(' ')
         ),
         InputAction::None

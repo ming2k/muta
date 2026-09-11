@@ -205,7 +205,6 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         round_started_at: None,
         queue_scroll: 0,
         queue_modal_follow: true,
-        help_scroll: 0,
         pending_permission: None,
         active_sheet: None,
         pending_permission_depth: 0,

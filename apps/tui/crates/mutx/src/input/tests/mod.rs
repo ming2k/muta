@@ -169,7 +169,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
 #[allow(dead_code)]
 pub(crate) enum SurfaceFixture {
     None,
-    Help,
+    UsageStats,
     Config,
     Telemetry,
     Sessions,
@@ -199,8 +199,8 @@ impl SurfaceFixture {
         match self {
             Self::None => (None, SceneKind::Conversation),
             Self::Config => (None, SceneKind::Settings),
-            Self::Help => (
-                Some(OverlaySurface::Dialog(DialogKind::Help)),
+            Self::UsageStats => (
+                Some(OverlaySurface::Dialog(DialogKind::UsageStats)),
                 SceneKind::Conversation,
             ),
             Self::Telemetry => (

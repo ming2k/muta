@@ -584,7 +584,7 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
             DialogKind::Switcher => {
                 app.command_palette_selected = app.command_palette_selected.saturating_sub(1);
             }
-            DialogKind::Help | DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {}
+            DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {}
         }
     } else {
         match app.current_scene() {
@@ -735,7 +735,7 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
             DialogKind::Switcher => {
                 app.command_palette_selected = app.command_palette_selected.saturating_add(1);
             }
-            DialogKind::Help | DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {}
+            DialogKind::Tools | DialogKind::Mcp | DialogKind::Skills => {}
         }
     } else {
         match app.current_scene() {

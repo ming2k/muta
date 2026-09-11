@@ -78,7 +78,6 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
 | [History search](#history-search-modal) | `Ctrl+R` | 70 × 72 | `draw_history_modal` |
 | [Question](#question-modal) | `ask_user` tool | 78 × 70 | `draw_question_modal` |
 | [Permission sheet](#permission-sheet) | Automatic | (inline, not centered) | `draw_permission_sheet` |
-| [Help](#help-modal) | `Ctrl+H` / `?` / `F1` / `/help` | 58 × 70 | `draw_help_modal` |
 | [Session Stats](#session-stats-modal) | `Ctrl+O` / model bar context or rate gauge | content-sized (72 × 70 nominal) | `overlays::telemetry::draw` |
 | [Usage statistics](#usage-statistics-modal) | `/usage` | 76 × 86% | `draw_usage_stats_modal` |
 | [Asides](#asides-modal) | `F5` / `/btw list` | 66 × 84% | `draw_btw_modal` |
@@ -115,7 +114,7 @@ the vocabulary is fixed by geometry:
   transcript). Subagent zoom and the side view route through the surface
   router like any other view; their frame data (the zoom stack, the side
   session id) lives on the shell.
-- A **panel** is a *retained modal* — one of the browse overlays (Help, Tools,
+- A **panel** is a *retained modal* — one of the browse overlays (Tools,
   MCP, Skills, Permissions, Usage statistics, Session Telemetry, Asides,
   Models, Connections, History, Queue, Sessions, Session tree) that floats over
   the active view and keeps
@@ -157,7 +156,7 @@ lifecycle, `Esc` returns to the exact origin, and `Del` closes the highlighted
 TUI view state. Closing a view never deletes a session, provider, aside, or
 other backend resource.
 
-**Click-outside-to-dismiss.** Read-only / info modals — Help, Tool-step
+**Click-outside-to-dismiss.** Read-only / info modals — Tool-step
 detail, Tools, Sessions, Permissions, Activity, History, and the two pickers
 (Models, Connections) — close when the user clicks outside their panel,
 mirroring `Esc`. Entry modals that hold precious in-progress input (Model
@@ -620,55 +619,6 @@ to `Confirm always · Cancel`.
 The sheet uses a warn-colored left bar (`panel_block(theme.warn(), …)`) as
 its severity cue, and `theme.raised()` for the footer band.
 
-## Help modal
-
-Keybindings cheat sheet. The narrowest centered modal: 58 × 70.
-
-Opens via `Ctrl+H`, `?` (top level, empty input), `F1`, or `/help`. `Ctrl+H`
-is the legacy shortcut but is **terminal-dependent**: it is byte-identical
-to Backspace (`0x08`), so it only opens help when the Kitty enhanced-keyboard
-protocol (`DISAMBIGUATE_ESCAPE_CODES`) is active. Multiplexers that don't
-forward Kitty flags — notably tmux, which strips the protocol on most
-shipping versions — collapse `Ctrl+H` and `Ctrl+Backspace` onto the same
-byte, so both keys open help there rather than `Ctrl+Backspace` deleting a
-word (use `Alt+Backspace` to delete a word inside tmux). `?` and `F1` have
-no such collision and work everywhere; prefer them inside tmux/screen. For
-the full key-collision table and tmux configuration that restores the
-distinction, see [Terminal UI § Key collisions under tmux /
-screen](../../explanation/tui.md#key-collisions-under-tmux--screen).
-
-```text
-╭──────────────────────────────────────╮
-│ Help                                 │
-│                                      │
-│ General                              │  ← section header (fg bold)
-│ enter     send message               │
-│ …                                    │
-│                                      │
-│ Transcript focus                     │
-│ ctrl+↑/↓   focus a step              │
-│ ↑↓         cycle steps               │
-│ enter      open the focused step     │
-│ esc        clear the focus           │
-│ …                                    │
-│                                      │
-│ esc · close                          │
-╰──────────────────────────────────────╯
-```
-
-Sections: **General**, **Line editing (Readline)**, **Transcript focus**, **Views &
-tools (leader chords: Ctrl+X, Ctrl+C)**, **Modes**. Closes with a one-line note: `Drag to select · Ctrl+C or
-Ctrl+Shift+C to copy.`
-
-Arming a leader chord (`Ctrl+X` or `Ctrl+C`) displays a floating Which-Key overlay card
-in the bottom-right corner without shifting page layout; `Ctrl+G` provides universal
-cancel (`keyboard-quit`).
-
-The body is a selectable document: dragging over the keycap rows and
-descriptions selects them, and `Ctrl+Shift+C` copies — the same interaction
-as transcript text (see [Selecting modal
-text](#selecting-modal-text)).
-
 ## Session Stats modal
 
 The current session's live and recorded telemetry (`Ctrl+O`, or a click on the
@@ -736,7 +686,6 @@ sentinel. Migrated surfaces:
 
 | Surface | What becomes copyable |
 |---------|----------------------|
-| Help (`?`) | The whole cheat sheet — keycap labels and descriptions |
 | Usage Statistics (`/usage`) | Summary KV, daily/model tables, event log |
 | Context Usage (`/usage` → round drill-in) | The round's KV read-out, turns table, legend |
 | Session Telemetry (`Ctrl+O` or model bar context/rate click) | Context window, token totals, streaming performance, the round/turn tables, and the attempt inspector's latency timeline |
@@ -744,7 +693,6 @@ sentinel. Migrated surfaces:
 | History `Tab` preview | The full prompt text of the focused entry |
 | Permission sheet body | Tool description and the arguments JSON |
 | OAuth pending sheet | Instructions, URL, verification code |
-| In-modal `?` keymap sub-pages | Key labels and descriptions (every modal that has one) |
 
 The consequence for the user:
 

@@ -714,12 +714,6 @@ pub struct App {
     /// queue freely, and re-set the moment they navigate again. Mirrors
     /// `session_modal_follow` / `question_modal_follow`.
     pub queue_modal_follow: bool,
-    /// Scroll offset inside `Modal::Help`. Reset to 0 each time the modal opens;
-    /// clamped each frame by the modal's body renderer. The keybinding list
-    /// overflows a typical terminal, so this is what keeps the lower sections
-    /// reachable — the renderer used to take a throwaway `&mut 0`, leaving the
-    /// modal unscrollable.
-    pub help_scroll: usize,
     pub pending_permission: Option<PermissionRequest>,
     /// The interaction sheet currently mounted in the composer slot, if any
     /// (ADR-0173 §3). The slot's two sibling components — the draft editor

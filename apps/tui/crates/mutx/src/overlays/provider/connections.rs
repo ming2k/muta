@@ -16,7 +16,7 @@ use crate::model::selection::SelectionState;
 use crate::primitives::{
     BodyRenderOptions, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
     breadcrumb_parts, keyvocab, modal_area, modal_frame, modal_header, modal_header_parts,
-    render_body, render_centered_body, render_modal_footer, render_modal_footer_with_more,
+    render_body, render_centered_body, render_modal_footer, render_modal_footer_with_extra,
 };
 use crate::providers::RankedProvider;
 use crate::render::Theme;
@@ -199,7 +199,7 @@ pub fn draw_connections_modal(
         let body = connections_empty_body(theme);
         render_centered_body(frame, body_rect, body);
         if let Some(fo) = f.footer {
-            render_modal_footer_with_more(frame, fo, hints, extra, theme);
+            render_modal_footer_with_extra(frame, fo, hints, extra, theme);
         }
         return area;
     }
@@ -208,7 +208,7 @@ pub fn draw_connections_modal(
         let body = search_empty_body(theme);
         render_centered_body(frame, body_rect, body);
         if let Some(fo) = f.footer {
-            render_modal_footer_with_more(frame, fo, hints, extra, theme);
+            render_modal_footer_with_extra(frame, fo, hints, extra, theme);
         }
         if show_caret && let Some(sr) = search_rect {
             place_picker_search_cursor(frame, sr, query, cursor_position);
@@ -238,7 +238,7 @@ pub fn draw_connections_modal(
     );
 
     if let Some(fo) = f.footer {
-        render_modal_footer_with_more(frame, fo, hints, extra, theme);
+        render_modal_footer_with_extra(frame, fo, hints, extra, theme);
     }
 
     if show_caret

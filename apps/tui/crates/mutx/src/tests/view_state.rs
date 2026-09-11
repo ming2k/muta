@@ -428,20 +428,26 @@ fn browse_view_reopen_restores_scroll_and_selection() {
     // it returns to the exact scroll/index the user left. Before the
     // refactor every open reset them to 0.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    assert!(app.open_dialog(crate::surfaces::DialogKind::Help));
-    assert_eq!(app.active_dialog(), Some(crate::surfaces::DialogKind::Help));
+    assert!(app.open_dialog(crate::surfaces::DialogKind::UsageStats));
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::UsageStats)
+    );
     assert_eq!(app.modal_index, 0);
 
     // The user scrolls and selects, then hides (Esc → dismiss_surface).
-    app.help_scroll = 42;
+    app.usage_stats_scroll = 42;
     app.modal_index = 3;
     assert!(app.dismiss_surface());
     assert!(app.surfaces.active_overlay().is_none());
 
     // Reopen: first-open returned false and the retained state is back.
-    assert!(!app.open_dialog(crate::surfaces::DialogKind::Help));
+    assert!(!app.open_dialog(crate::surfaces::DialogKind::UsageStats));
     assert_eq!(app.modal_index, 3, "selection retained across hide");
-    assert_eq!(app.help_scroll, 42, "scroll retained across hide");
+    assert_eq!(
+        app.usage_stats_scroll, 42,
+        "scroll retained across hide"
+    );
 }
 
 #[test]
@@ -486,15 +492,15 @@ fn view_state_is_forgotten_on_session_change() {
     // `close_all` fires on viewed-session change: retained state belongs to
     // the conversation, not the terminal (ADR-0133 close verb).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_dialog(crate::surfaces::DialogKind::Help);
-    app.help_scroll = 5;
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
+    app.usage_stats_scroll = 5;
     app.modal_index = 1;
     app.on_viewed_session_changed();
     assert!(
-        app.open_dialog(crate::surfaces::DialogKind::Help),
+        app.open_dialog(crate::surfaces::DialogKind::UsageStats),
         "state forgotten"
     );
-    assert_eq!(app.help_scroll, 0);
+    assert_eq!(app.usage_stats_scroll, 0);
     assert_eq!(app.modal_index, 0);
 }
 
@@ -504,27 +510,30 @@ fn view_switcher_restore_roundtrip() {
     // back to it (state intact); Enter on another view hides the origin
     // and focuses the target with its own retained state.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_dialog(crate::surfaces::DialogKind::Help);
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
     app.modal_index = 4;
 
-    // Open the transient switcher over Help; the router preserves the exact
-    // parent and the open snapshots its shared cursor/scroll projection.
+    // Open the transient switcher over Usage stats; the router preserves the
+    // exact parent and the open snapshots its shared cursor/scroll projection.
     app.open_dialog(crate::surfaces::DialogKind::Switcher);
     app.modal_index = 0;
 
-    // Esc (the shared dismiss verb) cancels back to Help — and restores
-    // Help's own cursor from the registry (the switcher's row cursor must
+    // Esc (the shared dismiss verb) cancels back to Usage stats — and restores
+    // its own cursor from the registry (the switcher's row cursor must
     // not leak into the restored surface).
     assert!(app.dismiss_surface());
-    assert_eq!(app.active_dialog(), Some(crate::surfaces::DialogKind::Help));
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::UsageStats)
+    );
     assert_eq!(
         app.modal_index, 4,
-        "Help's selection restored, not the switcher's row cursor"
+        "Usage stats' selection restored, not the switcher's row cursor"
     );
 
-    // Help's retained state survived the switcher round-trip.
+    // Usage stats' retained state survived the switcher round-trip.
     app.open_dialog(crate::surfaces::DialogKind::Tools);
-    assert!(!app.open_dialog(crate::surfaces::DialogKind::Help));
+    assert!(!app.open_dialog(crate::surfaces::DialogKind::UsageStats));
     assert_eq!(app.modal_index, 4, "retained selection intact");
 }
 
@@ -553,7 +562,7 @@ fn per_view_drafts_do_not_clobber_each_other() {
 fn switcher_enter_hides_origin_and_restores_target_state() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     // Target retains state.
-    app.open_dialog(crate::surfaces::DialogKind::Help);
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
     app.modal_index = 2;
     assert!(app.dismiss_surface());
 
@@ -567,27 +576,33 @@ fn switcher_enter_hides_origin_and_restores_target_state() {
     app.modal_index = 0;
 
     // The switcher's rows put open views first; with only Tools open the
-    // first row is Tools itself. Pick Help (find its row).
+    // first row is Tools itself. Pick Usage stats (find its row).
     let rows = app.surface_store.switcher_rows();
-    let help_row = rows
+    let stats_row = rows
         .iter()
         .position(|r| {
-            *r == crate::surfaces::SwitcherTarget::Dialog(crate::surfaces::DialogKind::Help)
+            *r == crate::surfaces::SwitcherTarget::Dialog(crate::surfaces::DialogKind::UsageStats)
         })
         .unwrap();
-    app.modal_index = help_row;
+    app.modal_index = stats_row;
 
     // Enter (the Activate arm's core, minus the async runtime plumbing).
-    let target = rows[help_row];
+    let target = rows[stats_row];
     app.modal_index = 0;
     app.pop_transient_surface();
     let crate::surfaces::SwitcherTarget::Dialog(target) = target else {
         panic!("expected a dialog row");
     };
     let first = app.open_dialog(target);
-    assert!(!first, "Help was opened before — not a first open");
-    assert_eq!(app.active_dialog(), Some(crate::surfaces::DialogKind::Help));
-    assert_eq!(app.modal_index, 2, "Help's retained selection restored");
+    assert!(!first, "Usage stats was opened before — not a first open");
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::UsageStats)
+    );
+    assert_eq!(
+        app.modal_index, 2,
+        "Usage stats' retained selection restored"
+    );
     assert!(
         app.surface_store
             .state(&crate::surfaces::DialogKind::Tools)
@@ -600,7 +615,7 @@ fn switcher_enter_hides_origin_and_restores_target_state() {
 fn switcher_filter_narrows_rows_and_matches_labels_and_hints() {
     // Phase 5: the switcher's own fuzzy query against label + hint.
     let mut store = crate::surfaces::SurfaceStore::new();
-    store.open(crate::surfaces::DialogKind::Help);
+    store.open(crate::surfaces::DialogKind::UsageStats);
     store.open(crate::surfaces::DialogKind::Asides);
 
     // "mcp" matches the MCP label.
@@ -633,7 +648,7 @@ fn switcher_filter_narrows_rows_and_matches_labels_and_hints() {
             crate::surfaces::SwitcherTarget::Scene(crate::surfaces::SceneKind::Dashboard),
             crate::surfaces::SwitcherTarget::Scene(crate::surfaces::SceneKind::Settings),
             crate::surfaces::SwitcherTarget::Dialog(crate::surfaces::DialogKind::Asides),
-            crate::surfaces::SwitcherTarget::Dialog(crate::surfaces::DialogKind::Help),
+            crate::surfaces::SwitcherTarget::Dialog(crate::surfaces::DialogKind::UsageStats),
         ]
     );
 }

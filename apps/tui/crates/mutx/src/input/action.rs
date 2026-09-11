@@ -142,8 +142,6 @@ pub enum InputAction {
     /// Open the input-history modal (Ctrl+R). Opens in browse mode — a plain
     /// newest-first list; `/` then enters the search sub-layer.
     OpenHistory,
-    /// Open the help / keybindings modal.
-    OpenHelp,
     /// Open the queue overview modal (the full outbox list). Reached via `F2`
     /// or by clicking the persistent queue bar. Mirrors clicking the queue bar
     /// — the request is never forwarded, it only opens the overlay.
@@ -541,7 +539,7 @@ pub enum InputAction {
 impl InputAction {
     /// Whether this action is a modal-opening command reached by typing a
     /// slash command into the composer (e.g. `/models`) — as opposed to a
-    /// keybinding such as Ctrl+R (history) or F1 (help).
+    /// keybinding such as Ctrl+R (history).
     ///
     /// These commands consume the composer text (the typed `/cmd`) the same
     /// way `SendSlash` does, but unlike `SendSlash` they are intercepted

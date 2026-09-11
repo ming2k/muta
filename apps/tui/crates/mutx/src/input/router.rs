@@ -315,12 +315,11 @@ pub fn route_event(
             let physical_key = crate::keymap::Key::from_event(key);
 
             // Stage 5: Global Hard-Bound Shortcuts
-            // F1 (Help), Ctrl+L (Palette), Ctrl+C (Interrupt/Quit), CopySelection
+            // Ctrl+L (Palette), Ctrl+C (Interrupt/Quit), CopySelection
             if let Some(cmd_id) =
                 crate::keymap::resolve_global_key_with(physical_key, &dispatch.key_overrides)
             {
                 match cmd_id {
-                    crate::keymap::CommandId::Help => return InputAction::OpenHelp,
                     crate::keymap::CommandId::CommandPalette => {
                         // Ctrl+P / Ctrl+L toggle the palette: open it at the
                         // top level, and close it while it is already open.
@@ -527,22 +526,14 @@ pub fn route_event(
                         InputAction::None
                     }
                 }
-                // Ctrl+H opens help only when the Kitty enhanced-keyboard
-                // protocol is active (enabled in `run_tui`). In a raw
-                // terminal Ctrl+H is byte-identical to Backspace (0x08), so
-                // without Kitty disambiguation it lands in the `Backspace`
-                // arm and never reaches here. Multiplexers like tmux that
-                // don't forward Kitty flags further collapse Ctrl+Backspace
-                // and Ctrl+H onto the same 0x08 byte, so both keys open
-                // help there. Use F1 or `?` for a portable shortcut. Not in
-                // the registry because it needs the Kitty protocol; the Help
-                // modal documents it via its description.
+                // Ctrl+H is inert: it has no chord in the registry. Under the
+                // Kitty enhanced-keyboard protocol it arrives as a distinct
+                // control event; in a raw terminal it is byte-identical to
+                // Backspace (0x08) and lands in the `Backspace` arm instead.
+                // Explicitly swallow it here so the printable-char arm below
+                // never inserts a literal `h`.
                 KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if dispatch.overlay.is_none() {
-                        InputAction::OpenHelp
-                    } else {
-                        InputAction::None
-                    }
+                    InputAction::None
                 }
                 // Ctrl+M is a declared global binding (registry →
                 // OpenModels). In a raw terminal Ctrl+M is byte-identical

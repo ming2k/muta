@@ -453,7 +453,7 @@ async fn process_one_event(
     });
     let suppress_completions = matches!(
         app.active_dialog(),
-        Some(crate::surfaces::DialogKind::Help | crate::surfaces::DialogKind::Switcher)
+        Some(crate::surfaces::DialogKind::Switcher)
     ) || active_sheet.is_some();
     let completions = if suppress_completions {
         Vec::new()

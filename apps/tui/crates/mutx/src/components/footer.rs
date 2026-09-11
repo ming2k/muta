@@ -1,9 +1,8 @@
 //! Width-aware modal footer hints.
 //!
 //! Each hint carries a numeric priority. When the footer is too narrow to show
-//! everything, lower-priority items are dropped first. If anything is hidden or
-//! labels are stripped, a trailing `? help` chip is appended (mandatory — never
-//! omitted when collapsed) so the user can open the in-modal keymap page.
+//! everything, lower-priority items are dropped first and remaining labels are
+//! compacted to keys only.
 
 use mutx_engine::{Frame, Line, Paragraph, Rect, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -152,58 +151,43 @@ enum FooterLabelMode {
     Compact,
 }
 
-/// Trailing chip shown when the footer has collapsed anything. The chip
-/// advertises the in-modal keymap expand key (`?`), so it always carries its
-/// full **label** `? help` (the `?` key opens the help/keybindings page). The
-/// label is non-negotiable: it is the only way the user learns what the chip
-/// offers (the hidden keymap), so it is never degraded to `? …` or a bare `?`.
-/// When space is tight the caller drops another hint to make room for `? help`;
-/// only an absurdly narrow terminal (fewer columns than `? help` is wide)
-/// collapses to `…`.
-const MORE_FULL: &str = "? help";
-
 /// Render the one-line modal command strip with width-aware degradation.
-///
-/// **Does not** append the `? help` chip — this is the default path for modals
-/// that do not wire an in-modal keymap page (e.g. question, model editor).
 pub(crate) fn render_modal_footer(
     frame: &mut Frame,
     rect: Rect,
     hints: &[FooterHint],
     theme: &Theme,
 ) {
-    render_footer_impl(frame, rect, hints, &[], theme, false);
+    render_footer_impl(frame, rect, hints, &[], theme);
 }
 
 /// Like [`render_modal_footer`], but accepts an extra slice of custom-band
-/// hints (e.g. `D delete` at band 70) and enables the mandatory `? help` chip
-/// when the strip has collapsed. List modals that support in-modal `?` expand
-/// use this.
-pub(crate) fn render_modal_footer_with_more(
+/// hints (e.g. `D delete` at band 70).
+pub(crate) fn render_modal_footer_with_extra(
     frame: &mut Frame,
     rect: Rect,
     hints: &[FooterHint],
     extra: &[FooterHintWithBand],
     theme: &Theme,
 ) {
-    render_footer_impl(frame, rect, hints, extra, theme, true);
+    render_footer_impl(frame, rect, hints, extra, theme);
 }
 
-/// Build the footer text for `width` (no `? help` chip). Used by tests and
-/// modals that only need the string.
+/// Build the footer text for `width`. Used by tests and modals that only need
+/// the string.
 pub(crate) fn modal_footer_text(hints: &[FooterHint], width: usize) -> String {
-    layout_footer(hints, &[], width, false).text
+    layout_footer(hints, &[], width).text
 }
 
-/// Build the footer text for `width`, enabling the mandatory `? help` chip and
-/// accepting custom-band hints. (Used by tests.)
+/// Build the footer text for `width`, accepting custom-band hints. (Used by
+/// tests.)
 #[cfg(test)]
-pub(crate) fn modal_footer_text_with_more(
+pub(crate) fn modal_footer_text_with_extra(
     hints: &[FooterHint],
     extra: &[FooterHintWithBand],
     width: usize,
 ) -> String {
-    layout_footer(hints, extra, width, true).text
+    layout_footer(hints, extra, width).text
 }
 
 /// A single rendered segment of the footer line. Keys are tagged so the
@@ -213,7 +197,7 @@ pub(crate) fn modal_footer_text_with_more(
 enum FooterSeg {
     /// A keyboard-key label (rendered with the keycap style).
     Key(String),
-    /// Any other text: a hint label, a ` · ` separator, or the `? help` chip.
+    /// Any other text: a hint label or a ` · ` separator.
     Text(String),
 }
 
@@ -234,7 +218,7 @@ fn segs_to_string(segs: &[FooterSeg]) -> String {
 
 /// Materialize the segment list as styled spans: keys take the unified keycap
 /// style, hint labels take the keycap label style. This is the single place that decides how
-/// footer keys look, so it can never drift from the activity bar / Help modal.
+/// footer keys look, so it can never drift from the activity bar.
 fn segs_to_spans(segs: &[FooterSeg], theme: &Theme) -> Vec<Span<'static>> {
     let key_style = keycap_style(theme);
     let label_style = theme.keycap_label_style();
@@ -258,9 +242,8 @@ fn render_footer_impl(
     hints: &[FooterHint],
     extra: &[FooterHintWithBand],
     theme: &Theme,
-    show_more: bool,
 ) {
-    let layout = layout_footer(hints, extra, rect.width as usize, show_more);
+    let layout = layout_footer(hints, extra, rect.width as usize);
     frame.render_widget(
         Paragraph::new(Line::from(segs_to_spans(&layout.segs, theme))),
         rect,
@@ -270,24 +253,14 @@ fn render_footer_impl(
 /// Lay out the footer for `width`, dropping lowest-priority hints first.
 ///
 /// Algorithm:
-/// 1. Try full labels for the entire set (complete → no `? help`).
+/// 1. Try full labels for the entire set.
 /// 2. Drop the lowest-priority hint(s) one at a time (still full labels).
 /// 3. Compact remaining (keys only), same drop ladder.
-/// 4. Last resort: the bare `? help` chip alone (no hints); `…` only when the
-///    terminal is too narrow even for `? help`.
-///
-/// **Invariant when `show_more` is true and the strip is incomplete**
-/// (any hint dropped, or labels stripped to keys-only): the rendered line
-/// **always ends with `? help`** — the chip's label is non-negotiable. It is
-/// the only way the user learns what the chip offers (the hidden keymap), so
-/// another hint is always dropped to make room rather than truncating the label
-/// to `? …` or `?`. Only a terminal narrower than `? help` itself collapses to
-/// `…`.
+/// 4. Last resort: the always-keep keys compact, truncated to fit.
 fn layout_footer(
     hints: &[FooterHint],
     extra: &[FooterHintWithBand],
     width: usize,
-    show_more: bool,
 ) -> FooterLayout {
     if width == 0 || hints.is_empty() && extra.is_empty() {
         return FooterLayout {
@@ -328,21 +301,18 @@ fn layout_footer(
 
     // Pass 1: full labels, progressively dropping lowest-priority items.
     for drop_count in 0..=ranked.len().saturating_sub(1) {
-        let any_dropped = drop_count > 0;
         if let Some(segs) = try_subset(
             &ranked,
             &drop_order,
             drop_count,
             FooterLabelMode::Full,
             width,
-            show_more,
-            any_dropped,
         ) {
             return finish(segs);
         }
     }
 
-    // Pass 2: compact (keys only), same drop ladder. Compact is collapsed.
+    // Pass 2: compact (keys only), same drop ladder.
     for drop_count in 0..=ranked.len().saturating_sub(1) {
         if let Some(segs) = try_subset(
             &ranked,
@@ -350,14 +320,12 @@ fn layout_footer(
             drop_count,
             FooterLabelMode::Compact,
             width,
-            show_more,
-            true,
         ) {
             return finish(segs);
         }
     }
 
-    // Last resort: Always keys only, still requiring the chip when show_more.
+    // Last resort: Always keys only, compact, truncated to the available width.
     let always: Vec<&RankedHint> = ranked.iter().filter(|r| r.rank >= 100).collect();
     let base_set = if always.is_empty() {
         ranked.iter().collect()
@@ -365,19 +333,6 @@ fn layout_footer(
         always
     };
     let base = join_hints(&base_set, FooterLabelMode::Compact);
-
-    if show_more {
-        // Prefer the bare chip (no hints) at its full label `? help`. If even
-        // that does not fit an absurdly narrow terminal, show `…` rather than
-        // truncating the label — never a `?` without its meaning.
-        for candidate in [append_more(&base, MORE_FULL), only_text(MORE_FULL)] {
-            let text = segs_to_string(&candidate);
-            if !text.is_empty() && text.width() <= width {
-                return finish(candidate);
-            }
-        }
-        return finish(only_text("…"));
-    }
 
     let text = segs_to_string(&base);
     let segs = if text.width() <= width {
@@ -388,8 +343,7 @@ fn layout_footer(
     finish(segs)
 }
 
-/// A segment list that is just one plain-text run (used for the bare `? help`
-/// chip fallback, which carries no keys).
+/// A segment list that is just one plain-text run.
 fn only_text(s: &str) -> Vec<FooterSeg> {
     vec![FooterSeg::Text(s.to_string())]
 }
@@ -407,8 +361,6 @@ fn try_subset(
     drop_count: usize,
     mode: FooterLabelMode,
     width: usize,
-    show_more: bool,
-    collapsed: bool,
 ) -> Option<Vec<FooterSeg>> {
     let dropped: std::collections::HashSet<usize> =
         drop_order.iter().take(drop_count).copied().collect();
@@ -426,19 +378,7 @@ fn try_subset(
         return None;
     }
     let text = segs_to_string(&base);
-    if !show_more || !collapsed {
-        return (text.width() <= width).then_some(base);
-    }
-    // Incomplete strip: the `? help` chip is mandatory and must be the last
-    // token. Its label is **non-negotiable** — it is the only way the user
-    // learns what the chip offers (the hidden keymap), so we never degrade it
-    // to `? …` / `?`. If `? help` does not fit, return None so the caller
-    // drops another hint and retries; the drop ladder bottoms out in the
-    // last-resort below (which shows only the chip, or `…` if even that won't
-    // fit in an absurdly narrow terminal).
-    let candidate = append_more(&base, MORE_FULL);
-    let t = segs_to_string(&candidate);
-    (t.width() <= width).then_some(candidate)
+    (text.width() <= width).then_some(base)
 }
 
 /// Join hints in stable display order (`order`) for a given label mode into a
@@ -466,20 +406,6 @@ fn join_hints(hints: &[&RankedHint], mode: FooterLabelMode) -> Vec<FooterSeg> {
         }
     }
     segs
-}
-
-fn append_more(base: &[FooterSeg], chip: &str) -> Vec<FooterSeg> {
-    let mut out = base.to_vec();
-    if out.is_empty() {
-        out.push(FooterSeg::Text(chip.to_string()));
-    } else {
-        // R2: `? help` is another peer affordance.
-        out.push(FooterSeg::Text(format!(
-            "{}{chip}",
-            " ".repeat(super::super::design::JOIN_ENUMERATE_COLS)
-        )));
-    }
-    out
 }
 
 fn truncate_to_width(s: &str, max: usize) -> String {
@@ -526,7 +452,7 @@ mod tests {
     #[test]
     fn full_width_keeps_every_label() {
         let hints = sample_hints();
-        let text = modal_footer_text_with_more(&hints, &[], 80);
+        let text = modal_footer_text_with_extra(&hints, &[], 80);
         // R2: same-rank peer affordances are separated by plain whitespace
         // (JOIN_ENUMERATE_COLS), not the `·` reserved for key→label joins.
         assert_eq!(
@@ -538,39 +464,21 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_strip_always_ends_with_more_chip() {
-        // When show_more is on and anything is incomplete, the last token is
-        // always the `? help` chip at its FULL label — never degraded to
-        // `? …` / `?` (the label is the only way the user learns what the chip
-        // offers, so it is non-negotiable). Only an absurdly narrow terminal
-        // (fewer columns than `? help` is wide) collapses to `…`. Sweep many
-        // widths so the invariant is width-stable.
+    fn collapsed_strip_never_emits_help_chip() {
+        // The `? help` chip is gone: however narrow the footer gets, it must
+        // never reappear, and the strip must always fit the given width.
         let hints = sample_hints();
-        let full = modal_footer_text_with_more(&hints, &[], 80);
+        let full = modal_footer_text_with_extra(&hints, &[], 80);
         for width in 1..=full.width() {
-            let text = modal_footer_text_with_more(&hints, &[], width);
-            if text != full {
-                let t = text.trim_end();
-                if width >= MORE_FULL.width() {
-                    // Room for `? help`: the full label must be present.
-                    assert!(
-                        t.ends_with("? help"),
-                        "width {width}: chip must keep its full `? help` label, got {t:?}"
-                    );
-                } else {
-                    // Too narrow even for the chip: a bare `…`, never a bare `?`.
-                    assert_eq!(
-                        t, "…",
-                        "width {width}: too-narrow footer must be `…`, got {t:?}"
-                    );
-                }
-            } else {
-                assert!(
-                    !text.contains('?'),
-                    "complete strip must not show ?: {:?}",
-                    text
-                );
-            }
+            let text = modal_footer_text_with_extra(&hints, &[], width);
+            assert!(
+                !text.contains('?'),
+                "width {width}: collapsed footer must not show the help chip, got {text:?}"
+            );
+            assert!(
+                text.width() <= width,
+                "width {width}: footer overflowed, got {text:?}"
+            );
         }
     }
 
@@ -584,25 +492,14 @@ mod tests {
             FooterHint::always("Esc", "close"),
         ];
         let extra = [FooterHint::with_band("D", "delete", 70)];
-        let text = modal_footer_text_with_more(&hints, &extra, 44);
+        let text = modal_footer_text_with_extra(&hints, &extra, 44);
         assert!(text.contains('D'), "band-70 D must survive: {text:?}");
         assert!(!text.contains('*'), "band-40 * should drop first: {text:?}");
     }
 
     #[test]
-    fn show_more_false_omits_chip() {
-        let hints = sample_hints();
-        let text = modal_footer_text(&hints, 30);
-        assert!(
-            !text.contains('?'),
-            "no chip when show_more is false: {text:?}"
-        );
-    }
-
-    #[test]
     fn default_path_never_appends_more() {
-        // modal_footer_text is the default path for modals that do not wire
-        // in-modal keymap expand. It must never append `?`.
+        // modal_footer_text must never append `?`.
         let hints = sample_hints();
         let mid = modal_footer_text(&hints, 40);
         assert!(!mid.contains('?'));

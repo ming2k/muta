@@ -29,10 +29,10 @@ fn focused_tool_steps_mut_only_touches_focused_subagent_children() {
 
 #[test]
 fn paste_in_readonly_modal_is_dropped_silently() {
-    // Read-only / non-text modals (Help, Sessions, Permission, ...) drop a
-    // paste silently — no insertion, no toast, no attachment.
+    // Read-only / non-text modals (Sessions, Usage stats, Permission, ...)
+    // drop a paste silently — no insertion, no toast, no attachment.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
-    app.open_dialog(crate::surfaces::DialogKind::Help);
+    app.open_dialog(crate::surfaces::DialogKind::UsageStats);
     app.input = String::new();
     app.cursor_position = 0;
 
@@ -114,7 +114,7 @@ fn caret_owner_scene_for_the_dashboard_inline_prompt() {
     );
     // An overlay above the scene still wins: the scene prompt is suspended.
     app.surfaces
-        .present_dialog(crate::surfaces::DialogKind::Help);
+        .present_dialog(crate::surfaces::DialogKind::UsageStats);
     assert_eq!(
         app.caret_owner(),
         CaretOwner::None,
@@ -154,7 +154,7 @@ fn caret_owner_modal_for_caret_modals() {
 fn caret_owner_none_for_read_only_and_decision_modals() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     for dialog in [
-        crate::surfaces::DialogKind::Help,
+        crate::surfaces::DialogKind::UsageStats,
         crate::surfaces::DialogKind::Sessions,
         crate::surfaces::DialogKind::Tools,
         crate::surfaces::DialogKind::Mcp,

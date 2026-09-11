@@ -63,8 +63,8 @@ width that still shows more than one of them.
 | `Ctrl+O` | Open the unified session telemetry modal (`OpenTelemetry`) |
 
 This is a `NoModal`-gated global binding (it does not fire while another modal
-owns the surface) and is declared in the shared keymap registry, so it
-appears in the Help modal alongside the other Ctrl-row chords.
+owns the surface) and is declared in the shared keymap registry, so the Command
+Palette and the `[keybindings]` config resolve the same chord.
 
 ## Visibility
 

@@ -226,13 +226,6 @@ fn redesigned_components_render_without_panicking() {
             &mut scroll,
             true,
         );
-        {
-            let mut scroll = 0;
-            let ctx = crate::keymap::AppContext::default();
-            let selection = crate::model::selection::SelectionState::None;
-            let mut layout_map = crate::model::layout::LayoutMap::new();
-            draw_help_modal(f, &mut scroll, &ctx, &theme, &selection, &mut layout_map);
-        }
         let selection = crate::model::selection::SelectionState::None;
         let mut layout_map = crate::model::layout::LayoutMap::new();
         let sessions_list = [

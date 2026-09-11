@@ -11,7 +11,7 @@ use crate::components::options::{ChoiceStyle, ChoiceTone, choice_style};
 use crate::primitives::{
     FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN, breadcrumb_parts,
     draw_scrollbar, keyvocab, modal_area, modal_frame, modal_header, modal_header_parts,
-    render_centered_body, render_modal_footer, render_modal_footer_with_more, resolve_scroll,
+    render_centered_body, render_modal_footer, render_modal_footer_with_extra, resolve_scroll,
 };
 use crate::render::Theme;
 
@@ -166,7 +166,7 @@ pub fn draw_sessions_modal(
         };
         render_centered_body(frame, f.body, body);
         if let Some(fo) = f.footer {
-            render_modal_footer_with_more(frame, fo, &list_footer_hints, &list_extra, theme);
+            render_modal_footer_with_extra(frame, fo, &list_footer_hints, &list_extra, theme);
         }
         return area;
     }
@@ -236,7 +236,7 @@ pub fn draw_sessions_modal(
     draw_scrollbar(frame, f.body, start, max_scroll, theme);
 
     if let Some(fo) = f.footer {
-        render_modal_footer_with_more(frame, fo, &list_footer_hints, &list_extra, theme);
+        render_modal_footer_with_extra(frame, fo, &list_footer_hints, &list_extra, theme);
     }
     area
 }

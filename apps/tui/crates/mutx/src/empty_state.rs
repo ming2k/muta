@@ -11,8 +11,8 @@
 //! The footer (input box, status bar, hint bar) renders exactly as in a live
 //! session, so the user lands in a familiar composer immediately.
 //!
-//! Beneath the logo the hero carries a **help carousel** (ADR-0104): one
-//! durable capability hint at a time (`/btw`, `Ctrl-R`, `F1`, `!` shell,
+//! Beneath the logo the hero carries a **capability carousel** (ADR-0104): one
+//! durable capability hint at a time (`/btw`, `Ctrl-R`, `!` shell,
 //! …) rotating on a wall-clock cadence, one line at a time (no position
 //! indicator — the copy is self-explaining) and nothing else — the static
 //! "type a message" tagline is retired, since the carousel's own first page
@@ -51,14 +51,14 @@ pub(crate) const MAX_LOGO_ROWS: usize = 20;
 /// the cadence stays constant regardless of how often the loop redraws.
 pub(crate) const CAROUSEL_SLIDE_SECS: u64 = 8;
 
-/// One rotating help page beneath the logo (ADR-0104). Each page is one
+/// One rotating capability page beneath the logo (ADR-0104). Each page is one
 /// centered line: a muted lead sentence followed by keycap/`command` tokens
 /// picked out in the theme's info tone, so the actionable part of each hint
 /// reads as an affordance the way the hint bar's `◆ effort` tag does.
 ///
 /// The copy is intentionally **durable**: every page teaches a capability
 /// that remains true for the life of the product (send, queue, asides,
-/// help, history, models, shell escape), never a transient state. The list
+/// history, models, shell escape), never a transient state. The list
 /// is static — there is nothing session-specific to compute — and new pages
 /// can be appended freely: the modulo rotation is derived from the slice
 /// length, so no other code needs to know the count.
@@ -66,12 +66,8 @@ pub(crate) fn carousel_pages() -> Vec<CarouselPage> {
     use CarouselToken as Tok;
     vec![
         CarouselPage {
-            lead: "Send a message, or ",
-            tokens: vec![
-                Tok::Key("/"),
-                Tok::Text(" command — try "),
-                Tok::Key("/help"),
-            ],
+            lead: "Send a message, or type ",
+            tokens: vec![Tok::Key("/"), Tok::Text(" for commands")],
         },
         CarouselPage {
             lead: "Mid-round, Enter ",
@@ -80,14 +76,6 @@ pub(crate) fn carousel_pages() -> Vec<CarouselPage> {
         CarouselPage {
             lead: "Start a background side chat with ",
             tokens: vec![Tok::Key("/btw")],
-        },
-        CarouselPage {
-            lead: "All shortcuts live behind ",
-            tokens: vec![
-                Tok::Key(crate::keymap::Key::F1.display()),
-                Tok::Text(" or "),
-                Tok::Key("?"),
-            ],
         },
         CarouselPage {
             lead: "Recall what you typed with ",
@@ -118,7 +106,7 @@ enum CarouselToken {
     Text(&'static str),
 }
 
-/// One page of the empty-state help carousel.
+/// One page of the empty-state capability carousel.
 pub struct CarouselPage {
     lead: &'static str,
     tokens: Vec<CarouselToken>,
@@ -240,7 +228,7 @@ fn effective_logo(user_logo: Option<&[String]>) -> Vec<&str> {
 /// - [`Self::NeedsProvider`] replaces the carousel with a static
 ///   setup blocker: a message the user must act on before anything else is
 ///   useful, so it stays pinned instead of rotating.
-/// - [`Self::Tour`] (the default) shows the rotating help carousel
+/// - [`Self::Tour`] (the default) shows the rotating capability carousel
 ///   (ADR-0104).
 ///
 /// The app shell selects the variant; the view layer owns the copy and
@@ -248,7 +236,7 @@ fn effective_logo(user_logo: Option<&[String]>) -> Vec<&str> {
 /// presentation (what the nudge looks like) in the renderer.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum EmptyStateGuidance {
-    /// The rotating tour: the help carousel alone. The default — a calm
+    /// The rotating tour: the capability carousel alone. The default — a calm
     /// landing strip that teaches one durable capability at a time instead
     /// of a recurring billboard.
     #[default]
@@ -263,7 +251,7 @@ pub enum EmptyStateGuidance {
 }
 
 impl EmptyStateGuidance {
-    /// Whether this variant rotates its help pages (ADR-0104). The setup
+    /// Whether this variant rotates its capability pages (ADR-0104). The setup
     /// blocker stays pinned — it is an action item, not a tour stop.
     #[cfg(test)]
     pub fn is_carousel(&self) -> bool {
@@ -331,7 +319,7 @@ fn guidance_section(
     let warn = Style::default().fg(theme.warn());
     match guidance {
         // The tour is the carousel alone: page 0 already answers "how do I
-        // start" ("Send a message, or / command — try /help"), so the old
+        // start" ("Send a message, or type / for commands"), so the old
         // static tagline beneath the logo duplicated it and is retired.
         EmptyStateGuidance::Tour => carousel_lines(carousel_index, theme),
         EmptyStateGuidance::NeedsProvider => vec![

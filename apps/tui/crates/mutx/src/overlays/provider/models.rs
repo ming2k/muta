@@ -16,7 +16,7 @@ use crate::components::row::{GUTTER, ListRow, RowGroup, RowStyledAtom};
 use crate::primitives::{
     BodyRenderOptions, FixedModalSpec, FooterHint, FooterHintWithBand, SCROLL_EDGE_MARGIN,
     keyvocab, modal_area, modal_frame, modal_header, render_body, render_centered_body,
-    render_modal_footer_with_more,
+    render_modal_footer_with_extra,
 };
 use crate::providers::{ModelBodyLine, RankedModel, models_body_lines};
 use crate::render::Theme;
@@ -151,7 +151,7 @@ pub fn draw_models_modal(
         };
         render_centered_body(frame, body_rect, body);
         if let Some(fo) = f.footer {
-            render_modal_footer_with_more(frame, fo, hints, extra, theme);
+            render_modal_footer_with_extra(frame, fo, hints, extra, theme);
         }
         return area;
     }
@@ -160,7 +160,7 @@ pub fn draw_models_modal(
         let body = search_empty_body(theme);
         render_centered_body(frame, body_rect, body);
         if let Some(fo) = f.footer {
-            render_modal_footer_with_more(frame, fo, hints, extra, theme);
+            render_modal_footer_with_extra(frame, fo, hints, extra, theme);
         }
         if show_caret && let Some(sr) = search_rect {
             place_picker_search_cursor(frame, sr, query, cursor_position);
@@ -193,7 +193,7 @@ pub fn draw_models_modal(
     );
 
     if let Some(fo) = f.footer {
-        render_modal_footer_with_more(frame, fo, hints, extra, theme);
+        render_modal_footer_with_extra(frame, fo, hints, extra, theme);
     }
 
     if show_caret
