@@ -610,6 +610,31 @@ fn decode_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T> {
     serde_json::from_str(value).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
 }
 
+/// Migration-only import of one historical attempt. Conflicting historical
+/// facts for the same attempt identity are *reported* and the first record
+/// wins, instead of aborting the migration — aborting leaves `user_version`
+/// below v15, so every later open retries and fails the same import forever
+/// (ADR-0236 "report conflicting records rather than silently selecting one").
+/// The live settlement path keeps [`upsert_attempt`]'s hard refusal.
+fn import_legacy_attempt(
+    conn: &Connection,
+    entry: &muta_contracts::usage_stats::UsageStatRecord,
+) -> Result<()> {
+    match upsert_attempt(conn, entry) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::InvalidParameterName(message))
+            if message.contains("conflicting reported usage") =>
+        {
+            warn!(
+                %message,
+                "usage migration: conflicting historical attempt; keeping the first record"
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn apply_durable_attempt_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
     // Idempotent: an already-migrated database carries `usage_clock`. A re-run
     // (e.g. a test that re-migrates a current schema from a stale user_version)
@@ -674,7 +699,7 @@ fn apply_durable_attempt_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         for blob in blobs {
             let day: Day = decode_json(&blob)?;
             for entry in day.records {
-                upsert_attempt(tx, &entry)?;
+                import_legacy_attempt(tx, &entry)?;
             }
         }
     }
@@ -684,7 +709,7 @@ fn apply_durable_attempt_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
     for (payload, root, at) in rows {
         let record: muta_contracts::RequestUsageRecord = decode_json(&payload)?;
         let at = if record.started_at_ms > 0 { record.started_at_ms } else { at.saturating_mul(1000) };
-        upsert_attempt(tx, &muta_contracts::usage_stats::UsageStatRecord {
+        import_legacy_attempt(tx, &muta_contracts::usage_stats::UsageStatRecord {
             day: muta_contracts::usage_stats::day_key_from_epoch_ms(at), recorded_at_ms: at,
             project: if root.is_empty() { String::new() } else { crate::paths::project_bucket_name(Path::new(&root)) }, record,
         })?;
