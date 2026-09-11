@@ -327,6 +327,60 @@ fn log_storage_metrics(db_path: &Path, engine: &DatabaseEngine, reader_ages: &Re
     );
 }
 
+/// WAL size beyond which the writer attempts a bounded checkpoint (ADR-0236
+/// D7: "checkpoint or reader pressure must not grow without limit").
+const WAL_CHECKPOINT_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024;
+/// Age beyond which an active reader snapshot is reported as the pressure
+/// that keeps the WAL from being reclaimed.
+const READER_AGE_WARN_MS: u64 = 30_000;
+
+/// ADR-0236 D7: bound WAL growth and surface reader pressure. Runs on the
+/// writer thread between transactions. Above the threshold a `PASSIVE`
+/// checkpoint reclaims what it can without blocking readers or writers; an
+/// old reader is reported as the reason full reclamation may be impossible.
+/// Bounded: at most one checkpoint per maintenance sample.
+fn maintain_storage_pressure(
+    db_path: &Path,
+    engine: &DatabaseEngine,
+    reader_ages: &ReaderAges,
+    wal_threshold_bytes: u64,
+    reader_warn_ms: u64,
+) {
+    if let Some(age_ms) = reader_ages.oldest_age().map(|age| age.as_millis() as u64)
+        && age_ms >= reader_warn_ms
+    {
+        warn!(
+            oldest_reader_ms = age_ms,
+            "a long-lived reader snapshot is pinning the WAL"
+        );
+    }
+    let wal_path = PathBuf::from(format!("{}-wal", db_path.display()));
+    let wal_bytes = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    if wal_bytes < wal_threshold_bytes {
+        return;
+    }
+    match engine
+        .conn
+        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+    {
+        Ok((0, log_frames, checkpointed)) => info!(
+            wal_bytes,
+            log_frames, checkpointed, "reclaimed WAL after pressure threshold"
+        ),
+        Ok((busy, log_frames, checkpointed)) => warn!(
+            wal_bytes,
+            busy, log_frames, checkpointed, "WAL checkpoint could not complete"
+        ),
+        Err(error) => warn!(%error, "WAL checkpoint failed"),
+    }
+}
+
 /// Open the engine and spawn one writer generation on a dedicated thread.
 /// The open happens on a blocking thread so a wedged SQLite open cannot
 /// stall the supervisor.
@@ -368,6 +422,13 @@ async fn spawn_writer(
                 if last_metrics.elapsed() >= METRICS_INTERVAL {
                     last_metrics = Instant::now();
                     log_storage_metrics(&metrics_path, &engine, &reader_ages);
+                    maintain_storage_pressure(
+                        &metrics_path,
+                        &engine,
+                        &reader_ages,
+                        WAL_CHECKPOINT_THRESHOLD_BYTES,
+                        READER_AGE_WARN_MS,
+                    );
                 }
                 if rx.is_empty() || foreground >= 16 {
                     foreground = 0;
@@ -402,3 +463,31 @@ async fn spawn_writer(
     Ok(tx)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ADR-0236 D7: the maintenance pass checkpoints a pressured WAL and
+    /// reports an over-age reader without wedging the engine.
+    #[test]
+    fn maintain_storage_pressure_bounds_the_wal_and_reports_old_readers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("muta.db");
+        let engine = DatabaseEngine::open(&path, None).unwrap();
+        let reader_ages = ReaderAges::default();
+        // A registered snapshot is "old enough" at any non-negative bound.
+        let _id = reader_ages.register();
+
+        // Threshold 0 forces the checkpoint branch; warn bound 0 forces the
+        // reader-pressure report. Must not panic and must leave the engine
+        // usable.
+        maintain_storage_pressure(&path, &engine, &reader_ages, 0, 0);
+
+        let version: u32 = engine
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_DB_VERSION);
+    }
+}
