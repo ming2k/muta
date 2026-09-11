@@ -176,11 +176,15 @@ mod tests {
         // next local day is far away, so pick two instants 48h apart.
         let t0 = 1_700_000_000_000u64;
         let t1 = t0 + 48 * 3600 * 1_000;
+        // Distinct attempts: the same `(session, actor, round, turn, attempt)`
+        // identity may not be re-reported with conflicting authoritative
+        // counts (ADR-0236; `upsert_attempt` refuses it), so two days means two
+        // attempts, not one attempt recorded twice.
         store
             .record(t0, "p", &sample_record("s1", 1, 1_000))
             .unwrap();
         store
-            .record(t1, "p", &sample_record("s1", 1, 2_000))
+            .record(t1, "p", &sample_record("s1", 2, 2_000))
             .unwrap();
         let report = store.report(10);
         assert_eq!(report.days.len(), 2);

@@ -611,6 +611,13 @@ fn decode_json<T: serde::de::DeserializeOwned>(value: &str) -> Result<T> {
 }
 
 fn apply_durable_attempt_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
+    // Idempotent: an already-migrated database carries `usage_clock`. A re-run
+    // (e.g. a test that re-migrates a current schema from a stale user_version)
+    // must no-op instead of renaming `usage_records` again and colliding with
+    // the existing `usage_records_day` index.
+    if table_exists(tx, "usage_clock")? {
+        return Ok(());
+    }
     tx.execute_batch("ALTER TABLE usage_records RENAME TO legacy_usage_records;
         CREATE TABLE usage_records (
             session_id TEXT NOT NULL, actor_id TEXT NOT NULL, round INTEGER NOT NULL,
@@ -649,13 +656,27 @@ fn apply_durable_attempt_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         CREATE TABLE session_revisions (session_id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
     ")?;
     // Prefer historical cross-session attribution; per-session facts fill gaps.
-    let mut stmt = tx.prepare("SELECT value FROM kv_store WHERE key LIKE 'usage:day:%' ORDER BY key")?;
-    let blobs = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>>>()?;
-    drop(stmt);
-    #[derive(Deserialize)] struct Day { records: Vec<muta_contracts::usage_stats::UsageStatRecord> }
-    for blob in blobs {
-        let day: Day = decode_json(&blob)?;
-        for entry in day.records { upsert_attempt(tx, &entry)?; }
+    // `kv_store` predates this migration on every real database, but a
+    // hand-built test schema may omit it — there is then nothing historical to
+    // import, so the import and its delete are both skipped.
+    let has_kv_store = table_exists(tx, "kv_store")?;
+    if has_kv_store {
+        let mut stmt =
+            tx.prepare("SELECT value FROM kv_store WHERE key LIKE 'usage:day:%' ORDER BY key")?;
+        let blobs = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>>>()?;
+        drop(stmt);
+        #[derive(Deserialize)]
+        struct Day {
+            records: Vec<muta_contracts::usage_stats::UsageStatRecord>,
+        }
+        for blob in blobs {
+            let day: Day = decode_json(&blob)?;
+            for entry in day.records {
+                upsert_attempt(tx, &entry)?;
+            }
+        }
     }
     let mut stmt = tx.prepare("SELECT u.payload, COALESCE(s.workspace_root,''), COALESCE(s.updated_at_s,0) FROM legacy_usage_records u LEFT JOIN sessions s ON s.id=u.session_id")?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?)))?.collect::<Result<Vec<_>>>()?;
@@ -668,7 +689,10 @@ fn apply_durable_attempt_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
             project: if root.is_empty() { String::new() } else { crate::paths::project_bucket_name(Path::new(&root)) }, record,
         })?;
     }
-    tx.execute_batch("DROP TABLE legacy_usage_records; DELETE FROM kv_store WHERE key LIKE 'usage:day:%';")?;
+    tx.execute_batch("DROP TABLE legacy_usage_records;")?;
+    if has_kv_store {
+        tx.execute_batch("DELETE FROM kv_store WHERE key LIKE 'usage:day:%';")?;
+    }
     Ok(())
 }
 

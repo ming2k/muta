@@ -12,7 +12,7 @@ pub const CURRENT_DB_VERSION: u32 = 15;
 /// for the discipline this enforces.
 #[cfg(test)]
 pub const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "f2f4cb09e48126eb80cd79f1846e4c94dd759d50b7145371484f8156ab198666";
+    "5018938efbdfb0bfc08dfcd30e58209bcd0fe2dc83ad0285692eb51902870f32";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
