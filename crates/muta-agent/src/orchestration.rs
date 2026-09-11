@@ -1620,15 +1620,12 @@ pub async fn execute_round(
 
     if let Some(ref ledger) = ledger { ledger.acknowledge_records(usage_slice); }
 
-    // Publish from the final committed history on every terminal path. This
-    // reconciles the pre-wire estimate after interruption, tool cancellation,
-    // or response commit instead of leaving the meter anchored to a request
-    // shape that is no longer AI-visible.
-    send_context_projection(&tx, &session_id, &agent, &round_history).await;
-
     let outcome = match outcome {
         Ok(outcome) => outcome,
         Err(error) => {
+            // The final committed history still reconciles the meter on the
+            // error path; there is no completion event, so ordering is free.
+            send_context_projection(&tx, &session_id, &agent, &round_history).await;
             if matches!(error, HarnessError::Interrupted)
                 && (streamed_text.load(Ordering::SeqCst) || tool_activity.load(Ordering::SeqCst))
             {
@@ -1645,6 +1642,41 @@ pub async fn execute_round(
     if !visible.is_empty() && !streamed_text.load(Ordering::SeqCst) {
         let _ = tx.send(round_response(&session_id, RoundEvent::Text(visible)));
     }
+
+    // ADR-0236 D5 / invariant #5: publish the authoritative completion as soon
+    // as the commit is acknowledged, *before* any optional projection (the
+    // context estimate below, the state mirrors further down). None of those
+    // may gate a completed round.
+    if emit_round_completed {
+        let _ = tx.send(round_response(
+            &session_id,
+            RoundEvent::RoundCompleted(muta_contracts::RoundSummary {
+                round: agent.round_count(),
+                output_tokens: outcome.token_usage.completion_tokens.max(0) as u64,
+                duration_ms: outcome.duration_ms,
+                paused_ms: outcome.paused_ms,
+                generation_ms: outcome.generation_ms,
+                session_revision: committed_revision,
+            }),
+        ));
+        // ADR-0209 Tenet II: Proactive push of token ledger updates on turn
+        // boundary. The token source report is an authoritative in-memory
+        // projection from the ledger, streamed immediately so open telemetry
+        // dialogs update live without polling.
+        if let Some(ledger) = agent.token_ledger() {
+            let report = ledger.snapshot_for_session(&session_id);
+            let _ = tx.send(AgentResponse::TokenUsageReport {
+                session_id: session_id.clone(),
+                report,
+            });
+        }
+    }
+
+    // Optional: reconcile the pre-wire estimate from the final committed
+    // history after completion has been published. This reconciles the meter
+    // after interruption, tool cancellation, or response commit instead of
+    // leaving it anchored to a request shape that is no longer AI-visible.
+    send_context_projection(&tx, &session_id, &agent, &round_history).await;
 
     // Mirror the unified task list so resume restores the sticky panel. The
     // value is compared against the session's current list to skip the write
@@ -1708,37 +1740,13 @@ pub async fn execute_round(
     // Phase 5: Round EOL Aspect Hook (ADR-0183)
     agent.aspects().fire_round_eol(&agent, Arc::clone(&session));
 
-    if emit_round_completed {
-        let _ = tx.send(round_response(
-            &session_id,
-            RoundEvent::RoundCompleted(muta_contracts::RoundSummary {
-                round: agent_round,
-                output_tokens: outcome.token_usage.completion_tokens.max(0) as u64,
-                duration_ms: outcome.duration_ms,
-                paused_ms: outcome.paused_ms,
-                generation_ms: outcome.generation_ms,
-            }),
-        ));
-        // ADR-0209 Tenet II: Proactive push of token ledger updates on turn boundary.
-        // The token source report is an authoritative projection from the ledger,
-        // streamed immediately so open telemetry dialogs update live without polling.
-        if let Some(ledger) = agent.token_ledger() {
-            let report = ledger.snapshot_for_session(&session_id);
-            let _ = tx.send(AgentResponse::TokenUsageReport {
-                session_id: session_id.clone(),
-                report,
-            });
-        }
-        // The cross-session usage aggregate is deliberately NOT computed here.
-        // It folds every day blob in the 400-day window (~85-110 ms release,
-        // ~410-430 ms debug against a year of history) and this point is
-        // between `RoundCompleted` and this function's return — i.e. on the
-        // critical path to the tail's idle snapshot, which is what clears the
-        // activity bar off `finalizing response`. The `/usage` overlay fetches
-        // it on demand instead (`AgentRequest::QueryUsageStats`), which is the
-        // path it was always designed around; live telemetry is carried by the
-        // in-memory `TokenUsageReport` above.
-    }
+    // The cross-session usage aggregate is deliberately NOT computed here. It
+    // folds every day blob in the 400-day window (~85-110 ms release, ~410-430
+    // ms debug against a year of history) and would sit on the critical path to
+    // the tail's idle snapshot, which is what clears the activity bar off
+    // `finalizing response`. The `/usage` overlay fetches it on demand instead
+    // (`AgentRequest::QueryUsageStats`); live telemetry is carried by the
+    // in-memory `TokenUsageReport` published with the completion above.
     Ok(RoundCompletion::Completed)
 }
 
