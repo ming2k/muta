@@ -41,29 +41,14 @@ impl App {
         self.surfaces.active_scene()
     }
 
-    /// Bridge forwarder for `current_view`.
-    pub(crate) fn current_view(&self) -> SceneKind {
-        self.current_scene()
-    }
-
     /// Navigate to a root scene.
     pub(crate) fn switch_scene(&mut self, scene: SceneKind) {
         self.surfaces.switch_scene(scene);
     }
 
-    /// Bridge forwarder for `show_view_surface`.
-    pub(crate) fn show_view_surface(&mut self, scene: impl Into<SceneKind>) {
-        self.switch_scene(scene.into());
-    }
-
     /// Hard reset to Conversation home scene: clear all overlays and history.
     pub(crate) fn reset_to_conversation(&mut self) {
         self.surfaces.reset_to_conversation();
-    }
-
-    /// Bridge forwarder for `show_chat_surface`.
-    pub(crate) fn show_chat_surface(&mut self) {
-        self.reset_to_conversation();
     }
 
     /// Pop one overlay and restore the underlying surface.
@@ -182,7 +167,7 @@ impl App {
         self.session_history_backfill_cursor = 0;
     }
 
-    pub(crate) fn can_open_view_switcher(&self) -> bool {
+    pub(crate) fn can_open_switcher(&self) -> bool {
         self.can_accept_navigation_signal()
     }
 
@@ -317,19 +302,9 @@ impl App {
         }
     }
 
-    /// Bridge forwarder for `restore_panel_state`.
-    pub(crate) fn restore_panel_state(&mut self, id: DialogKind) {
-        self.restore_dialog_state(id);
-    }
-
     /// Exit hook for a root scene.
     pub(crate) fn leave_scene_for_navigation(&mut self, scene: SceneKind) {
         self.deactivate_scene(scene)
-    }
-
-    /// Bridge forwarder for `leave_view_for_navigation`.
-    pub(crate) fn leave_view_for_navigation(&mut self, scene: SceneKind) {
-        self.leave_scene_for_navigation(scene);
     }
 
     pub(crate) fn deactivate_scene(&mut self, scene: SceneKind) {
@@ -416,11 +391,6 @@ impl App {
         }
     }
 
-    /// Bridge forwarder for `hide_active_panel`.
-    pub(crate) fn hide_active_panel(&mut self) -> bool {
-        self.dismiss_active_dialog()
-    }
-
     /// Explicitly close a retained dialog, dropping both its state and UI payload.
     pub(crate) fn close_dialog(&mut self, id: DialogKind) {
         if self.active_dialog() == Some(id) {
@@ -429,11 +399,6 @@ impl App {
         }
         self.surface_store.close(id);
         self.reset_dialog_payload(id);
-    }
-
-    /// Bridge forwarder for `close_panel`.
-    pub(crate) fn close_panel(&mut self, id: DialogKind) {
-        self.close_dialog(id);
     }
 
     fn reset_dialog_payload(&mut self, id: DialogKind) {

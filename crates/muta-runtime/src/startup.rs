@@ -273,12 +273,27 @@ define_builtin_commands! {
             ("off", "Disable confinement (allow full host filesystem access)"),
         ],
     },
-    Role = "/role" : {
-        summary: "Switch agent persona and role",
-        usage: ["/role", "/role [code|architect|reviewer|security]"],
-        examples: [("/role architect", "Switch to system design & analysis focus"), ("/role reviewer", "Read-only code review mode")],
-        intent_keywords: ["role", "persona", "preset", "mode", "identity", "architect", "reviewer", "security", "switch-role", "master"],
+    Persona = "/persona" : {
+        summary: "Switch agent persona (identity and capability)",
+        usage: ["/persona", "/persona [code|architect|reviewer|security|conversational]"],
+        examples: [
+            ("/persona architect", "Switch to system design & analysis focus"),
+            ("/persona reviewer", "Read-only code review mode"),
+            ("/persona conversational", "Workspace-free conversational companion"),
+        ],
+        intent_keywords: [
+            "persona", "role", "preset", "mode", "identity", "architect", "reviewer",
+            "security", "conversational", "switch-persona", "switch-role", "master",
+        ],
         category: Agent,
+        subcommands: [
+            ("code", "the default developer master (full native capabilities)"),
+            ("architect", "architecture & design focus (analysis-first)"),
+            ("reviewer", "read-only code review"),
+            ("security", "read-only security audit (command-confined)"),
+            ("code_analyst", "code analyst (read-only analysis & sandboxed execution)"),
+            ("conversational", "workspace-free conversation (no filesystem or command tools)"),
+        ],
     },
     Search = "/search" : {
         summary: "Semantic search over session history",
@@ -483,8 +498,8 @@ impl BuiltinCmd {
             "/auto" | "/delegate" | "/autopilot" | "/yolo" => Some(BuiltinCmd::Unattended),
             // `/unconfine`, `/unconfined`, `/jail`, `/escape` are aliases for `/confinement`.
             "/unconfine" | "/unconfined" | "/jail" | "/escape" => Some(BuiltinCmd::Confinement),
-            // `/master` and `/preset` are legacy aliases for `/role` (ADR-0183).
-            "/master" | "/preset" => Some(BuiltinCmd::Role),
+            // `/role`, `/master` and `/preset` are legacy aliases for `/persona` (ADR-0183 / ADR-0225).
+            "/role" | "/master" | "/preset" => Some(BuiltinCmd::Persona),
             _ => None,
         }
     }
@@ -594,14 +609,29 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
                 .map(|keyword| (*keyword).to_string())
                 .collect(),
             category: Some(spec.category.label().to_string()),
-            subcommands: spec
-                .subcommands
-                .iter()
-                .map(|(name, summary)| muta_contracts::CommandSubcommandSpec {
-                    name: (*name).to_string(),
-                    summary: (*summary).to_string(),
-                })
-                .collect(),
+            subcommands: {
+                let mut subs: Vec<muta_contracts::CommandSubcommandSpec> = spec
+                    .subcommands
+                    .iter()
+                    .map(|(name, summary)| muta_contracts::CommandSubcommandSpec {
+                        name: (*name).to_string(),
+                        summary: (*summary).to_string(),
+                    })
+                    .collect();
+                if spec.name == "/persona" {
+                    let user_personas = muta_persistence::personas::PersonasConfig::load();
+                    for (id, p) in user_personas.personas {
+                        if !subs.iter().any(|s| s.name == id) {
+                            let desc = p.mission.as_deref().unwrap_or(p.name.as_str());
+                            subs.push(muta_contracts::CommandSubcommandSpec {
+                                name: id,
+                                summary: desc.to_string(),
+                            });
+                        }
+                    }
+                }
+                subs
+            },
         })
         .collect::<Vec<_>>();
     commands.extend(
@@ -633,8 +663,9 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/unconfined", "/confinement"),
             ("/jail", "/confinement"),
             ("/escape", "/confinement"),
-            ("/master", "/role"),
-            ("/preset", "/role"),
+            ("/role", "/persona"),
+            ("/master", "/persona"),
+            ("/preset", "/persona"),
         ]
         .into_iter()
         .map(|(name, target)| muta_contracts::CommandAlias {

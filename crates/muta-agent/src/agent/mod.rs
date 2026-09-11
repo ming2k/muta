@@ -1213,6 +1213,7 @@ mod execution;
 mod rounds;
 mod state;
 mod steering;
+pub use steering::SwitchedPersona;
 mod tools_admin;
 
 pub(crate) use rounds::ToolResultRecord;

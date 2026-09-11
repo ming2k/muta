@@ -1431,9 +1431,9 @@ async fn ctrl_c_clears_history_recall_and_resets_draft() {
 #[test]
 fn esc_preserves_recalled_history_and_interrupts_when_running() {
     use crate::keymap::Key;
-    use crate::session::{ViewKeys, resolve_chat_surface_key};
+    use crate::session::{SceneKeys, resolve_chat_surface_key};
 
-    let mut keys = ViewKeys {
+    let mut keys = SceneKeys {
         is_responding: false,
         composer_send_mode: Default::default(),
         completion_kind: crate::completion::CompletionKind::None,

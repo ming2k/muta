@@ -125,10 +125,10 @@ pub enum RecallQueued {
 /// stayed visible at its old coordinate.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CaretOwner {
-    /// The live composer (no modal, no subagent zoom, no transcript-step focus).
+    /// The live composer (no overlay, no subagent zoom, no transcript-step focus).
     Composer,
-    /// A modal that renders its own caret (`Modal::owns_caret`).
-    Modal,
+    /// An active overlay surface that renders its own caret (dialog search, sheet form, etc.).
+    Overlay,
     /// No text-input surface is active — the cursor must be hidden.
     None,
 }
@@ -515,7 +515,7 @@ pub struct App {
     /// Recently executed commands for MRU display in Command Palette.
     pub(crate) recent_commands: Vec<String>,
     /// The session whose outbox the Queue view auto-blocked on entry
-    /// (ADR-0139). `hide_active_panel` is an `&mut App` method that
+    /// (ADR-0139). `dismiss_active_dialog` is an `&mut App` method that
     /// cannot see the loop's `viewed_session_id`, so the block site records
     /// the target here and the exit hook consumes it.
     pub(crate) queue_exit_session: Option<String>,

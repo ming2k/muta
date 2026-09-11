@@ -357,3 +357,16 @@ mod trust_domain_tests {
         assert!(shared_roots.snapshot().is_empty());
     }
 }
+
+#[cfg(test)]
+mod persona_command_tests {
+    use crate::startup::BuiltinCmd;
+
+    #[test]
+    fn persona_and_aliases_resolve_to_builtin_persona() {
+        assert_eq!(BuiltinCmd::from_slash("/persona"), Some(BuiltinCmd::Persona));
+        assert_eq!(BuiltinCmd::from_slash("/role"), Some(BuiltinCmd::Persona));
+        assert_eq!(BuiltinCmd::from_slash("/master"), Some(BuiltinCmd::Persona));
+        assert_eq!(BuiltinCmd::from_slash("/preset"), Some(BuiltinCmd::Persona));
+    }
+}

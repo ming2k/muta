@@ -208,34 +208,56 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 RoundEvent::ConfinementChanged(next_confined),
             ));
         }
-        Some(BuiltinCmd::Role) => {
-            // /role <role> — switch the live agent role (ADR-0183).
-            // Resolves the role onto the current identity, applies the
-            // resulting profile (identity preamble, capability scope, operation
-            // boundary), and surfaces a confirmation. With no argument, lists
-            // the available roles.
-            match parts.get(1) {
-                None | Some(&"") => {
-                    let roles: Vec<&'static str> = muta_contracts::AgentPersonaId::ALL
-                        .iter()
-                        .map(|r| r.as_str())
-                        .collect();
+        Some(BuiltinCmd::Persona) => {
+            // /persona [id] — switch the live agent persona (ADR-0225).
+            // Resolves the persona or preset onto the live agent, applies the
+            // resulting profile (identity preamble, capability scope, extensions,
+            // runtime knobs, unattended posture), and records the session metadata.
+            // With no argument, lists the available built-in presets and user personas.
+            let target = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
+            match target {
+                None => {
+                    let personas_config = muta_persistence::personas::PersonasConfig::load();
+                    let mut lines = Vec::new();
+
+                    let current = session
+                        .active_persona()
+                        .await
+                        .or_else(|| session.persona().map(str::to_string))
+                        .unwrap_or_else(|| "code".to_string());
+                    lines.push(format!("Active persona: `{current}`\n"));
+
+                    lines.push("Available personas:".to_string());
+                    lines.push("  Built-in presets:".to_string());
+                    for preset in muta_contracts::AgentPersonaId::ALL {
+                        lines.push(format!("    • `{}` — {}", preset.as_str(), preset.description()));
+                    }
+
+                    if !personas_config.is_empty() {
+                        lines.push(String::new());
+                        lines.push("  User personas (~/.config/muta/personas.toml):".to_string());
+                        for (id, p) in &personas_config.personas {
+                            let desc = p.mission.as_deref().unwrap_or(p.name.as_str());
+                            lines.push(format!("    • `{id}` (preset: `{}`) — {desc}", p.preset));
+                        }
+                    }
+
+                    lines.push(String::new());
+                    lines.push("Usage: `/persona <id>` or `/role <id>`".to_string());
+
                     record_command(
                         session,
                         resp_tx,
                         name,
                         args,
-                        CommandResult::Text(format!(
-                            "Available agent roles: {}. Usage: `/role <role>` or \
-                             mention `@role:<role>` in a message.",
-                            roles.join(", ")
-                        )),
+                        CommandResult::Text(lines.join("\n")),
                     )
                     .await;
                 }
-                Some(role) => match agent.apply_role(role) {
-                    Some(resolved) => {
+                Some(persona_id) => match agent.apply_persona(persona_id) {
+                    Some(switched) => {
                         let _ = session.set_unattended(agent.unattended()).await;
+                        let _ = session.set_persona(Some(switched.id.clone())).await;
                         let _ = resp_tx.send(round_response(
                             &session.id().await,
                             RoundEvent::UnattendedChanged(agent.unattended()),
@@ -246,28 +268,32 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             name,
                             args,
                             CommandResult::Text(format!(
-                                "Agent role switched to `{}` — {}. The next response will \
-                                 speak with this role's perspective and capability scope.",
-                                resolved.as_str(),
-                                resolved.description()
+                                "Agent persona switched to `{}` (`{}`) — {}. The next response will \
+                                 speak with this persona's perspective and capability scope.",
+                                switched.name,
+                                switched.id,
+                                switched.description
                             )),
                         )
                         .await;
                     }
                     None => {
+                        let personas_config = muta_persistence::personas::PersonasConfig::load();
+                        let mut available: Vec<String> = muta_contracts::AgentPersonaId::ALL
+                            .iter()
+                            .map(|p| format!("`{}`", p.as_str()))
+                            .collect();
+                        for id in personas_config.ids() {
+                            available.push(format!("`{id}`"));
+                        }
                         record_error(
                             session,
                             resp_tx,
                             name,
                             args,
                             format!(
-                                "Unknown agent role `{}`. Available roles: {}.",
-                                role,
-                                muta_contracts::AgentPersonaId::ALL
-                                    .iter()
-                                    .map(|r| r.as_str())
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
+                                "Unknown persona `{persona_id}`. Available personas: {}.",
+                                available.join(", ")
                             ),
                         )
                         .await;

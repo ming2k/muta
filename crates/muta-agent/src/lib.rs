@@ -109,7 +109,7 @@ const SUBAGENT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs
 
 pub mod agent;
 pub use agent::TitleEstablishedFn;
-pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome};
+pub use agent::{Agent, AgentBuilder, RequestTokenEstimate, RoundOutcome, SwitchedPersona};
 
 mod bash_policy;
 pub mod budget;

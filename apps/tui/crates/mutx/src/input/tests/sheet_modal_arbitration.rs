@@ -14,7 +14,7 @@ fn overlaid(fixture: SurfaceFixture, sheet: SheetKind) -> Dispatch {
     let (overlay, scene) = fixture.to_dispatch();
     Dispatch {
         overlay,
-        view: scene,
+        scene,
         sheet: Some(sheet),
         ..Default::default()
     }
@@ -35,7 +35,7 @@ fn route(dispatch: Dispatch, code: KeyCode) -> InputAction {
         dispatch,
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -216,7 +216,7 @@ fn injection_sheet_input_suspends_over_a_text_modal() {
             ..Default::default()
         },
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('x'));

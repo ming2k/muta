@@ -887,9 +887,28 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(labels, vec!["/debug trace off"]);
 
-        // /role offers 4 roles
+        // /persona offers all built-in presets (and /role alias preserves it)
         let AgentResponse::ComposerCompletions { items, .. } =
-            engine.complete(16, "/role ".into(), 6).await
+            engine.complete(16, "/persona ".into(), 9).await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "/persona code",
+                "/persona architect",
+                "/persona reviewer",
+                "/persona security",
+                "/persona code_analyst",
+                "/persona conversational"
+            ]
+        );
+
+        // /role alias also expands subcommands
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(17, "/role ".into(), 6).await
         else {
             panic!("unexpected response")
         };
@@ -900,7 +919,9 @@ mod tests {
                 "/role code",
                 "/role architect",
                 "/role reviewer",
-                "/role security"
+                "/role security",
+                "/role code_analyst",
+                "/role conversational"
             ]
         );
     }

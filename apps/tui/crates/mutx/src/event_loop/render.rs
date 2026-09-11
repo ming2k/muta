@@ -556,7 +556,9 @@ fn compose_frame(
             // composer panel until a composer click or a keystroke
             // hands it back.
             let step_focused = app.focused_target.is_some() || app.transcript_focused;
-            let show_caret = app.caret_visible();
+            let composer_owns_caret = app.caret_owner() == crate::CaretOwner::Composer;
+            let show_caret = app.caret_visible() && composer_owns_caret;
+            let composer_focused = !step_focused && (!has_overlay || composer_owns_caret);
             // A fully-typed known `/command` is painted in bold +
             // accent color so it reads as a resolved command
             // rather than prose; an unmatched `/`-prefix keeps
@@ -599,7 +601,7 @@ fn compose_frame(
                 }
             };
             let composer_options = render::ComposerDrawOptions {
-                focused: !step_focused,
+                focused: composer_focused,
                 show_caret,
                 follow_caret: app.input_scroll_follow_cursor,
                 record: true,
@@ -654,7 +656,7 @@ fn compose_frame(
                             input: &app.input,
                             byte_cursor,
                         },
-                        !step_focused,
+                        composer_focused,
                         show_caret,
                         true,
                         image_count,
@@ -1098,6 +1100,8 @@ fn compose_frame(
                         &app.recent_commands,
                         &app_ctx,
                     );
+                    let show_caret = app.caret_visible()
+                        && app.caret_owner() == crate::CaretOwner::Overlay;
                     Some(crate::overlays::draw_command_palette(
                         f,
                         crate::overlays::command_palette::CommandPaletteProps {
@@ -1105,6 +1109,7 @@ fn compose_frame(
                             entries: &entries,
                             selected_index: app.command_palette_selected,
                             scroll: &mut app.command_palette_scroll,
+                            show_caret,
                         },
                         &app.theme,
                         &app.selection,

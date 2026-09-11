@@ -823,11 +823,14 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 _ => muta_contracts::SessionSource::Startup,
             };
             let mut messages = session.model_window().await;
+            let before_len = messages.len();
             agent.fire_session_start(source, &mut messages).await;
             // Persist the hook-injected setup context through the single write
             // path so the session stays the source of truth (ADR-0048).
-            if let Err(err) = session.replace_messages(messages).await {
-                tracing::warn!(error = %err, "failed to persist SessionStart hook context");
+            if messages.len() > before_len {
+                if let Err(err) = session.append_turn(&messages).await {
+                    tracing::warn!(error = %err, "failed to persist SessionStart hook context");
+                }
             }
         }
     }

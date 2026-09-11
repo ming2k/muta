@@ -49,7 +49,7 @@ pub trait ComposerExtension: Send + Sync {
 
     /// Layer 2 Key Interceptor: returns `Some(action)` if handled,
     /// or `None` to let the key fall through to the Layer 3 text editing engine.
-    fn intercept_key(&self, key: Key, keys: &crate::session::ViewKeys) -> Option<InputAction>;
+    fn intercept_key(&self, key: Key, keys: &crate::session::SceneKeys) -> Option<InputAction>;
 }
 
 /// History Search (`Ctrl+R`) extension implementation.
@@ -64,7 +64,7 @@ impl ComposerExtension for HistorySearchExtension {
         crate::modal_keys::live_history_hints()
     }
 
-    fn intercept_key(&self, key: Key, _keys: &crate::session::ViewKeys) -> Option<InputAction> {
+    fn intercept_key(&self, key: Key, _keys: &crate::session::SceneKeys) -> Option<InputAction> {
         crate::modal_keys::resolve_history_search_key(key)
     }
 }
@@ -86,7 +86,7 @@ impl ComposerExtension for SlashCompletionExtension {
         SLASH_HINTS
     }
 
-    fn intercept_key(&self, key: Key, keys: &crate::session::ViewKeys) -> Option<InputAction> {
+    fn intercept_key(&self, key: Key, keys: &crate::session::SceneKeys) -> Option<InputAction> {
         match key.code {
             crossterm::event::KeyCode::Esc if !keys.completion_dismissed => {
                 Some(InputAction::CloseCompletion)
@@ -119,7 +119,7 @@ impl ComposerExtension for PathCompletionExtension {
         PATH_HINTS
     }
 
-    fn intercept_key(&self, key: Key, keys: &crate::session::ViewKeys) -> Option<InputAction> {
+    fn intercept_key(&self, key: Key, keys: &crate::session::SceneKeys) -> Option<InputAction> {
         match key.code {
             crossterm::event::KeyCode::Esc if !keys.completion_dismissed => {
                 Some(InputAction::CloseCompletion)
@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn test_history_extension_intercepts_shift_delete_not_bare_delete() {
         let ext = HistorySearchExtension;
-        let keys = crate::session::ViewKeys::default();
+        let keys = crate::session::SceneKeys::default();
 
         // Shift+Delete is intercepted
         assert_eq!(
@@ -178,7 +178,7 @@ mod tests {
         let slash_ext = SlashCompletionExtension;
         let path_ext = PathCompletionExtension;
 
-        let keys = crate::session::ViewKeys {
+        let keys = crate::session::SceneKeys {
             completion_dismissed: false,
             suggestion_count: 2,
             suggestion_index: Some(1),

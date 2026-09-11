@@ -253,6 +253,28 @@ impl SessionStore {
         Ok(())
     }
 
+    pub async fn active_persona(&self) -> Option<String> {
+        self.state.lock().await.data.persona.clone()
+    }
+
+    pub async fn set_persona(&self, persona: Option<String>) -> Result<(), String> {
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            state.data.persona = persona;
+            state.data.updated_at = unix_timestamp();
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                state.defer_persist = false;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn round_counter(&self) -> u64 {
         self.state.lock().await.data.round_counter
     }
@@ -329,5 +351,24 @@ impl SessionStore {
                 .await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn active_persona_and_set_persona_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = SessionStore::for_path(dir.path().join("session.json"));
+        assert_eq!(store.active_persona().await, None);
+
+        store.set_persona(Some("architect".to_string())).await.unwrap();
+        assert_eq!(store.active_persona().await, Some("architect".to_string()));
+
+        store.set_persona(None).await.unwrap();
+        assert_eq!(store.active_persona().await, None);
     }
 }

@@ -57,7 +57,7 @@ fn tab_after_esc_reopens_through_the_event_loop_context_shape() {
         crate::input::Dispatch::default(),
         &crate::modal_keys::ModalKeys::default(),
         &crate::sheet::SheetKeys::default(),
-        &crate::session::ViewKeys {
+        &crate::session::SceneKeys {
             completion_kind,
             suggestion_count: completions.len(),
             has_exact_suggestion: false,

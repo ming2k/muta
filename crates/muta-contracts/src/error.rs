@@ -121,23 +121,56 @@ impl ProviderError {
         matches!(self.kind, ProviderErrorKind::ContextOverflow)
     }
 
-    /// Whether this failure is a **request-shape refusal**: the upstream
-    /// rejected what we sent, as opposed to a transport, auth, quota, or
-    /// server fault.
+    /// Whether this failure is a **deterministic refusal of the request we just
+    /// sent** — the only kind of failure from which the image-cause probe can
+    /// draw a valid inference (ADR-0230).
     ///
-    /// Only a refusal of the request itself can have been caused by a field
-    /// *inside* it, which is why the image-cause probe (ADR-0230) is scoped to
-    /// these kinds. `Protocol` is included on
-    /// purpose: some vendors report a refusal in-band (HTTP 200 carrying an
-    /// `error` object), which surfaces as `Protocol` rather than
-    /// `InvalidRequest`.
+    /// The probe reasons: *re-send the same request with the attachments
+    /// withheld; if that succeeds, the attachments were the cause.* That
+    /// inference is only sound when **re-sending the identical bytes would have
+    /// failed identically**. Two properties are therefore required, and the
+    /// status codes below are chosen to satisfy both:
+    ///
+    /// 1. **Deterministic.** A transient failure breaks the inference outright,
+    ///    because a re-send tends to succeed *regardless of what changed* — so
+    ///    "succeeded after stripping" would be evidence of nothing, while the
+    ///    harness would latch it as proof that the route rejects images. That is
+    ///    why `408`, `429`, `5xx`, and transport/timeout failures are excluded
+    ///    even though they are common. (They are also already retried with
+    ///    backoff by the transport layer; the probe would race that recovery.)
+    /// 2. **Caused by the payload.** An endpoint, method, or conflict failure is
+    ///    deterministic but says nothing about the body, so probing it wastes a
+    ///    round trip before the real error surfaces — which is why `404`, `405`,
+    ///    `409`, and `410` are excluded despite arriving as
+    ///    [`ProviderErrorKind::InvalidRequest`].
+    ///
+    /// What remains is the "this payload is unacceptable" family: `400` and
+    /// `422` (validation), `413` (too large — a base64 image is the likeliest
+    /// cause), and `415` (unsupported media type, the canonical image
+    /// rejection).
+    ///
+    /// [`ProviderErrorKind::ContextOverflow`] is excluded on purpose: a
+    /// too-long prompt has its own recovery (compaction), and letting it also
+    /// arm the probe would withhold images to fix a problem that is not about
+    /// them.
+    ///
+    /// An in-band refusal (HTTP 2xx carrying an `error` object) has no status to
+    /// read, so the kinds only a request-shape refusal produces are accepted
+    /// there. This is the *only* classification the image recovery consults, and
+    /// it reads none of the vendor's prose.
     pub const fn is_request_refusal(&self) -> bool {
-        matches!(
-            self.kind,
-            ProviderErrorKind::InvalidRequest
-                | ProviderErrorKind::Protocol
-                | ProviderErrorKind::Other
-        )
+        if matches!(self.kind, ProviderErrorKind::ContextOverflow) {
+            return false;
+        }
+        match self.status {
+            Some(status) => matches!(status, 400 | 413 | 415 | 422),
+            None => matches!(
+                self.kind,
+                ProviderErrorKind::InvalidRequest
+                    | ProviderErrorKind::Protocol
+                    | ProviderErrorKind::Other
+            ),
+        }
     }
 
     // Deliberately absent: any predicate that decides "was this refusal about
@@ -279,33 +312,95 @@ impl From<ProviderError> for HarnessError {
 mod request_refusal_tests {
     use super::*;
 
-    fn error(kind: ProviderErrorKind) -> ProviderError {
-        ProviderError::new("mock", kind, "anything")
+    /// A status-mapped failure, the shape the transport produces.
+    fn http(status: u16, kind: ProviderErrorKind) -> ProviderError {
+        ProviderError::new("mock", kind, "message").with_status(status)
     }
 
     #[test]
-    fn request_refusal_scopes_the_probe_to_refusals_of_our_own_request() {
-        // This is the only classification the image recovery consults, and it is
-        // derived from the HTTP status the transport already mapped — it reads
-        // none of the vendor's prose, which is the whole point (ADR-0230).
-        //
-        // A refusal of what we sent is the only failure a field *inside* the
-        // request could explain, so those kinds may arm the probe.
+    fn payload_rejections_may_arm_the_image_probe() {
+        // The "this payload is unacceptable" family: deterministic AND
+        // body-caused, so the probe's inference is sound (ADR-0230).
+        for status in [400, 413, 415, 422] {
+            assert!(
+                http(status, ProviderErrorKind::InvalidRequest).is_request_refusal(),
+                "{status} must be probeable"
+            );
+        }
+    }
+
+    #[test]
+    fn transient_failures_are_never_probed_because_the_inference_would_be_invalid() {
+        // THE decisive exclusion. These are not merely uninformative: a re-send
+        // tends to succeed regardless of what changed, so "succeeded after
+        // stripping the images" would prove nothing — yet the harness would latch
+        // it as evidence that the route rejects images, permanently disabling a
+        // working capability for the session.
+        for (status, kind) in [
+            (500, ProviderErrorKind::Upstream),
+            (502, ProviderErrorKind::Upstream),
+            (503, ProviderErrorKind::Upstream),
+            (504, ProviderErrorKind::Upstream),
+            (429, ProviderErrorKind::RateLimited),
+            (408, ProviderErrorKind::Timeout),
+            (503, ProviderErrorKind::Unavailable),
+        ] {
+            assert!(
+                !http(status, kind).is_request_refusal(),
+                "{status} is transient and must not arm the probe"
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_and_auth_failures_are_deterministic_but_not_about_the_payload() {
+        // These WOULD be safe (they recur, so the probe self-disproves and
+        // latches nothing) but useless: probing them makes the user wait an
+        // extra round trip — e.g. before seeing "model not found" after a typo.
+        // Note they arrive as `InvalidRequest`, so a kind-based test would have
+        // swept them in.
+        for status in [404, 405, 409, 410] {
+            assert!(
+                !http(status, ProviderErrorKind::InvalidRequest).is_request_refusal(),
+                "{status} is not caused by the request body"
+            );
+        }
+        for status in [401, 403] {
+            assert!(
+                !http(status, ProviderErrorKind::Authentication).is_request_refusal(),
+                "{status} is an authorization failure"
+            );
+        }
+    }
+
+    #[test]
+    fn context_overflow_is_left_to_its_own_recovery() {
+        // A too-long prompt is recovered by compaction. Arming the image probe
+        // here would withhold images to fix a problem that is not about them —
+        // and it arrives as 400/413/422, i.e. inside the probeable range.
+        for status in [400, 413, 422] {
+            assert!(
+                !http(status, ProviderErrorKind::ContextOverflow).is_request_refusal(),
+                "{status} with an overflow payload belongs to compaction"
+            );
+        }
+    }
+
+    #[test]
+    fn in_band_refusals_fall_back_to_their_kind() {
+        // A vendor that reports a refusal inside a 2xx body leaves no status to
+        // read, so the kinds only a request-shape refusal produces are accepted.
         for kind in [
             ProviderErrorKind::InvalidRequest,
             ProviderErrorKind::Protocol,
             ProviderErrorKind::Other,
         ] {
-            assert!(error(kind).is_request_refusal(), "{kind:?}");
+            assert!(
+                ProviderError::new("mock", kind, "in-band").is_request_refusal(),
+                "{kind:?} without a status is an in-band refusal"
+            );
         }
-
-        // The rest are excluded, and each for a reason:
-        // - ContextOverflow has its own recovery (compaction), and conflating the
-        //   two would make the harness withhold images for a too-long prompt;
-        // - Timeout / Upstream / RateLimited / Unavailable / Transport may have
-        //   been *processed* (the attempt can be billable), so re-sending them is
-        //   not the free experiment a validation refusal is;
-        // - Authentication / Decode cannot be caused by an attachment.
+        // ...while a statusless transient kind still is not.
         for kind in [
             ProviderErrorKind::Transport,
             ProviderErrorKind::Timeout,
@@ -316,7 +411,10 @@ mod request_refusal_tests {
             ProviderErrorKind::Decode,
             ProviderErrorKind::Unavailable,
         ] {
-            assert!(!error(kind).is_request_refusal(), "{kind:?}");
+            assert!(
+                !ProviderError::new("mock", kind, "in-band").is_request_refusal(),
+                "{kind:?} must never arm the probe"
+            );
         }
     }
 }

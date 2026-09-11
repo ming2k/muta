@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::modal_keys::ModalKeys;
-use crate::session::ViewKeys;
+use crate::session::SceneKeys;
 use crate::sheet::SheetKeys;
 use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
 
@@ -22,7 +22,7 @@ fn enter(input: &mut String, exact: bool) -> InputAction {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             has_exact_suggestion: exact,
             ..Default::default()
         },
@@ -51,7 +51,7 @@ fn enter_with_completion(
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             completion_kind: kind,
             suggestion_count,
             has_exact_suggestion,
@@ -77,16 +77,16 @@ fn enter_shell(input: &mut String) -> InputAction {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
 
 fn key_in_view(code: KeyCode, in_subagent_view: bool, input: &mut String) -> InputAction {
     key_in_view_with(code, input, move |dispatch| {
-        // Surface dispatch keys off the explicit view (ADR-0172), not the
+        // Surface dispatch keys off the explicit scene (ADR-0205), not the
         // legacy flags.
-        dispatch.view = if in_subagent_view {
+        dispatch.scene = if in_subagent_view {
             crate::surfaces::SceneKind::TaskInspection
         } else {
             crate::surfaces::SceneKind::Conversation
@@ -102,7 +102,7 @@ fn key_in_side_view_with(
     let mut cursor = input.chars().count();
     let mut drag = SelectionDrag::default();
     let mut dispatch = Dispatch {
-        view: crate::surfaces::SceneKind::Aside,
+        scene: crate::surfaces::SceneKind::Aside,
         ..Default::default()
     };
     tune(&mut dispatch);
@@ -113,7 +113,7 @@ fn key_in_side_view_with(
         dispatch,
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -138,7 +138,7 @@ fn key_in_view_with(
         dispatch,
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -157,7 +157,7 @@ fn key_with_focus(code: KeyCode) -> InputAction {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             focused_target: true,
             ..Default::default()
         },
@@ -288,7 +288,7 @@ fn run_key(
         cursor,
         Dispatch {
             overlay,
-            view: scene,
+            scene,
             focused_target: has_focus,
             ..Default::default()
         },
@@ -301,7 +301,7 @@ fn run_key(
             ..Default::default()
         },
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -335,7 +335,7 @@ fn run_sheet_key(
             focused_target: has_focus,
             ..Default::default()
         },
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -367,7 +367,7 @@ fn run_history_key(
             ..Default::default()
         },
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -390,7 +390,7 @@ fn editor_key(code: KeyCode, field: u8, input: &mut String) -> InputAction {
             ..Default::default()
         },
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -409,7 +409,7 @@ fn compose_key(
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -429,7 +429,7 @@ fn key_without_modal(code: KeyCode) -> InputAction {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -450,7 +450,7 @@ fn compose_key_with_completion(
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             completion_kind,
             suggestion_count,
             has_exact_suggestion: exact,
@@ -475,7 +475,7 @@ fn run_paste(
         cursor,
         Dispatch {
             overlay,
-            view: scene,
+            scene,
             ..Default::default()
         },
         &ModalKeys {
@@ -487,7 +487,7 @@ fn run_paste(
             ..Default::default()
         },
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     )
 }
@@ -503,7 +503,7 @@ fn multiline_arrow(seed: &str, cursor: usize, code: KeyCode) -> (InputAction, us
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     (action, cur)

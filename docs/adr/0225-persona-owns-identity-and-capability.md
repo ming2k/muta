@@ -1,6 +1,6 @@
 # 0225. Persona owns identity and capability (AgentRole → AgentPersona)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-10
 - **Supersedes:** [ADR-0053](0053-declarative-principal-profile.md) and the `AgentRole` / `AgentRoleId` / `AgentPreset` vocabulary introduced by ADR-0211 (terminology and capability ownership only).
 - **Builds on:** [ADR-0223](0223-capability-is-the-extension-set.md), [ADR-0224](0224-unified-extension-primitive.md), [ADR-0220](0220-personas-persisted-named-principals.md).

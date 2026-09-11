@@ -147,13 +147,13 @@ fn completions_intent_keywords_suggest_canonical_command() {
     let doc = sessions_cand.doc.as_ref().unwrap();
     assert_eq!(doc.name, "/sessions");
 
-    // /switch suggests /models and /role
+    // /switch suggests /models and /persona
     app.input = "/switch".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert!(labels.contains(&"/models"));
-    assert!(labels.contains(&"/role"));
+    assert!(labels.contains(&"/persona"));
 }
 
 #[test]
@@ -577,7 +577,7 @@ fn model_editor_owns_caret_only_for_provider_key_field() {
         .present_sheet(crate::surfaces::SheetKind::ModelEditor);
     app.editor_model_settings_only = false;
     app.editor_field = 0;
-    assert_eq!(app.caret_owner(), CaretOwner::Modal);
+    assert_eq!(app.caret_owner(), CaretOwner::Overlay);
 
     app.editor_model_settings_only = true;
     app.editor_field = 1;

@@ -200,9 +200,12 @@ pub(crate) async fn restore_session_runtime(
     }
 
     let mut messages = session.model_window().await;
+    let before_len = messages.len();
     agent.fire_session_start(source, &mut messages).await;
-    if let Err(err) = session.replace_messages(messages).await {
-        tracing::warn!(error = %err, "failed to persist SessionStart hook context");
+    if messages.len() > before_len {
+        if let Err(err) = session.append_turn(&messages).await {
+            tracing::warn!(error = %err, "failed to persist SessionStart hook context");
+        }
     }
 
     send_harness_state_for_session(

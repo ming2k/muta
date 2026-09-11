@@ -95,7 +95,7 @@ fn caret_owner_modal_for_caret_modals() {
         .present_sheet(crate::surfaces::SheetKind::CustomProvider);
     assert_eq!(
         app.caret_owner(),
-        CaretOwner::Modal,
+        CaretOwner::Overlay,
         "the provider editor borrows the input line and renders its own caret",
     );
     assert!(
@@ -107,7 +107,7 @@ fn caret_owner_modal_for_caret_modals() {
     app.set_active_sheet_for_test(crate::sheet::SheetKind::InputInjection);
     assert_eq!(
         app.caret_owner(),
-        CaretOwner::Modal,
+        CaretOwner::Overlay,
         "the injection sheet renders its own caret",
     );
     assert!(
@@ -206,8 +206,8 @@ fn caret_owner_question_owns_caret_only_on_other() {
     app.question = Some(model);
     assert_eq!(
         app.caret_owner(),
-        CaretOwner::Modal,
-        "Other highlighted → modal owns the caret for the IME",
+        CaretOwner::Overlay,
+        "Other highlighted → overlay owns the caret for the IME",
     );
     assert!(
         app.caret_visible(),

@@ -18,7 +18,7 @@ fn star_in_models_modal_toggles_model_favorite() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::ProviderPickerToggleFavorite);
@@ -39,7 +39,7 @@ fn x_in_models_modal_blocks_model() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::ProviderPickerBlockModel);
@@ -60,7 +60,7 @@ fn star_in_connections_modal_is_inert_favorite_is_model_level() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_ne!(action, InputAction::ProviderPickerToggleFavorite);
@@ -84,7 +84,7 @@ fn letter_in_models_modal_feeds_the_fuzzy_filter() {
             ..Default::default()
         },
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('k'));
@@ -107,7 +107,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         ctx(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(letter, InputAction::None);
@@ -119,7 +119,7 @@ fn letter_in_models_browse_mode_is_inert_and_slash_enters_search() {
         ctx(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(slash, InputAction::ModelEnterSearch);
@@ -164,7 +164,7 @@ fn mouse_wheel_scrolls_question_modal_body() {
             },
             &ModalKeys::default(),
             &SheetKeys::default(),
-            &ViewKeys::default(),
+            &SceneKeys::default(),
             &mut drag,
         )
     };
@@ -207,7 +207,7 @@ fn mouse_selection_drag_tracks_within_selectable_modals() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(
@@ -232,7 +232,7 @@ fn question_mark_in_dialog_browse_mode_opens_help() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::OpenHelp);
@@ -257,7 +257,7 @@ fn question_mark_in_dialog_search_mode_inserts_char() {
         },
         &modal_keys,
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('?'));
@@ -280,7 +280,7 @@ fn question_mark_in_help_modal_closes_modal() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CloseModal);

@@ -110,15 +110,42 @@ None         no layer declared anything — the route is UNKNOWN, not text-only
    and then deleted during review for precisely this reason; §"Alternatives
    considered" records what it cost and why it failed.
 
-   **Cost.** The experiment is cheap *because* it only runs on request-shape
-   refusals. A validation refusal is rejected before inference and consumes no
-   tokens — the system's own ledger corroborates this, recording the attempt with
-   `RequestUsageStatus::Failed` and no token counts — so the failed attempt costs
-   bandwidth, and the retry without attachments is the turn the user needed
-   anyway. This is also why the trigger is scoped to `is_request_refusal`:
-   timeout, 5xx, 429, and transport failures may have been *processed* (and
-   billable), so re-sending those is not the free experiment a validation refusal
-   is. Scoping by error kind is therefore a cost guard, not a parsing concern.
+   **The trigger must preserve the inference's validity, not merely its
+   cheapness.** The probe reasons *"re-sent with the attachments withheld →
+   succeeded → the attachments were the cause"*, which is sound only if
+   **re-sending the identical bytes would have failed identically**. Two
+   properties follow, and `ProviderError::is_request_refusal` is defined by them
+   rather than by error *kind*:
+
+   - **Deterministic.** A transient failure invalidates the inference outright: a
+     re-send tends to succeed *regardless of what changed*, so "succeeded after
+     stripping" is evidence of nothing — while the harness would latch it as
+     proof that the route rejects images, permanently disabling a working
+     capability for the session. `408`, `429`, `5xx`, and transport/timeout
+     failures are therefore excluded, and the transport already retries them with
+     backoff, so the probe would race that recovery anyway.
+   - **Caused by the payload.** An endpoint/method/conflict/auth failure is
+     deterministic but says nothing about the body: probing it latches nothing
+     (it recurs, so the hypothesis self-disproves) yet makes the user wait an
+     extra round trip — e.g. before seeing "model not found" after a typo.
+     `404`, `405`, `409`, `410`, `401`, and `403` are excluded. `classify_http_error`
+     reports all of those as `InvalidRequest`, so a kind-based test would have
+     swept them in; the predicate reads the status.
+
+   The surviving set is the "this payload is unacceptable" family: `400`/`422`
+   (validation), `413` (too large — a base64 image is the likeliest cause), and
+   `415` (unsupported media type, the canonical image rejection).
+   `ContextOverflow` is excluded because compaction owns it — and it arrives as
+   `400`/`413`/`422`, i.e. inside the probeable range. An in-band refusal (HTTP
+   2xx carrying an `error` object) has no status to read, so it falls back to the
+   kinds only a request-shape refusal produces.
+
+   **Cost, as a secondary consequence.** A validation refusal is rejected before
+   inference and consumes no tokens — the system's own ledger corroborates this,
+   recording the attempt as `RequestUsageStatus::Failed` with no token counts —
+   so the failed attempt costs bandwidth, and the retry without attachments is
+   the turn the user needed anyway. A route whose refusals are misattributed pays
+   one extra round trip once, not a second conversation.
 
    This closes the loop for the durability problem §4 creates. Consider the
    motivating sequence: an image is pasted while a multimodal model is active,
@@ -160,12 +187,16 @@ None         no layer declared anything — the route is UNKNOWN, not text-only
   probe's outcome.** Latching a route as image-incapable requires a *successful*
   retry with the attachments withheld. A failed probe must leave nothing latched
   and must surface the original refusal, not the failure of the harness's own
-  modified request. Corollary: **no predicate may decide "was this about images?"
-  from the vendor's error text** — no message classifier, marker list, or
+  modified request. Corollary A: **no predicate may decide "was this about
+  images?" from the vendor's error text** — no message classifier, marker list, or
   upstream code table. Vendor envelopes and their prose differ per vendor and
   drift, so such a predicate can only ever be a liability (false negative: a
   bricked session; false positive: a withheld capability) that the differential
   already answers without parsing anything.
+  Corollary B: **the probe may only run where re-sending the identical request
+  would fail identically.** A transient failure makes the experiment
+  unfalsifiable; arming it there would convert a flaky server fault into a
+  durable, wrong capability claim.
 
 ### Positive Consequences
 

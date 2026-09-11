@@ -119,15 +119,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used to fail *every* later request on that route, including purely textual
   follow-ups, with `/retry` re-sending the identical doomed request. The
   provider's refusal is now *learned*, and **no vendor's error text is read to
-  do it**: a refusal of the request itself (`ProviderError::is_request_refusal`,
-  derived from the HTTP status) while attachments are present is simply
-  **probed** — the identical turn is re-sent with the attachments withheld, and
-  only a *successful* retry latches the route. A disproved probe latches nothing
-  and surfaces the original refusal rather than the failure of the harness's own
-  modified request. This is cheap because it is scoped to validation refusals,
-  which are rejected before inference and therefore consume no tokens (the
-  ledger records them as `Failed` with no counts) — unlike timeouts, 5xx, or 429,
-  which may have been processed and are excluded. A latched route is held in a
+  do it**: a refusal of the request we just sent while attachments are present is
+  simply **probed** — the identical turn is re-sent with the attachments
+  withheld, and only a *successful* retry latches the route. Which failures may
+  arm that probe is decided by whether the experiment can be *trusted*, not by
+  how informative the error looks: the trigger is limited to the "this payload is
+  unacceptable" statuses (400/422 validation, 413 too large, 415 unsupported
+  media type) plus in-band refusals, because only there would re-sending the
+  identical bytes have failed identically. Transient failures (408, 429, 5xx,
+  timeouts) are excluded even though they are common — a re-send tends to succeed
+  regardless of what changed, so "succeeded after stripping the images" would
+  prove nothing while latching a durable, wrong capability claim (and the
+  transport already retries them with backoff). Endpoint and auth failures
+  (404/405/409/410, 401/403) are excluded too: deterministic, but not about the
+  body, so probing them only adds a round trip before the real error surfaces.
+  A disproved probe latches nothing and surfaces the original refusal rather than
+  the failure of the harness's own modified request. The probe is cheap as a
+  consequence: validation refusals are rejected before inference and therefore
+  consume no tokens (the ledger records them as `Failed` with no counts). A
+  latched route is held in a
   `RouteFingerprint`-keyed suppression (so switching models disarms it) and the
   same turn is retried with the attachments projected out of the request
   checkpoint — one probe per round, outside the transient-retry budget,

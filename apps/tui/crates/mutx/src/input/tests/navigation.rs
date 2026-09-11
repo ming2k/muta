@@ -534,7 +534,7 @@ fn up_arrow_in_browse_hands_off_to_history() {
             permission_confirm_always: false,
             ..Default::default()
         },
-        &ViewKeys {
+        &SceneKeys {
             is_responding: false,
             completion_kind: crate::CompletionKind::None,
             suggestion_count: 0,

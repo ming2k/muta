@@ -22,7 +22,7 @@ fn esc_closes_slash_completion_menu() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 2,
             ..Default::default()
@@ -53,7 +53,7 @@ fn esc_closes_path_completion_menu() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             completion_kind: crate::CompletionKind::Path,
             suggestion_count: 3,
             suggestion_index: Some(1),
@@ -81,7 +81,7 @@ fn esc_falls_through_when_no_completion_is_open() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -110,7 +110,7 @@ fn escape_returns_from_always_confirmation() {
             permission_confirm_always: true,
             ..Default::default()
         },
-        &ViewKeys {
+        &SceneKeys {
             is_responding: true,
             ..Default::default()
         },
@@ -136,7 +136,7 @@ fn esc_in_models_browse_closes_the_modal() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CloseModal);
@@ -159,7 +159,7 @@ fn esc_in_connections_browse_closes_the_modal() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CloseModal);
@@ -215,7 +215,7 @@ fn escape_in_btw_modal_closes_the_modal() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CloseModal);
@@ -286,7 +286,7 @@ fn bracketed_paste_routes_in_free_text_modals() {
     );
 
     let config_context = Dispatch {
-        view: crate::surfaces::SceneKind::Settings,
+        scene: crate::surfaces::SceneKind::Settings,
         ..Default::default()
     };
     let mut input = String::new();
@@ -299,7 +299,7 @@ fn bracketed_paste_routes_in_free_text_modals() {
         config_context,
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(

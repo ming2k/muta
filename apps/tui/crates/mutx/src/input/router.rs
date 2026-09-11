@@ -29,7 +29,7 @@ pub struct Dispatch {
     /// can route keyboard events to PreAttach without inspecting `App`.
     pub pre_attach: bool,
     /// The root scene the user stands in (ADR-0205).
-    pub view: crate::surfaces::SceneKind,
+    pub scene: crate::surfaces::SceneKind,
     /// User remaps of the global chords (`[keybindings]` config, ADR-0172).
     /// Global resolution and the keycap hints both consult it.
     pub key_overrides: crate::keymap::GlobalOverrides,
@@ -159,7 +159,7 @@ fn foreground_scrolls_own_body(dispatch: &Dispatch) -> bool {
             .sheet
             .is_some_and(|kind| kind.keyboard_claims().body_scroll);
     }
-    scrolls_own_body(dispatch.overlay, dispatch.view)
+    scrolls_own_body(dispatch.overlay, dispatch.scene)
 }
 
 /// Whether the composer line is being edited on the foreground surface.
@@ -170,7 +170,7 @@ fn edits_input_field(dispatch: &Dispatch, modal_keys: &crate::modal_keys::ModalK
     if dispatch.sheet.is_some() && dispatch.overlay.is_none() {
         return dispatch.sheet == Some(crate::sheet::SheetKind::InputInjection);
     }
-    crate::modal_keys::modal_claims_composer_line(dispatch.overlay, dispatch.view, modal_keys)
+    crate::modal_keys::modal_claims_composer_line(dispatch.overlay, dispatch.scene, modal_keys)
 }
 
 fn scrolls_own_body(
@@ -206,7 +206,7 @@ pub fn route_event(
     dispatch: Dispatch,
     modal_keys: &crate::modal_keys::ModalKeys,
     sheet_keys: &crate::sheet::SheetKeys,
-    view_keys: &crate::session::ViewKeys,
+    scene_keys: &crate::session::SceneKeys,
     drag: &mut SelectionDrag,
 ) -> InputAction {
     match event {
@@ -335,7 +335,7 @@ pub fn route_event(
                         // Inside any other modal the chord is owned by that
                         // surface — Ctrl+P toggles the queue block in the
                         // queue panel. Ctrl+L over a modal is a dispatch-side
-                        // no-op (`can_open_view_switcher` is false), and we
+                        // no-op (`can_open_switcher` is false), and we
                         // swallow it here so it cannot fall through to the
                         // printable-char arm.
                         if physical_key == crate::keymap::Key::CTRL_L {
@@ -387,17 +387,17 @@ pub fn route_event(
                 };
             }
 
-            // Surface Dispatch (ADR-0172)
-            // Each full-screen view owns the keys for its own focus planes
-            // while no modal is up: the Session view's chat scheme (and its
-            // Subagent / Side siblings) resolves them here, before the modal /
+            // Surface Dispatch (ADR-0172 / ADR-0205)
+            // Each full-screen scene owns the keys for its own focus planes
+            // while no modal is up: the Conversation scene's chat scheme (and its
+            // TaskInspection / Aside siblings) resolves them here, before the modal /
             // global arms below. A key the surface does not own falls through
             // to the shared affordance library and the modal arms.
             if bare_chat_surface(&dispatch)
-                && let Some(action) = crate::session::resolve_view_key(
-                    dispatch.view,
+                && let Some(action) = crate::session::resolve_scene_key(
+                    dispatch.scene,
                     physical_key,
-                    view_keys,
+                    scene_keys,
                     input,
                     cursor_position,
                 )
@@ -428,12 +428,12 @@ pub fn route_event(
             }
             if (dispatch.overlay.is_some()
                 || matches!(
-                    dispatch.view,
+                    dispatch.scene,
                     crate::surfaces::SceneKind::Dashboard | crate::surfaces::SceneKind::Settings
                 ))
                 && let Some(action) = crate::modal_keys::resolve_modal_key(
                     dispatch.overlay,
-                    dispatch.view,
+                    dispatch.scene,
                     physical_key,
                     modal_keys,
                     input,
@@ -474,9 +474,9 @@ pub fn route_event(
                         InputAction::QuestionCancel
                     } else if dispatch.sheet == Some(crate::sheet::SheetKind::InputInjection) {
                         InputAction::InputCancel
-                    } else if dispatch.view == crate::surfaces::SceneKind::Settings {
+                    } else if dispatch.scene == crate::surfaces::SceneKind::Settings {
                         InputAction::ConfigBack
-                    } else if dispatch.view == crate::surfaces::SceneKind::Dashboard {
+                    } else if dispatch.scene == crate::surfaces::SceneKind::Dashboard {
                         InputAction::CloseModal
                     } else {
                         InputAction::None
@@ -484,7 +484,7 @@ pub fn route_event(
                 }
                 KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     // Ctrl+R (history search) is a chat-surface chord resolved
-                    // by the Session view's scheme (ADR-0172); no other
+                    // by the Conversation scene's scheme (ADR-0172 / ADR-0205); no other
                     // surface claims it.
                     InputAction::None
                 }
@@ -560,7 +560,7 @@ pub fn route_event(
                     // chord (arm above). What remains here is inert: the
                     // chat surface's Enter (activate focused step / commit
                     // completion / send / queue / slash) is resolved by the
-                    // Session view's scheme (ADR-0172) before this match,
+                    // Session scene's scheme (ADR-0172 / ADR-0205) before this match,
                     // and the surfaces that punt (e.g. the pickers' read-only
                     // info sub-views) are no-ops too.
                     InputAction::None
@@ -569,14 +569,14 @@ pub fn route_event(
                     // Modal Tab-focus verbs (ADR-0172) and the HistorySearch
                     // insert are owned by the modal schemes above; the chat
                     // surface's Tab (commit / reopen a completion) by the
-                    // Session view's scheme (ADR-0173). Inert here.
+                    // Session scene's scheme (ADR-0173 / ADR-0205). Inert here.
                     InputAction::None
                 }
                 KeyCode::BackTab => {
                     // Modal BackTab verbs (ADR-0172) and the sheets'
                     // reverse-walk are owned by the surface schemes above;
-                    // the chat surface's BackTab by the Session view's
-                    // scheme (ADR-0172). Inert here.
+                    // the chat surface's BackTab by the Session scene's
+                    // scheme (ADR-0172 / ADR-0205). Inert here.
                     InputAction::None
                 }
                 // Ctrl+J: alias for Alt+Enter — insert a literal newline.
@@ -752,8 +752,8 @@ pub fn route_event(
                     InputAction::None
                 }
                 // Alt+S / Alt+P / Alt+N are chat-surface chords (steer now /
-                // previous / next prompt history), resolved by the Session
-                // view's scheme (ADR-0172) before this match.
+                // previous / next prompt history), resolved by the Conversation
+                // scene's scheme (ADR-0172 / ADR-0205) before this match.
                 KeyCode::Char(c) => {
                     // The command palette's filter is owned by its scheme
                     // (modal_keys::resolve_view_switcher_key, ADR-0172);
@@ -933,8 +933,8 @@ pub fn route_event(
                     InputAction::None
                 }
                 // Alt+↑ / Alt+↓ (transcript step focus switching) are
-                // chat-surface chords, resolved by the Session view's scheme
-                // (ADR-0172) before this match.
+                // chat-surface chords, resolved by the Conversation scene's scheme
+                // (ADR-0172 / ADR-0205) before this match.
                 // Ctrl+↑ / Ctrl+↓ inside a modal scroll the modal body by one
                 // page — the same gesture a pager or editor binds to a
                 // half-page jump. Mirrors PageUp / PageDown so users have both
@@ -942,13 +942,13 @@ pub fn route_event(
                 // Page keys). Routed through the shared `Scroll*` actions.
                 KeyCode::Up
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && scrolls_own_body(dispatch.overlay, dispatch.view) =>
+                        && scrolls_own_body(dispatch.overlay, dispatch.scene) =>
                 {
                     InputAction::ScrollPageUp
                 }
                 KeyCode::Down
                     if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && scrolls_own_body(dispatch.overlay, dispatch.view) =>
+                        && scrolls_own_body(dispatch.overlay, dispatch.scene) =>
                 {
                     InputAction::ScrollPageDown
                 }
@@ -967,7 +967,7 @@ pub fn route_event(
                     } else {
                         // Chat-surface ↑ (walk focused steps / completion
                         // suggestions / multi-line caret) is resolved by the
-                        // Session view's scheme (ADR-0172); everything else
+                        // Conversation scene's scheme (ADR-0172 / ADR-0205); everything else
                         // the schemes punted on is inert.
                         InputAction::None
                     }
@@ -983,8 +983,8 @@ pub fn route_event(
                     {
                         InputAction::ModalDown
                     } else {
-                        // Chat-surface ↓ is resolved by the Session view's
-                        // scheme (ADR-0172).
+                        // Chat-surface ↓ is resolved by the Conversation scene's
+                        // scheme (ADR-0172 / ADR-0205).
                         InputAction::None
                     }
                 }

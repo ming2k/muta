@@ -432,23 +432,25 @@ impl App {
     ///
     /// This is a pure function of active surface and edit mode — never of the
     /// selection, which is folded in separately by [`Self::caret_visible`].
-    /// Keeping ownership and appearance separate lets one authoritative frame
-    /// cursor state represent both an inactive surface and a hidden selection
-    /// caret without a second physical-cursor writer.
+    /// Authoritative Stage-Scene-Overlay caret ownership (ADR-0205).
+    ///
+    /// The input hierarchy strictly dictates which surface owns the physical cursor:
+    /// 1. If an Overlay (Dialog/Sheet) is mounted in the overlay stack:
+    ///    - If it accepts text input (Palette, search bar, editor form), it owns `CaretOwner::Overlay`.
+    ///    - If it delegates to the composer (`HistorySearch`), it owns `CaretOwner::Composer`.
+    ///    - Otherwise (browse dialogs, list navigation, delete confirmation), cursor is suppressed (`CaretOwner::None`).
+    /// 2. If no overlay is mounted, the active root Scene owns the terminal:
+    ///    - In `ConversationScene`, the composer owns `CaretOwner::Composer` unless a transcript step
+    ///      or browse focus has blurred the composer (`CaretOwner::None`).
+    ///    - Non-conversational scenes without composer claim `CaretOwner::None`.
     pub fn caret_owner(&self) -> CaretOwner {
         use crate::surfaces::{DialogKind, SheetKind};
         if self.surfaces.active_overlay().is_some() || self.active_sheet().is_some() {
-            // The provider-delete confirm overlay is a keyboard-only sub-layer
-            // (no text input): suppress the caret while it is open so the host
-            // IME does not anchor to the provider-search input behind the
-            // panel. Re-arms naturally when the overlay closes and ownership
-            // returns to the picker.
+            // Confirmation sub-layers suppress caret
             if self.pending_provider_delete.is_some() {
                 return CaretOwner::None;
             }
-            // The history panel floats above a fully-live composer: the
-            // composer IS its filter input, so the composer (not a modal
-            // field) owns the caret while this surface is open.
+            // History panel delegates text entry directly to the composer
             if self.active_composer_extension()
                 == Some(crate::composer_extension::ComposerExtensionKind::HistorySearch)
             {
@@ -458,24 +460,21 @@ impl App {
                     CaretOwner::Composer
                 };
             }
-            // Models and Connections are editable only while their search
-            // row is open. Browse mode renders no text field and therefore
-            // must not claim a terminal/IME caret.
+            // Models and Connections search rows claim overlay caret
             if matches!(
                 self.active_dialog(),
                 Some(DialogKind::Models | DialogKind::Connections)
             ) {
                 return if self.model_search {
-                    CaretOwner::Modal
+                    CaretOwner::Overlay
                 } else {
                     CaretOwner::None
                 };
             }
-            // The provider-key form has one text field. Per-model settings
-            // contain only effort/thinking controls and render no caret.
+            // Provider/Model key editor form
             if self.surfaces.contains_sheet(SheetKind::ModelEditor) {
                 return if !self.editor_model_settings_only && self.editor_field == 0 {
-                    CaretOwner::Modal
+                    CaretOwner::Overlay
                 } else {
                     CaretOwner::None
                 };
@@ -483,13 +482,15 @@ impl App {
             if self.active_sheet() == Some(crate::sheet::SheetKind::InputInjection)
                 && self.surfaces.active_overlay().is_none()
             {
-                return CaretOwner::Modal;
+                return CaretOwner::Overlay;
             }
+            // Unified Command Palette (Switcher) and Custom Provider forms
             if matches!(self.active_dialog(), Some(DialogKind::Switcher))
                 || self.surfaces.contains_sheet(SheetKind::CustomProvider)
             {
-                return CaretOwner::Modal;
+                return CaretOwner::Overlay;
             }
+            // Question Sheet's "Other" free-text entry
             if self.active_sheet() == Some(crate::sheet::SheetKind::Question)
                 && self.surfaces.active_overlay().is_none()
                 && self
@@ -497,15 +498,12 @@ impl App {
                     .as_ref()
                     .is_some_and(|q| q.is_other_highlighted())
             {
-                return CaretOwner::Modal;
+                return CaretOwner::Overlay;
             }
             return CaretOwner::None;
         }
-        // No modal: the composer owns the caret unless a transcript step has
-        // keyboard focus, the pointer parked attention on the transcript
-        // (ADR-0174 browse focus), or we are zoomed into a subagent task
-        // (which has no input line at all — its footer collapses to zero
-        // height).
+
+        // Scene layer: the composer owns the caret unless blurred by step/browse focus
         if self.current_scene() != crate::surfaces::SceneKind::Conversation
             || self.focused_target.is_some()
             || self.transcript_focused

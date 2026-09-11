@@ -45,7 +45,7 @@ pub(super) async fn handle_send_chat(
     // here — Enter in `Modal::HistorySearch` emits the dedicated
     // `HistoryInsert` action so the chosen entry lands in the
     // input box for editing instead of being sent immediately.
-    app.show_chat_surface();
+    app.reset_to_conversation();
     app.suggestion_index = None;
     app.input_scroll = 0;
     // The latency timeline starts here: the daemon records dispatch, this

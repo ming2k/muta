@@ -737,7 +737,7 @@ fn picker_caret_owner_exists_only_in_search_mode() {
         app.model_search = true;
         assert_eq!(
             app.caret_owner(),
-            CaretOwner::Modal,
+            CaretOwner::Overlay,
             "{dialog:?} search mode owns the visible query field"
         );
     }
@@ -764,7 +764,7 @@ fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
         .present_sheet(crate::surfaces::SheetKind::CustomProvider);
     assert_eq!(
         app.caret_owner(),
-        CaretOwner::Modal,
+        CaretOwner::Overlay,
         "CustomProvider owns the caret"
     );
     app.surfaces.dismiss_all_overlays();
@@ -1419,7 +1419,7 @@ fn switching_away_from_queue_runs_exit_hook() {
 #[test]
 fn queue_view_hide_releases_the_auto_block() {
     // Phase 4: the open-time auto-block is released by EVERY hide path
-    // (the exit hook in hide_active_panel), not just the Esc arm.
+    // (the exit hook in dismiss_active_dialog), not just the Esc arm.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.open_dialog(crate::surfaces::DialogKind::Queue);
     app.block_queue("sess");

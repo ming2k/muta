@@ -194,7 +194,7 @@ pub async fn run_app_loop(
             );
         }
         if open_host {
-            crate::event_loop::actions::enter_view(
+            crate::event_loop::actions::enter_scene(
                 app,
                 crate::surfaces::SceneKind::Dashboard,
                 &runtime,
@@ -513,7 +513,7 @@ async fn process_one_event(
     // or cloning a potentially very large draft on every keypress.
     let composer_edit_state_before = (app.input.len(), app.cursor_position);
     let composer_owned_before = app.caret_owner() == crate::CaretOwner::Composer;
-    let current_view = app.current_view();
+    let current_scene = app.current_scene();
 
     let action = if let Some(component_action) = component_input::route(app, event, &keyboard_path)
     {
@@ -527,7 +527,7 @@ async fn process_one_event(
                 overlay: active_overlay,
                 sheet: active_sheet,
                 pre_attach: app.pre_attach.is_some(),
-                view: current_view,
+                scene: current_scene,
                 key_overrides: app.key_overrides.clone(),
                 focused_target: has_focused_target,
                 transcript_focused,
@@ -552,7 +552,7 @@ async fn process_one_event(
                 permission_show_details,
                 focused_target: has_focused_target,
             },
-            &crate::session::ViewKeys {
+            &crate::session::SceneKeys {
                 is_responding,
                 composer_send_mode: app.composer_send_mode,
                 completion_kind,

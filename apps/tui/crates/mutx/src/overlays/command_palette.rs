@@ -52,8 +52,10 @@ fn humanize_command_name(name: &str) -> String {
         "/unconfine" => "Workspace Confinement".to_string(),
         "/unconfined" => "Workspace Confinement".to_string(),
         "/jail" => "Workspace Confinement (legacy alias)".to_string(),
-        "/role" => "Agent Role".to_string(),
-        "/master" => "Agent Role (legacy alias)".to_string(),
+        "/persona" => "Agent Persona".to_string(),
+        "/role" => "Agent Persona (legacy alias)".to_string(),
+        "/master" => "Agent Persona (legacy alias)".to_string(),
+        "/preset" => "Agent Persona (legacy alias)".to_string(),
         "/search" => "Search Session History".to_string(),
         "/fork" => "Fork Session".to_string(),
         "/diff" => "Workspace Diff".to_string(),
@@ -217,6 +219,7 @@ pub(crate) struct CommandPaletteProps<'a> {
     pub entries: &'a [PaletteEntry],
     pub selected_index: usize,
     pub scroll: &'a mut usize,
+    pub show_caret: bool,
 }
 
 /// Draw the unified Command Palette modal.
@@ -232,6 +235,7 @@ pub(crate) fn draw_command_palette(
         entries,
         selected_index,
         scroll,
+        show_caret,
     } = props;
     let outer_rect = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, outer_rect, theme, true, true);
@@ -273,6 +277,13 @@ pub(crate) fn draw_command_palette(
         },
     ];
     frame.render_widget(Paragraph::new(Line::from(query_spans)), query_line_rect);
+
+    if show_caret {
+        let cursor_x = (query_line_rect.x + 2 + query.width() as u16)
+            .min(query_line_rect.right().saturating_sub(1));
+        let cursor_y = query_line_rect.y;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 
     // Separator line
     let sep_rect = Rect {

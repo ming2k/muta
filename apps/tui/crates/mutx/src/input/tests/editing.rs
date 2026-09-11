@@ -21,7 +21,7 @@ fn typing_in_compose_returns_insert_char() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 2,
             ..Default::default()
@@ -50,7 +50,7 @@ fn backspace_in_compose_returns_backspace_action() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             completion_kind: crate::CompletionKind::Slash,
             suggestion_count: 1,
             has_exact_suggestion: true,
@@ -76,7 +76,7 @@ fn backspace_atomically_deletes_an_image_chip() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -98,7 +98,7 @@ fn backspace_atomically_deletes_a_paste_chip_without_trailing_space() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -118,7 +118,7 @@ fn backspace_falls_through_to_single_char_outside_a_chip() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::Backspace);
@@ -149,7 +149,7 @@ fn plain_ctrl_c_maps_to_semantic_ctrl_c() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::CtrlC);
@@ -176,7 +176,7 @@ fn single_key_shortcuts_in_connections_modal() {
             },
             &ModalKeys::default(),
             &SheetKeys::default(),
-            &ViewKeys::default(),
+            &SceneKeys::default(),
             &mut drag,
         );
         assert_eq!(action, expected, "key '{key}' in connections modal");
@@ -205,7 +205,7 @@ fn arrows_cycle_custom_provider_selectors_without_editing_text() {
                 ..Default::default()
             },
             &SheetKeys::default(),
-            &ViewKeys::default(),
+            &SceneKeys::default(),
             &mut drag,
         );
         assert_eq!(action, InputAction::CycleCustomProviderChoice { forward });
@@ -233,7 +233,7 @@ fn custom_provider_model_field_accepts_plain_text() {
             ..Default::default()
         },
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('.'));
@@ -265,7 +265,7 @@ fn b_and_d_in_preset_chooser_pick_the_login_method() {
             },
             &ModalKeys::default(),
             &SheetKeys::default(),
-            &ViewKeys::default(),
+            &SceneKeys::default(),
             &mut drag,
         );
         assert_eq!(
@@ -964,7 +964,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::OpenHistory);
@@ -984,7 +984,7 @@ fn ctrl_r_opens_history_modal_when_no_modal_is_open() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -1263,7 +1263,7 @@ fn ctrl_l_opens_command_palette() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::ViewSwitcherToggle);
@@ -1456,7 +1456,7 @@ fn delete_key_inert_outside_free_text() {
             },
             &ModalKeys::default(),
             &SheetKeys::default(),
-            &ViewKeys::default(),
+            &SceneKeys::default(),
             &mut drag,
         ),
         InputAction::None
@@ -1482,7 +1482,7 @@ fn delete_key_closes_selected_view_in_switcher() {
             },
             &ModalKeys::default(),
             &SheetKeys::default(),
-            &ViewKeys::default(),
+            &SceneKeys::default(),
             &mut drag,
         ),
         InputAction::ViewCloseSelected
@@ -1503,7 +1503,7 @@ fn host_prompt_delete_key_removes_forward_char() {
             &mut input,
             &mut cursor,
             Dispatch {
-                view: crate::surfaces::SceneKind::Dashboard,
+                scene: crate::surfaces::SceneKind::Dashboard,
                 ..Default::default()
             },
             &ModalKeys {
@@ -1511,7 +1511,7 @@ fn host_prompt_delete_key_removes_forward_char() {
                 ..Default::default()
             },
             &SheetKeys::default(),
-            &ViewKeys::default(),
+            &SceneKeys::default(),
             &mut drag,
         ),
         InputAction::None
@@ -1539,7 +1539,7 @@ fn tab_is_inert_without_a_completion() {
             },
             &ModalKeys::default(),
             &SheetKeys::default(),
-            &ViewKeys::default(),
+            &SceneKeys::default(),
             &mut drag,
         );
         assert_eq!(action, InputAction::None);
@@ -1559,7 +1559,7 @@ fn enter_while_running_in_steer_mode_emits_steer_immediate() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             is_responding: true,
             composer_send_mode: crate::app::ComposerSendMode::Steer,
             ..Default::default()
@@ -1587,7 +1587,7 @@ fn tab_while_running_emits_toggle_send_mode() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             is_responding: true,
             ..Default::default()
         },
@@ -1609,7 +1609,7 @@ fn enter_while_running_in_follow_up_mode_emits_queue_follow_up() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             is_responding: true,
             composer_send_mode: crate::app::ComposerSendMode::FollowUp,
             ..Default::default()
@@ -1640,7 +1640,7 @@ fn printable_char_in_transcript_is_inert_and_does_not_mutate_composer() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -1667,7 +1667,7 @@ fn key_release_events_are_ignored() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -1687,7 +1687,7 @@ fn key_release_events_are_ignored() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);
@@ -1708,7 +1708,7 @@ fn key_repeat_events_are_processed() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::InsertChar('a'));

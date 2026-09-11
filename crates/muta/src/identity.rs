@@ -50,8 +50,8 @@ impl muta_runtime::UiBridge for DaemonUiBridge {
     }
 }
 
-// Role presets (`architect`, `reviewer`, `security`) and the
-// `/role` (alias `/master`) / `@role:` switching mechanism are declared in
-// `muta-contracts` as shared vocabulary (`AgentPersonaId`,
-// `AgentPersona::from_preset`) and applied via `Agent::apply_role`,
+// Persona presets (`architect`, `reviewer`, `security`, `code_analyst`, `conversational`)
+// and the `/persona` (aliases `/role`, `/master`, `/preset`) switching mechanism are
+// declared in `muta-contracts` as shared vocabulary (`AgentPersonaId`,
+// `AgentPersona::from_preset`) and applied via `Agent::apply_persona`,
 // so this binary does not need its own role registry — both frontends share one.

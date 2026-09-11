@@ -841,7 +841,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             app.session_modal_follow = true;
         }
         input::InputAction::OpenConfig => {
-            enter_view(app, crate::surfaces::SceneKind::Settings, runtime);
+            enter_scene(app, crate::surfaces::SceneKind::Settings, runtime);
         }
         input::InputAction::ConfigFocusToggle => {
             if app.current_scene() == SceneKind::Settings {
@@ -1178,7 +1178,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             ) {
                 let id = session.id.clone();
                 let short_id = crate::session::short_session_id(&id);
-                app.hide_active_panel();
+                app.dismiss_active_dialog();
                 app.modal_index = 0;
                 // A session was chosen from the startup picker, so a
                 // real conversation now backs the view: subsequent
@@ -1219,7 +1219,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                     app.switch_to_target = Some(row.id.clone());
                     app.should_quit.store(true, Ordering::SeqCst);
                 }
-                app.hide_active_panel();
+                app.dismiss_active_dialog();
                 app.modal_index = 0;
                 app.host_prompting = false;
             }
@@ -1303,7 +1303,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::CreateNewSession => {
             app.startup_overlay = crate::StartupOverlay::None;
-            app.hide_active_panel();
+            app.dismiss_active_dialog();
             app.send_intent(AgentRequest::SlashCommand("/new".to_string()));
         }
         input::InputAction::OpenSessionInfo => {
@@ -1681,7 +1681,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         input::InputAction::ViewSwitcherToggle => {
             if app.active_dialog() == Some(DialogKind::Switcher) {
                 app.dismiss_surface();
-            } else if app.can_open_view_switcher() {
+            } else if app.can_open_switcher() {
                 app.open_dialog(DialogKind::Switcher);
                 app.command_palette_query.clear();
                 app.command_palette_selected = 0;
@@ -1744,7 +1744,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                         requires_args,
                     } => {
                         if requires_args {
-                            app.show_chat_surface();
+                            app.reset_to_conversation();
                             app.input = format!("{} ", slash);
                             app.set_cursor_end();
                             app.completion_dismissed = false;
@@ -1768,7 +1768,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // full transcript back-fill; the modal closes on arrival.
             if let Some(row) = app.btw_list.get(app.modal_index) {
                 let side_id = row.id.clone();
-                app.hide_active_panel();
+                app.dismiss_active_dialog();
                 app.send_intent(AgentRequest::FocusSide { side_id });
             }
         }
@@ -1929,7 +1929,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // composer and closes the modal. Closing resumes the
             // auto-block the modal set on open.
             let idx = app.modal_index;
-            app.hide_active_panel();
+            app.dismiss_active_dialog();
             if let Some(crate::app::RecallQueued::Restored(dispatch)) =
                 app.recall_queued_at(viewed_session_id, idx)
             {
@@ -2264,7 +2264,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
 /// retained modals). It focuses/restores the panel, runs one-time
 /// initialization, then applies the panel's refresh-on-show and enter-hook
 /// policy. Dedicated shortcuts, mouse targets, backend open signals and the
-/// quick switcher all route here. Full-screen views use [`enter_view`].
+/// quick switcher all route here. Root scenes use [`enter_scene`].
 pub(crate) fn open_active_connection_detail(
     app: &mut App,
     runtime: &UiRuntime,
@@ -2408,7 +2408,7 @@ pub(super) fn enter_panel(
 
 /// Enter a full-screen scene (ADR-0205): navigate the router, run the scene's
 /// every-show UI refresh, and fire its data-refresh request.
-pub(super) fn enter_view(
+pub(super) fn enter_scene(
     app: &mut App,
     scene: impl Into<crate::surfaces::SceneKind>,
     runtime: &UiRuntime,
@@ -2862,13 +2862,13 @@ async fn execute_command_by_id(
             );
         }
         CommandId::NavigateSession => {
-            enter_view(app, crate::surfaces::SceneKind::Conversation, runtime);
+            enter_scene(app, crate::surfaces::SceneKind::Conversation, runtime);
         }
         CommandId::NavigateDashboard => {
-            enter_view(app, crate::surfaces::SceneKind::Dashboard, runtime);
+            enter_scene(app, crate::surfaces::SceneKind::Dashboard, runtime);
         }
         CommandId::NavigateSettings => {
-            enter_view(app, crate::surfaces::SceneKind::Settings, runtime);
+            enter_scene(app, crate::surfaces::SceneKind::Settings, runtime);
         }
         CommandId::OpenQueue => {
             enter_panel(

@@ -24,7 +24,7 @@ fn enter_in_compose_while_busy_steers_immediate_by_default() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             is_responding: true,
             ..Default::default()
         },
@@ -49,7 +49,7 @@ fn enter_in_compose_while_busy_queues_follow_up_in_follow_up_mode() {
         Dispatch::default(),
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys {
+        &SceneKeys {
             is_responding: true,
             composer_send_mode: crate::app::ComposerSendMode::FollowUp,
             ..Default::default()
@@ -135,7 +135,7 @@ fn space_in_transcript_is_inert() {
         },
         &ModalKeys::default(),
         &SheetKeys::default(),
-        &ViewKeys::default(),
+        &SceneKeys::default(),
         &mut drag,
     );
     assert_eq!(action, InputAction::None);

@@ -19,7 +19,7 @@ Project and user-defined commands are covered under
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/unattended [on\|off]` | Toggle unattended execution mode (aliases: `/auto`, `/delegate`) |
 | `/confinement [on\|off]` | Toggle workspace filesystem confinement for this session (aliases: `/unconfine`, `/jail`) |
-| `/role <code\|architect\|reviewer\|security>` | Switch the agent role preset — installs a role directive and narrows the capability scope (alias: `/master`) |
+| `/persona [code\|architect\|reviewer\|security\|conversational]` | Switch agent persona and capability — switches active identity and capability scope (aliases: `/role`, `/master`, `/preset`) |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
 | `/fork` | Fork the current conversation into a child session |
@@ -156,23 +156,25 @@ When on, the agent runs unattended: tool executions and file modifications are a
 
 When confinement is disabled (`off`), file tools can read and write any path on the host system bounded only by the OS user permissions of the daemon. When enabled (`on`, default), file operations outside admitted workspace roots are blocked.
 
-### `/role`
+### `/persona`
 
 | Form | Effect |
 |------|--------|
-| `/role <role>` | Switch the active agent role preset (role directive + capability scope) (alias: `/master`) |
-| `/role` | List the available presets and the current one |
+| `/persona <id>` | Switch the active agent persona (identity, capability scope, and session metadata) (aliases: `/role`, `/master`, `/preset`) |
+| `/persona` | List available personas (shipped presets and user-configured personas) and the current one |
 
-Switches the session's agent preset at runtime (ADR-0053, updated by ADR-0144 and ADR-0183). `code` restores the embedding's baseline identity — empty for the shipped CLI, whose prompt carries no self-description — while a focused role installs an imperative role directive and narrows the capability scope. It can also be triggered mid-message with the `@role:<role>` or `@master:<role>` mention:
+Switches the session's agent persona and capability at runtime (ADR-0053, updated by ADR-0183 and ADR-0225). Switching resolves against user-configured personas in `~/.config/muta/personas.toml` first, then falls back to built-in presets:
 
-| Preset | Scope |
-|--------|-------|
-| `code` | The default developer agent — full capabilities, unrestricted writes, no role directive |
-| `architect` | Design and review focus — full read, writes retained but the directive steers toward analysis and written rationale before changes |
+| Built-in Preset | Scope |
+|-----------------|-------|
+| `code` | The default developer master — full native capabilities, unrestricted writes, no role directive |
+| `architect` | Design and review focus — full read, writes retained but directive steers toward analysis and design rationale |
 | `reviewer` | Read-only code review — read/search/inspect tools only (no `write_file`, `edit_text`, or `execute_command`) |
-| `security` | Read-only, command-confined security audit — read/search plus a narrow command allowlist |
+| `security` | Read-only, command-confined security audit — read/search plus narrow command allowlist |
+| `code_analyst` | Read-only code analysis & sandboxed execution |
+| `conversational` | Workspace-free conversational companion — web + ask_user tools only |
 
-Unknown preset names are rejected with the list of valid presets. Legacy `/master` calls are transparently accepted as aliases.
+Unknown persona identifiers are rejected with the list of valid personas. Legacy `/role`, `/master`, and `/preset` calls are transparently accepted as aliases.
 
 ### `/btw`
 
