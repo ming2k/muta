@@ -20,7 +20,9 @@ own home. No single edit makes a model appear everywhere:
    the frozen pre-migration registry. New models are *not* added here (it is a
    one-way snapshot); skip it unless you are intentionally re-baselining.
 4. **Reference docs** — `docs/reference/providers.md` (preset table row +
-   bullet), and any family listing in `docs/reference/`.
+   bullet), and any family listing in `docs/reference/`. The blueprint for how
+   the list is assembled is
+   [Model catalog architecture](../architecture/model-catalog.md).
 5. **`CHANGELOG.md`** — an `Unreleased` entry under the right section.
 
 ## Checklist
@@ -52,19 +54,45 @@ own home. No single edit makes a model appear everywhere:
 
 ## Layer weights (why the checklist looks like this)
 
-Effective capability resolution for a model id is:
+Effective capability resolution for a model id, highest layer first:
 
-```
-user connection overrides (ConnectionOverrides)
-  > provider overrides (model_providers.toml)
-  > master catalog (Baseline ⊕ RemoteCatalog)
-  > conservative floor (128k context, text-only safe defaults)
+```text
+route settings overrides
+  > connection overrides (connections.toml)
+    > provider overrides (model_providers.toml)
+      > connection-declared facts
+        > provider-declared facts
+          > remote advertised metadata
+            > compiled baseline table
+              > conservative floor (128k context, no tool calling)
 ```
 
-A new model therefore needs a baseline entry even when discovery is on: the
-Zhipu coding `/models` endpoint returns ids only (`{id, object, created,
-owned_by}` — verified live 2026-08), so without a baseline the model would be
-visible but capability-less, or filtered out entirely by the intersection.
+This cascade is a *field-level* overlay: a layer that omits a field falls
+through to the layer below rather than clearing it. It is not the same
+mechanism as model membership, which selects one id list and then filters it.
+The compiled baseline is therefore a **fallback**, not the catalog the remote
+list merges into — the merged "master catalog" a reader might expect does not
+exist in the code.
+
+Membership and capability are easy to conflate here, so keep them apart:
+
+- **Membership.** A remote-catalog provider defaults to open admission, so an
+  id the relay advertises appears in the picker even when no baseline knows it.
+  A connection configured with `filter = "baseline"` instead intersects the
+  remote list against the baseline table, and an id missing from that table
+  disappears from the picker entirely.
+- **Capability.** An id with no baseline entry resolves to the conservative
+  floor: a 128k context window, no tool calling, and the permissive vision
+  routing policy.
+
+A new model therefore needs a baseline entry even when discovery is on. The
+Zhipu coding `/models` endpoint returns ids only
+(`{id, object, created, owned_by}` — verified live 2026-08), so without a
+baseline the model would be visible but capability-less, or — on a
+`filter = "baseline"` connection — absent from the picker altogether.
+
+[Model catalog architecture](../architecture/model-catalog.md) is the full
+blueprint for both axes.
 
 ## Anti-patterns
 

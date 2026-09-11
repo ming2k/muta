@@ -79,7 +79,7 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
 | [Question](#question-modal) | `ask_user` tool | 78 × 70 | `draw_question_modal` |
 | [Permission sheet](#permission-sheet) | Automatic | (inline, not centered) | `draw_permission_sheet` |
 | [Help](#help-modal) | `Ctrl+H` / `?` / `F1` / `/help` | 58 × 70 | `draw_help_modal` |
-| [Activity](#activity-modal) | Click activity bar | 72 × 70 | `draw_activity_modal` |
+| [Session Stats](#session-stats-modal) | `Ctrl+O` / model bar context or rate gauge | content-sized (72 × 70 nominal) | `overlays::telemetry::draw` |
 | [Usage statistics](#usage-statistics-modal) | `/usage` | 76 × 86% | `draw_usage_stats_modal` |
 | [Asides](#asides-modal) | `F5` / `/btw list` | 66 × 84% | `draw_btw_modal` |
 | [Toasts](#toasts) | Transient | top-right, 3 rows | `draw_armed_toast`, `draw_copy_toast` |
@@ -102,8 +102,8 @@ The two [toasts](#toasts) are non-modal and use `ToastBubble` from
 `Modal` is a rendering/input discriminant, not navigation identity. The
 authoritative foreground is one exact `Surface`: a full-screen `View`, a
 `Panel(PanelId)` floating over it, or a transient modal. This distinction
-matters because Activity and Todos share the same renderer while remaining
-different destinations.
+matters because a panel keeps a retained lifecycle (cursor, scroll, MRU
+membership) while the sheets pushed over it are transient.
 
 Under [ADR-0141](../../adr/0141-view-means-fullscreen-and-modal-means-modal.md)
 the vocabulary is fixed by geometry:
@@ -115,9 +115,10 @@ the vocabulary is fixed by geometry:
   transcript). Subagent zoom and the side view route through the surface
   router like any other view; their frame data (the zoom stack, the side
   session id) lives on the shell.
-- A **panel** is a *retained modal* — one of the browse overlays (Help,
-  Activity, Todos, Tools, MCP, Skills, Permissions, Usage statistics,
-  Usage stats, Session Telemetry, Asides, Models, Connections, History, Queue, Sessions, Session tree) that floats over the active view and keeps
+- A **panel** is a *retained modal* — one of the browse overlays (Help, Tools,
+  MCP, Skills, Permissions, Usage statistics, Session Telemetry, Asides,
+  Models, Connections, History, Queue, Sessions, Session tree) that floats over
+  the active view and keeps
   the create/show/hide/switch/close lifecycle of ADR-0139: retained cursor
   and scroll, per-panel parked drafts, MRU presence in the quick switcher.
   Retention is orthogonal to geometry: a panel is still a modal.
@@ -144,7 +145,7 @@ Esc, Ctrl+C, and outside click.
 Transient workflows use the same bounded return stack. Model/provider/OAuth
 editors and Permission, Question, and Input Injection sheets push over the
 exact current surface and return to it when settled. A request sheet therefore
-cannot collapse an interrupted Todos view into Activity or chat. Drill-in
+cannot collapse an interrupted panel (say the Queue panel) into chat. Drill-in
 sub-layers remain state owned by their parent view and pop before the parent
 can be hidden.
 
@@ -231,10 +232,17 @@ by the wire id — the stable identity — not by the label.
 |-----|--------|
 | printable | Append to the filter (composer is the input source) |
 | `↑` / `↓` | Move selection |
+| `/` | Enter the search sub-layer (`Esc` clears it) — in browse mode `/` opens search rather than inserting a literal slash |
 | `Enter` | Activate the highlighted (provider, model) row |
+| `*` | Toggle favorite on the highlighted model (model-level, ADR-0046) |
+| `x` | Block the highlighted model on its connection (writes a connection valve rule, ADR-0203) |
 | `e` | Open the per-model settings editor (effort / thinking) |
-| `d` | Remove the highlighted model from a custom provider |
+| `r` | Refresh the connection catalogs |
 | `Esc` | Close |
+
+When the list is empty the footer switches to `a` add connection, `r` refresh,
+`Esc` close. Search mode's footer drops the verbs and shows `type` filter,
+`↑↓` navigate, `Enter` activate, `Esc` clear search.
 
 `Ctrl+M` opens this modal only on terminals that support the Kitty enhanced
 keyboard protocol. In a raw terminal `Ctrl+M` is byte-identical to `Enter`,
@@ -661,21 +669,33 @@ descriptions selects them, and `Ctrl+Shift+C` copies — the same interaction
 as transcript text (see [Selecting modal
 text](#selecting-modal-text)).
 
-## Activity modal
+## Session Stats modal
 
-Tabbed overview of the current round, opened by clicking the activity bar.
-Two tabs cycled with `←`/`→`:
+The current session's live and recorded telemetry (`Ctrl+O`, or a click on the
+model bar's context/rate gauge). Two tabs:
 
 | Tab | Contents |
 |-----|----------|
-| **Activity** | The current round's user prompt (wrapped) and the live status block: `round N · turn M · <model> · <elapsed>` + activity label + optional review alert |
-| **Tasks** | The unified todo list: `done/total` header plus one row per item with a status glyph |
+| **Overview** | Context window (used / capacity / draft), session token totals, and streaming performance |
+| **Activity** | The round table — one row per recorded round with tokens in/out, cache hit rate, stream TPS, duration and turn count — drilling into that round's turns, and from a turn into its attempt inspector |
 
 | Key | Effect |
 |-----|--------|
-| `←` / `→` | Cycle tabs |
-| `↑` / `↓` | Scroll the active tab's body |
-| `Esc` | Close |
+| `Tab` / `BackTab` | Cycle tabs (the footer labels the destination) |
+| `1` / `2` | Jump to Overview / Activity; `[` `h` / `]` `l` step between tabs |
+| `↑` / `↓` | Scroll the body, or select a row in the round table |
+| `Enter` | On Overview: jump to the Activity tab. On Activity: open the selected round's turns, then the selected turn's attempts |
+| `Esc` | Back out one drill level (attempts → turns → rounds), then close |
+
+The round/turn counters that the transcript anchors as `round N` are the same
+values this modal tabulates — see
+[Activity bar → Round and turn](activity-bar.md#round-and-turn).
+
+There is **no activity bar modal**, and the bar is not clickable: the retired
+"Activity / Tasks" overlay (`draw_activity_modal`) is gone, its tab strip
+replaced by this modal's Activity tab. The task list it used to show has no
+panel today; a `write_todos`/`update_todo` tool result renders inline in the
+transcript like any other tool step.
 
 ## Usage statistics modal
 
@@ -719,8 +739,7 @@ sentinel. Migrated surfaces:
 | Help (`?`) | The whole cheat sheet — keycap labels and descriptions |
 | Usage Statistics (`/usage`) | Summary KV, daily/model tables, event log |
 | Context Usage (`/usage` → round drill-in) | The round's KV read-out, turns table, legend |
-| Session Telemetry (`Ctrl+O` or model bar context/rate click) | Unified session stats, token totals, streaming pace, latency timeline |
-| Activity modal (Activity / Todos) | Prompt, status detail, last failure, todo items |
+| Session Telemetry (`Ctrl+O` or model bar context/rate click) | Context window, token totals, streaming performance, the round/turn tables, and the attempt inspector's latency timeline |
 | Sessions `i` info sub-view | Session id, title, timestamps, full last prompt |
 | History `Tab` preview | The full prompt text of the focused entry |
 | Permission sheet body | Tool description and the arguments JSON |

@@ -2275,7 +2275,11 @@ termination: ShellTermination,
  * background-job id the child was adopted under, so the UI can point
  * at the notification target.
  */
-detached_job_id?: string | null, } } | { "Code": { lang: string | null, text: string, start_line: number, prefix: string | null, suffix: string | null, } } | { "Listing": { entries: Array<string>, } } | { "Matches": { pattern: string, lines: Array<string>, } } | { "Patch": { path: string, op: PatchOp, old: string, new: string, start_line: number, } } | { "Subagent": { summary: string, messages: Array<Message>, usage: TokenUsage, 
+detached_job_id?: string | null, } } | { "Code": { lang: string | null, text: string, start_line: number, prefix: string | null, suffix: string | null, } } | { "Listing": { entries: Array<string>, } } | { "Matches": { pattern: string, lines: Array<string>, } } | { "Patch": { path: string, op: PatchOp, old: string, new: string, start_line: number, 
+/**
+ * Advisory diagnostics for a committed change; never a mutation failure.
+ */
+warnings?: Array<string>, } } | { "Subagent": { summary: string, messages: Array<Message>, usage: TokenUsage, 
 /**
  * Time the subagent's own provider requests spent *generating*
  * (completion-spanning, excluding tool execution and human pauses),

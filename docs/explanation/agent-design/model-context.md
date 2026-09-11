@@ -70,7 +70,7 @@ execution, or network enrichment happens here. Producers run before assembly
 under the applicable execution and permission boundaries, and every enabled
 temporary-context producer must have a finite budget and an explicit relevance
 condition. `E_n` may be empty — and is empty by default, because code structure
-is delivered on demand through the `get_outline` tool rather than as an ambient
+is delivered on demand through the `code_query` tool rather than as an ambient
 per-request map ([ADR-0214](../../adr/0214-on-demand-code-structure-context-and-mutation-freshness.md)).
 
 Three data surfaces stay distinct:

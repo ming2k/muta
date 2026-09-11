@@ -7,7 +7,7 @@ Before writing, modifying, or archiving any documentation, please read and follo
   1. Prefer `cargo check` (or package-level check) for instant syntax/type validation over full compilation.
   2. For tests, ALWAYS use targeted filters (e.g. `cargo nextest run -p <package> -E 'test(<filter>)'`) instead of running full package or workspace suites.
 - **Latency Consciousness**: Prioritize developer waiting time and iterative speed. Avoid triggering redundant, long-running compilation or test tasks.
-- **Long-Running Commands (ADR-0190)**: A dev server, watcher, daemon, or any command that will not exit on its own MUST be started with `background: true` on `run_command`. A foreground call whose sync budget expires while the process is still alive detaches it to the background fabric automatically (the process keeps running; the result arrives as a job notification) — but explicit `background: true` is always preferable.
+- **Long-Running Commands (ADR-0190)**: A dev server, watcher, or daemon MUST be started with `service: true` on `run_command` (readiness is reported; running is the success state). Use `background: true` for bounded work you want to overlap with other work, and collect its outcome with the `process` tool (`wait`/`status`/`logs`). A foreground call whose sync budget expires while the process is still alive detaches it to the background fabric automatically (the process keeps running; you get the job id) — but an explicit `background`/`service` call is always preferable. Nothing resumes your turn when a background job finishes (ADR-0212/ADR-0234): the completion is a task event, not an automatic continuation.
 
 ## Non-interactive Git Discipline
 

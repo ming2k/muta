@@ -11,7 +11,16 @@ guard).
 | `description` | string | yes | Max 60 chars |
 | `prompt` | string | yes | Self-contained instructions for the subagent |
 | `role` | string | no | `"explore"` (default), `"code"`, `"mcp"`, or `"skill"` |
-| `background` | bool | no | Dispatch asynchronously; read-only roles only |
+
+The call returns when the child finishes: it runs inside the calling turn, so
+`delegate_code` and its siblings cannot be dispatched to the background job
+fabric. The former `background` parameter is gone from the schema
+([ADR-0234](../../adr/0234-authorized-background-job-continuations.md)) because
+it promised an asynchronous dispatch the implementation never performed — no
+job registration, no `job_id`, no result to collect. Passing it explicitly is
+rejected with an actionable error rather than silently running synchronously.
+Background *shell* work is available through `run_command`'s `background` and
+`service` modes.
 
 Spawns a subagent that inherits the parent's provider, runs isolated in its own
 context, and receives only the tools admitted by the bound preset
@@ -28,21 +37,33 @@ event streaming, the TUI zoom view, presets, and full-duplex — is explained in
 [Subagents](../../explanation/agent-design/subagents.md). See also
 [ADR-0144](../../adr/0144-three-tier-agent-hierarchy-and-tool-pool.md).
 
-## `delegate_code` and `delegate_mcp`
+## Roles
 
-Two more `SubagentTool` instances bind other presets to their own tool names:
-[`SUBAGENT_CODE`](../../explanation/agent-design/subagents.md#profiles) as
-`delegate_code` (the implementation delegation path, with the same parameters
-as `spawn_agent`), and `SUBAGENT_MCP_SPECIALIST` as `delegate_mcp` (specialized
-integration work with dynamic/MCP tools in an isolated sandbox).
+`role` selects the child's **capability grant and persona**, not a separate
+tool. The enum in the schema and the runtime check come from one constant
+(`DISPATCH_ROLES` in `crates/muta-agent/src/subagent_tool.rs`), so a role the
+schema offers always resolves and a role it does not offer is refused with the
+dispatchable set named — it is never silently downgraded to the bound default.
 
-The tools share one `SubagentRegistry` (call ids are globally unique, so a
-user's reply routes to the correct live child regardless of which tool spawned
-it) but register as distinct capabilities under different names, so they
-coexist in the parent toolset without one shadowing the other. `SUBAGENT_CODE`
-runs `delegated: true` like other subagents — the principal's act of calling
-`delegate_code` is the authorization for the delegated task, so the child's
-writes and commands execute on the subagent's own authority and do not route
-through the permission broker. (`ask_user` still uses the full-duplex channel.)
-See [ADR-0087](../../adr/0087-code-envoy-runs-autopilot.md) (supersedes
-ADR-0086's attended default).
+| Role | Grant | Notes |
+|------|-------|-------|
+| `explore` | read-only inspection | The default. Read-only, non-interactive, non-recursive. |
+| `code` | read-only + write/execute | Delegated implementation work; the delegation is the authorization (ADR-0087). |
+| `mcp` | admits the parent's full toolset, plus the session's live dynamic tools bound at spawn | Narrower grants are an open question — see ADR-0237. |
+| `skill` | read-only inspection | Persona framing for skill discovery. Shares `explore`'s toolset exactly. |
+
+`title` is deliberately **not** dispatchable: it is a harness-internal role
+(session titling drives it directly) and must not become spawnable just because
+it lives in the same preset pool.
+
+There is no separate `delegate_code` / `delegate_mcp` tool in the shipped
+binary. `SubagentTool::named` can construct such instances — the type supports
+it, and the TUI renders those names — but only `spawn_agent` is registered, and
+its `role` enum is how a caller reaches the other grants. A `role` therefore
+costs no extra tool schema.
+
+Each child receives only the tools its preset admits
+(`crates/muta-contracts/src/subagent.rs`), regardless of role. A role can only
+*narrow* the parent's authority: recursion (`spawn_agent`) and control-flow
+tools are excluded absolutely, and the master's delegation policy must admit the
+preset at all.

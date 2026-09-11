@@ -2,7 +2,10 @@
 
 This page defines how muta determines a model's capability and route for one
 provider channel. For provider availability and endpoints, see
-[Providers](providers.md). For the decision history, see
+[Providers](providers.md). For how the list those channels come from is
+assembled in the first place — membership, refresh triggers, and the picker —
+see [Model catalog architecture](../architecture/model-catalog.md). For the
+decision history, see
 [ADR-0070](../adr/0070-provider-scoped-remote-model-metadata.md).
 
 ## Sources

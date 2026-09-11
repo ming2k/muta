@@ -14,9 +14,9 @@ The `Tool` trait is defined in
 ## Registry
 
 Most tools self-register through `inventory` and are collected into a
-`ToolSet` by the application. Agent construction automatically adds `todo` and
-`todo_update`, bound to that instance's live task-list context. `SubagentTool` is
-assembled explicitly because it captures a snapshot of the other tools.
+`ToolSet` by the application. Agent construction adds `todo`, bound to that
+instance's live task-list context. `SubagentTool` is assembled explicitly
+because it captures a snapshot of the other tools.
 
 | Tool | Access | Permission scope | Reference page |
 |------|--------|------------------|----------------|
@@ -28,22 +28,28 @@ assembled explicitly because it captures a snapshot of the other tools.
 | `find_files` | `Read` | `*` | [filesystem](filesystem.md) |
 | `list_dir` | `Read` | `*` | [filesystem](filesystem.md) |
 | `search_text` | `Read` | `*` | [filesystem](filesystem.md) |
-| `get_outline` | `Read` | `*` | [filesystem](filesystem.md) |
+| `code_query` | `Read` | `*` | [filesystem](filesystem.md) |
 | `ask_user` | `Read` | `*` | [interaction](interaction.md) |
 | `todo` | `Read` | `*` | [interaction](interaction.md) |
-| `todo_update` | `Read` | `*` | [interaction](interaction.md) |
 | `read_url` | `Read` | `*` | [web](web.md) |
 | `search_web` | `Read` | `*` | [web](web.md) |
 | `spawn_agent` | `Read` (spawns subagent) | `*` | [subagent](subagent.md) |
-| `delegate_code` | `Read` (spawns subagent) | `*` | [subagent](subagent.md) |
-| `delegate_mcp` | `Read` (spawns subagent) | `*` | [subagent](subagent.md) |
-| `use_skill` | `Read` | `*` | [skills](skills.md) |
-| `list_skills` | `Read` | `*` | [skills](skills.md) |
+| `process` | `Read` | `*` | [execute_command](execute_command.md#the-process-tool) |
 | `mcp__<server>__<tool>` | `Read` if server `read_only = true`, else `Write` | `*` | [mcp](mcp.md) |
 
 `permission_scope` defaults to `"*"`. Only `write_file`, `edit_text`, and
 `execute_command` override it; their scope string is what a cached `Always` rule matches
 against.
+
+`todo` is installed by `Agent::new` rather than self-registering, so it is absent
+from a context built with only `collect_toolset`. `spawn_agent` selects the
+child's role from the `role` enum documented in [subagent](subagent.md) — those
+roles are arms of one tool, not separate tools, and the enum is also the
+enforced contract (an unadvertised role is refused, not silently defaulted).
+
+The published surface is pinned by a token-budget test
+(`crates/muta-agent/src/tools/tests.rs`): every schema listed here is paid for in
+every request, so adding one means raising that budget deliberately.
 
 Parameters are exposed to the model as JSON Schema via
 `Tool::to_openai_function()` (`crates/muta-contracts/src/capability.rs`), which

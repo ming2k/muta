@@ -144,6 +144,11 @@ auth store.
 
 ## Model discovery
 
+Admission, refresh triggers, and everything the picker finally renders are
+specified in
+[Model catalog architecture](../architecture/model-catalog.md); this section
+covers only the wire surfaces.
+
 Inference and discovery protocols are distinct. Both OpenAI inference
 protocols use the OpenAI `/models` discovery shape; Anthropic and Google use
 their own model-list surfaces. ChatGPT uses the Codex model catalogue.

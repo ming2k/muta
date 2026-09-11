@@ -299,12 +299,15 @@ tables.
 Beyond rendering content, the TUI maintains state whose only purpose is
 to communicate that the agent is busy:
 
-- A monotonic `spinner_tick` advances once per frame and drives the
-  breathing-dot indicator (a luminance sweep, not a braille spinner), so
-  the activity bar animates at roughly 10 fps even while the
+- A wall-clock animation epoch, sampled once per frame, drives the
+  breathing-dot indicator (a luminance sweep, not a braille spinner), so the
+  activity bar animates at roughly 10 fps even while the
   harness is waiting on a slow provider.
-- An `activity_status` string surfaces the current phase
-  (`responding`, `thinking`, `retry 2/4 in 3s`, `awaiting permission`).
+- A typed activity phase surfaces what the round is doing (`responding`,
+  `thinking`, `awaiting permission`, a tool verb), and a transport setback is
+  rendered beside it as a separate clause (`retry 2/4 next in 3s`) rather than
+  as a phase: the two channels describe different things, and the clause ends
+  when the phase leaves the wait it annotates.
 - `follow_bottom` keeps the newest content in view while streaming and
   yields to manual control the moment the user scrolls.
 - Sticky headers pin an expanded step's header to the top of the

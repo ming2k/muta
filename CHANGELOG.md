@@ -7,6 +7,157 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Authorized autonomous continuation (ADR-0234). In an **unattended** session, a
+  background job that settles can now start one follow-up round on its own: the
+  agent sees a harness-authored report of what finished and continues without
+  anyone asking again. It is bounded by construction — one wake round per
+  originating request, a wake round cannot re-arm its own budget, an interactive
+  session never wakes, a queued human follow-up always goes first, and a round
+  that is already running is never superseded. A refusal leaves the result
+  retained for `process`.
+- `code_query` replaces `get_outline` as the structural query surface: one tool
+  with `outline`, `symbol`, and `find` modes over one declaration index.
+  `symbol` returns a declaration's **source** by name (optionally
+  container-qualified), and `find` locates declarations by a closed
+  `kind[:name-glob]` grammar across a scope — so the model fetches a function
+  instead of reading a whole file. All modes are bounded with truncation
+  disclosed, and each result names the content version of the bytes it
+  describes (ADR-0237).
+- `edit_text` and `write_file` accept an optional `expected_version`: the
+  content version a `code_query` or `read_text` result reported. A mismatch — or
+  a file that has since disappeared — refuses the mutation before it happens, so
+  a write can no longer discard content the caller never saw. Omitting it
+  preserves the previous behaviour exactly (ADR-0237, closing ADR-0214's
+  freshness invariants).
+- The built-in tool surface is pinned by a token-budget test, measured with the
+  project's own cl100k accounting; raising it is a deliberate, recorded act
+  (ADR-0237).
+- Background job results are retained instead of only broadcast: the manager
+  keeps a bounded queue of settled outcomes with a per-delivery identity, so a
+  result survives a missed or lagged notification and stays retrievable until a
+  consumer claims it. `process` with `action: 'wait'` is that consumer — it now
+  returns the settled `summary` and `log_path` alongside the state and tail, and
+  reports how many deliveries it claimed, so the same settlement is never
+  collected twice. Claiming governs delivery, not readability: the job keeps its
+  own settled result, so `status` and a repeated `wait` still report the
+  summary and log path (ADR-0234).
+
+### Changed
+
+- `process` with `action: 'wait'` no longer blocks on a running service. A
+  service has no terminal state by contract (ADR-0190: running *is* its success
+  state), so waiting for one burned the whole timeout and ended in a
+  `Timed out` error that told the caller nothing; it now returns
+  `service_still_running` immediately and points at `status`/`logs`/`kill`. A
+  service that has actually exited still waits normally (ADR-0234).
+- `process` with `action: 'status'` now includes the job's settled `summary` and
+  `log_path` once it has finished, so inspecting a completed job reports what it
+  produced instead of only its state (ADR-0234).
+- Added `docs/architecture/model-catalog.md`: the living blueprint for the model
+  catalog, covering all three axes in one place — model membership and its valve
+  algebra, the capability cascade, remote catalog sources and their refresh
+  triggers, and what the model picker finally renders. It also records the
+  divergences between the running behavior and the decision records (open
+  admission as the default filter, the conservative floor, and the picker's
+  three-section ordering).
+
+### Fixed
+
+- `spawn_agent`'s `role` enum is now the enforced contract, not a hint. An
+  unadvertised or misspelled role is refused with the dispatchable set named
+  instead of being silently downgraded to the bound default, and the
+  harness-internal `title` role is no longer dispatchable through the
+  model-facing surface (ADR-0237).
+- `docs/reference/tools/index.md` no longer advertises tools that no code path
+  installs (`list_skills`, `use_skill`, `delegate_code`, `delegate_mcp`) or a
+  retired name (`todo_update`), and `docs/reference/tools/skills.md` states that
+  the skill tools are not model-visible today (ADR-0237).
+- A lagged background-job event stream no longer silences a session's task bar.
+  The per-session forwarder treated `broadcast::RecvError::Lagged` as end of
+  stream and exited, so one overload dropped every later task-bar update for
+  that session; it now skips the gap and rebuilds the rows from the job
+  snapshots (ADR-0234).
+- A foreground command detached at the sync budget keeps its owning session:
+  `adopt_process` no longer records the adopted child as ownerless, so the
+  settle can still be attributed, delivered, and revoked with that session
+  (ADR-0234). Closing a session now discards the outcomes retained for it.
+- Background jobs can no longer be "terminated" after they have settled: the
+  fabric drops a job's cancel handle and pid together at settle time and
+  `kill` refuses with the job's state, instead of sending `SIGKILL` to a pid the
+  OS may already have recycled for an unrelated process. A recurring timer keeps
+  its cancel handle between fires, so it stays terminable after its first tick
+  (previously the first fire cleared the handle and stranded the armed loop);
+  cancelling one now settles its entry without publishing a wake digest
+  (ADR-0234).
+- The activity bar's transport-setback clause (`retry N/M (…)`) no longer
+  outlives the retry it describes: it is retired by the session's next phase
+  write instead of by a hand-maintained list of progress events that missed
+  `StreamStart`/`StreamDelta`, so it can no longer ride beside `answering` for
+  the whole of a streamed response (or keep the frame clock running for a
+  clause nobody can see). A background `/btw` aside's countdown is
+  session-scoped and no longer paints the primary view's bar; a one-shot
+  provider reply now reads `answering` rather than leaving `waiting for model`
+  up (ADR-0235).
+- The queue bar's `Ctrl-q expand` keycap now fires: the chord is declared on
+  `CommandId::OpenQueue`, resolves at the top level, and the legend renders the
+  registry's chord (or nothing when the command has no binding) instead of a
+  literal — so the bar can no longer advertise an affordance that reaches
+  nothing. `GlobalOverrides::effective_binding` returns `Option<Key>` and no
+  longer substitutes a placeholder chord for unbound commands (ADR-0238).
+
+### Removed
+
+- `InputAction::RecallQueued` (pop the newest outbox item into the composer):
+  the gesture lost its producer when ADR-0174 handed `↑`/`↓` to inline history
+  recall, and the outbox's live recall is the Queue panel's `Enter` on the
+  selected item. The aside view's unreachable `F5 asides` / `Ctrl+C interrupt`
+  hint legend is gone with it — that page renders its breadcrumb and `Esc back`
+  (ADR-0238).
+
+### Changed
+
+- `get_outline` is retired in favour of `code_query` (no alias): structure
+  retrieval is one tool with three modes, and outline, symbol, and find results
+  are projections of a single declaration index and renderer rather than two
+  paths that could disagree. `outline` now includes members, indented under
+  their container, so methods are first-class targets (ADR-0237, ADR-0135).
+- `run_command` no longer advertises scheduling: `schedule_in_secs` and
+  `repeat` are removed from its schema, and `service` is documented as
+  outranking `background` when both are set. The parameters previously promised
+  that "the command runs at fire time", but the Timer arm only publishes a
+  digest and never executes a command — and with autonomous wakes disabled
+  (ADR-0212) that digest had no consumer. Remaining background messages now
+  state the truth: the job runs independently of the turn and its outcome is
+  collected with the `process` tool (ADR-0234).
+- `spawn_agent` (and `delegate_code`/`delegate_mcp`) no longer accept a
+  `background` parameter. The call always awaited the child round and returned
+  its result, so the parameter's promise of an asynchronous dispatch — and of a
+  later notification — was never honored; passing it now fails with an
+  actionable error instead of silently running synchronously (ADR-0234).
+- `edit_text` and `write_file` now report syntax errors as explicit non-blocking
+  warnings after successful writes, allowing incremental repairs and incomplete
+  intermediate states. Code-intelligence interception no longer rejects syntax;
+  path permissions, unique matching, and filesystem errors remain hard checks
+  (ADR-0233). Successful results retain structured patches with backward-compatible
+  `warnings`, shown alongside rich diffs and included in model/legacy text output.
+- The TUI's caret, hint rows, and Enter behaviour now follow the Stage-Scene-Overlay
+  layer stack (ADR-0205) instead of being re-derived per surface.
+  `App::caret_owner()` is the single arbiter, and every overlay renderer receives
+  its verdict as a `show_caret` flag rather than placing the terminal cursor on its
+  own authority — which is how a dimmed picker or sheet could previously park the
+  cursor while a different layer held the keyboard. `CaretOwner::Modal` is renamed
+  `Overlay` and a new `Scene` variant covers a scene's own inline prompt (the
+  `/dashboard` task line), whose edited text had rendered with no caret at all.
+  Scene chrome that advertises suspended chords (the head legend, the model-bar
+  keycaps) is withheld while an overlay is foreground, and the TaskInspection zoom
+  no longer pins a three-row key-legend footer: its whole keyboard surface is one
+  `Esc` plus a pair of remappable sibling walks, which a fixed keycap row could not
+  render faithfully under a remap. `Esc` in the zoomed task — and in an aside —
+  now unwinds one level at a time (completion, then step/browse focus, then exit)
+  instead of leaving the scene on the first press.
+
 ## [0.46.1] - 2026-09-11
 
 ### Added

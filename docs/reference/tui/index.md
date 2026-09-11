@@ -69,7 +69,7 @@ recall (the same walk as `Alt+P`/`Alt+N`; ADR-0174/0176).
 | [Thinking step](thinking-step.md) | Expandable step for reasoning text |
 | [Step state machine](step-state.md) | The three orthogonal axes (Lifecycle × Disclosure × Interaction) and the accent/weight color channels |
 | [Subagent view](subagent-view.md) | Inline subagent step + zoomed-in child stream + navigation bar + focus stack |
-| [Activity bar](activity-bar.md) | Breathing-dot liveness anchor + live status label + elapsed; clickable to open the Activity modal |
+| [Activity bar](activity-bar.md) | Breathing-dot liveness anchor + live status label + elapsed + the transport clause; a status surface (no click target) |
 | [Queue bar](queue-bar.md) | One-row staged-outbox summary; busy `Enter` stages here; click to open the queue modal |
 | [Model bar](model-bar.md) | Ambient gauges: model name + reasoning tier + `@instance` · context usage · stream rate |
 | [Head row](status-bar.md) | Ambient session state at the top of every view: session identity + workspace (left) + mode flags (right) |

@@ -171,25 +171,26 @@ keystrokes through the same surface but render their own framing around it.
 
 ## History pointer model
 
-The `↑`/`↓` inline recall treats the composer as a **pointer** over three
-kinds of slot, so the arrow keys are predictable and nothing you type is ever
-silently lost:
+The `↑`/`↓` inline recall treats the composer as a **pointer** over two kinds of
+slot, so the arrow keys are predictable and nothing you type is ever silently
+lost:
 
 | Slot | Contents | Behaviour |
 |------|----------|-----------|
 | **Draft** (the newest position) | The input that has **not been successfully sent**: what you are composing right now, an input restored by interrupting a round before output (`UnsentInput`), or an entry inserted from Ctrl+R | Editable and **remembered**. Walk into history with `↑` and back with `↓` and the draft comes back exactly as you left it (text + attachments) |
-| **Queue row** (an outbox item) | A staged next-round message (a busy-Enter item) | **Editable projection**. `↑`/`↓` walk the pointer across the queue without removing anything; `Enter` writes the edit back **into that item, in place** — the queue's length and order are untouched |
 | **History row** `p` | A previously sent prompt from this session's history, newest-first | **Read-only snapshot**. You can edit it before sending, but the edit is temporary — once the pointer moves away, coming back to the row reloads the original text |
 
-Navigation (the queue comes first — it is the newer, more urgent surface):
+Navigation is readline-style: `↑` from the draft's **first line** hands off to
+the previous history row (stashing the draft on the first press, so a stray `↑`
+never loses what you were typing), and `↓` past the newest row restores the
+stashed draft. Inside a multi-line draft the arrows move the caret instead
+(ADR-0174's edge hand-off).
 
-- With the queue non-empty, `↑` arms the **queue pointer** at the newest item
-  and steps toward older items (clamping at the oldest). The first press
-  stashes the draft, so a stray `↑` never loses what you were typing.
-- `↓` walks the queue pointer back toward newer items; past the newest it
-  dissolves the pointer and restores the stashed draft.
-- Only an exhausted queue hands `↑` on to input history, where the same
-  gestures walk the history rows instead.
+The **outbox is not part of this walk** (ADR-0238). A staged follow-up is
+recalled explicitly from the [Queue panel](modals.md) — which is what the
+[queue bar](queue-bar.md) expands — where `↑`/`↓` select an item and `Enter`
+pulls it into the composer. The composer's arrows never address the outbox, so
+a queued message can never be edited or consumed by an accidental arrow press.
 
 **The recall badge (ADR-0192).** While the pointer sits on a history row, the
 top breathing row declares it — `[history 3/17 · draft saved]`:
@@ -206,17 +207,6 @@ top breathing row declares it — `[history 3/17 · draft saved]`:
   shows the fork before an accidental `↑` throws it away.
 - `Esc draft` on the hint row names the exit: Esc cancels the walk and
   restores the stashed draft without sending.
-
-**Committing a queue edit.** `Enter` while the pointer is armed writes the
-composer's content back into the pointed-at item *in that item's slot*:
-editing `a` of a `[a, b, c]` queue into `d` yields `[d, b, c]` — never
-`[b, c, d]` (a requeue) and never a duplicate.
-
-**When the pointed-at item vanishes.** The item may ship, be deleted, or be
-recalled while you are editing (its round completed behind your back). The
-pointer is then empty: your edit stays in the composer, and the next `Enter`
-treats it as a **fresh message** — sent immediately if the session is idle,
-queued at the back if it is busy. The gesture never dead-ends on a race.
 
 What counts as "the newest / unsent" slot is defined by **send success**:
 

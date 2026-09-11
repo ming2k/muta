@@ -120,8 +120,12 @@ to `provider_retry_max_attempts` (default 30, hard maximum 60). Provider
 bounded exponential backoff using `provider_retry_base_ms` and
 `provider_retry_max_ms` (default 10s ceiling, preventing overly sparse polling).
 
-The TUI surfaces live retry state directly on the activity bar (`● retry 4/30 · next in 6.6s`)
-and detailed failure error messages in the Activity modal without adding transcript noise.
+The TUI surfaces live retry state directly on the activity bar: the master label
+reads `waiting for model` and the setback rides beside it as a clause
+(`● waiting for model  retry 3/29 (running for 6s)`). The clause ends the moment
+the phase leaves that wait, i.e. when the retried request lands. Repeated
+failures surface as one expandable notice in the transcript rather than as
+per-attempt noise.
 When retry attempts are exhausted or a terminal error occurs, the transcript presents an
 expandable notice component (collapsed summary header by default, expandable to formatted JSON body).
 `Esc`, session switching, or a newer request cancels the wait.
@@ -158,7 +162,7 @@ normalization is intentionally conservative: operations on the same target may
 collide even when secondary arguments differ. It is therefore an advanced,
 default-off policy configured through `[principal.nudge]`, not a routine TUI
 preference. Subagents force it off. See the
-[Configuration Reference](../../reference/configuration.md#agent-behavior).
+[Configuration Reference](../../reference/configuration.md#master-agent-behavior).
 
 ### Execution bounds
 

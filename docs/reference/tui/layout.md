@@ -97,16 +97,16 @@ box and model bar are persistent (when chrome is visible):
 
 | Row | Height | When present |
 |-----|--------|--------------|
-| Activity bar | `ACTIVITY_BAR_ROWS = 1` | Activity is non-empty and not `idle`; not in subagent view; chrome visible. Breathing-dot liveness anchor plus the live status label and the round elapsed timer. Click to open the Activity modal. See [Activity bar](activity-bar.md). |
-| Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in subagent view; chrome visible. `QUEUE` identity · count · inline preview of the next item to pop · key legend (`Ctrl+P` block/resume, `Ctrl+Q` expand). Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag when the user holds the outbox with `Ctrl+P`. Click to expand the Queue modal (auto-blocks the outbox for safe editing). |
+| Activity bar | `ACTIVITY_BAR_ROWS = 1` | The viewed session has a live phase (it is not `idle`) or a permission request is pending, not in subagent view, chrome visible. Breathing-dot liveness anchor plus the live status label, the round elapsed timer, and the transport clause. Not a control: it has no click target. See [Activity bar](activity-bar.md). |
+| Queue bar | `QUEUE_BAR_ROWS = 1` | The viewed session's outbox is non-empty; not in subagent view; chrome visible. `FOLLOW-UPS` identity · count · inline preview of the next item to pop · key legend. Count turns warning-colored while paused (round not done) and error-colored + `blocked` tag while the outbox is held. Click to expand the Queue panel. See [Queue bar](queue-bar.md). |
 | Input box | `COMPOSER_VERTICAL_CHROME_ROWS + wrapped_lines`, capped at `terminal_height / 2`, min `COMPOSER_MIN_HEIGHT = 4` | Not in subagent view; chrome visible |
 | Model bar | `MODEL_BAR_ROWS = 1` | Chrome visible (always, when no modal is open). Ambient gauges only: model name + reasoning tier + `@instance` · context usage · stream rate. |
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │ SESSION b3c4 ~/projects/xx                      DELEGATED  │  ← head row
-│ QUEUE 1  {next item preview…}  Ctrl+P block  Ctrl+Q expand  │  ← queue bar
-│ ● making edits (23s · Esc Esc interrupt)                 │  ← activity bar
+│ FOLLOW-UPS 1  {next item preview…}        Ctrl-q expand     │  ← queue bar
+│ ● making edits [23s]                  Esc Esc interrupt     │  ← activity bar
 │                                                          │  ← input box
 │ › type here…                                            │
 │                                                          │
@@ -115,14 +115,17 @@ box and model bar are persistent (when chrome is visible):
 └─────────────────────────────────────────────────────────────┘
 ```
 
-The activity bar carries the breathing-dot liveness anchor plus the live
-status label and the round elapsed timer — each surfaced only while it
-applies. It sits directly above the input box so the live status reads as
-part of the composer cluster. The queue bar owns the pending outbox.
-(Every join on these rows — the ` · ` between items, the whitespace between keycap
-units — follows the [join ladder](visual-language.md).) The structural counters
-(`round N › turn M · <model>`) deliberately do **not** appear on the bars;
-they live inside the Activity modal (opened by clicking the activity bar).
+The activity bar carries the breathing-dot liveness anchor, the live status
+label, the round elapsed timer, and (during a provider backoff) the transport
+clause — each surfaced only while it applies. It sits directly above the input
+box so the live status reads as part of the composer cluster. The queue bar
+owns the pending outbox and is the one clickable footer row (it opens the Queue
+panel). (Every join on these rows — the whitespace between keycap units, the
+enumerated gap before a preview — follows the
+[join ladder](visual-language.md).) The structural counters (`round N`,
+`turn M`) deliberately do **not** appear on the bars: the transcript anchors
+each round on its user-message header, and the Session Stats modal (`Ctrl+O`)
+carries the round/turn tables.
 The model bar carries the ambient gauges while the composer carries the next input
 action (left) plus three ambient clusters on the right: the latest-turn
 stream rate (`47.8 tok/s`, or `–` before a defensible sample), the model

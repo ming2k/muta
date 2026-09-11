@@ -128,9 +128,33 @@ protocol = "chat-completions"
 base_url = "https://relay.example.com/v1/chat/completions"
 user_agent = "acme-client/1.0"
 
-# Optional connection-level model delta (narrowing and overrides only):
-models.include = ["acme-7b", "acme-13b"]
+# Optional catalog-source override. Independent of `base_url`: a relay can
+# serve inference from its own endpoint while reading metadata elsewhere.
+# catalog_source = { models_dev = "anthropic" }
+# catalog_source = { endpoint = "open_ai_compatible" }
 ```
+
+The optional connection-level model delta (ADR-0199, ADR-0203) is a sub-table.
+`filter` and `block` are keys of `models`, so they are declared before the
+`inject` array-of-tables:
+
+```toml
+[connections.models]
+filter = "all"                     # "baseline" | "all" | ["acme-*", "*-mini"]
+block = ["acme-legacy"]            # ids pruned unconditionally
+
+[[connections.models.inject]]      # ids served even when the catalog omits them
+id = "acme-7b"                     # inject bypasses `filter`
+context_window = 200000            # optional capability facts
+
+[connections.models.overrides."acme-13b"]
+context_window = 300000
+```
+
+`include` and `exclude` remain accepted as aliases for `inject` and `block`.
+Omitting `filter` selects the provider-type default: `all` for a `custom`
+connection or any provider with a remote catalog source, `baseline` otherwise.
+The stored value is the rule, never a frozen list of model ids (ADR-0203).
 
 The credential for a connection is stored once in `credentials.toml`, keyed by
 connection name:
@@ -157,7 +181,7 @@ repairs the pairing.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `favorites` | `[]` | Favorite **model ids** pinned for quick access in the picker (ADR-0046 made favorites per-model). Flat list of model wire ids; a starred daily-driver model sorts into the second priority tier (below the currently-active pair) wherever it is served |
+| `favorites` | `[]` | Favorite **model ids**. Flat list of model wire ids; a starred model appears in the picker's FAVORITES section wherever it is served, regardless of which connection provides it (ADR-0046 made favorites per-model) |
 
 ## Model provider scope
 

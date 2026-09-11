@@ -64,14 +64,14 @@ The view modules live flat under `apps/tui/crates/mutx/src/`, grouped by concern
 |--------|----------------|
 | `render/mod.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptProps`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
 | `components/` | Reusable composed components: modal pages, selectable lists, scroll bodies, selectable document bodies (`selectable_body`), footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
-| `overlays/` | One renderer per modal (provider, session, help, activity, config, permission, …). |
+| `overlays/` | One renderer per dialog/sheet (provider, session, help, queue, telemetry, usage stats, permission, …). |
 | `tools/` | Per-tool-step presenters (execute_command, edit, read, search, web, ask_user, diff, …). |
 | `disclosure/` | Expandable-step disclosure: state machine, sticky-pin tracking, step renderers. |
 | `layout/` | Transcript arrangement strategies (`default` / `legacy`). |
 | `theme.rs` / `design.rs` | Color scheme + non-color design tokens (spacing, gutters, row counts). |
-| `chrome.rs` / `composer.rs` / `primitives.rs` / `text_layout.rs` / … | Drawing leaves: activity/state/model bars, input composer, rect helpers, text wrapping. |
+| `chrome/` / `composer.rs` / `primitives.rs` / `text_layout.rs` / … | Drawing leaves: activity/state/model bars, input composer, rect helpers, text wrapping. |
 | `model/` | Semantic data model: `document` (`TranscriptMessage`, `Block`, markdown parsing), `layout` (`LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing), `selection` (`SelectionState`). |
-| `fuzzy` / `providers` / `modal` / `completion` | Helpers shared with the shell. |
+| `fuzzy` / `providers` / `surfaces` / `completion` | Helpers shared with the shell. |
 
 ### App shell — `apps/tui/crates/mutx/src`
 
@@ -105,51 +105,56 @@ only draw what the shell chose to hand it.
 `draw_transcript(frame, &mut LayoutMap, view)` is the single entry point
 for the transcript; the per-modal overlays (`draw_models_modal`,
 `draw_permission_sheet`, …) take their own small borrowed view structs
-(`ActivityModalView`, `CustomEditorProps`, …) the same way.
+(`ModelsModalProps`, `CustomEditorProps`, `QueueModalProps`, …) the same way.
 The shell calls the view and never the reverse.
 
 ## Surface routing and shared presentation discriminants
 
-`Modal`, `Recess`, and `ActivityTab` are fieldless enums that *name* things
+`Recess` and the surface discriminants are fieldless enums that *name* things
 without owning state:
 
-- `Modal` — which overlay presentation to draw and which modal input map to
-  use. It is a projection, never durable navigation identity: Activity and
-  Todos intentionally project to the same modal.
+- `Surface` — `Scene(SceneKind)` (a full-screen workspace: `Conversation`,
+  `Dashboard`, `Settings`, `TaskInspection`, `Aside`) or
+  `Overlay(OverlaySurface)`, where `OverlaySurface` is `Dialog(DialogKind)`
+  (a centered floating dialog) or `Sheet(SheetKind)` (an edge-anchored action
+  prompt). It is a projection, never durable navigation identity: the shell
+  owns exact navigation in `surfaces.rs`, and a dialog keeps its retained state
+  (`SurfaceStore` + `RetentionPolicy`) while the sheets pushed over it come and
+  go.
 - `Recess` — how the live surface recedes behind a modal (float / dim /
   takeover). The view layer's recess pass and the shell's footer-collapse
   decision both key off it.
-- `ActivityTab` — which section the Activity modal shows.
 
-The shell owns exact navigation separately in `surfaces.rs`. `SurfaceRouter`
-is the sole authority for the active `Surface` (`View`, `Panel(PanelId)`, or
-`Transient(Modal)`) — the base full-screen view plus the transient return
-stack; `PanelRegistry` owns lazy panel state and MRU order. Render code
-receives only the router's `Modal` projection. Lifecycle code operates on
-`PanelId`/`View`, so it never attempts the lossy inverse mapping from a
-modal back to a surface.
+The shell owns navigation separately in `surfaces.rs`. `SurfaceRouter`
+(ADR-0205's Stage-Scene-Overlay model) is the sole authority: exactly one
+`SceneKind` is active, plus a LIFO `overlay_stack: Vec<OverlaySurface>` driven
+by `switch_scene` / `open_dialog` / `present_sheet`. `SurfaceStore` owns the
+retained dialog state and its `RetentionPolicy` (`Retained`, `Ephemeral`,
+`SessionScoped`), so a panel's cursor and scroll survive dismissal and a
+session switch purges what was session-scoped. Render code receives the
+router's `Surface` projection and never a scene/overlay inverse.
 
-Under ADR-0141 a **view** is an independent full-screen destination
-(`Session`, `Dashboard`, `Settings`, `Subagent`, `Side`) and a **panel** is a
-retained modal — one of the browse overlays (help, activity, todos, tools,
-…) floating over the active view. Subagent zoom and the aside view route
-through the router as views (`App::focus_stack` / `side_session_id` remain
-frame data), so `in_subagent_view()` / `in_side_view()` derive from the router
-instead of scattered booleans and stack emptiness.
+Under ADR-0141 a **scene** is an independent full-screen destination
+(`Conversation`, `Dashboard`, `Settings`, `TaskInspection`, `Aside`) and a
+**dialog/sheet** is a modal floating over the active scene. Subagent zoom and
+the aside view route through the router as scenes (`App::focus_stack` /
+`side_session_id` remain frame data), so `in_subagent_view()` / `in_side_view()`
+derive from the router instead of scattered booleans and stack emptiness.
 
-All entry paths converge on the event loop's `enter_panel` / `enter_view`
-transactions. They run first-create initialization, refresh-on-show backend
-queries, and enter/exit hooks consistently for shortcuts, mouse actions,
-switcher actions, and backend presentation signals. Snapshot responses
-update data only; separate open signals navigate. Request sheets and
-workflow editors push/pop through the router, while drill-ins remain state
-owned by their parent surface. See
-[ADR-0139](../../adr/0139-unified-tui-surface-router-and-view-lifecycle.md)
-and [ADR-0141](../../adr/0141-view-means-fullscreen-and-modal-means-modal.md).
+All entry paths converge on the event loop's `enter_panel` transaction (and the
+`open_dialog` / `switch_scene` calls it wraps). They run first-create
+initialization, refresh-on-show backend queries, and enter/exit hooks
+consistently for shortcuts, mouse actions, switcher actions, and backend
+presentation signals. Snapshot responses update data only; separate open
+signals navigate. Request sheets and workflow editors push/pop through the
+router, while drill-ins remain state owned by their parent surface. See
+[ADR-0205](../../adr/0205-unified-tui-surface-architecture-and-spatial-modality-taxonomy.md) (the current model)
+and [ADR-0139](../../adr/0139-unified-tui-surface-router-and-view-lifecycle.md)
+(its lifecycle ancestry).
 
 Because presentation types are shared by both layers and dependencies point
-downward, they live in the lower layer (`tui::modal`) and the shell re-exports
-them. The same reasoning applies to
+downward, they live in the lower layer (`mutx::surfaces`) and the shell
+re-exports them. The same reasoning applies to
 `completion::{Completion, CompletionKind}`: render code draws them, while
 matching logic remains in the shell as an `impl App`.
 

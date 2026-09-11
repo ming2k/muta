@@ -40,10 +40,10 @@ current input buffer, session execution state, and outbox pointer:
 |----------------|-----------|------------------------|---------------|
 | `Prompt` | Session idle, plain prose | Starts a new agent round | `Enter send prompt` |
 | `Command` | Buffer starts with recognized `/` | Executes local slash command | `Enter send command` (Brand bold) |
-| `Steer` | Session busy, steer mode armed | Interrupts round at safe boundary | `Enter send steer` (Amber warning) |
-| `FollowUp` | Session busy, follow-up armed | Appends message to outbox queue | `Enter send follow-up` (Info blue) |
-| `QueueEdit` | Armed queue pointer on item `#N` | Updates queued item in place | `Enter update follow-ups[N]` |
+| `Running(Steer)` | Session busy, steer mode armed | Interrupts round at safe boundary | `Enter send steer` (Amber warning) |
+| `Running(FollowUp)` | Session busy, follow-up armed | Appends message to outbox queue | `Enter send follow-up` (Info blue) |
 | `Completion` | Open completion popup | Commits selected candidate | `Tab / Enter select` |
+| `HistoryRecall` | Inline `↑` pointer on a history row (ADR-0192) | Sends the recalled row | `Esc draft / Enter send` |
 | `HistorySearch`| Ctrl+R panel active | Inserts matched history entry | `Tab / Enter insert` |
 
 ### The `Tab` delivery toggle
@@ -109,9 +109,9 @@ Keystroke Event
   requests retain the prior candidates and apply client-side prefix
   filtering until the newer daemon response atomically updates the state.
 
-## Multi-slot history and outbox pointer model
+## Multi-slot history pointer model
 
-The `↑` and `↓` arrow keys treat the composer as a pointer over three
+The `↑` and `↓` arrow keys treat the composer as a pointer over two
 distinct slot tiers:
 
 ```text
@@ -121,19 +121,22 @@ distinct slot tiers:
 │    • Preserved across ↑ / ↓ navigation excursions      │
 │    • Restored automatically on pre-response interrupt  │
 ├────────────────────────────────────────────────────────┤
-│ 2. Queue Outbox Slots (Editable Projections)           │
-│    • Steer / follow-up items staged for delivery       │
-│    • Enter commits modifications in place              │
-├────────────────────────────────────────────────────────┤
-│ 3. History Snapshot Slots (Read-only Records)          │  Oldest
+│ 2. History Snapshot Slots (Read-only Records)          │  Oldest
 │    • Session prompts backfilled from transcript file   │
 │    • Persisted global history across sessions          │
 └────────────────────────────────────────────────────────┘
 ```
 
+The arrows hand off at the buffer's edge (ADR-0174): inside a multi-line draft
+they move the caret, and `↑` from the first line / `↓` past the last hands the
+buffer to the pointer. The **outbox is deliberately not a tier** (ADR-0238): a
+staged follow-up is recalled from the [Queue panel](../reference/tui/queue-bar.md)
+by an explicit `Enter`, never by an arrow press, so browsing your own history
+can't consume or rewrite queued work.
+
 ### The recall pointer badge (ADR-0192)
 
-While the pointer occupies tier 3 (a history snapshot slot), the composer's
+While the pointer occupies tier 2 (a history snapshot slot), the composer's
 top breathing row declares it — `[history 3/17 · draft saved]`:
 
 - `3/17` is the 1-based pointer position over the current session's
@@ -152,17 +155,14 @@ top breathing row declares it — `[history 3/17 · draft saved]`:
   Ctrl+R badge on the same row (content honesty over surface naming) but
   never the overflow indicator (a spatial fact about the row itself).
 
-### In-place queue editing
+### Outbox recall is an explicit panel action
 
-When the outbox queue contains staged items, pressing `↑` enters the
-**queue pointer** rather than jumping directly to historical sessions.
-The composer loads the queued item's text, and the top breathing row
-displays a contextual badge (e.g. `[edit: follow-up #1 · draft saved]`).
-
-Pressing `Enter` commits the modified text **in place** within that item's
-existing queue slot. It never duplicates or re-orders the queue. Pressing
-`Esc` or navigating down past the newest queue item restores the stashed
-live draft untouched.
+The outbox is not part of the arrow walk (ADR-0238). A staged follow-up is
+recalled from the **Queue panel** — expanded by the [queue bar](../reference/tui/queue-bar.md)'s
+keycap or a click, or by `/queue` / the palette's "Queue (Outbox)" entry —
+where `↑`/`↓` move the item selection and `Enter` pulls the selected item into
+the composer for re-editing. Because the gesture is explicit, browsing your own
+history with `↑` can never consume, reorder or rewrite queued work.
 
 ### Pre-response unsend draft recovery
 

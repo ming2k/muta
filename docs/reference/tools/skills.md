@@ -12,6 +12,14 @@ session history. All are `Read` and bypass the permission broker.
 `UseSkillTool` (`crates/muta-skills/src/tools.rs`) loads the skill body
 into the conversation.
 
+**Not currently model-visible.** Neither `use_skill` nor `list_skills` is
+registered into an agent's toolset: `Agent::with_skills` attaches the registry
+only, and no code path installs these tool types. Models reach skill bodies
+through the `@name` / `skill://` mention injection and through the `skill`
+subagent role, and reach skill files with the ordinary file tools. Treat this
+page as the contract of the tool types themselves, not as a promise they are
+admitted; see ADR-0237 for the gap.
+
 ## `list_skills`
 
 | Parameter | Type | Required | Notes |

@@ -18,16 +18,16 @@ Every view shares this chrome slot:
 - **Session (Main):** `SESSION` identity, the persistent session-id tail
   (last 4 chars, dimmed), and the tilde-shortened workspace path on the
   left; the delegated-autonomous flag (`DELEGATED`) on the right. Row 2
-  appears when view stack depth > 1 (rendering the breadcrumb trail `Main › Subagent[...]`
-  plus `Ctrl+X menu`), or while asides are live (the aside chip
-  `btw 2 · 1 running` and `F5 asides`). No interrupt pair — the activity bar's
+  appears while asides are live (the chip `btw: 2 total (1 active)` plus
+  `F5 asides`); with no live asides the band collapses to the identity row and
+  the transcript reclaims the line. No interrupt pair — the activity bar's
   `Esc Esc interrupt` hint is the authoritative copy.
-- **`/btw`:** `/btw` identity, "Side conversation", parent status. Row 2
-  shows the view breadcrumbs (`Main › Aside`), `Ctrl+C back`, `F5 asides`, and
-  `Esc interrupt aside` (while the aside's round runs).
-- **Subagent:** `Subagent` identity, the task label, `N of M` position. Row 2 is omitted
-  when single-depth (its permanent footer already carries the legend); when nested,
-  it displays the subagent breadcrumb hierarchy.
+- **`/btw`:** `/btw` identity, "Side conversation", the parent's status. Row 2
+  shows the view breadcrumb `Main › Aside` and `Esc back`.
+- **Subagent:** `Subagent` identity, the task label, `N of M` position. Row 2
+  shows the breadcrumb `Main › Subagent[role]` and `Esc back`; the rest of the
+  scene's keyboard surface (the sibling walk) is discoverable through the
+  Command Palette and Help rather than advertised here.
 - **Dashboard:** `DASHBOARD` identity, "all projects", and a live
   session-count summary on the right.
 

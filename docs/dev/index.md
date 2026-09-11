@@ -4,6 +4,7 @@
 |------|---------|
 | [Acceptance](acceptance.md) | Authentic end-to-end user journeys without shortcuts |
 | [Testing](testing.md) | Running, interpreting, and extending automated unit, integration, and snapshot test suites |
+| [New-model onboarding](new-model-onboarding.md) | Every layer a model id must be added to before a user sees it, and the tests that catch drift |
 | [Workspace layout](workspace-layout.md) | Product families, shared package groups, and placement rules |
 | [Release process](release.md) | Versioning, pre-tag verification checklist, and tag/publish workflow |
 | [Documentation governance](../governance/documentation/core/index.md) | Standardized rules for organizing, writing, and reviewing docs |
@@ -11,6 +12,7 @@
 ## Architecture
 
 - [Crate layering](../explanation/crate-layering.md) — the workspace crate topology, each layer's responsibility, and the dependency DAG
+- [Model catalog architecture](../architecture/model-catalog.md) — the living blueprint for model membership, capability resolution, catalog refresh, and the picker
 - [Persistence and the XDG layout](../explanation/persistence.md) — why every persistent path flows through the central `Dirs` layer and the four-category split
 - [Harness architecture](../explanation/agent-design/harness.md) — control plane, provider calls, autonomous loop
 - [Request flow](../explanation/request-flow.md) — HTTP transactions, SSE streaming, ReAct loop

@@ -48,14 +48,14 @@ The architecture defines the Homogeneous Agent Model (ADR-0183): a single unifie
 
 | Term | Definition |
 |------|------------|
-| **`/schedule` scheduler** | Clock-driven scheduler: schedules a prompt on a cron expression (recurring) or a countdown / absolute-time (one-shot), stores jobs durably as session-scoped `ScheduledJob` state, fires a fresh round per tick, drops once-jobs after firing, and auto-expires recurring jobs after 30 days. |
-| **`/repeat`** | Cron-only alias for `/schedule`, retained for the recurring-cron use case. |
+| **Timer task** | The fabric's clock arm (`JobSpec::Timer`): it publishes its digest as a completed outcome at fire time and re-arms itself for recurring use; it never executes a command line. No tool arms one today, and the former `/schedule` and `/repeat` schedulers (session-scoped `ScheduledJob` state, fresh round per tick) were removed with their internals. [ADR-0190](../adr/0190-agent-as-actor-unified-task-fabric.md), [ADR-0234](../adr/0234-authorized-background-job-continuations.md) |
+| **background job** | Work handed to the job fabric — `run_command` with `background: true` (bounded, `JobKind::Interactive`) or `service: true` (long-lived, readiness-reported) — identified by a `job_id` and controlled through the `process` tool (`status`/`logs`/`wait`/`kill`). Settling publishes a task event; it does not resume the model's turn ([ADR-0212](../adr/0212-decouple-followup-queue-and-authoritative-task-bar.md), [ADR-0234](../adr/0234-authorized-background-job-continuations.md)) |
 
 ## Task list
 
 | Term | Definition |
 |------|------------|
-| **todo list** | The single source of truth for remaining work, shared with `todo`/`todo_update`, shown in the Activity modal, and persisted across restarts. The model populates it directly; there is no longer a plan tool that seeds it. [ADR-0020](../adr/0020-unified-task-list.md) |
+| **todo list** | The single source of truth for remaining work, shared with `todo`/`todo_update`, and persisted across restarts. The model populates it directly; there is no longer a plan tool that seeds it. The TUI renders it on the `write_todos` tool step. [ADR-0020](../adr/0020-unified-task-list.md) |
 | **stop-gate** | The round-exit forcing function: any `Stop` hooks. It is the only gate that can refuse a round ending and force one more turn. [Harness architecture](../explanation/agent-design/harness.md) |
 
 ## Sub-Agents and Delegation
@@ -105,7 +105,7 @@ before the round runs.
 |------|------------|
 | **`@file:` mention** | Implicit file-content injection: `@file:src/main.rs` (or `@files:…`) reads that file and appends its contents as a hidden user message, so the model sees the source without an explicit `read_text` call. Sandboxed to the workspace root (symlink-hardened: absolute paths and `..` are rejected), capped at 50 KB per file and 10 files per round. Rejections surface as a hidden error note so the model learns why and can recover. |
 | **`@skill:` mention** | Disambiguated skill mention: `@skill:name` / `@skills:name` (plural mirrors `@files:`) load the named skill as a hidden user message, alongside the bare `@name` and `skill://…` forms. See [Skills](#skills) |
-| **`@principal:` mention** | Runtime role switch: `@principal:architect` (code / architect / reviewer / security) switches the active principal role for the round — same effect as `/principal <role>`. [Slash commands](commands.md#principal) |
+| **`/persona`** | Switch the active persona — identity *and* capability in one switch: `code` (default developer master), `architect`, `reviewer`, `security`, `code_analyst`, `conversational`. Aliases: `/role`, `/master`. [Slash commands](commands.md#persona) |
 | **`@path` mention** | TUI completion trigger only: typing `@` opens path completion; the `@` is dropped on accept. Not an injection form. [Input box](tui/input-box.md) |
 
 ## TUI surfaces
@@ -147,7 +147,7 @@ before the round runs.
 | **`ModelRequest`** | The immutable core contract carrying provider-visible messages and admitted tool declarations together for one call. [ADR-0061](../adr/0061-atomic-model-request-boundary.md) |
 | **`Channel`** | The fully resolved materialization of one derived route: credentials, model id, protocol, and optional provider-scoped remote metadata. [Model Metadata](model-metadata.md) |
 | **effort** | Reasoning **depth** — the per-model "how hard should it think" knob (`none`…`max`), abstracted from every provider's depth field onto one ladder. Orthogonal to thinking on/off. [Reasoning effort](effort.md) |
-| **thinking** | The reasoning on/off switch (an Anthropic/DeepSeek concept), distinct from effort (depth). [Model Metadata](model-metadata.md#thinking-support) |
+| **thinking** | The reasoning on/off switch (an Anthropic/DeepSeek concept), distinct from effort (depth). [Reasoning effort](effort.md) |
 | **wire protocol** | The inference API a route speaks: `chat-completions`, `responses`, `anthropic-messages`, or `google-gemini`. A connection may override the provider's default `protocol`. [Providers](providers.md#implemented-inference-protocols) |
 | **model catalog** | Centralized provider-construction factory; every provider id materializes into a `Channel`, so startup and runtime switching share one resolution source. [ADR-0005](../adr/0005-strict-layering-and-renames.md) |
 | **`RetryableError`** | The marker type wrapping transient provider errors; prefixed `[MUTA_RETRYABLE]`. [Providers](providers.md) |

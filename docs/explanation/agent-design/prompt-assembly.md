@@ -118,7 +118,7 @@ never replayed (see
 Code structure is not delivered through this channel. Earlier designs projected
 an automatic repository outline into every request; that ambient map is removed.
 The model retrieves structure on demand through the scoped, bounded
-`get_outline` tool, and optional change reminders are not a back door that
+`code_query` tool, and optional change reminders are not a back door that
 rebuilds repository structure during assembly. See
 [ADR-0213](../../adr/0213-model-request-composition-and-context-lifecycle.md) and
 [ADR-0214](../../adr/0214-on-demand-code-structure-context-and-mutation-freshness.md).

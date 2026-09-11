@@ -1,7 +1,7 @@
 # Filesystem tools
 
 Read and mutate files and directory listings. `read_text`, `read_image`,
-`find_files`, `list_dir`, `get_outline`, and `search_text` are `Read`;
+`find_files`, `list_dir`, `code_query`, and `search_text` are `Read`;
 `write_file` and `edit_text` are `Write`. Source:
 `crates/muta-agent/src/tools/`.
 
@@ -52,6 +52,28 @@ works across kimi / GLM / OpenAI / Gemini.
 | `old_string` | string | yes | Exact verbatim text block to replace; must match uniquely |
 | `new_string` | string | yes | Replacement text to insert in place of `old_string` |
 
+### Mutation outcomes and syntax warnings
+
+Both mutation tools write through the execution-environment filesystem before
+reporting syntax diagnostics. Malformed JSON, TOML, and supported source-language
+content is written successfully, including new files, overwrites, and partial
+repairs of already-invalid files. Intermediate invalid states are allowed; no
+skip parameter is required or provided.
+
+All successful results retain `ToolOutput::Patch` and its rich diff. Parser
+diagnostics populate its `warnings` string array (omitted when empty; older
+payloads default to empty), with `Write succeeded` and an explicit
+`Warning (non-blocking syntax diagnostic)`. The UI displays warnings alongside
+the diff; model-facing and legacy text output include them with the patch summary.
+Warnings describe the committed candidate and do not roll it back. Repair the file in subsequent edits. Unsupported
+formats are not claimed to be validated; syntax checks are not compilation or
+type checking.
+
+Argument validation, path authorization, unique matching, and filesystem failures
+remain hard errors. Failed writes do not produce success warnings. The
+code-intelligence extension does not veto syntax errors. Policy:
+[ADR-0233](../../adr/0233-non-blocking-mutation-syntax-diagnostics.md).
+
 ## `find_files`
 
 | Parameter | Type | Required | Default | Notes |
@@ -84,21 +106,53 @@ Runs in-process with Rust's `regex` engine (escaped by default for safe literal 
 library; it does not spawn an `rg` executable. Output is capped at about 32 KB,
 and each file contributes at most 50 matches.
 
-## `get_outline`
+## `code_query`
 
-| Parameter | Type | Required | Notes |
-|-----------|------|----------|-------|
-| `path` | string | yes | Source file path (`.rs`, `.ts`, `.js`, `.py`, `.c`, `.cpp`, `.go`); relative paths use primary workspace |
+One tool, three modes, one parser. `outline` summarises a file; `symbol`
+returns a declaration's source; `find` locates declarations by kind and name
+across a scope.
 
-Returns the top-level syntactic symbols of one file — a navigation aid, not a
-full AST, type analysis, or dependency proof. The tool reads the current bytes
-at call time, reports a content-addressed version identity for the snapshot it
-described, and bounds both the input (2 MiB) and the rendered output (200
-symbols / 16 KiB). Truncation and unsupported analysis are stated in the
-result.
+| Parameter | Type | Required | Default | Notes |
+|-----------|------|----------|---------|-------|
+| `mode` | string | yes | — | `outline`, `symbol`, or `find` |
+| `path` | string | no | `.` | File for `outline`/`symbol`; file or directory scope for `find` |
+| `symbol` | string | for `symbol` | — | Declaration name, optionally container-qualified (`Service::run`) |
+| `pattern` | string | for `find` | — | `kind[:name-glob]` clauses, comma/space separated and ORed |
+| `limit` | integer | no | `200` | Entry cap; maximum `1000` |
+| `budget` | integer | no | `16384` | Result byte cap; maximum `131072` |
+
+```text
+pattern := clause ( ( ',' | whitespace ) clause )*
+clause  := kind [ ':' name_glob ]
+kind    := fn | method | struct | enum | trait | impl | class
+         | interface | type | const | static | mod | macro
+```
+
+The kind vocabulary is **closed**: the model never writes a tree-sitter query,
+so a wrong kind is rejected with the legal list named rather than failing as a
+malformed S-expression. `name_glob` supports `*` and `?` only. The `fn` clause
+also matches `method`, so a caller need not know whether a function sits inside
+an `impl` or `class`; `method` stays exact.
+
+Results are a syntactic summary — never a complete AST, type analysis, or
+dependency proof:
+
+- **Bounded.** Input is capped at 2 MiB per file and a scope-wide `find` scans
+  at most 2000 files / 64 MiB; output is capped by `limit` and `budget`. Every
+  truncation is disclosed, and each file from `find`/`symbol` is capped at 400
+  lines.
+- **Versioned.** Every result carries the content-addressed version of the
+  bytes it described. That version is the value `edit_text` and `write_file`
+  accept as `expected_version`.
+- **Honest.** Unsupported extensions, oversized inputs, and empty scopes are
+  reported as such; nothing is silently clipped or silently empty.
+
+Relative paths resolve against the primary workspace, and a scope-wide query
+walks through the shared ignore rules (`find_files` / `search_text`), so it
+never wades into build output or vendored trees.
 
 Code structure enters model context only through this scoped, on-demand query:
-no facet projects an automatic repository-wide map, and a returned outline is
+no facet projects an automatic repository-wide map, and a returned result is
 history-bearing evidence that is not rewritten when the source later changes.
 See [Model context](../../explanation/agent-design/model-context.md).
 
