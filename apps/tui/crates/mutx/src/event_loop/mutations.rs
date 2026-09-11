@@ -209,6 +209,16 @@ pub(crate) enum ChromeEdit {
     RoundEnded,
     /// The turn finished; performance snapshot for the Activity modal.
     TurnPerformance(Box<muta_contracts::TurnPerformanceSnapshot>),
+    /// The session's in-flight model request was retried (`RetryScheduled`):
+    /// publish the setback clause beside its phase.
+    ///
+    /// There is no clear counterpart, and that is the point (ADR-0235): the
+    /// clause is retired by the *next phase write* for this session
+    /// ([`SessionChrome::set_phase`]), so the producer states the fact and
+    /// forgets it. A producer that could clear it would reintroduce the
+    /// hand-maintained "events that mean the retry is over" list that let the
+    /// clause outlive its setback.
+    TransportSetback(Box<ProviderRetryState>),
 }
 
 /// Everything the response translator (and monitor client) can ask the event
@@ -238,7 +248,14 @@ pub(crate) enum AppMutation {
     SetRoundCount(u64),
     SetCurrentTurn(u64),
     SetRoundStartedAt(Option<std::time::Instant>),
-    SetProviderRetry(Option<ProviderRetryState>),
+    /// Publish the primary session's transport setback (provider retry
+    /// countdown) beside its phase.
+    ///
+    /// Not an `Option`: the clause cannot be "set to nothing" because clearing
+    /// it here is precisely how the bar went stale (ADR-0235). It is retired by
+    /// the next [`AppMutation::SetPhase`] that is not `AwaitingModel` — the one
+    /// writer that sees every phase move.
+    SetProviderRetry(ProviderRetryState),
 
     // Human-in-the-loop queues.
     QueuePermission {

@@ -118,13 +118,9 @@ pub(crate) const MODEL_BAR_ROWS: u16 = 1;
 /// justified halves mirror each other (matching the composer's prompt
 /// prefix feel).
 pub(crate) const MODEL_BAR_INNER_PADDING: usize = 1;
-/// Minimum gap between the left-anchored gauge cluster (context usage,
-/// stream rate) and the right-pinned model-identity cluster.
+/// Minimum gap between the left-anchored gauge cluster (context usage)
+/// and the right-pinned model-identity cluster.
 pub(crate) const MODEL_BAR_GAP_MIN: usize = 2;
-/// Gap between adjacent gauge segments (context usage, stream rate) in the
-/// row's left cluster. These metrics are peers in the telemetry cluster, so
-/// their gap sits at 1 column, tighter than or equal to the separation before the keycap hint.
-pub(crate) const MODEL_BAR_SEGMENT_GAP: usize = 1;
 /// Gap *inside* the model-identity group (`model effort @instance`) — these
 /// three tokens read as one identity, so they sit tighter than the gap
 /// between the identity group and the context-usage segment.
@@ -186,13 +182,6 @@ pub(crate) const FOOTER_TOP_GAP_ROWS: u16 = 0;
 /// `ViewHints::has_content`), so the common cases render a single-row band
 /// and the transcript reclaims the line.
 pub(crate) const PAGE_HEADER_ROWS: u16 = 2;
-
-/// Height of the Subagent page's permanent key-legend footer. Three rows on the
-/// page background: a top and bottom blank padding row around a middle row
-/// that carries the actual shortcuts (`Esc back`, `[ prev`, `] next` — the
-/// page's own navigation only; the global `F1 help` pair lives on no
-/// persistent chrome, ADR-0104).
-pub(crate) const SUBAGENT_FOOTER_ROWS: u16 = 3;
 
 /// Horizontal inset applied to the footer area containing status/composer/hints.
 pub(crate) const FOOTER_H_INSET: u16 = TRANSCRIPT_H_INSET;

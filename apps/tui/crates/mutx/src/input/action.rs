@@ -368,10 +368,6 @@ pub enum InputAction {
     HistoryPrev,
     /// Navigate history down.
     HistoryNext,
-    /// Legacy destructive recall (pop the newest queue item into the
-    /// composer). Kept for the queue modal's explicit pull-to-composer re-edit,
-    /// where removing the item from the list *is* the point.
-    RecallQueued,
     /// Re-edit the queue modal's *selected* item (not always the newest):
     /// recall it into the composer and close the modal. Bound to `Enter`
     /// inside the queue modal. The queue is auto-blocked on modal open, so

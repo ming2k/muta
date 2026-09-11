@@ -101,31 +101,6 @@ pub(crate) fn compose_target_for_extension(
     }
 }
 
-/// Derive the compose target from current state (legacy adapter forwarding to [`compose_target_for_extension`]).
-#[allow(dead_code)]
-pub(crate) fn compose_target(
-    busy: bool,
-    send_mode: Option<crate::app::ComposerSendMode>,
-    is_slash: bool,
-    completion_active: Option<crate::completion::CompletionKind>,
-    is_history_search: bool,
-) -> ComposeTarget {
-    let ext = if is_history_search {
-        Some(crate::composer_extension::ComposerExtensionKind::HistorySearch)
-    } else {
-        match completion_active {
-            Some(crate::completion::CompletionKind::Slash) => {
-                Some(crate::composer_extension::ComposerExtensionKind::SlashCompletion)
-            }
-            Some(crate::completion::CompletionKind::Path) => {
-                Some(crate::composer_extension::ComposerExtensionKind::PathCompletion)
-            }
-            _ => None,
-        }
-    };
-    compose_target_for_extension(busy, send_mode, is_slash, ext, false)
-}
-
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ComposerHints {
     pub compose_target: ComposeTarget,
@@ -162,7 +137,7 @@ impl Default for ComposerHints {
 
 /// Build the composer's hint row separated into left and right spans.
 ///
-/// The chord set (and its labels) come from the Session view's own scheme
+/// The chord set (and its labels) come from the Conversation scene's own scheme
 /// (`session::live_chat_hints`, ADR-0172): what the row advertises is exactly
 /// what `resolve_chat_surface_key` handles, so a hint can never drift from a
 /// dead shortcut. Only the *presentation* — which side a chord lands on, the
@@ -309,27 +284,6 @@ pub(crate) fn hint_row_parts(
     }
 
     (left, right)
-}
-
-/// Build the composer's combined hint row.
-#[allow(dead_code)]
-pub(crate) fn hint_row_spans(
-    can_retry: bool,
-    density: ActionDensity,
-    target: ComposeTarget,
-    theme: &Theme,
-    bg: Color,
-    toggle_mode_key: crate::keymap::Key,
-) -> Vec<Span<'static>> {
-    let (left, right) = hint_row_parts(can_retry, density, target, theme, bg, toggle_mode_key);
-    if left.is_empty() {
-        right
-    } else {
-        let mut spans = left;
-        spans.push(Span::styled("   ", Style::default().bg(bg)));
-        spans.extend(right);
-        spans
-    }
 }
 
 #[cfg(test)]

@@ -166,6 +166,9 @@ pub struct DashboardProps<'a> {
     pub prompt_create_new: bool,
     pub prompt_text: &'a str,
     pub current_session_id: &'a str,
+    // The frame-level caret verdict (ADR-0205): the inline prompt borrows the
+    // composer buffer but owns the cursor through this scene's own footer band.
+    pub show_caret: bool,
 }
 
 /// Draw the full-screen dashboard view.
@@ -186,6 +189,7 @@ pub fn draw_dashboard(
         prompt_create_new,
         prompt_text,
         current_session_id,
+        show_caret,
     } = props;
     // A true full-screen surface: clear the whole frame and paint our own
     // backdrop, then lay out inside the viewport margins.
@@ -288,6 +292,7 @@ pub fn draw_dashboard(
         prompt_text,
         theme,
         false,
+        show_caret,
     );
 
     DashboardRects {
@@ -697,6 +702,11 @@ fn render_footer(
     prompt_text: &str,
     theme: &Theme,
     keymap_page: bool,
+    // The frame-level caret verdict (ADR-0205): the Dashboard's inline prompt
+    // borrows the composer buffer but owns the cursor through its own footer
+    // band, so this flag comes from `App::caret_owner() == CaretOwner::Scene`
+    // rather than from `prompting` alone.
+    show_caret: bool,
 ) {
     if rect.height == 0 || rect.width < 10 {
         return;
@@ -741,6 +751,20 @@ fn render_footer(
                 blank.clone()
             };
             frame.render_widget(Paragraph::new(line), Rect::new(rect.x, y, rect.width, 1));
+        }
+
+        // The field is append-only (there is no caret motion inside a scene
+        // prompt), so the caret rests flush after the typed text — measured
+        // through the same `unicode_width` pass the spans were painted with,
+        // and clamped to the band so a long task line never spills past the
+        // right edge.
+        if show_caret {
+            let lead = "   ".width() + label.width() + prompt_text.width();
+            let cursor_x = rect
+                .x
+                .saturating_add(lead.min(u16::MAX as usize) as u16)
+                .min(rect.right().saturating_sub(1));
+            frame.set_cursor_position((cursor_x, mid));
         }
         return;
     }

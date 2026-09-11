@@ -504,6 +504,12 @@ impl App {
         }
 
         // Scene layer: the composer owns the caret unless blurred by step/browse focus
+        if self.current_scene() == crate::surfaces::SceneKind::Dashboard && self.host_prompting {
+            // The Dashboard's inline prompt borrows the composer buffer but
+            // renders in the scene's own footer band, so the scene — not the
+            // composer — owns the cursor while it is open.
+            return CaretOwner::Scene;
+        }
         if self.current_scene() != crate::surfaces::SceneKind::Conversation
             || self.focused_target.is_some()
             || self.transcript_focused
@@ -696,7 +702,7 @@ impl App {
     }
 
     /// Tear down the input-injection modal's borrowed state: hand the parked
-    /// composer draft back. Does **not** touch `active_modal`.
+    /// composer draft back. Does **not** touch the overlay stack.
     pub fn restore_input_draft(&mut self) {
         self.input = std::mem::take(&mut self.injection_stashed_input);
         self.set_cursor_end();

@@ -96,7 +96,11 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
         }
 
         AppMutation::SetPhase(phase) => {
-            app.phase = phase;
+            // The primary's half of the setback-clause lifetime: this mirror is
+            // written by every primary phase move, so retiring the clause here
+            // is what makes "the clause ends with its phase" true by
+            // construction (ADR-0235).
+            app.set_phase(phase);
             true
         }
         AppMutation::SetResponding(responding) => {
@@ -118,7 +122,7 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             true
         }
         AppMutation::SetProviderRetry(retry) => {
-            app.provider_retry = retry;
+            app.provider_retry = Some(retry);
             true
         }
 
@@ -870,20 +874,20 @@ fn apply_chrome(app: &mut App, session_id: &str, edit: ChromeEdit) {
                     chrome.round_started_at = Some(std::time::Instant::now());
                 }
                 if chrome.phase.is_none() {
-                    chrome.phase = Some(Phase::Preparing);
+                    chrome.set_phase(Some(Phase::Preparing));
                 }
             } else {
-                chrome.phase = None;
+                chrome.set_phase(None);
                 chrome.current_turn = 0;
                 chrome.round_started_at = None;
             }
         }
         ChromeEdit::ActivityFolded(phase) => {
-            chrome.phase = Some(phase);
+            chrome.set_phase(Some(phase));
             chrome.responding = true;
         }
         ChromeEdit::PhaseOnly(phase) => {
-            chrome.phase = phase;
+            chrome.set_phase(phase);
         }
         ChromeEdit::StreamStarted => {
             chrome.responding = true;
@@ -891,22 +895,28 @@ fn apply_chrome(app: &mut App, session_id: &str, edit: ChromeEdit) {
                 chrome.round_started_at = Some(std::time::Instant::now());
             }
             if !matches!(chrome.phase, Some(Phase::Reasoning | Phase::Answering)) {
-                chrome.phase = Some(Phase::Answering);
+                chrome.set_phase(Some(Phase::Answering));
             }
         }
         ChromeEdit::TurnStarted { round, turn } => {
             chrome.round_count = round;
             chrome.current_turn = turn;
-            chrome.phase = Some(Phase::AwaitingModel);
+            chrome.set_phase(Some(Phase::AwaitingModel));
         }
         ChromeEdit::RoundEnded => {
-            chrome.phase = None;
+            chrome.set_phase(None);
             chrome.responding = false;
             chrome.current_turn = 0;
             chrome.round_started_at = None;
         }
         ChromeEdit::TurnPerformance(performance) => {
             chrome.last_turn_performance = Some(*performance);
+        }
+        ChromeEdit::TransportSetback(setback) => {
+            // Publish-only: the clause is retired by this session's next phase
+            // write (`SessionChrome::set_phase`), never by another mutation
+            // (ADR-0235).
+            chrome.transport_setback = Some(*setback);
         }
     }
 }

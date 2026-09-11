@@ -15,6 +15,12 @@
 //!    rides beside the phase as a dim annotation and owns no label slot.
 //! 3. Unknown future labels degrade to [`Phase::Other`] instead of being
 //!    dropped — the bar never goes blank just because a new label shipped.
+//! 4. A transport setback clause is **owned by the transport-wait phase**: it
+//!    is live exactly while its session's phase is [`Phase::AwaitingModel`],
+//!    and ends with the first phase write that says anything else
+//!    ([`ends_transport_setback`]). No producer retires the clause, which is
+//!    what keeps a wire event this fold has not learned yet from leaving a
+//!    dead clause on the bar.
 
 use std::borrow::Cow;
 
@@ -152,6 +158,26 @@ impl Phase {
     }
 }
 
+/// Whether writing this phase ends the transport-setback clause of the session
+/// it belongs to (design rule 4, ADR-0235).
+///
+/// A setback clause sells one thing: *the model request in flight for this
+/// phase did not land*. Only [`Phase::AwaitingModel`] can host that claim.
+/// Every other value — `Answering`, `Reasoning`, `Tool(_)`, `Finalizing`,
+/// `AwaitingUser`, `Other(_)`, and `None` (the round is over) — is evidence
+/// that something *did* land, so the annotation is spent and must go.
+///
+/// Deriving the end from the phase, rather than clearing the clause in each
+/// progress arm of the response translator, is what makes the lifetime
+/// complete: the wire vocabulary is deliberately open ([`Phase::Other`] exists
+/// so a new backend label never blanks the bar), so any hand-maintained list of
+/// "events that retry" is one shipped event away from leaving a stale clause on
+/// screen — while every activity fact the bar can *display* necessarily moves
+/// the phase.
+pub fn ends_transport_setback(phase: Option<&Phase>) -> bool {
+    phase != Some(&Phase::AwaitingModel)
+}
+
 fn tool_verb(name: &str) -> ToolVerb {
     match name {
         "find_files" | "list_dir" | "read_image" | "read_text" | "use_skill" | "read_url" => {
@@ -229,5 +255,34 @@ mod tests {
     fn gate_phases_report_attention() {
         assert!(Phase::AwaitingUser.is_gate());
         assert!(!Phase::AwaitingModel.is_gate());
+    }
+
+    /// Design rule 4 (ADR-0235): the transport-wait phase hosts the setback
+    /// clause; every other phase — including idle — ends it. This is the only
+    /// statement of the clause's lifetime, so it is pinned here.
+    #[test]
+    fn only_the_transport_wait_phase_hosts_a_setback_clause() {
+        assert!(!ends_transport_setback(Some(&Phase::AwaitingModel)));
+
+        for phase in [
+            Phase::Queued,
+            Phase::Preparing,
+            Phase::Reasoning,
+            Phase::Answering,
+            Phase::Finalizing,
+            Phase::Tool(ToolVerb::Running),
+            Phase::AwaitingUser,
+            Phase::Other("some new backend label".into()),
+        ] {
+            assert!(
+                ends_transport_setback(Some(&phase)),
+                "{phase:?} is progress, so it ends the setback clause"
+            );
+        }
+
+        assert!(
+            ends_transport_setback(None),
+            "idle means the retrying round is over"
+        );
     }
 }

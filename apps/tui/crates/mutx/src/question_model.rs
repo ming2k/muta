@@ -1169,6 +1169,7 @@ mod tests {
                 // Slot-anchored sheet (ADR-0173 §3): the bottom band of the
                 // terminal, as if the composer slot it replaces sat there.
                 mutx_engine::Rect::new(0, height * 5 / 8, width, height * 3 / 8),
+                true,
                 &Theme::default(),
             );
         });

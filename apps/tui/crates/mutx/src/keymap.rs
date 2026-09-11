@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::surfaces::{DialogKind, SceneKind};
+use crate::surfaces::DialogKind;
 
 // Canonical key vocabulary and display formatting
 
@@ -773,19 +773,20 @@ pub enum Availability {
 }
 
 /// Snapshot of application state passed to availability predicates.
+///
+/// Every field here must be **read** by an availability predicate below —
+/// this is deliberately a narrow projection, not a mirror of `App`. Layering
+/// questions (which scene, which overlay) are answered by
+/// `App::current_scene()` / `App::surfaces` / `App::caret_owner()` at the
+/// point of use, so they are not duplicated here.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AppContext {
-    pub active_scene: SceneKind,
     pub has_overlay: bool,
     pub active_dialog: Option<DialogKind>,
     pub is_responding: bool,
-    pub has_input: bool,
     pub has_selection: bool,
     pub has_running_task: bool,
-    pub in_subagent_view: bool,
-    pub in_side_view: bool,
     pub queue_count: usize,
-    pub has_focused_target: bool,
 }
 
 /// Authoritative declaration of a single application command.
@@ -1038,7 +1039,7 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         hint: "/queue",
         category: CommandCategory::Navigate,
         scope: Scope::Global,
-        bindings: &[],
+        bindings: &[Key::CTRL_Q],
         slash: Some("/queue"),
         availability: avail_always,
         disclosure: DisclosurePriority::L2Palette,
@@ -1267,7 +1268,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Force full TUI terminal redraw and layout sync",
     },
-
     // Dialog Actions: Sessions
     CommandSpec {
         id: CommandId::SessionOpenSelected,
@@ -1321,7 +1321,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "View session details, token usage, and history",
     },
-
     // Dialog Actions: Models
     CommandSpec {
         id: CommandId::ModelSelect,
@@ -1401,7 +1400,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Fetch updated model list from provider",
     },
-
     // Dialog Actions: Connections
     CommandSpec {
         id: CommandId::ConnectionOpenDetail,
@@ -1494,7 +1492,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Dangerous,
         description: "Remove custom provider connection",
     },
-
     // Dialog Actions: MCP
     CommandSpec {
         id: CommandId::McpToggleServer,
@@ -1522,7 +1519,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Restart and reconnect highlighted MCP server",
     },
-
     // Dialog Actions: Permissions
     CommandSpec {
         id: CommandId::PermissionToggleRule,
@@ -1537,7 +1533,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Toggle rule allow / deny status",
     },
-
     // Dialog Actions: Queue
     CommandSpec {
         id: CommandId::QueueRecallItem,
@@ -1591,7 +1586,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Move highlighted message later in dispatch order",
     },
-
     // Dialog Actions: Telemetry
     CommandSpec {
         id: CommandId::TelemetryTabOverview,
@@ -1658,7 +1652,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Inspect individual round attempt breakdown",
     },
-
     // Dialog Actions: Skills
     CommandSpec {
         id: CommandId::SkillsToggleDetail,
@@ -1673,7 +1666,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Expand or collapse skill documentation",
     },
-
     // Dialog Actions: Asides
     CommandSpec {
         id: CommandId::AsideFocus,
@@ -1714,7 +1706,6 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
         danger: DangerLevel::Safe,
         description: "Reload active aside threads list",
     },
-
     // Dialog Actions: History Search
     CommandSpec {
         id: CommandId::HistorySearchInsert,
@@ -1843,12 +1834,23 @@ fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
         CommandId::CopySelection => Some(Key::CTRL_SHIFT_C),
         CommandId::OpenTelemetry => Some(Key::CTRL_O),
         CommandId::OpenActiveConnectionDetail => Some(Key::CTRL_N),
+        // `Esc` is a real chord, not a placeholder: it is the registry's
+        // declared binding for CancelOrBack and it resolves there. (It is also
+        // the value the display path used to fall back to for *every* chordless
+        // command, which is what made an unbound command look bound.)
+        CommandId::CancelOrBack => Some(Key::ESC),
+        // The queue bar's expand affordance (ADR-0126's Ctrl row). Raw mode
+        // clears `IXON` on both the direct and the multiplexer path, so the
+        // chord reaches the app (ADR-0156 scopes the same reasoning).
+        CommandId::OpenQueue => Some(Key::CTRL_Q),
         _ => None,
     }
 }
 
-/// The canonical resolution table (the 6 hard-bound globals + the model-bar
-/// chords), ignoring user overrides.
+/// The canonical resolution table (the hard-bound globals + the bar chords:
+/// F1 help, Ctrl+P/L palette, Ctrl+O session stats, Ctrl+N connection detail,
+/// Ctrl+Q queue, Esc back, Ctrl+C quit, Ctrl+Shift+C copy), ignoring user
+/// overrides.
 fn canonical_global_key(key: Key) -> Option<CommandId> {
     if key == Key::F1 {
         Some(CommandId::Help)
@@ -1858,6 +1860,8 @@ fn canonical_global_key(key: Key) -> Option<CommandId> {
         Some(CommandId::OpenTelemetry)
     } else if key == Key::CTRL_N {
         Some(CommandId::OpenActiveConnectionDetail)
+    } else if key == Key::CTRL_Q {
+        Some(CommandId::OpenQueue)
     } else if key == Key::ESC {
         Some(CommandId::CancelOrBack)
     } else if key == Key::CTRL_C {
@@ -1995,13 +1999,20 @@ impl GlobalOverrides {
         self.assigned.is_empty()
     }
 
-    /// The chord that should *display* for a command (override, else
-    /// canonical), so hints keep showing the binding that actually fires.
-    pub fn effective_binding(&self, cmd: CommandId) -> Key {
+    /// The chord that should *display* for a command: the user's override
+    /// when one is configured, else the canonical chord — and `None` when the
+    /// command has no chord at all.
+    ///
+    /// Chrome must render the binding that actually fires, and nothing when
+    /// none does (ADR-0238): a keycap is a promise, so there is no fallback
+    /// value here. Returning a placeholder chord for an unbound command is
+    /// exactly how the queue bar came to advertise a `Ctrl-q` that resolved to
+    /// nothing.
+    pub fn effective_binding(&self, cmd: CommandId) -> Option<Key> {
         if let Some((key, _)) = self.assigned.iter().find(|(_, c)| **c == cmd) {
-            return *key;
+            return Some(*key);
         }
-        canonical_global_chord(cmd).unwrap_or(Key::ESC)
+        canonical_global_chord(cmd)
     }
 }
 
@@ -2214,7 +2225,7 @@ mod tests {
         );
         assert_eq!(resolve_global_key(Key::ESC), Some(CommandId::CancelOrBack));
         assert_eq!(resolve_global_key(Key::CTRL_C), Some(CommandId::Quit));
-        assert_eq!(resolve_global_key(Key::CTRL_Q), None);
+        assert_eq!(resolve_global_key(Key::CTRL_Q), Some(CommandId::OpenQueue));
         assert_eq!(
             resolve_global_key(Key::CTRL_SHIFT_C),
             Some(CommandId::CopySelection)
@@ -2377,18 +2388,60 @@ mod tests {
             Some(CommandId::Quit)
         );
         assert_eq!(resolve_global_key_with(Key::CTRL_C, &o), None);
-        assert_eq!(resolve_global_key_with(Key::CTRL_Q, &o), None);
+        // Ctrl+Q was never touched by this override set, so it still fires.
+        assert_eq!(
+            resolve_global_key_with(Key::CTRL_Q, &o),
+            Some(CommandId::OpenQueue)
+        );
         // Unremapped commands keep their canonical behavior.
         assert_eq!(resolve_global_key_with(Key::F1, &o), Some(CommandId::Help));
         // Effective binding follows the override for remapped commands.
-        assert_eq!(o.effective_binding(CommandId::Quit), ctrl_shift_q);
-        assert_eq!(o.effective_binding(CommandId::Help), Key::F1);
+        assert_eq!(o.effective_binding(CommandId::Quit), Some(ctrl_shift_q));
+        assert_eq!(o.effective_binding(CommandId::Help), Some(Key::F1));
+        // A command with no canonical chord reports none — chrome renders no
+        // keycap for it rather than a placeholder (ADR-0238).
+        assert_eq!(o.effective_binding(CommandId::InterruptTask), None);
         // Esc / Back is never remappable.
         let mut esc_map = std::collections::HashMap::new();
         esc_map.insert("cancel".to_string(), "ctrl+k".to_string());
         let o2 = GlobalOverrides::from_config(&esc_map);
-        assert_eq!(o2.effective_binding(CommandId::CancelOrBack), Key::ESC);
+        assert_eq!(
+            o2.effective_binding(CommandId::CancelOrBack),
+            Some(Key::ESC)
+        );
         assert!(o2.is_empty());
+    }
+
+    /// Chrome's keycaps and the dispatcher read one table: every chord a
+    /// `Global` command advertises in the registry resolves back to that exact
+    /// command. This is the guard that would have caught the queue bar's
+    /// hardcoded `Ctrl-q` (ADR-0238).
+    #[test]
+    fn every_advertised_global_binding_resolves_to_its_command() {
+        for cmd in COMMAND_REGISTRY {
+            if cmd.scope != Scope::Global {
+                continue;
+            }
+            for &key in cmd.bindings {
+                assert_eq!(
+                    resolve_global_key(key),
+                    Some(cmd.id),
+                    "registry advertises {key:?} for {:?}, but dispatch resolves it elsewhere",
+                    cmd.id
+                );
+            }
+            // The display path agrees with the dispatch path.
+            let display = GlobalOverrides::default().effective_binding(cmd.id);
+            if !cmd.bindings.is_empty() {
+                assert_eq!(
+                    display,
+                    Some(cmd.bindings[0]),
+                    "{:?} advertises {:?} but would render {display:?}",
+                    cmd.id,
+                    cmd.bindings[0]
+                );
+            }
+        }
     }
 
     #[test]

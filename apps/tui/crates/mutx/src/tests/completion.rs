@@ -533,7 +533,7 @@ fn esc_in_session_info_subpage_backs_out_before_quit_or_close() {
 
 /// Ctrl+C at the `mutx attach` startup picker must quit the program — the
 /// same as Esc and an outside click — NOT drop into an empty session. Regression
-/// for a bug where Ctrl+C closed the modal (`active_modal = None`) but never set
+/// for a bug where Ctrl+C closed the picker (cleared the overlay stack) but never set
 /// `should_quit`, so the user landed in a bare empty chat (which a stray
 /// `/models` then persisted as an empty-session file). Mirrors the event loop's
 /// `CtrlC` arm ordering.

@@ -145,10 +145,17 @@ fn compose_frame(
     };
     // Transport-setback clause: rides beside the status label (never in its
     // slot), counting down while a provider retry backs off.
-    let backoff_clause = app
-        .provider_retry
+    //
+    // Read from the *viewed* session's chrome (ADR-0235): the clause annotates
+    // that session's phase, so a background aside backing off against a
+    // rate-limited upstream cannot paint a countdown onto the primary's bar.
+    // Its lifetime is already over if the phase moved on — `set_phase` retires
+    // it — so this needs no staleness check of its own.
+    let now = std::time::Instant::now();
+    let backoff_clause = viewed_chrome
+        .transport_setback
         .as_ref()
-        .map(|retry| retry.summary(std::time::Instant::now()));
+        .map(|setback| setback.summary(now));
 
     // Compute the displayed input text first so the transcript layout can
     // reserve the right height for a wrapping, growing input box.
@@ -193,6 +200,23 @@ fn compose_frame(
     } else {
         Recess::None
     };
+
+    // The frame-level caret arbitration (ADR-0205). Exactly one layer owns the
+    // physical terminal cursor; every overlay renderer receives this single
+    // verdict (`App::caret_visible` + `App::caret_owner`) instead of
+    // re-deriving it from its own local flags — which is how a suspended
+    // surface could previously park the cursor inside itself while a different
+    // layer was the keyboard foreground.
+    let overlay_owns_caret = app.caret_visible() && app.caret_owner() == crate::CaretOwner::Overlay;
+    let scene_owns_caret = app.caret_visible() && app.caret_owner() == crate::CaretOwner::Composer;
+    // A non-conversation scene's own inline prompt (the Dashboard task line)
+    // owns the cursor through its scene chrome rather than through SceneKeys.
+    let scene_prompt_owns_caret =
+        app.caret_visible() && app.caret_owner() == crate::CaretOwner::Scene;
+    // A scene hint row (head legend, model-bar keycaps) advertises chords that
+    // are suspended the moment an overlay takes the keyboard foreground, so it
+    // is suppressed rather than left dimmed-but-readable behind the backdrop.
+    let scene_chrome_hints = !has_overlay;
 
     // When zoomed into a Subagent, render its child messages and
     // show a contextual first-row header; otherwise render the
@@ -348,6 +372,12 @@ fn compose_frame(
                     }),
                     blocked: app.pending_count(viewed_session_id) > 0
                         && app.is_queue_blocked(viewed_session_id),
+                    // The legend's keycap comes from the registry, never a
+                    // literal: the bar can only advertise a chord that fires
+                    // (ADR-0238).
+                    expand_key: app
+                        .key_overrides
+                        .effective_binding(crate::keymap::CommandId::OpenQueue),
                 },
                 tasks_bar: render::TasksBarProps {
                     tasks: &app.background_tasks,
@@ -355,7 +385,11 @@ fn compose_frame(
                 persistence_health: app.persistence_health.as_ref(),
                 subagent_bar,
                 side_banner,
-                page_hints: Some(page_hints),
+                // ADR-0205: a head legend advertises scene chords, which are
+                // suspended the moment an overlay takes the keyboard
+                // foreground — so the row is withheld rather than left
+                // dimmed-but-readable behind the backdrop.
+                page_hints: scene_chrome_hints.then_some(page_hints),
                 session_head: Some(render::SessionHead {
                     session_id: viewed_session_id,
                     workspace: &app.current_workspace,
@@ -453,12 +487,6 @@ fn compose_frame(
                     reasoning_effort: hint_reasoning,
                     context_tokens: app.context_tokens.map(|snapshot| snapshot.tokens),
                     context_window: app.active_model_context_window(),
-                    last_turn_tps: viewed_chrome
-                        .last_turn_performance
-                        .and_then(|sample| sample.stream_tps()),
-                    last_turn_ttft_ms: viewed_chrome
-                        .last_turn_performance
-                        .and_then(|sample| sample.ttft_ms()),
                     ignition_elapsed_ms: app
                         .effort_ignition_epoch
                         .map(|epoch| epoch.elapsed().as_millis()),
@@ -468,7 +496,6 @@ fn compose_frame(
             )
         });
         for (key, rect) in [
-            (UiKey::Performance, model_bar_rects.performance),
             (UiKey::Context, model_bar_rects.context),
             (UiKey::Connection, model_bar_rects.connection),
         ] {
@@ -556,9 +583,8 @@ fn compose_frame(
             // composer panel until a composer click or a keystroke
             // hands it back.
             let step_focused = app.focused_target.is_some() || app.transcript_focused;
-            let composer_owns_caret = app.caret_owner() == crate::CaretOwner::Composer;
-            let show_caret = app.caret_visible() && composer_owns_caret;
-            let composer_focused = !step_focused && (!has_overlay || composer_owns_caret);
+            let show_caret = scene_owns_caret && !step_focused;
+            let composer_focused = !step_focused && (!has_overlay || scene_owns_caret);
             // A fully-typed known `/command` is painted in bold +
             // accent color so it reads as a resolved command
             // rather than prose; an unmatched `/`-prefix keeps
@@ -742,6 +768,7 @@ fn compose_frame(
                         app.question_modal_follow,
                         app.pending_question_depth,
                         question_rect,
+                        overlay_owns_caret,
                         &app.theme,
                     );
                 }
@@ -866,6 +893,7 @@ fn compose_frame(
                             scroll: &mut app.model_scroll,
                             follow_selection: app.model_modal_follow,
                             search: app.model_search,
+                            show_caret: overlay_owns_caret,
                             connection_info_detail: app.connection_info_detail,
                             connection_detail: app.connection_detail.as_ref(),
                             connection_info_scroll: &mut app.connection_info_scroll,
@@ -891,6 +919,7 @@ fn compose_frame(
                             scroll: &mut app.model_scroll,
                             follow_selection: app.model_modal_follow,
                             search: app.model_search,
+                            show_caret: overlay_owns_caret,
                             refreshing: app.models_refreshing,
                             spinner_phase,
                         },
@@ -920,20 +949,15 @@ fn compose_frame(
                 }
                 DialogKind::Help => {
                     let app_ctx = crate::keymap::AppContext {
-                        active_scene: app.current_scene(),
                         has_overlay: app.surfaces.active_overlay().is_some(),
                         active_dialog: app.surfaces.underlying_dialog(),
                         is_responding: viewed_running,
-                        has_input: !app.input.is_empty(),
                         has_selection: !matches!(
                             app.selection,
                             crate::model::selection::SelectionState::None
                         ),
                         has_running_task: viewed_running,
-                        in_subagent_view: app.in_subagent_view(),
-                        in_side_view: app.in_side_view,
                         queue_count: app.pending_dispatch.len(),
-                        has_focused_target: app.focused_target.is_some(),
                     };
                     Some(render::draw_help_modal(
                         f,
@@ -1076,23 +1100,18 @@ fn compose_frame(
                 )),
                 DialogKind::Switcher => {
                     let app_ctx = crate::keymap::AppContext {
-                        active_scene: app.current_scene(),
                         has_overlay: app.surfaces.active_overlay().is_some(),
                         active_dialog: app
                             .surfaces
                             .underlying_dialog()
                             .or_else(|| app.active_dialog()),
                         is_responding: viewed_running,
-                        has_input: !app.input.is_empty(),
                         has_selection: !matches!(
                             app.selection,
                             crate::model::selection::SelectionState::None
                         ),
                         has_running_task: viewed_running,
-                        in_subagent_view: app.in_subagent_view(),
-                        in_side_view: app.in_side_view,
                         queue_count: app.pending_dispatch.len(),
-                        has_focused_target: app.focused_target.is_some(),
                     };
                     let entries = crate::overlays::command_palette::filter_palette_commands(
                         &app.command_palette_query,
@@ -1100,8 +1119,8 @@ fn compose_frame(
                         &app.recent_commands,
                         &app_ctx,
                     );
-                    let show_caret = app.caret_visible()
-                        && app.caret_owner() == crate::CaretOwner::Overlay;
+                    let show_caret =
+                        app.caret_visible() && app.caret_owner() == crate::CaretOwner::Overlay;
                     Some(crate::overlays::draw_command_palette(
                         f,
                         crate::overlays::command_palette::CommandPaletteProps {
@@ -1131,6 +1150,7 @@ fn compose_frame(
                             &app.input,
                             app.cursor_position,
                             !endpoint,
+                            overlay_owns_caret,
                             &app.theme,
                         ))
                     } else {
@@ -1169,6 +1189,7 @@ fn compose_frame(
                             app.cursor_position,
                             !app.editor_model_settings_only,
                             app.editor_field,
+                            overlay_owns_caret,
                             effort,
                             &effort_levels,
                             thinking,
@@ -1239,6 +1260,7 @@ fn compose_frame(
                         f,
                         &app.theme,
                         &mut app.custom_scroll,
+                        overlay_owns_caret,
                     ))
                 }
                 _ => None,
@@ -1263,6 +1285,7 @@ fn compose_frame(
                         prompt_create_new: app.host_prompt_new,
                         prompt_text: &app.input,
                         current_session_id: viewed_session_id,
+                        show_caret: scene_prompt_owns_caret,
                     },
                     &app.theme,
                 );

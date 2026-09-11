@@ -237,10 +237,7 @@ pub(crate) fn build_attempt_inspector_body(
             .into_iter()
             .flatten()
             .collect();
-            (
-                format!("cold start: {}", phases.join(" + ")),
-                accent(theme),
-            )
+            (format!("cold start: {}", phases.join(" + ")), accent(theme))
         };
         timeline.node(
             Some(base_ms + us_to_s(connected_us)),

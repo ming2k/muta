@@ -524,6 +524,7 @@ fn edit_text_diff_renders_from_structured_patch() {
             old: "let x = 1;".into(),
             new: "let x = 2;".into(),
             start_line: 0,
+            warnings: Vec::new(),
         },
         true,
     );
@@ -560,11 +561,13 @@ fn write_file_expanded_renders_diff_with_additions() {
             old: String::new(),
             new: "pub fn hello() -> &'static str {\n    \"world\"\n}".into(),
             start_line: 0,
+            warnings: vec!["non-blocking syntax diagnostic: example warning".into()],
         },
         true,
     );
     let rendered = render_grid(&m, 80, 20);
 
+    assert!(rendered.contains("Warning: non-blocking syntax diagnostic: example warning"));
     assert!(rendered.contains("Write src/lib.rs +3"));
     assert!(rendered.contains("+ pub fn hello() -> &'static str {"));
     assert!(rendered.contains("+     \"world\""));
@@ -646,6 +649,7 @@ fn render_transcript_frame(
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,

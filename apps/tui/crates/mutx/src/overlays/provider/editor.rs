@@ -243,6 +243,9 @@ pub fn draw_model_editor(
     cursor_position: usize,
     show_key: bool,
     focused_field: u8,
+    // The frame-level caret verdict (ADR-0205): `true` only while this sheet is
+    // the layer that owns the physical cursor.
+    show_caret: bool,
     effort: Option<&str>,
     effort_levels: &[String],
     thinking: Option<bool>,
@@ -388,7 +391,7 @@ pub fn draw_model_editor(
         render_modal_footer(frame, fo, &hints, theme);
     }
 
-    if show_key && focused_field == 0 && body_rect.width > 0 && body_rect.height > 0 {
+    if show_caret && show_key && focused_field == 0 && body_rect.width > 0 && body_rect.height > 0 {
         let prefix = format!("{:<8}", "API key");
         let caret_col = caret_column(input, cursor_position);
         let max_x = body_rect.right().saturating_sub(1);
@@ -414,6 +417,8 @@ pub fn draw_web_value_editor(
     input: &str,
     cursor_position: usize,
     secret: bool,
+    // The frame-level caret verdict (ADR-0205).
+    show_caret: bool,
     theme: &Theme,
 ) -> mutx_engine::Rect {
     let geometry = ContentModalSpec::MODEL_EDITOR;
@@ -471,7 +476,7 @@ pub fn draw_web_value_editor(
             theme,
         );
     }
-    if modal.body.width > 0 && modal.body.height > 0 {
+    if show_caret && modal.body.width > 0 && modal.body.height > 0 {
         let local_caret = usize::from(caret_column(input, cursor_position)).saturating_sub(offset);
         let cursor_x = modal
             .body
@@ -617,6 +622,8 @@ pub fn draw_custom_provider_editor(
     frame: &mut Frame,
     theme: &Theme,
     scroll: &mut usize,
+    // The frame-level caret verdict (ADR-0205).
+    show_caret: bool,
 ) -> mutx_engine::Rect {
     let CustomEditorProps {
         fields,
@@ -771,7 +778,7 @@ pub fn draw_custom_provider_editor(
     );
     let visible = body_rect.height as usize;
     let in_view = (*scroll <= row) && (row < *scroll + visible);
-    if in_view && text_focused {
+    if show_caret && in_view && text_focused {
         let prefix_w = 3 + LABEL_W as u16;
         let caret_col = caret_column(input, cursor_position);
         let max_x = body_rect.right().saturating_sub(1);

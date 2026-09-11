@@ -3,17 +3,14 @@
 use mutx_engine::{Color, Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::UnicodeWidthStr;
 
-use crate::components::keycap::keycap_style;
-use crate::design::{
-    MODEL_BAR_GAP_MIN, MODEL_BAR_INNER_PADDING, MODEL_BAR_MODEL_GAP, MODEL_BAR_SEGMENT_GAP,
-};
+use crate::design::{MODEL_BAR_GAP_MIN, MODEL_BAR_INNER_PADDING, MODEL_BAR_MODEL_GAP};
 use crate::render::Theme;
 
 pub const CONTEXT_USAGE_WARN_THRESHOLD: f64 = 0.70;
 pub const CONTEXT_USAGE_CRIT_THRESHOLD: f64 = 0.90;
 
 /// Inputs for [`draw_model_bar`]. The split row's halves — context usage
-/// and stream rate on the left, model identity on the right.
+/// on the left, model identity on the right.
 pub struct ModelBarProps<'a> {
     pub current_model: &'a str,
     pub model_available: bool,
@@ -21,8 +18,6 @@ pub struct ModelBarProps<'a> {
     pub reasoning_effort: Option<&'a str>,
     pub context_tokens: Option<usize>,
     pub context_window: usize,
-    pub last_turn_tps: Option<f64>,
-    pub last_turn_ttft_ms: Option<f64>,
     pub ignition_elapsed_ms: Option<u128>,
 }
 
@@ -35,8 +30,6 @@ impl<'a> Default for ModelBarProps<'a> {
             reasoning_effort: None,
             context_tokens: None,
             context_window: 0,
-            last_turn_tps: None,
-            last_turn_ttft_ms: None,
             ignition_elapsed_ms: None,
         }
     }
@@ -45,7 +38,6 @@ impl<'a> Default for ModelBarProps<'a> {
 /// Fine-grained click targets painted inside the model bar.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ModelBarRects {
-    pub performance: Option<Rect>,
     pub context: Option<Rect>,
     pub connection: Option<Rect>,
 }
@@ -111,8 +103,6 @@ pub fn draw_model_bar(
         reasoning_effort,
         context_tokens,
         context_window,
-        last_turn_tps,
-        last_turn_ttft_ms,
         ignition_elapsed_ms,
     } = props;
 
@@ -189,46 +179,22 @@ pub fn draw_model_bar(
         .map(|span| span.content.width())
         .sum::<usize>();
 
-    let performance_spans: Vec<Span<'static>> = match (
-        last_turn_tps.filter(|rate| rate.is_finite() && *rate > 0.0),
-        last_turn_ttft_ms.filter(|ttft| ttft.is_finite() && *ttft > 0.0),
-    ) {
-        (Some(rate), Some(ttft)) => vec![
-            Span::styled(
-                format!("{rate:.1} tok/s"),
-                Style::default().fg(theme.muted()).bg(bg),
-            ),
-            Span::styled(" · ", Style::default().fg(theme.dim()).bg(bg)),
-            Span::styled(
-                format!("{ttft:.0}ms ttft"),
-                Style::default().fg(theme.dim()).bg(bg),
-            ),
-        ],
-        (Some(rate), None) => vec![Span::styled(
-            format!("{rate:.1} tok/s"),
-            Style::default().fg(theme.muted()).bg(bg),
-        )],
-        _ => Vec::new(),
-    };
-    let performance_width = performance_spans
-        .iter()
-        .map(|span| span.content.width())
-        .sum::<usize>();
-
-    let keycap_badge = |text: &str| Span::styled(text.to_string(), keycap_style(theme).bg(bg));
+    let keycap_badge =
+        |text: &str| Span::styled(text.to_string(), Style::default().fg(theme.dim()).bg(bg));
+    // Both keycaps render the chord the registry actually resolves (ADR-0238):
+    // a retired/remapped/unbound chord must never be advertised.
     let telemetry_key = key_overrides.effective_binding(crate::keymap::CommandId::OpenTelemetry);
     let connection_key =
         key_overrides.effective_binding(crate::keymap::CommandId::OpenActiveConnectionDetail);
-    let telemetry_keycap_width = telemetry_key.display().width() + 1;
-    let connection_keycap_width = connection_key.display().width() + 1;
+    let telemetry_keycap_width = telemetry_key.map_or(0, |key| key.display().width() + 1);
+    let connection_keycap_width = connection_key.map_or(0, |key| key.display().width() + 1);
 
     let mut show_model = model_width > 0;
     let mut show_reasoning = reasoning_width > 0;
     let mut show_instance = instance_width > 0;
-    let mut show_performance = performance_width > 0;
     let mut show_context = context_seg_width > 0;
-    let mut show_telemetry_keycap = show_context || show_performance;
-    let mut show_connection_keycap = show_model || show_instance;
+    let mut show_telemetry_keycap = show_context && telemetry_key.is_some();
+    let mut show_connection_keycap = (show_model || show_instance) && connection_key.is_some();
 
     let identity_width_for = |model: bool, reasoning: bool, instance: bool, show_keycap: bool| {
         let identity_count = usize::from(model) + usize::from(reasoning) + usize::from(instance);
@@ -241,18 +207,12 @@ pub fn draw_model_bar(
         }
         width
     };
-    let gauges_width_for = |performance: bool, context: bool, show_keycap: bool| {
+    let gauges_width_for = |context: bool, show_keycap: bool| {
         let mut width = 0;
         if context {
             width += context_seg_width;
         }
-        if performance {
-            if context {
-                width += MODEL_BAR_SEGMENT_GAP;
-            }
-            width += performance_width;
-        }
-        if (context || performance) && show_keycap {
+        if context && show_keycap {
             width += telemetry_keycap_width;
         }
         width
@@ -263,7 +223,7 @@ pub fn draw_model_bar(
         inner + gauges_width + middle + identity_width + inner <= full_w
     };
 
-    let mut gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
+    let mut gauges_width = gauges_width_for(show_context, show_telemetry_keycap);
     let mut identity_width = identity_width_for(
         show_model,
         show_reasoning,
@@ -273,7 +233,7 @@ pub fn draw_model_bar(
 
     if !fits(gauges_width, identity_width) && show_telemetry_keycap {
         show_telemetry_keycap = false;
-        gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
+        gauges_width = gauges_width_for(show_context, show_telemetry_keycap);
     }
     if !fits(gauges_width, identity_width) && show_connection_keycap {
         show_connection_keycap = false;
@@ -302,14 +262,10 @@ pub fn draw_model_bar(
             show_connection_keycap,
         );
     }
-    if !fits(gauges_width, identity_width) && show_performance {
-        show_performance = false;
-        gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
-    }
     if !fits(gauges_width, identity_width) && show_context {
         show_context = false;
         show_telemetry_keycap = false;
-        gauges_width = gauges_width_for(show_performance, show_context, show_telemetry_keycap);
+        gauges_width = gauges_width_for(show_context, show_telemetry_keycap);
     }
     if !fits(gauges_width, identity_width) && show_model {
         show_model = false;
@@ -330,18 +286,12 @@ pub fn draw_model_bar(
     if show_context {
         left_spans.extend(context_spans);
     }
-    if show_performance {
-        if !left_spans.is_empty() {
-            left_spans.push(Span::styled(
-                " ".repeat(MODEL_BAR_SEGMENT_GAP),
-                Style::default().bg(bg),
-            ));
-        }
-        left_spans.extend(performance_spans);
-    }
-    if (show_context || show_performance) && show_telemetry_keycap {
+    if show_context
+        && show_telemetry_keycap
+        && let Some(key) = telemetry_key
+    {
         left_spans.push(Span::styled(" ", Style::default().bg(bg)));
-        left_spans.push(keycap_badge(telemetry_key.display()));
+        left_spans.push(keycap_badge(key.display()));
     }
 
     let mut right_spans: Vec<Span<'static>> = Vec::new();
@@ -365,9 +315,12 @@ pub fn draw_model_bar(
             identity_started = true;
             right_spans.extend(segment);
         }
-        if (show_model || show_instance) && show_connection_keycap {
+        if (show_model || show_instance)
+            && show_connection_keycap
+            && let Some(key) = connection_key
+        {
             right_spans.push(Span::styled(" ", Style::default().bg(bg)));
-            right_spans.push(keycap_badge(connection_key.display()));
+            right_spans.push(keycap_badge(key.display()));
         }
     }
 
@@ -393,43 +346,17 @@ pub fn draw_model_bar(
 
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 
-    let mut performance_rect: Option<Rect> = None;
     let mut context_rect: Option<Rect> = None;
     let mut connection_rect: Option<Rect> = None;
     if !ignition_label_active {
-        let mut x = inner as u16;
-        let mut any_rendered = false;
-        let mut advance = |width: usize, seg: &mut Option<Rect>, leading: bool| {
-            if leading {
-                x += MODEL_BAR_SEGMENT_GAP as u16;
-            }
-            *seg = Some(Rect::new(rect.x + x, rect.y, width as u16, rect.height));
-            x += width as u16;
-        };
         if show_context {
-            let keycap_extra = if !show_performance && show_telemetry_keycap {
-                telemetry_keycap_width
-            } else {
-                0
-            };
-            advance(
-                context_seg_width + keycap_extra,
-                &mut context_rect,
-                any_rendered,
-            );
-            any_rendered = true;
-        }
-        if show_performance {
             let keycap_extra = if show_telemetry_keycap {
                 telemetry_keycap_width
             } else {
                 0
             };
-            advance(
-                performance_width + keycap_extra,
-                &mut performance_rect,
-                any_rendered,
-            );
+            let width = (context_seg_width + keycap_extra) as u16;
+            context_rect = Some(Rect::new(rect.x + inner as u16, rect.y, width, rect.height));
         }
         if right_rendered_width > 0 {
             let right_x = (inner + left_rendered_width + gap) as u16;
@@ -442,7 +369,6 @@ pub fn draw_model_bar(
         }
     }
     ModelBarRects {
-        performance: performance_rect,
         context: context_rect,
         connection: connection_rect,
     }

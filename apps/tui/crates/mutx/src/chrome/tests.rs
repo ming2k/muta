@@ -264,10 +264,10 @@ fn context_usage_spans_render_used_and_percentage() {
 /// @instance`) pins right — reading left → right as **context → speed →
 /// identity**. Under width pressure the keycap hint drops first, then
 /// the instance suffix (provenance is nice-to-have) while the model
-/// name, effort tag, context meter, and stream rate all still fit.
+/// name, effort tag, and context meter all still fit.
 #[test]
-fn model_bar_orders_context_speed_then_model() {
-    let row_text = |width: u16, tps: Option<f64>| -> String {
+fn model_bar_orders_context_then_model() {
+    let row_text = |width: u16| -> String {
         let mut terminal = mutx_engine::TestTerminal::new(width, 1);
         terminal.draw(|f| {
             draw_model_bar(
@@ -278,7 +278,6 @@ fn model_bar_orders_context_speed_then_model() {
                     model_available: true,
                     provider_name: Some("kimi-code"),
                     reasoning_effort: Some("max"),
-                    last_turn_tps: tps,
                     ..Default::default()
                 },
                 &Theme::default(),
@@ -291,23 +290,22 @@ fn model_bar_orders_context_speed_then_model() {
             .collect::<String>()
     };
 
-    // Wide enough for everything: `ctx rate Ctrl+O` left,
+    // Wide enough for everything: `ctx Ctrl+O` left,
     // `model effort @instance Ctrl+N` right, in that left-to-right order.
-    let wide = row_text(80, Some(47.8));
+    let wide = row_text(80);
     let ctx_pos = wide.find("(0%)").expect("context meter shown");
-    let rate_pos = wide.find("47.8 tok/s").expect("stream rate shown");
     let model_pos = wide.find("kimi-k2.7-code").expect("model shown");
     assert!(
-        ctx_pos < rate_pos && rate_pos < model_pos,
-        "row must read context → speed → identity: {wide:?}"
+        ctx_pos < model_pos,
+        "row must read context → identity: {wide:?}"
     );
     let inst_pos = wide.find("@kimi-code").expect("instance suffix shown");
     assert!(model_pos < inst_pos, "instance follows the model: {wide:?}");
     // Progressive disclosure: single unified keycap trails the telemetry cluster.
     let telemetry_key = wide.find("Ctrl-o").expect("telemetry keycap hint shown");
     assert!(
-        rate_pos < telemetry_key,
-        "keycap trails the gauges: {wide:?}"
+        ctx_pos < telemetry_key,
+        "keycap trails the context gauge: {wide:?}"
     );
     let conn_key = wide.find("Ctrl-n").expect("connection keycap hint shown");
     assert!(
@@ -322,40 +320,27 @@ fn model_bar_orders_context_speed_then_model() {
         "identity must end at the right edge: {wide:?}"
     );
 
-    // No TPS sample yet: the rate gauge hides entirely —
-    // no `– tok/s` placeholder noise before the first turn completes.
-    let cold = row_text(80, None);
-    assert!(
-        !cold.contains("tok/s"),
-        "rate gauge must hide without a sample: {cold:?}"
-    );
-    assert!(
-        cold.contains("(0%)") && cold.contains("Ctrl-o"),
-        "context gauge and single telemetry keycap survive: {cold:?}"
-    );
-
-    // Narrower row: the keycap hint drops first (52 still keeps the
-    // provenance suffix), then the instance suffix (46), while the
-    // gauges, model name, and effort tag survive in order.
-    let narrow = row_text(52, Some(47.8));
+    // Narrower row: the telemetry keycap hint drops first (48 still keeps the
+    // provenance suffix), then the instance suffix (35), while the
+    // context meter, model name, and effort tag survive in order.
+    let narrow = row_text(48);
     assert!(
         !narrow.contains("Ctrl-o"),
-        "keycap hint hides first: {narrow:?}"
+        "telemetry keycap hint hides first: {narrow:?}"
     );
     assert!(
         narrow.contains("@kimi-code"),
-        "provenance suffix survives at 52: {narrow:?}"
+        "provenance suffix survives at 48: {narrow:?}"
     );
-    let tighter = row_text(46, Some(47.8));
+    let tighter = row_text(35);
     assert!(
         !tighter.contains('@'),
         "instance should hide next: {tighter:?}"
     );
     let ctx_pos = tighter.find("(0%)").expect("context survives");
-    let rate_pos = tighter.find("tok/s").expect("rate survives");
     let model_pos = tighter.find("kimi-k2.7-code").expect("model survives");
     assert!(
-        ctx_pos < rate_pos && rate_pos < model_pos,
+        ctx_pos < model_pos,
         "order must hold after dropping the hints: {tighter:?}"
     );
 }
@@ -454,7 +439,7 @@ fn model_bar_renders_unavailable_model_indicator() {
 }
 
 #[test]
-fn model_bar_click_rects_follow_context_speed_order() {
+fn model_bar_click_rects_follow_context_and_connection_layout() {
     let theme = Theme::default();
     let mut terminal = mutx_engine::TestTerminal::new(80, 1);
 
@@ -466,7 +451,6 @@ fn model_bar_click_rects_follow_context_speed_order() {
             ModelBarProps {
                 current_model: "kimi-k2.7-code",
                 provider_name: None,
-                last_turn_tps: Some(47.8),
                 ..Default::default()
             },
             &theme,
@@ -474,16 +458,15 @@ fn model_bar_click_rects_follow_context_speed_order() {
         );
     });
     let ctx = captured.context.expect("context rect present");
-    let perf = captured.performance.expect("performance rect present");
     let conn = captured.connection.expect("connection rect present");
     assert!(
-        ctx.x + ctx.width <= perf.x,
-        "context meter must sit left of the stream-rate segment"
+        ctx.x + ctx.width <= conn.x,
+        "context meter must sit left of the connection segment"
     );
     // The gauges anchor the row's left edge: the context rect starts at
     // the inner indent, one cell in.
     assert_eq!(ctx.x, 1, "gauges must lead the row from the left indent");
-    // Rects carry their gauge segment text; the trailing gauge includes
+    // Rects carry their gauge segment text; the context gauge includes
     // the single Ctrl-o keycap hint.
     let buf = terminal.buffer();
     let slice = |r: Rect| -> String {
@@ -491,8 +474,7 @@ fn model_bar_click_rects_follow_context_speed_order() {
             .map(|x| buf[(x, r.y)].symbol().to_string())
             .collect::<String>()
     };
-    assert_eq!(slice(ctx), "0 (0%)", "context rect mismatch");
-    assert_eq!(slice(perf), "47.8 tok/s Ctrl-o", "rate rect mismatch");
+    assert_eq!(slice(ctx), "0 (0%) Ctrl-o", "context rect mismatch");
     assert_eq!(
         slice(conn),
         "kimi-k2.7-code Ctrl-n",
@@ -503,8 +485,8 @@ fn model_bar_click_rects_follow_context_speed_order() {
     let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
     let model_pos = row.find("kimi-k2.7-code").expect("model on the row");
     assert!(
-        perf.x + perf.width <= model_pos as u16,
-        "identity must sit right of the gauges: {row:?}"
+        ctx.x + ctx.width <= model_pos as u16,
+        "identity must sit right of the context gauge: {row:?}"
     );
     assert_eq!(
         &row[80 - 1 - "kimi-k2.7-code Ctrl-n".len()..80 - 1],
@@ -1101,6 +1083,7 @@ fn queue_bar_leads_with_brand_tag_on_a_plain_surface() {
                 items: &[item],
                 paused: false,
                 blocked: false,
+                expand_key: Some(crate::keymap::Key::CTRL_Q),
             },
             &theme,
         );
@@ -1122,12 +1105,75 @@ fn queue_bar_leads_with_brand_tag_on_a_plain_surface() {
 }
 
 #[test]
+fn queue_bar_legend_renders_the_resolved_chord_and_nothing_when_unbound() {
+    // The legend is a promise: it renders the chord the registry resolves for
+    // the expand command (ADR-0238), so a remap shows through…
+    let item = QueueItemProps {
+        queued_at_ms: 1_700_000_000_000,
+        text: "fix the flaky test".to_string(),
+    };
+    let remapped = queue_row_text(
+        QueueBarProps {
+            items: std::slice::from_ref(&item),
+            paused: false,
+            blocked: false,
+            expand_key: Some(crate::keymap::Key::ctrl('e')),
+        },
+        70,
+        &Theme::default(),
+    );
+    assert!(remapped.contains("Ctrl-e"), "remap must show: {remapped:?}");
+    assert!(
+        !remapped.contains("Ctrl-q"),
+        "the literal chord must not be hardcoded: {remapped:?}"
+    );
+
+    // …and a command with no binding renders no keycap at all, rather than
+    // advertising a chord that resolves to nothing (the defect this guards).
+    let unbound = queue_row_text(
+        QueueBarProps {
+            items: std::slice::from_ref(&item),
+            paused: false,
+            blocked: false,
+            expand_key: None,
+        },
+        70,
+        &Theme::default(),
+    );
+    assert!(
+        unbound.contains("FOLLOW-UPS 1"),
+        "identity survives: {unbound:?}"
+    );
+    assert!(
+        !unbound.contains("Ctrl-") && !unbound.contains("expand"),
+        "an unbound affordance must not be advertised: {unbound:?}"
+    );
+
+    // The default registry binding is the documented Ctrl-q expand.
+    let default_binding = queue_row_text(
+        QueueBarProps {
+            items: &[item],
+            paused: false,
+            blocked: false,
+            expand_key: Some(crate::keymap::Key::CTRL_Q),
+        },
+        70,
+        &Theme::default(),
+    );
+    assert!(
+        default_binding.contains("Ctrl-q expand"),
+        "row was {default_binding:?}"
+    );
+}
+
+#[test]
 fn queue_bar_empty_state_hints_how_to_stage() {
     let text = queue_row_text(
         QueueBarProps {
             items: &[],
             paused: false,
             blocked: false,
+            expand_key: Some(crate::keymap::Key::CTRL_Q),
         },
         70,
         &Theme::default(),
@@ -1150,6 +1196,7 @@ fn queue_bar_previews_next_item_with_count_and_text() {
             items: &[item],
             paused: true,
             blocked: false,
+            expand_key: Some(crate::keymap::Key::CTRL_Q),
         },
         92,
         &Theme::default(),
@@ -1194,6 +1241,7 @@ fn queue_bar_never_renders_the_tab_affordance() {
             items: &[item],
             paused: false,
             blocked: false,
+            expand_key: Some(crate::keymap::Key::CTRL_Q),
         },
         70,
         &Theme::default(),

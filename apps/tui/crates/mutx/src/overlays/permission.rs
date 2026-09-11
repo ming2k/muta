@@ -62,6 +62,10 @@ pub fn draw_question_modal(
     follow_highlight: bool,
     queue_depth: usize,
     slot: Rect,
+    // The frame-level caret verdict (ADR-0205): `true` only while this sheet is
+    // the layer that owns the physical cursor. The sheet never places the
+    // cursor on its own authority.
+    show_caret: bool,
     theme: &Theme,
 ) -> mutx_engine::Rect {
     // The minimum body height that keeps the sheet usable. Below this the
@@ -426,7 +430,7 @@ pub fn draw_question_modal(
     // keep it on screen. We still guard by the visible window: if the field is
     // scrolled away (e.g. the user is browsing with wheel/Pg), there is no
     // honest coordinate and the event loop leaves the cursor hidden.
-    if let Some(caret_row) = other_caret_row {
+    if show_caret && let Some(caret_row) = other_caret_row {
         let visible_top = *scroll;
         let visible_bottom = scroll.saturating_add(f.body.height as usize);
         if caret_row >= visible_top && caret_row < visible_bottom {
@@ -1124,6 +1128,7 @@ mod tests {
                 true,
                 0,
                 Rect::new(0, 0, 78, 16),
+                true,
                 &Theme::default(),
             );
         });

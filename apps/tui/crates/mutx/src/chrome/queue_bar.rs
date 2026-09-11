@@ -5,7 +5,6 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::components::keycap::keycap_span;
 use crate::design::{BAR_LEGEND_GAP_MIN, JOIN_ENUMERATE_COLS};
-use crate::keymap::Key;
 use crate::render::Theme;
 
 /// One queued outbox item projected for the [`QueueBarProps`] / queue modal.
@@ -21,14 +20,19 @@ pub struct QueueBarProps<'a> {
     pub items: &'a [QueueItemProps],
     pub paused: bool,
     pub blocked: bool,
+    /// The chord that actually opens the queue panel, resolved from the
+    /// command registry (ADR-0238). `None` — the command was unbound or the
+    /// user remapped it away — renders no keycap: the bar advertises the
+    /// binding that fires, and nothing when none does.
+    pub expand_key: Option<crate::keymap::Key>,
 }
 
 /// How much of the queue bar's keycap legend survives under width pressure.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegendDensity {
-    /// Keys + label: `Ctrl+Q expand`.
+    /// Key + label: `Ctrl-q expand`.
     Full,
-    /// Bare keycap: `Ctrl+Q`.
+    /// Bare keycap: `Ctrl-q`.
     Compact,
     /// Nothing — the legend is dropped entirely.
     Tiny,
@@ -45,6 +49,7 @@ pub fn draw_queue_bar(
         items,
         paused,
         blocked,
+        expand_key,
     } = props;
 
     let full_w = rect.width as usize;
@@ -88,7 +93,12 @@ pub fn draw_queue_bar(
         if matches!(density, LegendDensity::Tiny) {
             return spans;
         }
-        spans.push(keycap_span(theme, Key::CTRL_Q.display()));
+        // No resolved chord → no keycap. The label alone would advertise an
+        // affordance with no way to reach it by keyboard (ADR-0238).
+        let Some(key) = expand_key else {
+            return spans;
+        };
+        spans.push(keycap_span(theme, key.display()));
         if matches!(density, LegendDensity::Full) {
             spans.push(Span::styled(" expand", theme.keycap_label_style()));
         }

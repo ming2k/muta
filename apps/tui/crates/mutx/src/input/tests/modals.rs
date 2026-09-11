@@ -3,6 +3,46 @@
 use super::*;
 use crate::surfaces::{DialogKind, OverlaySurface};
 
+/// The queue bar's legend advertises `Ctrl+Q expand`, so `Ctrl+Q` must resolve
+/// to the panel it names — at the top level only (the bar is session chrome and
+/// is not on screen behind a modal). This is the dispatch half of ADR-0238's
+/// "a bar advertises a chord that fires, or nothing at all".
+#[test]
+fn ctrl_q_opens_the_queue_panel_at_the_top_level_only() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let ctrl_q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+
+    let action = route_event(
+        Event::Key(ctrl_q),
+        &mut input,
+        &mut cursor,
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::OpenQueue);
+
+    // Behind a modal the chord is not the bar's: the modal owns the keyboard.
+    let action = route_event(
+        Event::Key(ctrl_q),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Models)),
+            ..Default::default()
+        },
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_ne!(action, InputAction::OpenQueue);
+}
+
 #[test]
 fn star_in_models_modal_toggles_model_favorite() {
     let mut input = String::new();

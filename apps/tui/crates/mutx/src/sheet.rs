@@ -104,13 +104,6 @@ impl SheetKind {
             },
         }
     }
-
-    /// Whether the sheet unconditionally renders its own text caret.
-    /// The question sheet's "Other" field is state-dependent and resolved in
-    /// `App::caret_owner` instead.
-    pub fn owns_caret(self) -> bool {
-        matches!(self, InputInjection)
-    }
 }
 
 /// The sheets' self-owned key schemes (ADR-0173 §3): a key the sheet owns

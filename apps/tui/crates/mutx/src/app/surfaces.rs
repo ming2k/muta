@@ -31,11 +31,6 @@ impl App {
         self.surfaces.active_dialog()
     }
 
-    /// Bridge forwarder for `active_panel`.
-    pub(crate) fn active_panel(&self) -> Option<DialogKind> {
-        self.active_dialog()
-    }
-
     /// The root scene the user stands in (ADR-0205: Conversation, Dashboard, Settings, etc.).
     pub(crate) fn current_scene(&self) -> SceneKind {
         self.surfaces.active_scene()
@@ -223,11 +218,6 @@ impl App {
         first
     }
 
-    /// Bridge forwarder for `open_panel`.
-    pub(crate) fn open_panel(&mut self, id: impl Into<DialogKind>) -> bool {
-        self.open_dialog(id.into())
-    }
-
     /// Persist current TUI presentation preferences into `$XDG_CONFIG_HOME/mutx/config.toml`.
     pub fn save_tui_config(&self) {
         let mut cfg = crate::config::TuiConfig::load();
@@ -268,11 +258,6 @@ impl App {
                 query_active,
             },
         );
-    }
-
-    /// Bridge forwarder for `save_panel_state`.
-    pub(crate) fn save_panel_state(&mut self, id: DialogKind) {
-        self.save_dialog_state(id);
     }
 
     /// Restore the live fields projected by a retained dialog.
@@ -356,11 +341,6 @@ impl App {
         {
             self.resume_queue(&sid);
         }
-    }
-
-    /// Bridge forwarder for `deactivate_panel`.
-    pub(crate) fn deactivate_panel(&mut self, id: DialogKind) {
-        self.deactivate_dialog(id);
     }
 
     /// Dismiss active dialog or return from non-conversation scene (ADR-0205).
@@ -628,9 +608,43 @@ impl App {
                 .session_chrome
                 .get(&self.current_session_id)
                 .and_then(|chrome| chrome.last_turn_performance),
+            // The primary's own setback slot. Unlike `phase` this mirror is
+            // never swapped into the App fields by `apply_chrome`/the parked
+            // primary chrome: the primary view reads it directly, the aside
+            // view reads the aside's entry, and a view change therefore has
+            // nothing to restore (ADR-0235).
+            transport_setback: self.provider_retry.clone(),
         }
     }
 
+    /// Write the primary session's activity phase, retiring its
+    /// transport-setback clause by the same rule as
+    /// [`SessionChrome::set_phase`] — this is the primary's half of the single
+    /// clause lifetime (ADR-0235).
+    pub fn set_phase(&mut self, phase: Option<crate::phase::Phase>) {
+        if crate::phase::ends_transport_setback(phase.as_ref()) {
+            self.provider_retry = None;
+        }
+        self.phase = phase;
+    }
+
+    /// Whether any session currently carries a live transport setback. The
+    /// event loop's animation predicate and the renderer both read this, so a
+    /// countdown nobody is looking at still ticks, and a retired one stops
+    /// costing frames.
+    pub fn has_live_transport_setback(&self) -> bool {
+        self.provider_retry.is_some()
+            || self
+                .session_chrome
+                .values()
+                .any(|chrome| chrome.transport_setback.is_some())
+    }
+
+    /// Copy a viewed session's chrome into the App-level mirrors. Deliberately
+    /// partial: it carries the display slots a view swap must restore
+    /// (`phase`, counters, timer origin) and *not* the setback clause, which is
+    /// parked by construction — the primary keeps its own in
+    /// [`App::provider_retry`] while an aside is on screen (ADR-0235).
     pub(super) fn apply_chrome(&mut self, chrome: &SessionChrome) {
         self.phase = chrome.phase.clone();
         self.round_started_at = chrome.round_started_at;
@@ -639,7 +653,7 @@ impl App {
     }
 
     pub fn clear_responding(&mut self) {
-        self.phase = None;
+        self.set_phase(None);
         self.round_started_at = None;
         self.loop_status = muta_contracts::LoopStatus::Idle;
         if self.in_side_view {
@@ -647,12 +661,12 @@ impl App {
                 && let Some(chrome) = self.session_chrome.get_mut(side_id)
             {
                 chrome.responding = false;
-                chrome.phase = None;
+                chrome.set_phase(None);
                 chrome.round_started_at = None;
             }
         } else if let Some(chrome) = self.session_chrome.get_mut(&self.current_session_id) {
             chrome.responding = false;
-            chrome.phase = None;
+            chrome.set_phase(None);
             chrome.round_started_at = None;
         }
     }

@@ -335,7 +335,9 @@ impl SurfaceRouter {
     /// If an overlay is active, return the overlay immediately underneath the top overlay, if any.
     pub fn underlying_overlay(&self) -> Option<OverlaySurface> {
         if self.overlay_stack.len() >= 2 {
-            self.overlay_stack.get(self.overlay_stack.len() - 2).copied()
+            self.overlay_stack
+                .get(self.overlay_stack.len() - 2)
+                .copied()
         } else {
             None
         }

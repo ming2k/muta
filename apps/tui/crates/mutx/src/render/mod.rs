@@ -22,9 +22,9 @@ pub(crate) use crate::design::{
     COMPOSER_PROMPT_PREFIX_COLS, COMPOSER_RIGHT_PAD_COLS, COMPOSER_VERTICAL_CHROME_ROWS,
     FOOTER_H_INSET, FOOTER_TOP_GAP_ROWS, MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS, MODEL_BAR_ROWS,
     PAGE_HEADER_ROWS, QUEUE_BAR_ROWS, REASONING_TRACE_BLOCK_GAP_ROWS,
-    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, SUBAGENT_FOOTER_ROWS,
-    TOOL_STEP_BODY_INDENT_COLS, TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS,
-    TRANSCRIPT_BODY_LEADING_INDENT, TRANSCRIPT_H_INSET,
+    REASONING_TRACE_BODY_TOP_GAP_ROWS, STEP_MIN_WIDTH, TOOL_STEP_BODY_INDENT_COLS,
+    TOOL_STEP_BODY_TOP_GAP_ROWS, TOOL_STEP_CHILDREN_GAP_ROWS, TRANSCRIPT_BODY_LEADING_INDENT,
+    TRANSCRIPT_H_INSET,
 };
 use crate::disclosure::{StickyStep, draw_sticky_summary_if_needed};
 /// Which guidance copy the empty-state hero shows beneath the logo (ADR-0057).
@@ -52,8 +52,8 @@ pub use crate::theme::{COLOR_SCHEMES, Theme};
 use crate::view_header;
 #[allow(unused_imports)]
 pub(crate) use crate::view_header::{
-    AsidesChip, BtwHead, SessionHead, ViewHeader, ViewHints, ViewKind, draw_subagent_footer,
-    draw_view_header, draw_view_header_hints,
+    AsidesChip, BtwHead, SessionHead, ViewHeader, ViewHints, ViewKind, draw_view_header,
+    draw_view_header_hints,
 };
 #[allow(unused_imports)]
 pub use crate::views::settings::*;
@@ -197,7 +197,7 @@ pub struct TranscriptProps<'a> {
     /// legend (ADR-0103 §3). `None` suppresses the legend entirely (non-app
     /// contexts).
     pub page_hints: Option<view_header::ViewHints<'a>>,
-    /// Session identity for the Session view's head row: the persistent-id tail
+    /// Session identity for the Conversation scene's head row: the persistent-id tail
     /// plus the tilde-shortened workspace on the left, and the session mode
     /// (`DELEGATED`) on the right. `None` only in non-session contexts
     /// (tests/showcase) where no ambient session exists.
@@ -504,7 +504,7 @@ impl BlockWrapCache {
     }
 }
 
-/// Page-header context for a Subagent view (shown when zoomed into a task).
+/// Page-header context for the TaskInspection scene (shown when zoomed into a task).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubagentBarInfo {
     /// The subagent's role (`explore` / `plan` / …), when the `Started` event
@@ -666,17 +666,12 @@ pub fn draw_transcript(
     // has page-specific affordances to announce (ADR-0104; see
     // `ViewHints::has_content`) — the view-affordance legend on row 2, both
     // carved off with one layout split. Without a head, the standard
-    // viewport margins apply. The Subagent page additionally owns the terminal's
-    // last rows for its permanent key-legend footer (three background-painted
-    // rows whose middle row carries the shortcuts), so the transcript ends
-    // above that band.
-    let (head_rect, hints_rect, subagent_footer_rect, viewport) = if view_header.is_some() {
+    // viewport margins apply. TaskInspection reserves no second row and no
+    // bottom band: the scene's whole keyboard surface is one `Esc` and a pair
+    // of remappable sibling walks, which the head cannot render faithfully
+    // under a remap (ADR-0205), so the transcript keeps those rows.
+    let (head_rect, hints_rect, viewport) = if view_header.is_some() {
         let full = frame.area();
-        let footer_rows = if subagent_bar.is_some() {
-            SUBAGENT_FOOTER_ROWS
-        } else {
-            0
-        };
         // The head band's height is demand-driven (ADR-0104): row 2 is
         // reserved only while the view has page-specific affordances.
         // `PAGE_HEADER_ROWS` stays the recorded ceiling.
@@ -687,19 +682,16 @@ pub fn draw_transcript(
                 Constraint::Length(1),
                 Constraint::Length(band_rows.saturating_sub(1)),
                 Constraint::Min(0),
-                Constraint::Length(footer_rows),
             ])
             .split(full);
         (
             // The head band spans the terminal's full width — it is top-level
-            // chrome pinned to the top edge, the counterpart of the Subagent
-            // key-legend band at the bottom edge, not a transcript-area
+            // chrome pinned to the top edge, not a transcript-area
             // component. Its *text* keeps the shared horizontal inset (applied
             // inside `draw_view_header` as pad spans) so it stays aligned with
             // the transcript band below.
             Some(sub[0]),
             (band_rows > 1).then_some(sub[1]),
-            (footer_rows > 0).then_some(sub[3]),
             // The remaining area keeps the bottom viewport margin (0) but
             // drops the top one (the head owns that row now).
             Rect::new(
@@ -710,7 +702,7 @@ pub fn draw_transcript(
             ),
         )
     } else {
-        (None, None, None, viewport_rect(frame))
+        (None, None, viewport_rect(frame))
     };
 
     let size = viewport;
@@ -853,13 +845,6 @@ pub fn draw_transcript(
     }
     if let (Some(hints), Some(rect)) = (page_hints_view.as_ref(), hints_rect) {
         draw_view_header_hints(frame, rect, hints, theme);
-    }
-
-    // 1b. Subagent key-legend footer — pinned to the terminal's last rows (its
-    // rect came out of the same layout split as the head). Painted on the
-    // page-body background with the shortcuts on its middle row.
-    if let (Some(info), Some(rect)) = (subagent_bar.as_ref(), subagent_footer_rect) {
-        draw_subagent_footer(frame, rect, info, theme);
     }
 
     // 2. Transcript History — the transcript area is the whole `chunks[0]`

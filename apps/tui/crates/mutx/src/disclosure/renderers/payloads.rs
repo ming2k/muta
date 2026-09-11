@@ -1861,6 +1861,25 @@ pub(crate) fn draw_tool_result(
                 }) => diff_cache.patch(message_id, old, new, *start_line),
                 _ => diff_cache.legacy_arguments(message_id, name, arguments),
             };
+            if let Some(muta_contracts::ToolOutput::Patch { warnings, .. }) = structured {
+                for warning in warnings {
+                    let text = format!("Warning: {warning}");
+                    let bg = ctx.theme.code_surface();
+                    let style = Style::default().bg(bg).fg(ctx.theme.warn());
+                    let _ = emit_command_lines(
+                        ctx,
+                        mi,
+                        block_idx,
+                        indent,
+                        inner_w.max(1),
+                        Style::default().bg(bg),
+                        block_selection_range(selection, mi, block_idx),
+                        &text,
+                        style,
+                        0,
+                    );
+                }
+            }
             draw_diff_content(ctx, hunks.as_ref(), indent, inner_w, lang);
         }
         ResultKind::Checklist => {

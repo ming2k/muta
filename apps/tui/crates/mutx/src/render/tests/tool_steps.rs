@@ -3,7 +3,7 @@
 use super::*;
 
 /// Render both the compact Subagent step (root view) and the zoomed-in
-/// Subagent view with its page header, ensuring no layout panics.
+/// TaskInspection scene with its page header, ensuring no layout panics.
 /// Visual verification (run with MUTA_VISUAL=1 --nocapture): a subagent
 /// zoom view with two ReAct turns, each emitting a concurrent tool-call
 /// batch, groups into turn bands with flush same-turn calls and a blank
@@ -63,6 +63,7 @@ fn subagent_view_groups_children_into_turn_bands() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -173,6 +174,7 @@ fn subagent_step_and_view_render_without_panicking() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -194,7 +196,7 @@ fn subagent_step_and_view_render_without_panicking() {
         );
     });
 
-    // Zoomed-in Subagent view: the task's children are the message stream
+    // Zoomed-in TaskInspection scene: the task's children are the message stream
     // and the contextual header is shown on the first row.
     let children = root_messages[1].subagent_children().unwrap().to_vec();
     terminal.draw(|f| {
@@ -218,6 +220,7 @@ fn subagent_step_and_view_render_without_panicking() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -260,16 +263,19 @@ fn subagent_step_and_view_render_without_panicking() {
         "   SUBAGENT [EXPLORE] the codebase                                      (1/2)   ",
         "Subagent identity, role tag, title and sibling index on the head row"
     );
-    // The permanent key legend occupies the last three terminal rows,
-    // with the shortcuts on its middle row.
-    let legend = row_text(28);
+    // The TaskInspection scene carries no shortcut legend at all (ADR-0205):
+    // its three chords are one `Esc` and a pair of remappable sibling walks,
+    // which a fixed keycap row cannot advertise faithfully under a remap. The
+    // scene is therefore exactly one head row plus the transcript — the last
+    // terminal row is transcript, not chrome.
+    let last_row = row_text(29);
     assert!(
-        legend.contains("Esc back") && legend.contains("[ prev") && legend.contains("] next"),
-        "Subagent shortcuts pinned on the footer's middle row: {legend:?}"
+        !last_row.contains("Esc back") && !last_row.contains("prev") && !last_row.contains("next"),
+        "no shortcut legend is pinned to the TaskInspection scene: {last_row:?}"
     );
     assert!(
-        row_text(27).trim().is_empty() && row_text(29).trim().is_empty(),
-        "The footer's top and bottom rows are blank padding"
+        !row_text(28).contains("Esc back"),
+        "no shortcut legend on the row above either"
     );
 }
 
@@ -325,6 +331,7 @@ fn height_cache_skip_path_matches_full_layout() {
                         items: &[],
                         paused: false,
                         blocked: false,
+                        expand_key: Some(crate::keymap::Key::CTRL_Q),
                     },
                     tasks_bar: Default::default(),
                     persistence_health: None,
@@ -403,6 +410,7 @@ fn expanded_edit_diff_height_is_scroll_independent() {
         old,
         new,
         start_line: 0,
+        warnings: Vec::new(),
     };
     m.finish_tool_step("call_test", structured.to_text(), structured, 0);
     if let crate::model::document::MessageKind::ToolStep { expanded, .. } = &mut m.kind {
@@ -435,6 +443,7 @@ fn expanded_edit_diff_height_is_scroll_independent() {
                         items: &[],
                         paused: false,
                         blocked: false,
+                        expand_key: Some(crate::keymap::Key::CTRL_Q),
                     },
                     tasks_bar: Default::default(),
                     persistence_health: None,
@@ -534,6 +543,7 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
                     items: &queue_items,
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -617,9 +627,11 @@ fn footer_stack_places_rows_where_the_legacy_offsets_did() {
     );
 }
 
-/// The Subagent page's row 2 never renders — its permanent footer already
-/// carries the same legend (ADR-0104), so a second copy one screen apart
-/// would be pure duplication.
+/// The TaskInspection scene renders the head row only — no second row and no
+/// pinned legend band, because the scene's three chords (one `Esc` plus a pair
+/// of remappable sibling walks) cannot be rendered faithfully by a fixed
+/// keycap row (ADR-0205/ADR-0104). Discovery lives in the Command Palette and
+/// Help instead.
 #[test]
 fn subagent_view_omits_row2_entirely() {
     let hints = ViewHints {
@@ -680,6 +692,7 @@ fn checklist_tool_step_renders_with_active_selection_without_panic() {
                         items: &[],
                         paused: false,
                         blocked: false,
+                        expand_key: Some(crate::keymap::Key::CTRL_Q),
                     },
                     tasks_bar: Default::default(),
                     persistence_health: None,

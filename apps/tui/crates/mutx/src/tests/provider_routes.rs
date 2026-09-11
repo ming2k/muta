@@ -1015,7 +1015,10 @@ async fn models_modal_refresh_action_provides_feedback_and_deduplicates() {
     assert!(app.copy_toast_until.is_some());
 
     let req = rx.try_recv().expect("should send refresh request");
-    assert!(matches!(req, muta_contracts::AgentRequest::RefreshProviderModels));
+    assert!(matches!(
+        req,
+        muta_contracts::AgentRequest::RefreshProviderModels
+    ));
 
     // Second press while refreshing: warns already in progress, does not send duplicate request
     let flow2 = crate::event_loop::actions::dispatch_action_for_test(
@@ -1035,7 +1038,9 @@ async fn models_modal_refresh_action_provides_feedback_and_deduplicates() {
     crate::event_loop::apply::apply(
         &mut app,
         &runtime,
-        crate::event_loop::AppMutation::ProviderPicker(muta_contracts::ProviderPickerSnapshot::default()),
+        crate::event_loop::AppMutation::ProviderPicker(
+            muta_contracts::ProviderPickerSnapshot::default(),
+        ),
     );
     assert!(!app.models_refreshing);
 
@@ -1050,5 +1055,8 @@ async fn models_modal_refresh_action_provides_feedback_and_deduplicates() {
         },
     );
     assert!(app.copy_toast_until.is_none());
-    assert_eq!(app.notice_toast_message, "Model list refreshed (up to date)");
+    assert_eq!(
+        app.notice_toast_message,
+        "Model list refreshed (up to date)"
+    );
 }

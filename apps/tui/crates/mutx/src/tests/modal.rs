@@ -744,21 +744,15 @@ fn picker_caret_owner_exists_only_in_search_mode() {
 }
 
 #[test]
-fn modal_owns_caret_lists_only_unconditional_input_surfaces() {
-    // Static ownership is reserved for modals that render a text field in
-    // every state. Browse/search pickers are state-dependent and resolved in
-    // `App::caret_owner` instead.
-    //
-    // The one deliberate exception is `Modal::Question`: its renderer places
-    // the real cursor only while the "Other" free-text row is highlighted, and
-    // ownership is decided *state-dependently* in `App::caret_owner` (which
-    // consults `QuestionModel::is_other_highlighted`) rather than by the static
-    // `owns_caret()`. It therefore appears in neither list here — it is tested
-    // separately by `caret_owner_question_owns_caret_only_on_other`.
-    // HistorySearch is also state-dependent: its panel floats above a
-    // live composer that IS the filter field, so the composer (not the modal)
-    // owns the caret — handled state-dependently in `App::caret_owner`. It
-    // appears in `not_owns` below and is exercised by the caret-owner tests.
+fn overlay_caret_owner_is_arbitrated_by_the_layer_stack() {
+    // Caret ownership is never declared statically by a surface type. It is
+    // arbitrated once per frame by `App::caret_owner()` from the mounted layer
+    // stack (ADR-0205), so every state-dependent case — a picker that is only
+    // editable while its search row is open, the Question sheet's "Other"
+    // field, the HistorySearch panel that borrows the live composer line —
+    // resolves through the same function instead of a per-surface copy. See
+    // `caret_owner_question_owns_caret_only_on_other` and
+    // `picker_caret_owner_exists_only_in_search_mode` for those cases.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.surfaces
         .present_sheet(crate::surfaces::SheetKind::CustomProvider);
@@ -1189,6 +1183,7 @@ fn exiting_an_aside_restores_the_primary_chrome_exactly() {
             round_started_at: Some(std::time::Instant::now()),
             can_retry: false,
             last_turn_performance: None,
+            transport_setback: None,
         },
     );
     // Re-entering (focus jump) must swap the aside's own chrome in.
@@ -1231,6 +1226,7 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
             round_started_at: Some(std::time::Instant::now()),
             can_retry: false,
             last_turn_performance: None,
+            transport_setback: None,
         },
     );
     app.enter_side_view("side-2".to_string());

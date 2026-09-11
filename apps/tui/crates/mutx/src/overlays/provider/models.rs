@@ -41,6 +41,11 @@ pub struct ModelsModalProps<'a> {
     pub scroll: &'a mut usize,
     pub follow_selection: bool,
     pub search: bool,
+    /// Whether this surface currently owns the terminal cursor
+    /// (`App::caret_owner() == CaretOwner::Overlay`, ADR-0205). The picker
+    /// never places the physical cursor on its own authority — the frame-level
+    /// arbiter decides that, and this flag is its verdict threaded down.
+    pub show_caret: bool,
     pub refreshing: bool,
     pub spinner_phase: usize,
 }
@@ -61,6 +66,7 @@ pub fn draw_models_modal(
         scroll,
         follow_selection,
         search,
+        show_caret,
         refreshing,
         spinner_phase,
     } = props;
@@ -69,7 +75,11 @@ pub fn draw_models_modal(
 
     let header_rect = f.header;
 
-    let refresh_label = if refreshing { "refreshing…" } else { "refresh" };
+    let refresh_label = if refreshing {
+        "refreshing…"
+    } else {
+        "refresh"
+    };
     let browse_hints: [FooterHint; 8] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
@@ -133,10 +143,7 @@ pub fn draw_models_modal(
                 Line::from(""),
                 Line::from(vec![
                     Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
-                    Span::styled(
-                        "Refreshing models…",
-                        Style::default().fg(theme.muted()),
-                    ),
+                    Span::styled("Refreshing models…", Style::default().fg(theme.muted())),
                 ]),
             ]
         } else {
@@ -155,7 +162,7 @@ pub fn draw_models_modal(
         if let Some(fo) = f.footer {
             render_modal_footer_with_more(frame, fo, hints, extra, theme);
         }
-        if let Some(sr) = search_rect {
+        if show_caret && let Some(sr) = search_rect {
             place_picker_search_cursor(frame, sr, query, cursor_position);
         }
         return area;
@@ -189,7 +196,10 @@ pub fn draw_models_modal(
         render_modal_footer_with_more(frame, fo, hints, extra, theme);
     }
 
-    if search && let Some(sr) = search_rect {
+    if show_caret
+        && search
+        && let Some(sr) = search_rect
+    {
         place_picker_search_cursor(frame, sr, query, cursor_position);
     }
     area

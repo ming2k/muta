@@ -45,6 +45,7 @@ fn redesigned_components_render_without_panicking() {
                             items: &[],
                             paused: false,
                             blocked: false,
+                            expand_key: Some(crate::keymap::Key::CTRL_Q),
                         },
                         tasks_bar: Default::default(),
                         persistence_health: None,
@@ -123,6 +124,7 @@ fn redesigned_components_render_without_panicking() {
                 scroll: &mut 0,
                 follow_selection: true,
                 search: false,
+                show_caret: true,
                 connection_info_detail: false,
                 connection_detail: None,
                 connection_info_scroll: &mut 0,
@@ -145,6 +147,7 @@ fn redesigned_components_render_without_panicking() {
                 scroll: &mut 0,
                 follow_selection: true,
                 search: false,
+                show_caret: true,
                 refreshing: false,
                 spinner_phase: 0,
             },
@@ -174,7 +177,20 @@ fn redesigned_components_render_without_panicking() {
             },
             &theme,
         );
-        draw_model_editor(f, "OpenAI", "", 0, true, 0, None, &[], None, None, &theme);
+        draw_model_editor(
+            f,
+            "OpenAI",
+            "",
+            0,
+            true,
+            0,
+            true,
+            None,
+            &[],
+            None,
+            None,
+            &theme,
+        );
         // Preset chooser.
         let mut preset_scroll = 0;
         draw_preset_chooser(0, f, &theme, &mut preset_scroll);
@@ -208,6 +224,7 @@ fn redesigned_components_render_without_panicking() {
             f,
             &theme,
             &mut scroll,
+            true,
         );
         {
             let mut scroll = 0;
@@ -293,6 +310,7 @@ fn redesigned_components_render_without_panicking() {
             true,
             0,
             mutx_engine::Rect::new(0, 0, 60, 10),
+            true,
             &theme,
         );
     });
@@ -513,6 +531,7 @@ fn footer_keeps_one_blank_row_below_transcript_when_active_or_idle() {
                         items: &[],
                         paused: false,
                         blocked: false,
+                        expand_key: Some(crate::keymap::Key::CTRL_Q),
                     },
                     tasks_bar: Default::default(),
                     persistence_health: None,
@@ -582,6 +601,7 @@ fn too_small_terminal_shows_notice_and_zeroed_render() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -652,6 +672,7 @@ fn empty_session_renders_empty_state_with_nonzero_height() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -717,6 +738,7 @@ fn nonempty_session_does_not_render_empty_state() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -791,6 +813,7 @@ fn empty_session_uses_user_logo_and_reports_its_height() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -899,6 +922,7 @@ fn empty_state_tour_renders_the_current_carousel_page() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -970,6 +994,7 @@ fn h1_underline_clamps_to_text_extent() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -1059,6 +1084,7 @@ fn h1_underline_emits_wide_glyph_in_underlined_run() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,
@@ -1143,6 +1169,7 @@ fn h1_underline_excludes_prefix_indent_on_wrapped_rows() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,

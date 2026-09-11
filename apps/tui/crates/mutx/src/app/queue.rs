@@ -41,12 +41,11 @@ impl App {
         self.pending_dispatch.remove(position)
     }
 
-    /// Is this session's outbox hard-blocked by the user? While blocked, no
-    /// queued message auto-drains — not even after natural completion + idle.
-    /// The queue modal blocks on open and resumes on close; `Ctrl+P` toggles
-    /// from
-    /// the bar. A no-op (and leaves the block off) for a session with no
-    /// staged items.
+    /// Is this session's outbox hard-blocked? While blocked, no queued message
+    /// auto-drains — not even after natural completion + idle. The Queue panel
+    /// blocks on open and resumes on close; `Ctrl+P` toggles the block from
+    /// inside that panel (at the top level `Ctrl+P` is the command palette).
+    /// A no-op (and leaves the block off) for a session with no staged items.
     pub fn is_queue_blocked(&self, session_id: &str) -> bool {
         self.queue_blocked_sessions.contains(session_id)
     }
@@ -58,10 +57,10 @@ impl App {
         self.queue_blocked_sessions.insert(session_id.to_string());
     }
 
-    /// Force the block off. Used when the queue modal closes (auto-resume), so
+    /// Force the block off. Used when the queue panel closes (auto-resume), so
     /// the outbox returns to its normal auto-drain behavior the moment the
-    /// user stops managing it — unless they explicitly blocked it with
-    /// `Ctrl+P` outside the modal (that toggle is honored because the modal
+    /// user stops managing it — unless they explicitly blocked it from inside
+    /// the panel with `Ctrl+P` (that toggle is honored because the panel's
     /// close path only resumes what its own open path blocked).
     pub fn resume_queue(&mut self, session_id: &str) {
         self.queue_blocked_sessions.remove(session_id);

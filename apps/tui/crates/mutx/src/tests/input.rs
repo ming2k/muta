@@ -89,6 +89,40 @@ fn caret_owner_none_in_subagent_view() {
 }
 
 #[test]
+fn caret_owner_scene_for_the_dashboard_inline_prompt() {
+    // ADR-0205 layering: a scene's own inline prompt is scene chrome, not the
+    // chat composer and not an overlay. The `/dashboard` task line borrows the
+    // composer *buffer* but renders in the scene's footer band, so it must
+    // report `Scene` — otherwise the arbiter hides the cursor and the user
+    // types into a field with no visible caret.
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
+    assert_eq!(
+        app.caret_owner(),
+        CaretOwner::None,
+        "the dashboard is a read-only console until its prompt opens"
+    );
+    app.host_prompting = true;
+    assert_eq!(
+        app.caret_owner(),
+        CaretOwner::Scene,
+        "the open inline prompt owns the cursor through its scene chrome"
+    );
+    assert!(
+        app.caret_visible(),
+        "a live scene prompt keeps the cursor visible so the IME anchors to it"
+    );
+    // An overlay above the scene still wins: the scene prompt is suspended.
+    app.surfaces
+        .present_dialog(crate::surfaces::DialogKind::Help);
+    assert_eq!(
+        app.caret_owner(),
+        CaretOwner::None,
+        "a read-only overlay above the scene takes the caret away from it"
+    );
+}
+
+#[test]
 fn caret_owner_modal_for_caret_modals() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.surfaces

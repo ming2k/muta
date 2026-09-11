@@ -378,20 +378,20 @@ quit = "ctrl+shift+q"
         let o = cfg.global_key_overrides();
         assert_eq!(
             o.effective_binding(crate::keymap::CommandId::CommandPalette),
-            crate::keymap::Key::ctrl('k')
+            Some(crate::keymap::Key::ctrl('k'))
         );
         assert_eq!(
             o.effective_binding(crate::keymap::CommandId::Quit),
-            crate::keymap::Key {
+            Some(crate::keymap::Key {
                 modifiers: crossterm::event::KeyModifiers::CONTROL
                     .union(crossterm::event::KeyModifiers::SHIFT),
                 code: crossterm::event::KeyCode::Char('q')
-            }
+            })
         );
         // Unconfigured commands keep their canonical binding.
         assert_eq!(
             o.effective_binding(crate::keymap::CommandId::Help),
-            crate::keymap::Key::F1
+            Some(crate::keymap::Key::F1)
         );
     }
 
@@ -411,11 +411,11 @@ bogus = "ctrl+z"
         let g = cfg.global_key_overrides();
         assert_eq!(
             g.effective_binding(crate::keymap::CommandId::CommandPalette),
-            crate::keymap::Key::ctrl('k')
+            Some(crate::keymap::Key::ctrl('k'))
         );
         assert_eq!(
             g.effective_binding(crate::keymap::CommandId::Quit),
-            crate::keymap::Key::CTRL_C
+            Some(crate::keymap::Key::CTRL_C)
         );
         // Surface parsing picks only the session-table verb names.
         let s = cfg.surface_key_overrides();

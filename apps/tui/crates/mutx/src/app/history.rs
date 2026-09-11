@@ -591,7 +591,7 @@ impl App {
     /// Tear down the history modal's borrowed state: hand the parked composer
     /// draft back, drop any filter query, and clear the search sub-flag.
     /// Shared by the Esc (`CloseModal`) and click-outside dismiss
-    /// paths so the two can never drift. Does **not** touch `active_modal` —
+    /// paths so the two can never drift. Does **not** touch the overlay stack —
     /// the caller owns that transition.
     pub fn restore_history_draft(&mut self) {
         self.input = std::mem::take(&mut self.injection_stashed_input);
@@ -606,7 +606,7 @@ impl App {
     /// draft back, drop any filter query, and clear the search/scroll sub-flags.
     /// Shared by the Esc (`CloseModal`), click-outside dismiss, and activation
     /// paths so they can never drift. Mirrors [`Self::restore_history_draft`];
-    /// does **not** touch `active_modal` — the caller owns that transition.
+    /// does **not** touch the overlay stack — the caller owns that transition.
     pub fn restore_model_draft(&mut self) {
         self.input = std::mem::take(&mut self.injection_stashed_input);
         self.set_cursor_end();

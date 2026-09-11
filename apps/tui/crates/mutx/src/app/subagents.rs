@@ -379,6 +379,12 @@ impl App {
                     .session_chrome
                     .get(&self.current_session_id)
                     .and_then(|chrome| chrome.last_turn_performance),
+                // Deliberately empty: the primary's setback clause is *not* a
+                // displayed-mirror slot. It stays in `App::provider_retry`
+                // (the primary's own, `viewed_chrome`'s primary branch reads
+                // it there), so leaving the aside view has nothing to restore
+                // and entering one cannot clobber it (ADR-0235).
+                transport_setback: None,
             });
         }
         if let Some(chrome) = self.session_chrome.get(&side_id).cloned() {
@@ -386,6 +392,11 @@ impl App {
         } else {
             // First entry: the aside has no chrome history yet — a fresh,
             // idle surface. Clearing rather than inheriting is the point.
+            //
+            // Written straight into the displayed mirror rather than through
+            // `set_phase`: the primary's setback clause is not part of what a
+            // view swap displays (ADR-0235), so a fresh aside showing an idle
+            // bar must not retire the primary's live countdown.
             self.phase = None;
             self.round_started_at = None;
             self.round_count = 0;
@@ -412,7 +423,7 @@ impl App {
             // No snapshot exists only in a legacy in-process state that
             // predates the snapshot write; clear to a neutral surface and
             // let the next frame's per-session bookkeeping rebuild it.
-            self.phase = None;
+            self.set_phase(None);
             self.round_started_at = None;
         }
         self.in_side_view = false;

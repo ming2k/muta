@@ -40,6 +40,7 @@ fn transcript_content_rect_spans_band_and_gap_rows() {
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,

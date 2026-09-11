@@ -345,7 +345,10 @@ fn test_attempt_inspector_omits_a_connection_moment_it_cannot_place() {
     // The rest of the ladder is unaffected: the head moment still carries its
     // own timestamp through `Server started`.
     assert!(full_text.contains("Server started"), "{full_text}");
-    assert!(full_text.contains("headers 120ms from dispatch"), "{full_text}");
+    assert!(
+        full_text.contains("headers 120ms from dispatch"),
+        "{full_text}"
+    );
     // An unsampled socket shows no retransmit claim at all: a zero here would
     // read as a clean socket rather than an untouched field.
     assert!(!full_text.contains("retransmits"), "{full_text}");

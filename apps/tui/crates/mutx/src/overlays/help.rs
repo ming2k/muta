@@ -53,9 +53,10 @@ pub fn draw_help_modal(
 
     // 0. Active Dialog Contextual Controls (if opened over a dialog)
     if let Some(dialog) = ctx.active_dialog {
-        rows.push(SelectableRow::from_line(Line::from(section_fmt(
-            &format!("{} Controls", dialog.label()),
-        ))));
+        rows.push(SelectableRow::from_line(Line::from(section_fmt(&format!(
+            "{} Controls",
+            dialog.label()
+        )))));
         for cmd in COMMAND_REGISTRY
             .iter()
             .filter(|c| c.scope == Scope::Dialog(dialog))

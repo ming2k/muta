@@ -576,6 +576,7 @@ mod tests {
             events: vec![record(4_000)],
             first_day: Some("2026-08-20".to_string()),
             last_day: Some("2026-08-20".to_string()),
+            ..Default::default()
         }
     }
 

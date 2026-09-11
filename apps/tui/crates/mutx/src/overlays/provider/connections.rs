@@ -31,6 +31,11 @@ pub struct ConnectionsModalProps<'a> {
     pub scroll: &'a mut usize,
     pub follow_selection: bool,
     pub search: bool,
+    /// Whether this surface currently owns the terminal cursor
+    /// (`App::caret_owner() == CaretOwner::Overlay`, ADR-0205). The picker
+    /// never places the physical cursor on its own authority — the frame-level
+    /// arbiter decides that, and this flag is its verdict threaded down.
+    pub show_caret: bool,
     pub connection_info_detail: bool,
     pub connection_detail: Option<&'a muta_contracts::ConnectionDetail>,
     pub connection_info_scroll: &'a mut usize,
@@ -56,6 +61,7 @@ pub fn draw_connections_modal(
         scroll,
         follow_selection,
         search,
+        show_caret,
         connection_info_detail,
         connection_detail,
         connection_info_scroll,
@@ -69,7 +75,11 @@ pub fn draw_connections_modal(
     let header_rect = f.header;
 
     // `a add` opens the preset chooser and `Enter details` drills into connection info/usage.
-    let refresh_label = if refreshing { "refreshing…" } else { "refresh" };
+    let refresh_label = if refreshing {
+        "refreshing…"
+    } else {
+        "refresh"
+    };
     let browse_hints: [FooterHint; 8] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::secondary("/", "search"),
@@ -200,7 +210,7 @@ pub fn draw_connections_modal(
         if let Some(fo) = f.footer {
             render_modal_footer_with_more(frame, fo, hints, extra, theme);
         }
-        if let Some(sr) = search_rect {
+        if show_caret && let Some(sr) = search_rect {
             place_picker_search_cursor(frame, sr, query, cursor_position);
         }
         return area;
@@ -231,7 +241,10 @@ pub fn draw_connections_modal(
         render_modal_footer_with_more(frame, fo, hints, extra, theme);
     }
 
-    if search && let Some(sr) = search_rect {
+    if show_caret
+        && search
+        && let Some(sr) = search_rect
+    {
         place_picker_search_cursor(frame, sr, query, cursor_position);
     }
     area

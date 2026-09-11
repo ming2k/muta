@@ -11,10 +11,10 @@
 //! `step_interaction` — no app-state or render dependency — so it stays
 //! unit-testable and free of layering cycles.
 //!
-//! The router does **not** handle pre-cascade checks (modal backdrop,
+//! The router does **not** handle pre-cascade checks (overlay backdrop,
 //! activity bar, sticky header) that consume the click before any content
 //! resolution. Those remain in the event loop because they gate on
-//! transient app state (`active_modal`, `sticky_step`).
+//! transient app state (`App::surfaces`, `sticky_step`).
 //!
 //! # Relationship to `step_interaction`
 //!

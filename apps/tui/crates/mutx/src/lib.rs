@@ -53,7 +53,7 @@ pub mod trust_gate;
 // Semantic data model.
 pub(crate) mod model;
 
-// The Session view's self-owned keyboard scheme (ADR-0172).
+// The Conversation scene's self-owned keyboard scheme (ADR-0172/ADR-0205).
 pub(crate) mod session;
 // Per-modal keybinding schemes (ADR-0172).
 pub(crate) mod modal_keys;
@@ -490,7 +490,19 @@ pub async fn run_tui(
                 workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
                 retry_pending: false,
             };
-            let mut retry: Option<crate::app::ProviderRetryState> = None;
+            // How many provider attempts the round currently in flight has
+            // spent. It exists for exactly one purpose: the terminal `Error`
+            // arm phrases "Exhausted {n} retry attempts — …" from it, because
+            // the wire error carries no retry count.
+            //
+            // It is a **counter, not state**: it holds no setback, no timer and
+            // no failure text, so it is not a second copy of the clause the
+            // activity bar renders — that clause is owned by the session's
+            // phase and retired with it (ADR-0235), and nothing here sends a
+            // clause write at all. The `retry_attempts = 0` writes below exist
+            // only so a later error cannot be blamed for an earlier round's
+            // attempts.
+            let mut retry_attempts: usize = 0;
             let mut reasoning_start: Option<std::time::Instant> = None;
             // The live primary session id: the translator updates it on
             // `/new` / `/session open` / `/resume` / `/fork` and scopes
@@ -677,14 +689,12 @@ pub async fn run_tui(
                                     .await;
                             }
                             RoundEvent::RoundCompleted(_summary) => {
-                                retry = None;
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                retry_attempts = 0;
                                 transcript!(E::RetainNotRetry);
                             }
                             RoundEvent::RoundInterrupted(record) => {
                                 // C11: the durable twin of the live stop.
-                                retry = None;
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                retry_attempts = 0;
                                 chrome!(event_loop::mutations::ChromeEdit::RoundEnded);
                                 if !routes_to_side {
                                     mutations.send(M::SetPhase(None)).await;
@@ -713,8 +723,7 @@ pub async fn run_tui(
                                 }
                             }
                             RoundEvent::Text(t) => {
-                                retry = None;
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                retry_attempts = 0;
                                 let (provider, model) = attribution!();
                                 let effort = picker_effort!();
                                 let mut message = TranscriptMessage::new(Role::Assistant, t)
@@ -728,15 +737,30 @@ pub async fn run_tui(
                                     message.turn = Some(turn);
                                 }
                                 transcript!(E::Append { message });
-                                if !routes_to_side && harness.loop_status.is_idle() {
-                                    mutations.send(M::SetResponding(false)).await;
-                                    mutations.send(M::SetPhase(None)).await;
+                                // A one-shot text payload is the degenerate case
+                                // of the delta stream: it *is* visible model
+                                // output, so it moves the session's phase
+                                // exactly as a delta does. Otherwise the bar
+                                // keeps reading "waiting for model" after the
+                                // model has answered — and, since the setback
+                                // clause is retired when the phase leaves
+                                // `AwaitingModel` (ADR-0235), the countdown for
+                                // the attempt that just landed rides on.
+                                chrome!(event_loop::mutations::ChromeEdit::PhaseOnly(Some(
+                                    Phase::Answering,
+                                )));
+                                if !routes_to_side {
+                                    if harness.loop_status.is_idle() {
+                                        mutations.send(M::SetResponding(false)).await;
+                                        mutations.send(M::SetPhase(None)).await;
+                                    } else {
+                                        mutations.send(M::SetPhase(Some(Phase::Answering))).await;
+                                    }
                                 }
                             }
                             RoundEvent::CommandResult { name, args, result } => {
                                 mutations.send(M::ClearSwitchingSession).await;
-                                retry = None;
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                retry_attempts = 0;
                                 let invocation = if args.is_empty() {
                                     format!("/{}", name)
                                 } else {
@@ -852,8 +876,7 @@ pub async fn run_tui(
                                     mutations.send(M::SetResponding(true)).await;
                                     mutations.send(M::SetPhase(Some(Phase::Finalizing))).await;
                                 }
-                                retry = None;
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                retry_attempts = 0;
                                 let position = positions_by_session.get(&session_id).copied();
                                 let round = position.map(|(round, _)| round);
                                 let turn = position.map(|(_, turn)| turn);
@@ -886,8 +909,7 @@ pub async fn run_tui(
                                 });
                             }
                             RoundEvent::StreamDiscard => {
-                                retry = None;
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                retry_attempts = 0;
                                 let position = positions_by_session.get(&session_id).copied();
                                 transcript!(E::StreamDiscard {
                                     round: position.map(|(round, _)| round),
@@ -897,8 +919,7 @@ pub async fn run_tui(
                             RoundEvent::UnsentInput { .. } => {
                                 // Retraction is removed: entries only grow and
                                 // update in place; the prompt is marked Cancelled.
-                                retry = None;
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                retry_attempts = 0;
                                 transcript!(E::CancelLastUserPrompt);
                                 if !routes_to_side {
                                     mutations.send(M::SetResponding(false)).await;
@@ -973,8 +994,7 @@ pub async fn run_tui(
                                 }
                                 let (provider, model) = attribution!();
                                 let effort = picker_effort!();
-                                retry = None;
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                retry_attempts = 0;
                                 let position = positions_by_session.get(&session_id).copied();
                                 let sent_at_ms = now_ms!();
                                 let mut message = TranscriptMessage::tool_step(id, name, arguments)
@@ -1228,8 +1248,7 @@ pub async fn run_tui(
                                     .take()
                                     .map(|started| started.elapsed().as_millis() as u64);
                                 if !running {
-                                    retry = None;
-                                    mutations.send(M::SetProviderRetry(None)).await;
+                                    retry_attempts = 0;
                                 }
                                 transcript!(E::FinalizeOrphanedReasoning { duration_ms });
                             }
@@ -1260,9 +1279,22 @@ pub async fn run_tui(
                                     retry_at,
                                     failure: message.clone(),
                                 };
-                                retry = Some(state.clone());
-                                mutations.send(M::SetProviderRetry(Some(state))).await;
-                                if !routes_to_side {
+                                retry_attempts = attempt;
+                                // Publish-only (ADR-0235). The clause is
+                                // retired by the next phase write for *this*
+                                // session — each store owns its own phase —
+                                // never by this translator, which is why no
+                                // arm of this match carries a clause clear.
+                                // The primary's slot is the App mirror, an
+                                // aside's its own chrome entry, so a retrying
+                                // aside cannot paint a countdown onto the
+                                // primary's bar.
+                                if routes_to_side {
+                                    chrome!(event_loop::mutations::ChromeEdit::TransportSetback(
+                                        Box::new(state),
+                                    ));
+                                } else {
+                                    mutations.send(M::SetProviderRetry(state)).await;
                                     // Transport setback, not a workflow phase: the
                                     // countdown rides the dedicated clause channel.
                                     mutations
@@ -1292,22 +1324,16 @@ pub async fn run_tui(
                                 });
                             }
                             RoundEvent::Error(e) => {
-                                let last_retry = retry.take();
-                                mutations.send(M::SetProviderRetry(None)).await;
+                                let attempts = std::mem::take(&mut retry_attempts);
                                 transcript!(E::RetainNotRetry);
                                 // A terminal round error may still carry the raw
                                 // retryable-envelope encoding: strip it so the
                                 // user sees the message, never the wire framing.
-                                let message = if let Some(retry_state) = last_retry
-                                    && retry_state.attempt > 1
-                                {
+                                let message = if attempts > 1 {
                                     if e.starts_with("Failed after") || e.starts_with("Exhausted") {
                                         e
                                     } else {
-                                        format!(
-                                            "Exhausted {} retry attempts — {}",
-                                            retry_state.attempt, e
-                                        )
+                                        format!("Exhausted {attempts} retry attempts — {e}")
                                     }
                                 } else {
                                     e

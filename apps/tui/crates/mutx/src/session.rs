@@ -10,7 +10,8 @@
 //! transcript scrolling (PgUp/PgDn/Home/End) is handled unconditionally by the
 //! router. Before this module those keys were
 //! scattered through the central `input` match as bare `active_modal == None`
-//! branches that silently applied to every scene. They now live here as the
+//! branches that silently applied to every scene (that mirror is gone with
+//! ADR-0205; the router's overlay stack is the only foreground authority). They now live here as the
 //! surface's own keybinding scheme: an executable resolver,
 //! [`resolve_chat_surface_key`], whose advertised hints
 //! ([`live_chat_hints`]) share its single semantic origin.

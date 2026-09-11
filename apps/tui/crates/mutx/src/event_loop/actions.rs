@@ -728,7 +728,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // of `history_rows` (the filtered matches) and drop it into
             // the input box for further editing / sending. The message
             // is not shipped here — the user hits Enter again to send.
-            app.save_panel_state(crate::surfaces::DialogKind::HistorySearch);
+            app.save_dialog_state(crate::surfaces::DialogKind::HistorySearch);
             let ranked = app.history_rows();
             let pick = ranked.get(app.modal_index).or_else(|| ranked.first());
             let Some((orig_idx, _)) = pick else {
@@ -1696,23 +1696,18 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
             let is_busy = app.running_sessions.contains(viewed_session_id);
             let app_ctx = crate::keymap::AppContext {
-                active_scene: app.current_scene(),
                 has_overlay: app.surfaces.active_overlay().is_some(),
                 active_dialog: app
                     .surfaces
                     .underlying_dialog()
                     .or_else(|| app.active_dialog()),
                 is_responding: is_busy,
-                has_input: !app.input.is_empty(),
                 has_selection: !matches!(
                     app.selection,
                     crate::model::selection::SelectionState::None
                 ),
                 has_running_task: is_busy,
-                in_subagent_view: app.in_subagent_view(),
-                in_side_view: app.in_side_view,
                 queue_count: app.pending_dispatch.len(),
-                has_focused_target: app.focused_target.is_some(),
             };
             let entries = crate::overlays::command_palette::filter_palette_commands(
                 &app.command_palette_query,
@@ -1913,15 +1908,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // press (so ↓ can restore it).
             let session_rows = app.current_session_history();
             app.history_prev(&session_rows);
-        }
-        input::InputAction::RecallQueued => {
-            // Destructive recall for the queue modal's explicit pull-to-composer
-            // gesture, where removing the item from the list is the point.
-            if let Some(crate::app::RecallQueued::Restored(dispatch)) =
-                app.recall_queued(viewed_session_id)
-            {
-                app.restore_dispatch(dispatch);
-            }
         }
         input::InputAction::RecallQueuedSelected => {
             // The queue modal's `Enter` recalls the *selected* item

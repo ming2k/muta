@@ -36,6 +36,7 @@ fn render_full_view(
                     items: &[],
                     paused: false,
                     blocked: false,
+                    expand_key: Some(crate::keymap::Key::CTRL_Q),
                 },
                 tasks_bar: Default::default(),
                 persistence_health: None,

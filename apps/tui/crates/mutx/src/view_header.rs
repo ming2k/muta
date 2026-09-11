@@ -1,15 +1,16 @@
-//! Contextual first-row header for every view — plus the Subagent
-//! page's permanent key-legend footer.
+//! Contextual first-row header for every scene.
 //!
-//! Every view — Main (session), `/btw`, Subagent, Settings, and future focused pages —
-//! shares one layout rule for the head row: identity and view-specific
-//! context on the left, mode / index metadata on the right. Navigation
-//! shortcuts do **not** live on the head row; the aside view carries them on
-//! its second header row (ADR-0103 §3) and the Subagent page on its permanent
-//! three-row footer ([`draw_subagent_footer`]) instead. Row 2 is demand-driven
-//! (ADR-0104): it exists only while the view has something to say that no
-//! other surface already says. Keeping this outside disclosure rendering
-//! also leaves one clear extension point for future focused pages.
+//! Every scene — Conversation, `/btw` Aside, TaskInspection, Settings — shares
+//! one layout rule for the head row: identity and scene-specific context on the
+//! left, mode / index metadata on the right. Navigation shortcuts do **not**
+//! live on the head row; they live on row 2 (ADR-0103 §3). Row 2 is
+//! demand-driven (ADR-0104): it exists only while the scene has something to
+//! say that no other surface already says. The aside and TaskInspection scenes
+//! are identified by a breadcrumb, so their row 2 is that crumb plus `Esc back`
+//! — and nothing else, because their remaining chords are remappable and a
+//! fixed keycap row cannot advertise a remap faithfully (ADR-0205: chrome never
+//! advertises what it cannot honour). Keeping this outside disclosure rendering
+//! also leaves one clear extension point for future focused scenes.
 
 use mutx_engine::{Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -24,6 +25,9 @@ pub(crate) enum ViewHeader<'a> {
     /// The `/btw` aside view (ADR-0103): identity + parent status on row 1;
     /// its shortcuts live on row 2 via [`draw_view_header_hints`].
     Btw(BtwHead),
+    /// The TaskInspection scene (ADR-0205): `SUBAGENT` identity, the task's
+    /// role tag, its label, and the `N of M` sibling index; row 2 is the
+    /// `Main › Subagent[role]` breadcrumb plus `Esc back`.
     Subagent(&'a SubagentBarInfo),
     /// Full-screen Settings View (ADR-0141): `SETTINGS` identity.
     Settings,
@@ -48,8 +52,7 @@ pub(crate) struct BtwHead {
 /// that are either global (`F1 help` — every modal footer and the Help modal
 /// own that discovery) or already carried by a *more specific* surface: the
 /// main view's interrupt lives on the activity bar (which spells the real
-/// double-Esc arming, `Esc Esc interrupt`), and the Subagent page's legend
-/// lives on its permanent footer ([`draw_subagent_footer`]).
+/// double-Esc arming, `Esc Esc interrupt`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ViewHints<'a> {
     /// Which view the legend belongs to — decides the keycap set.
@@ -72,22 +75,31 @@ impl ViewHints<'_> {
     /// means the caller must not reserve the row at all — the head collapses
     /// to a single row and the transcript reclaims the line.
     ///
-    /// - **Breadcrumbs active**: always expands row 2.
-    /// - **Main**: only while at least one aside is live (the aside chip +
-    ///   `F5 asides` are exactly the affordances this row exists for).
-    /// - **Btw**: always — `Ctrl+C back` is the view's single exit, and
-    ///   no other surface repeats it.
-    /// - **Subagent**: never — its permanent footer already carries the same
-    ///   legend (`draw_subagent_footer`), so a row-2 copy would duplicate the
-    ///   exact keycaps one screen apart.
+    /// - **Breadcrumb-identified pages** (aside, subagent task): always — the
+    ///   crumb line plus `Esc back` *is* the row. See the notes below for why
+    ///   those pages advertise nothing else.
+    /// - **Session**: while asides are live — the chip plus the asides chord.
+    /// - **Settings**: always — `Esc back` is the center's only exit.
+    /// - **Btw** / **Subagent** *without* a crumb:
+    ///   unreachable (`event_loop::render` sets the crumb whenever it sets
+    ///   those kinds) and deliberately blank. Their remaining chords (the
+    ///   aside interrupt, the sibling walks) are remappable
+    ///   (`session.prev_sibling` / `session.next_sibling`) and a fixed keycap
+    ///   row cannot render a remap faithfully (ADR-0205: chrome never
+    ///   advertises what it cannot honour), so they are left to the Command
+    ///   Palette and Help.
     pub(crate) fn has_content(&self) -> bool {
+        // A breadcrumb-identified page always carries row 2.
         if self.breadcrumbs.is_some() {
             return true;
         }
         match self.kind {
             ViewKind::Session => self.asides.is_some(),
-            ViewKind::Btw | ViewKind::Settings => true,
-            ViewKind::Subagent => false,
+            ViewKind::Settings => true,
+            // Crumb-less aside/subagent pages cannot occur
+            // (`event_loop::render` sets the crumb with the kind); nothing to
+            // render if one ever did.
+            ViewKind::Btw | ViewKind::Subagent => false,
         }
     }
 }
@@ -208,11 +220,12 @@ pub(crate) fn draw_view_header(
             // the row-2 legend (ADR-0103 §3), so "Esc back" is gone here.
             action: String::new(),
         },
-        // The Subagent head shares the Session head's shape: uppercase identity
-        // + `[ROLE]` tag + task title on the left, and pure index metadata on
-        // the right — the sibling count `(i/n)`, shown only when there is
-        // more than one sibling. Navigation shortcuts moved to the Subagent
-        // page's permanent footer (see `draw_subagent_footer`).
+        // The Subagent head carries the page's whole identity: uppercase
+        // identity + `[ROLE]` tag + task title on the left, and pure index
+        // metadata on the right — the sibling count `(i/n)`, shown only when
+        // there is more than one sibling. The page has no shortcut legend
+        // (ADR-0205: chrome carries no affordance it cannot honour, and the
+        // page's three chords are one Esc and two remappable sibling walks).
         ViewHeader::Subagent(bar) => HeaderContent {
             title: " SUBAGENT ",
             tag: String::new(),
@@ -293,12 +306,10 @@ pub(crate) fn draw_view_header(
     // session head. `Ctrl+P` is the Command Palette chord (the model bar and
     // footer hints advertise it), so surfacing it in the head's right-side
     // space keeps the shortcut discoverable on every session view.
-    let palette = matches!(header, ViewHeader::Session(_)).then(|| {
-        crate::components::keycap::KeyAffordance::from_key(
-            key_overrides.effective_binding(crate::keymap::CommandId::CommandPalette),
-            "palette",
-        )
-    });
+    let palette = matches!(header, ViewHeader::Session(_))
+        .then(|| key_overrides.effective_binding(crate::keymap::CommandId::CommandPalette))
+        .flatten()
+        .map(|key| crate::components::keycap::KeyAffordance::from_key(key, "palette"));
     let palette_width = palette.map(|a| a.width()).unwrap_or(0);
     let right_separator = usize::from(action_width > 0 && palette_width > 0);
     let right_reserved = action_width + palette_width + right_separator;
@@ -381,8 +392,22 @@ pub(crate) fn draw_view_header_hints(
         return;
     }
 
-    // Leading descriptive segment (before the keycaps): the main view's live
-    // aside chip, the aside view's parent note.
+    // Everything below is the *crumb-less* subset of pages. The aside and the
+    // subagent task are identified by their breadcrumb (`Main › Aside`,
+    // `Main › Subagent[role]`, set by `event_loop::render` whenever it sets
+    // those kinds), so they were already rendered and returned above — a
+    // hint set claiming one of those kinds with no breadcrumb is a caller bug,
+    // not a state with a legend to invent (ADR-0238).
+    debug_assert!(
+        !matches!(hints.kind, ViewKind::Btw | ViewKind::Subagent),
+        "a crumb-less {:?} page has no legend to render; breadcrumb-identified \
+         pages must carry their crumb",
+        hints.kind
+    );
+
+    // Leading descriptive segment (before the keycaps): the main conversation's
+    // live-asides chip. The aside's parent status lives on row 1 (the page
+    // header), not here.
     let note: Option<String> = match hints.kind {
         ViewKind::Session => hints.asides.as_ref().map(|chip| {
             if chip.running > 0 {
@@ -391,11 +416,7 @@ pub(crate) fn draw_view_header_hints(
                 format!("btw: {} total", chip.total)
             }
         }),
-        ViewKind::Btw => {
-            let note = hints.parent_note.trim();
-            (!note.is_empty()).then(|| note.to_string())
-        }
-        ViewKind::Subagent | ViewKind::Settings => None,
+        ViewKind::Btw | ViewKind::Subagent | ViewKind::Settings => None,
     };
 
     let pairs: Vec<crate::components::keycap::KeyAffordance> = match hints.kind {
@@ -409,27 +430,15 @@ pub(crate) fn draw_view_header_hints(
             }
             pairs
         }
-        ViewKind::Btw => {
-            let mut pairs = vec![
-                crate::components::keycap::KeyAffordance::from_key(crate::keymap::Key::ESC, "back"),
-                crate::components::keycap::KeyAffordance::from_key(
-                    crate::keymap::Key::F5,
-                    "asides",
-                ),
-            ];
-            if hints.interruptible {
-                pairs.push(crate::components::keycap::KeyAffordance::from_key(
-                    crate::keymap::Key::CTRL_C,
-                    "interrupt",
-                ));
-            }
-            pairs
-        }
-        ViewKind::Subagent => Vec::new(),
         ViewKind::Settings => vec![crate::components::keycap::KeyAffordance::from_key(
             crate::keymap::Key::ESC,
             "back",
         )],
+        // Unreachable — a crumb-less aside/subagent page is a caller bug,
+        // asserted above. Rendering nothing keeps a malformed hint set from
+        // painting a legend that no surface honours (ADR-0205: chrome never
+        // advertises what it cannot honour).
+        ViewKind::Btw | ViewKind::Subagent => Vec::new(),
     };
 
     let width = rect.width as usize;
@@ -438,10 +447,9 @@ pub(crate) fn draw_view_header_hints(
         loop {
             let note_width = note.as_ref().map(|n| n.width() + 4).unwrap_or(0);
             let pairs_width: usize = chosen.iter().map(|affordance| affordance.width()).sum();
-            let needed = note_width
-                + pairs_width
-                + SUBAGENT_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1);
-            if needed <= width.saturating_sub(2 * SUBAGENT_FOOTER_MARGIN_MIN) || chosen.len() <= 1 {
+            let needed =
+                note_width + pairs_width + HEAD_HINTS_PAIR_GAP * chosen.len().saturating_sub(1);
+            if needed <= width.saturating_sub(2 * HEAD_HINTS_MARGIN_MIN) || chosen.len() <= 1 {
                 break;
             }
             chosen.pop();
@@ -451,10 +459,10 @@ pub(crate) fn draw_view_header_hints(
 
     let note_width = note.as_ref().map(|n| n.width()).unwrap_or(0);
     let pairs_width: usize = chosen.iter().map(|affordance| affordance.width()).sum();
-    let gaps = SUBAGENT_FOOTER_PAIR_GAP * chosen.len().saturating_sub(1)
-        + if note.is_some() { 4 } else { 0 };
+    let gaps =
+        HEAD_HINTS_PAIR_GAP * chosen.len().saturating_sub(1) + if note.is_some() { 4 } else { 0 };
     let content_width = note_width + pairs_width + gaps;
-    let margin = ((width.saturating_sub(content_width)) / 2).max(SUBAGENT_FOOTER_MARGIN_MIN);
+    let margin = ((width.saturating_sub(content_width)) / 2).max(HEAD_HINTS_MARGIN_MIN);
 
     let mut spans = vec![Span::styled(" ".repeat(margin), fill)];
     if let Some(note) = note {
@@ -462,7 +470,7 @@ pub(crate) fn draw_view_header_hints(
     }
     for (i, affordance) in chosen.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" ".repeat(SUBAGENT_FOOTER_PAIR_GAP), fill));
+            spans.push(Span::styled(" ".repeat(HEAD_HINTS_PAIR_GAP), fill));
         }
         let [key_span, label_span] = affordance.render_spans(theme, bg);
         spans.push(key_span);
@@ -476,60 +484,8 @@ pub(crate) fn draw_view_header_hints(
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
-/// Draw the Subagent page's permanent three-row footer.
-pub(crate) fn draw_subagent_footer(
-    frame: &mut Frame,
-    rect: Rect,
-    info: &SubagentBarInfo,
-    theme: &Theme,
-) {
-    if rect.height == 0 {
-        return;
-    }
-
-    let bg = theme.raised();
-    let fill = Style::default().bg(bg);
-
-    let mut pairs: Vec<crate::components::keycap::KeyAffordance> =
-        vec![crate::components::keycap::KeyAffordance::from_key(
-            crate::keymap::Key::ESC,
-            "back",
-        )];
-    if info.total > 1 {
-        pairs.push(crate::components::keycap::KeyAffordance::new("[", "prev"));
-        pairs.push(crate::components::keycap::KeyAffordance::new("]", "next"));
-    }
-
-    let content_len: usize = pairs.iter().map(|a| a.width()).sum::<usize>()
-        + SUBAGENT_FOOTER_PAIR_GAP * pairs.len().saturating_sub(1);
-    let width = rect.width as usize;
-    let margin = (width.saturating_sub(content_len)) / 2;
-
-    let mut spans: Vec<Span<'static>> = vec![Span::styled(" ".repeat(margin), fill)];
-    for (i, affordance) in pairs.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::styled(" ".repeat(SUBAGENT_FOOTER_PAIR_GAP), fill));
-        }
-        let [key_span, label_span] = affordance.render_spans(theme, bg);
-        spans.push(key_span);
-        spans.push(label_span);
-    }
-    spans.push(Span::styled(
-        " ".repeat(width.saturating_sub(margin + content_len)),
-        fill,
-    ));
-
-    let footer_lines = vec![
-        Line::from(Span::styled(" ".repeat(width), fill)),
-        Line::from(spans),
-        Line::from(Span::styled(" ".repeat(width), fill)),
-    ];
-
-    frame.render_widget(Paragraph::new(footer_lines), rect);
-}
-
-const SUBAGENT_FOOTER_PAIR_GAP: usize = 3;
-const SUBAGENT_FOOTER_MARGIN_MIN: usize = 2;
+const HEAD_HINTS_PAIR_GAP: usize = 3;
+const HEAD_HINTS_MARGIN_MIN: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tone {
@@ -659,14 +615,20 @@ mod tests {
     }
 
     #[test]
-    fn btw_hints_legend_leads_with_exit_and_asides() {
+    fn aside_page_legend_is_its_breadcrumb_plus_esc_back() {
+        // The aside page is identified by its breadcrumb, and `draw_view_header_hints`
+        // short-circuits on a crumb: the reachable row is the crumb line plus the
+        // single `Esc back` pair. (The hand-written aside legend — `F5 asides`,
+        // `Ctrl+C interrupt` — that this test used to pin was unreachable dead
+        // code; the aside's other chords are remappable and are left to the
+        // Command Palette and Help, ADR-0205/0237.)
         let theme = Theme::default();
         let hints = ViewHints {
             kind: ViewKind::Btw,
             asides: None,
             interruptible: true,
             parent_note: "main running",
-            breadcrumbs: None,
+            breadcrumbs: Some("Main › Aside"),
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -678,21 +640,49 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect();
+        assert!(row.starts_with("   Main › Aside"), "crumb leads: {row}");
+        assert!(row.contains("Esc"), "the exit pair is offered: {row}");
+        assert!(row.contains("back"), "…spelt as the back action: {row}");
         assert!(
-            row.contains("Esc"),
-            "legend must lead with the exit pair: {row}"
-        );
-        assert!(
-            row.contains("asides"),
-            "legend must offer the asides modal: {row}"
-        );
-        assert!(
-            row.contains("Ctrl-c"),
-            "legend must offer the aside interrupt: {row}"
+            !row.contains("asides") && !row.contains("interrupt"),
+            "the aside's remappable chords are not advertised on this row: {row}"
         );
         assert!(
             !row.contains("F1"),
             "global help is not a view-level affordance: {row}"
+        );
+    }
+
+    /// The crumb-less aside/subagent hint set is a caller bug, not a page with
+    /// a legend to invent: it renders nothing (and trips the debug assertion in
+    /// debug builds).
+    #[test]
+    fn crumb_less_aside_hints_render_nothing() {
+        let theme = Theme::default();
+        let hints = ViewHints {
+            kind: ViewKind::Btw,
+            asides: None,
+            interruptible: true,
+            parent_note: "main running",
+            breadcrumbs: None,
+        };
+        assert!(!hints.has_content(), "no crumb, no row");
+        let mut terminal = mutx_engine::TestTerminal::new(80, 1);
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            terminal.draw(|frame| {
+                draw_view_header_hints(frame, frame.area(), &hints, &theme);
+            });
+        }))
+        .ok();
+        let row: String = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            row.trim().is_empty(),
+            "a malformed hint set must not paint a legend no surface honours: {row:?}"
         );
     }
 
@@ -735,18 +725,25 @@ mod tests {
         };
         assert!(!mk(ViewKind::Session, false).has_content());
         assert!(mk(ViewKind::Session, true).has_content());
-        assert!(mk(ViewKind::Btw, false).has_content());
+        assert!(mk(ViewKind::Settings, false).has_content());
+        // Crumb-less: the aside and subagent pages have no legend of their own
+        // (they are identified by their crumb, which is a caller bug to omit).
+        assert!(!mk(ViewKind::Btw, false).has_content());
         assert!(!mk(ViewKind::Subagent, false).has_content());
         assert!(!mk(ViewKind::Subagent, true).has_content());
 
-        let with_crumbs = ViewHints {
-            kind: ViewKind::Session,
+        // A breadcrumb-identified page always carries the row, whichever kind
+        // it is: the crumb line plus `Esc back` is the legend.
+        let crumbs = |kind: ViewKind| ViewHints {
+            kind,
             asides: None,
             interruptible: false,
             parent_note: "",
-            breadcrumbs: Some("Main › Subagent"),
+            breadcrumbs: Some("Main › Aside"),
         };
-        assert!(with_crumbs.has_content());
+        assert!(crumbs(ViewKind::Btw).has_content());
+        assert!(crumbs(ViewKind::Subagent).has_content());
+        assert!(crumbs(ViewKind::Session).has_content());
     }
 
     #[test]

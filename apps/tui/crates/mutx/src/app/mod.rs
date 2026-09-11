@@ -125,8 +125,14 @@ pub enum RecallQueued {
 /// stayed visible at its old coordinate.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CaretOwner {
-    /// The live composer (no overlay, no subagent zoom, no transcript-step focus).
+    /// The live chat composer (no overlay, no subagent zoom, no transcript-step focus).
     Composer,
+    /// A text field belonging to a non-conversation root scene — today the
+    /// Dashboard's inline new-session / prompt task line, whose text is the
+    /// composer buffer but whose field is the scene's own footer. Distinct
+    /// from [`Self::Composer`] because the composer's readline family and
+    /// selection handling must not apply to a scene prompt.
+    Scene,
     /// An active overlay surface that renders its own caret (dialog search, sheet form, etc.).
     Overlay,
     /// No text-input surface is active — the cursor must be hidden.
@@ -241,6 +247,38 @@ pub struct SessionChrome {
     /// session-scoped so primary and `/btw` views never borrow each other's
     /// hint-bar measurement.
     pub last_turn_performance: Option<muta_contracts::TurnPerformanceSnapshot>,
+    /// The transport setback this session's in-flight model request reported
+    /// (`RetryScheduled`): a retry countdown rendered as a clause beside the
+    /// activity label, never as the label itself (see `crate::phase` rule 2).
+    ///
+    /// Session-scoped for the same reason as `phase`: a background aside
+    /// backing off against a rate-limited upstream must not paint a retry
+    /// countdown onto the primary view's bar ([`App::provider_retry`] is the
+    /// primary's own slot).
+    ///
+    /// **Lifetime:** no producer ever clears this. It is retired — together
+    /// with the phase it annotates — by the first phase write that is not
+    /// [`crate::phase::Phase::AwaitingModel`], which
+    /// [`SessionChrome::set_phase`] enforces as the single writer of both
+    /// (ADR-0235).
+    pub transport_setback: Option<ProviderRetryState>,
+}
+
+impl SessionChrome {
+    /// Write this session's activity phase, retiring its transport-setback
+    /// clause under [`crate::phase::ends_transport_setback`] (ADR-0235).
+    ///
+    /// This is the **only** way anything in the process ends a setback clause,
+    /// and the rule it applies is derived from the phase rather than from the
+    /// event that produced it: the response translator publishes a setback and
+    /// then forgets about it, so a wire event it does not know about cannot
+    /// leave a dead countdown on the bar.
+    pub fn set_phase(&mut self, phase: Option<crate::phase::Phase>) {
+        if crate::phase::ends_transport_setback(phase.as_ref()) {
+            self.transport_setback = None;
+        }
+        self.phase = phase;
+    }
 }
 
 /// Whether [`App::adopt_as_draft`] may clobber a composer that currently
@@ -494,19 +532,18 @@ pub struct App {
     /// loop's heartbeat tick so holding the pointer still at the edge keeps
     /// scrolling, and cleared when the pointer re-enters or the drag ends.
     pub input_drag_scroll: Option<bool>,
-    /// Authoritative foreground surface: the full-screen view plus whatever
-    /// panel/transient floats over it (ADR-0141). Callers consume
-    /// `Self::active_modal` as the rendering projection; panel identity is
-    /// always read from [`Self::active_panel`] and view identity from
-    /// [`Self::current_view`].
+    /// Authoritative foreground surface: the root Scene plus the LIFO overlay
+    /// stack floating over it (ADR-0205). The router is the single navigation
+    /// truth — there is no parallel `active_modal` / `active_panel` /
+    /// `current_view` mirror to read instead.
     pub(crate) surfaces: crate::surfaces::SurfaceRouter,
     pub modal_index: usize,
-    /// Retained panel states + the MRU order that backs the Ctrl+L quick
-    /// switcher (ADR-0139/0141). Browse panels open through
-    /// [`Self::open_panel`], which initialises state exactly once per panel
-    /// and restores it on every later open — hide/close/switch instead of
-    /// the old reset-on-every-open ritual. Full-screen views are not
-    /// registered here: their state already persists on `App`.
+    /// Retained dialog states + the MRU order that backs the quick switcher
+    /// (ADR-0205). Browse dialogs open through `open_dialog`, which
+    /// initialises state exactly once per dialog and restores it on every
+    /// later open — hide/close/switch instead of the old reset-on-every-open
+    /// ritual. Root scenes are not registered here: their state already
+    /// persists on `App`.
     pub(crate) surface_store: crate::surfaces::SurfaceStore,
     /// The command palette's live fuzzy query (Ctrl+L).
     pub(crate) command_palette_query: String,
@@ -640,6 +677,12 @@ pub struct App {
     /// Typed activity-bar phase for the primary session (`None` = idle /
     /// bar hidden). Never holds transport setbacks — see `crate::phase`.
     pub phase: Option<crate::phase::Phase>,
+    /// The primary session's transport setback (retry countdown), rendered as a
+    /// clause beside [`App::phase`]. The primary's slot, mirroring
+    /// [`SessionChrome::transport_setback`] for the primary view exactly as
+    /// `phase` mirrors [`SessionChrome::phase`]; asides keep theirs in their
+    /// own chrome entry. Write it only through [`App::set_phase`], which owns
+    /// the clause's lifetime (ADR-0235).
     pub provider_retry: Option<ProviderRetryState>,
     /// Durability-health banner state (ADR-0196 D4): the daemon's
     /// persistence-writer degradation, folded from the monitor stream.

@@ -155,7 +155,10 @@ pub(super) async fn handle_send_chat(
             let expanded = composer_attachments::strip_orphan_image_chips(&expanded, images.len());
             if !app.in_side_view {
                 runtime.is_responding.store(true, Ordering::SeqCst);
-                app.phase = Some(crate::phase::Phase::Queued);
+                // A new dispatch opens a new attempt window: `Queued` is not
+                // the transport-wait phase, so this also retires any setback
+                // clause left over from an earlier round (ADR-0235).
+                app.set_phase(Some(crate::phase::Phase::Queued));
             }
             app.running_sessions.insert(viewed_session_id.to_string());
             let sent_at_ms = now_epoch_ms();
@@ -500,7 +503,9 @@ pub(crate) async fn handle_esc_interrupt_with_runtime(
         return;
     }
     runtime.is_responding.store(false, Ordering::SeqCst);
-    app.phase = None;
+    // The round is being stopped: no request is in flight any more, so the
+    // transport-setback clause goes with the phase (ADR-0235).
+    app.set_phase(None);
     let msgs = if side {
         &mut app.side_messages
     } else {

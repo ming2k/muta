@@ -355,6 +355,13 @@ pub fn route_event(
                         // matching the telemetry binding above.
                         return InputAction::OpenActiveConnectionDetail;
                     }
+                    crate::keymap::CommandId::OpenQueue if dispatch.overlay.is_none() => {
+                        // Ctrl+Q (queue-bar expand keycap, ADR-0126's Ctrl row).
+                        // Top level only: the bar is session chrome and is not
+                        // visible behind a modal, so behind one the chord falls
+                        // through to whatever the modal claims.
+                        return InputAction::OpenQueue;
+                    }
                     crate::keymap::CommandId::InterruptTask => return InputAction::Interrupt,
                     crate::keymap::CommandId::Quit => return InputAction::CtrlC,
                     crate::keymap::CommandId::CopySelection => return InputAction::CopySelection,
