@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-09-11
+
 ### Added
 
 - **Durable turn commits and recoverable projections (ADR-0236).** A turn commit
@@ -143,6 +145,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected item. The aside view's unreachable `F5 asides` / `Ctrl+C interrupt`
   hint legend is gone with it — that page renders its breadcrumb and `Esc back`
   (ADR-0238).
+- The in-app Help modal and all four of its entry points (`F1`, `Ctrl+H`, `?`,
+  and `/help`) are removed. The Command Palette (`Ctrl+P`/`Ctrl+L`) is now the
+  single discovery surface for commands, chords, and slash triggers. `Key::F1`
+  is deleted; `Ctrl+H` is inert (no longer colliding with Backspace by inserting
+  a literal `h`); `?` is an ordinary printable that inserts where text is
+  editable. The mandatory modal-footer `? help` chip and the empty-state
+  carousel's `F1`/`?` page are gone with it (ADR-0239).
 
 ### Changed
 
@@ -7177,7 +7186,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.46.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/ming2k/muta/compare/v0.46.1...v0.47.0
 [0.46.1]: https://github.com/ming2k/muta/compare/v0.46.0...v0.46.1
 [0.46.0]: https://github.com/ming2k/muta/compare/v0.45.3...v0.46.0
 [0.45.3]: https://github.com/ming2k/muta/compare/v0.45.2...v0.45.3
