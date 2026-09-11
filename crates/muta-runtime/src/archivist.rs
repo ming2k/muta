@@ -465,6 +465,24 @@ pub const ARCHIVIST_STATION: MeshStation = MeshStation::Hypervisor;
 mod tests {
     use super::*;
 
+    /// Sandbox the process-wide store to a temp `MUTA_HOME` before any test
+    /// opens it. These tools read the *global* handle, which otherwise resolves
+    /// to the developer's real `~/.local/share/muta/muta.db` and contends with
+    /// any other test binary for its owner lock. Mirrors
+    /// `tests/it/mod.rs::sandbox_once`.
+    fn sandbox_once() {
+        use std::sync::Once;
+        static SANDBOX: Once = Once::new();
+        static KEEP: std::sync::Mutex<Option<tempfile::TempDir>> = std::sync::Mutex::new(None);
+        SANDBOX.call_once(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            // SAFETY: single-writer (the Once) and set before any test body
+            // opens the global store; the env is never mutated again.
+            unsafe { std::env::set_var("MUTA_HOME", tmp.path()) };
+            *KEEP.lock().unwrap() = Some(tmp);
+        });
+    }
+
     #[test]
     fn archivist_address_is_hypervisor_station() {
         let addr = archivist_address();
@@ -480,6 +498,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_tool_runs_against_the_real_store() {
+        sandbox_once();
         // The live store may or may not have content; the tool must not
         // error on an empty index — fail-open to an empty hit list.
         let out = ArchivistSearchHistoryTool
@@ -491,12 +510,14 @@ mod tests {
 
     #[tokio::test]
     async fn list_tool_runs_against_the_real_store() {
+        sandbox_once();
         let out = ArchivistListSessionsTool.call("{}").await.unwrap();
         assert!(out.contains("session_count"), "{out}");
     }
 
     #[tokio::test]
     async fn read_tool_reports_unknown_session() {
+        sandbox_once();
         let err = ArchivistReadSessionTool
             .call(r#"{"session_id": "ffffffff-ffff-ffff-ffff-ffffffffffff"}"#)
             .await
@@ -517,6 +538,7 @@ mod tests {
         use muta_agent::mesh::MeshMailbox;
         use muta_contracts::MeshStation;
 
+        sandbox_once();
         let tracker = MeshTracker::new();
         let tool = ArchivistInstructSessionTool::new(tracker.clone(), archivist_address());
 
