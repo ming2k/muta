@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-09-11
+
+### Added
+
+- **Persistence durability hardening and online hot backup.**
+  - Atomic writes for CAS `BlobStore`: payloads are written to an ephemeral sibling `.tmp` file, flushed and synced via `fsync`, and atomically renamed to the destination hash, eliminating truncated or corrupted file artifacts from process crashes or power interruptions. `retain_only` cleans up interrupted temp artifacts.
+  - Scoped read helper: `PersistenceHandle::with_reader` ensures `DbReader` instances and snapshot transactions are cleanly dropped at closure exit, preventing long-running reads from pinning the WAL log.
+  - Graduated WAL checkpointing: when no active readers exist, checkpoints automatically escalate from `PASSIVE` to `TRUNCATE`, freeing WAL disk space back to zero bytes. Successful maintenance passes trigger `PRAGMA optimize` for optimal query planning.
+  - Online hot backup: `PersistenceHandle::create_backup` and `create_backup_blocking` issue non-blocking atomic `VACUUM INTO` snapshots to produce clean, defragmented SQLite backup databases without interrupting live traffic.
+- **Contextual in-dialog key references.** Pressing `?` inside an active dialog without an active text entry field displays a localized key reference sub-view (`{Dialog} › Keys`) adhering to the host dialog layout and authoritative commands registered in `COMMAND_REGISTRY`.
+
 ## [0.47.0] - 2026-09-11
 
 ### Added
@@ -7186,7 +7197,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.1...HEAD
+[0.47.1]: https://github.com/ming2k/muta/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/ming2k/muta/compare/v0.46.1...v0.47.0
 [0.46.1]: https://github.com/ming2k/muta/compare/v0.46.0...v0.46.1
 [0.46.0]: https://github.com/ming2k/muta/compare/v0.45.3...v0.46.0
