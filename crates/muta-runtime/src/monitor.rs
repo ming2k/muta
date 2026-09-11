@@ -360,6 +360,7 @@ mod tests {
             duration_ms: 5_000,
             paused_ms: 0,
             generation_ms: 2_000,
+            ..Default::default()
         })));
         let row = t.row();
         assert_eq!(row.status, SessionStatus::Idle);

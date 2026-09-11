@@ -1603,7 +1603,10 @@ pub async fn execute_round(
 
     // Commit all terminal round state (messages, usage records, retry point)
     // in a single atomic persistence transaction instead of multiple full-snapshot writes.
-    session
+    // The committed revision is the durable boundary this completion follows
+    // (ADR-0236 D5); it travels on the completion notification so a client can
+    // order the completion against later state.
+    let committed_revision = session
         .commit_turn(CommitTurn {
             messages: &round_history,
             round_counter: None,

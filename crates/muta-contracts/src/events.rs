@@ -1205,6 +1205,13 @@ pub struct RoundSummary {
     /// tokens/sec: `tps = output_tokens / generation_ms`. Falls back to the
     /// round `active_ms()` only when no request completed measurably.
     pub generation_ms: u64,
+    /// The durable session revision this completion follows (ADR-0236 D5): the
+    /// authoritative commit was acknowledged at this revision before the
+    /// completion was published. A client can order the completion against
+    /// later session state and discard a stale replay instead of regressing a
+    /// newer view. `0` for a completion emitted before this field existed.
+    #[serde(default)]
+    pub session_revision: u64,
 }
 
 impl RoundSummary {
@@ -2263,6 +2270,7 @@ mod tests {
             duration_ms: 10_000,
             paused_ms: 8_000,
             generation_ms: 0,
+            ..Default::default()
         };
         assert_eq!(summary.active_ms(), 2_000);
         assert!(
@@ -2284,6 +2292,7 @@ mod tests {
             duration_ms: 40_000,
             paused_ms: 8_000,
             generation_ms: 2_000,
+            ..Default::default()
         };
         assert_eq!(summary.active_ms(), 32_000);
         assert!(
@@ -2301,6 +2310,7 @@ mod tests {
             duration_ms: 0,
             paused_ms: 0,
             generation_ms: 0,
+            ..Default::default()
         };
         assert_eq!(summary.active_ms(), 0);
         assert_eq!(summary.tps(), 0.0);
@@ -2317,6 +2327,7 @@ mod tests {
             duration_ms: 1_000,
             paused_ms: 2_000,
             generation_ms: 0,
+            ..Default::default()
         };
         assert_eq!(summary.active_ms(), 0);
         assert_eq!(summary.tps(), 0.0);
