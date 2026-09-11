@@ -897,12 +897,8 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "/persona code",
-                "/persona architect",
-                "/persona reviewer",
-                "/persona security",
-                "/persona code_analyst",
-                "/persona conversational"
+                "/persona developer",
+                "/persona philosophist",
             ]
         );
 
@@ -916,12 +912,8 @@ mod tests {
         assert_eq!(
             labels,
             vec![
-                "/role code",
-                "/role architect",
-                "/role reviewer",
-                "/role security",
-                "/role code_analyst",
-                "/role conversational"
+                "/role developer",
+                "/role philosophist",
             ]
         );
     }

@@ -283,12 +283,12 @@ transparent and maintainable.
 
 | Concern | File |
 |---------|------|
-| Document model (`Block`, `TranscriptMessage`, `MessageKind`) | `apps/tui/crates/mutx/src/model/document.rs` |
-| Markdown parser (`parse_blocks_markdown`, inline scanner, table accumulator) | `apps/tui/crates/mutx/src/model/document.rs` |
-| Message body renderer (`draw_message_body`) | `apps/tui/crates/mutx/src/message_body.rs` |
-| Adaptive table layout (`build_table_render`, `shrink_column_widths`) | `apps/tui/crates/mutx/src/markdown_table.rs` |
-| Text wrapping, CJK, code gutter, selection helpers | `apps/tui/crates/mutx/src/text_layout.rs` |
-| Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `apps/tui/crates/mutx/src/model/layout.rs` |
-| Selection extraction (`get_selected_text`) | `apps/tui/crates/mutx/src/model/selection.rs` |
-| Grid engine (`Grid`, `diff`, `Backend`) | `apps/tui/crates/mutx-engine/src/` |
+| Document model (`Block`, `TranscriptMessage`, `MessageKind`) | `apps/terminal/crates/mutx/src/model/document.rs` |
+| Markdown parser (`parse_blocks_markdown`, inline scanner, table accumulator) | `apps/terminal/crates/mutx/src/model/document.rs` |
+| Message body renderer (`draw_message_body`) | `apps/terminal/crates/mutx/src/message_body.rs` |
+| Adaptive table layout (`build_table_render`, `shrink_column_widths`) | `apps/terminal/crates/mutx/src/markdown_table.rs` |
+| Text wrapping, CJK, code gutter, selection helpers | `apps/terminal/crates/mutx/src/text_layout.rs` |
+| Layout map and hit-testing (`LayoutMap`, `BlockRegion`, `TableCellHit`) | `apps/terminal/crates/mutx/src/model/layout.rs` |
+| Selection extraction (`get_selected_text`) | `apps/terminal/crates/mutx/src/model/selection.rs` |
+| Grid engine (`Grid`, `diff`, `Backend`) | `apps/terminal/crates/mutx-engine/src/` |
 | Export-to-markdown (clipboard handoff) | `crates/muta-runtime/src/export.rs` |

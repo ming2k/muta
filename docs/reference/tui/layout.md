@@ -29,7 +29,7 @@ on every frame.
 ```
 
 The viewport rect itself comes from `viewport_rect(frame)` in
-`apps/tui/crates/mutx/src/primitives.rs`.
+`apps/terminal/crates/mutx/src/primitives.rs`.
 
 ## Responsive layout & capability-first pipeline (ADR-0181)
 

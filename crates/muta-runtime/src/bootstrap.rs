@@ -10,7 +10,7 @@
 //! the original `main` did, with the same background spawns.
 //!
 //! The crate stays application-neutral (ADR-0054): the caller supplies the
-//! [`AgentIdentity`], the [`AgentPersona`], and the [`UiBridge`] as
+//! [`AgentIdentity`], the [`AgentRoleProfile`], and the [`UiBridge`] as
 //! parameters. Nothing here names a product.
 //!
 //! `SessionStart::Version`, `SessionStart::Doctor`, `SessionStart::Attach`, and
@@ -20,7 +20,7 @@
 
 use muta_agent::catalog;
 use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
-use muta_agent::{Agent, AgentIdentity, AgentPersona, RoundLifecycle, SubagentTool};
+use muta_agent::{Agent, AgentIdentity, AgentRoleProfile, RoundLifecycle, SubagentTool};
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, Message, NoticeKind, NoticeSeverity, NoticeSource,
     NoticeSurface, Provider, RoundEvent, SUBAGENT_EXPLORE, ToolContextBuilder, ToolSet,
@@ -51,7 +51,7 @@ pub struct BootstrapParams {
     pub identity: AgentIdentity,
     /// The declarative agent preset profile (ADR-0053), applied after
     /// construction and before the `[agent]` config overlay.
-    pub preset: AgentPersona,
+    pub preset: AgentRoleProfile,
     /// The frontend's clipboard/UI bridge (used by `/export`).
     pub ui: Arc<dyn UiBridge>,
     /// How the session begins (ADR-0116: only the assembly-relevant

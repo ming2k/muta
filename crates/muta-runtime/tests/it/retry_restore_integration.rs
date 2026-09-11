@@ -28,7 +28,7 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
     BootstrapParams {
         human_channel: None,
         identity: identity.clone(),
-        preset: muta_contracts::AgentPersona::with_identity("probe", identity),
+        preset: muta_contracts::AgentRoleProfile::with_identity("probe", identity),
         ui: Arc::new(HeadlessProbe),
         startup,
         project_root: Some(project_root),
@@ -122,7 +122,7 @@ async fn workspace_free_scope_assembles_without_a_workspace() {
     let boot = bootstrap::assemble(BootstrapParams {
         human_channel: None,
         identity: identity.clone(),
-        preset: muta_contracts::AgentPersona::with_identity("practice", identity),
+        preset: muta_contracts::AgentRoleProfile::with_identity("practice", identity),
         ui: Arc::new(HeadlessProbe),
         startup: SessionStart::Fresh,
         project_root: None,

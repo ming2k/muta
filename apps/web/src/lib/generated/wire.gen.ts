@@ -1501,7 +1501,7 @@ export type Readiness = { "readiness": "first_output" } | { "readiness": "after_
 /**
  * Network protocol used to query a first-party remote model catalog.
  */
-export type RemoteCatalogEndpoint = "open_ai_compatible" | "anthropic" | "google" | "google_cloud_code" | "codex" | "copilot";
+export type RemoteCatalogEndpoint = "open_ai_compatible" | "anthropic" | "google" | "google_cloud_code" | "codex" | "copilot" | "opencode_go";
 
 /**
  * A connection-local override for the provider's remote catalog source.

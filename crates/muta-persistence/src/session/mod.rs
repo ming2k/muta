@@ -526,7 +526,7 @@ impl SessionState {
 }
 
 pub struct SessionStore {
-    workspace: Option<muta_contracts::WorkspaceBinding>,
+    workspace: std::sync::RwLock<Option<muta_contracts::WorkspaceBinding>>,
     persona: Option<String>,
     /// Directory holding every session file for this project (or, for
     /// [`SessionStore::for_path`], the parent of the pinned snapshot). All

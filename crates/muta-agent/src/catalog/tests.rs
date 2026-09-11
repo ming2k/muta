@@ -400,8 +400,8 @@ fn opencode_go_routes_models_by_wire_format() {
 
 #[test]
 fn openai_route_uses_official_api_not_opencode_go_relay() {
-    // ADR-0203: OpenAI uses models.dev as its remote catalog source for capability
-    // facts, but its inference routes MUST target https://api.openai.com, never
+    // OpenAI uses its official endpoint as its remote catalog source, and
+    // its inference routes MUST target https://api.openai.com, never
     // the opencode.ai relay endpoint.
     let (protocol, base_url, _) =
         route_for_model("openai", "gpt-4o").expect("openai gpt-4o route must exist");
@@ -788,10 +788,10 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
 }
 
 #[tokio::test]
-async fn models_dev_source_materializes_catalog_models_for_opencode_go() {
-    // The opencode-go preset's live catalog is the models.dev third-party
+async fn opencode_go_source_materializes_catalog_models() {
+    // The opencode-go preset's live catalog is the models.opencode.ai private
     // directory (not the relay's own /models). Discovery resolves the
-    // embedded snapshot and materializes ids the client baseline does not
+    // catalog and materializes ids the client baseline does not
     // know (e.g. glm-5.3) via the remote-catalog overlay (ADR-0203).
     let _sandbox = sandboxed_paths();
     let instances = Connections {
@@ -805,7 +805,7 @@ async fn models_dev_source_materializes_catalog_models_for_opencode_go() {
     instances.save().unwrap();
 
     let outcome = discover_provider_models().await;
-    assert!(outcome.changed, "models.dev discovery must record a change");
+    assert!(outcome.changed, "opencode-go discovery must record a change");
     assert!(
         outcome.failures.is_empty(),
         "failures: {:?}",

@@ -832,6 +832,51 @@ use muta_providers::{
 };
 
 #[tokio::test]
+async fn opencode_go_list_models_parses_private_catalog() {
+    let mut server = Server::new_async().await;
+    let base_url = format!("{}/api.json", server.url());
+    let _mock = server
+        .mock("GET", "/api.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+                "opencode-go": {
+                    "models": {
+                        "glm-5.3": {
+                            "id": "glm-5.3",
+                            "name": "GLM-5.3",
+                            "reasoning": true,
+                            "tool_call": true
+                        },
+                        "deepseek-flash": {
+                            "id": "deepseek-flash",
+                            "name": "DeepSeek Flash",
+                            "reasoning": true,
+                            "tool_call": true
+                        }
+                    }
+                }
+            }"#,
+        )
+        .create_async()
+        .await;
+
+    let key = SecretString::from("key-123");
+    let req = ModelDiscoveryRequest {
+        protocol: DiscoveryProtocol::OpencodeGo,
+        base_url: &base_url,
+        api_key: &key,
+        account_id: None,
+        user_agent: None,
+        extra_headers: &[],
+    };
+    let models = list_models(req).await.expect("discovery succeeds");
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, vec!["deepseek-flash", "glm-5.3"]);
+}
+
+#[tokio::test]
 async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
     let mut server = Server::new_async().await;
     let chat_url = format!("{}/v1/chat/completions", server.url());

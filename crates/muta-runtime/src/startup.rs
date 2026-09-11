@@ -273,26 +273,25 @@ define_builtin_commands! {
             ("off", "Disable confinement (allow full host filesystem access)"),
         ],
     },
-    Persona = "/persona" : {
-        summary: "Switch agent persona (identity and capability)",
-        usage: ["/persona", "/persona [code|architect|reviewer|security|conversational]"],
+    Role = "/role" : {
+        summary: "Switch agent role (identity, capability, and workspace)",
+        usage: [
+            "/role",
+            "/role philosophist",
+            "/role developer <workspace>",
+        ],
         examples: [
-            ("/persona architect", "Switch to system design & analysis focus"),
-            ("/persona reviewer", "Read-only code review mode"),
-            ("/persona conversational", "Workspace-free conversational companion"),
+            ("/role developer /path/to/project", "Switch to developer role with workspace"),
+            ("/role philosophist", "Switch to philosophist role (workspace-free)"),
         ],
         intent_keywords: [
-            "persona", "role", "preset", "mode", "identity", "architect", "reviewer",
-            "security", "conversational", "switch-persona", "switch-role", "master",
+            "role", "persona", "preset", "mode", "identity", "developer", "philosophist",
+            "switch", "switch-role", "switch-persona", "master",
         ],
         category: Agent,
         subcommands: [
-            ("code", "the default developer master (full native capabilities)"),
-            ("architect", "architecture & design focus (analysis-first)"),
-            ("reviewer", "read-only code review"),
-            ("security", "read-only security audit (command-confined)"),
-            ("code_analyst", "code analyst (read-only analysis & sandboxed execution)"),
-            ("conversational", "workspace-free conversation (no filesystem or command tools)"),
+            ("developer", "the default developer role (full native capabilities with workspace)"),
+            ("philosophist", "philosophical inquiry & reflection (workspace-free)"),
         ],
     },
     Search = "/search" : {
@@ -498,8 +497,8 @@ impl BuiltinCmd {
             "/auto" | "/delegate" | "/autopilot" | "/yolo" => Some(BuiltinCmd::Unattended),
             // `/unconfine`, `/unconfined`, `/jail`, `/escape` are aliases for `/confinement`.
             "/unconfine" | "/unconfined" | "/jail" | "/escape" => Some(BuiltinCmd::Confinement),
-            // `/role`, `/master` and `/preset` are legacy aliases for `/persona` (ADR-0183 / ADR-0225).
-            "/role" | "/master" | "/preset" => Some(BuiltinCmd::Persona),
+            // `/persona`, `/master` and `/preset` are aliases for `/role`.
+            "/persona" | "/master" | "/preset" => Some(BuiltinCmd::Role),
             _ => None,
         }
     }
@@ -618,7 +617,7 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
                         summary: (*summary).to_string(),
                     })
                     .collect();
-                if spec.name == "/persona" {
+                if spec.name == "/role" {
                     let user_personas = muta_persistence::personas::PersonasConfig::load();
                     for (id, p) in user_personas.personas {
                         if !subs.iter().any(|s| s.name == id) {
@@ -663,9 +662,9 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/unconfined", "/confinement"),
             ("/jail", "/confinement"),
             ("/escape", "/confinement"),
-            ("/role", "/persona"),
-            ("/master", "/persona"),
-            ("/preset", "/persona"),
+            ("/persona", "/role"),
+            ("/master", "/role"),
+            ("/preset", "/role"),
         ]
         .into_iter()
         .map(|(name, target)| muta_contracts::CommandAlias {

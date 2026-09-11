@@ -359,14 +359,24 @@ mod trust_domain_tests {
 }
 
 #[cfg(test)]
-mod persona_command_tests {
+mod role_command_tests {
     use crate::startup::BuiltinCmd;
+    use muta_contracts::MainAgentRole;
 
     #[test]
-    fn persona_and_aliases_resolve_to_builtin_persona() {
-        assert_eq!(BuiltinCmd::from_slash("/persona"), Some(BuiltinCmd::Persona));
-        assert_eq!(BuiltinCmd::from_slash("/role"), Some(BuiltinCmd::Persona));
-        assert_eq!(BuiltinCmd::from_slash("/master"), Some(BuiltinCmd::Persona));
-        assert_eq!(BuiltinCmd::from_slash("/preset"), Some(BuiltinCmd::Persona));
+    fn role_and_aliases_resolve_to_builtin_role() {
+        assert_eq!(BuiltinCmd::from_slash("/role"), Some(BuiltinCmd::Role));
+        assert_eq!(BuiltinCmd::from_slash("/persona"), Some(BuiltinCmd::Role));
+        assert_eq!(BuiltinCmd::from_slash("/master"), Some(BuiltinCmd::Role));
+        assert_eq!(BuiltinCmd::from_slash("/preset"), Some(BuiltinCmd::Role));
+    }
+
+    #[test]
+    fn builtin_roles_are_developer_and_philosophist() {
+        assert_eq!(MainAgentRole::ALL.len(), 2);
+        assert_eq!(MainAgentRole::ALL[0], MainAgentRole::Developer);
+        assert_eq!(MainAgentRole::ALL[1], MainAgentRole::Philosophist);
+        assert_eq!(MainAgentRole::ALL[0].as_str(), "developer");
+        assert_eq!(MainAgentRole::ALL[1].as_str(), "philosophist");
     }
 }

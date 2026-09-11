@@ -30,7 +30,7 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
     BootstrapParams {
         human_channel: None,
         identity: identity.clone(),
-        preset: muta_contracts::AgentPersona::with_identity("probe", identity),
+        preset: muta_contracts::AgentRoleProfile::with_identity("probe", identity),
         ui: Arc::new(HeadlessProbe),
         startup,
         project_root: Some(project_root),

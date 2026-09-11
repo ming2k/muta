@@ -101,7 +101,7 @@ pub mod model;
 pub mod todos;
 pub use todos::{MAX_TODOS, TodoId, TodoItem, TodoList, TodoStatus};
 pub mod agent_kind;
-pub mod agent_persona;
+pub mod agent_role;
 pub mod aspects;
 pub mod cognitive;
 pub mod execution_policy;
@@ -113,9 +113,9 @@ pub mod job;
 pub mod mesh;
 pub mod subagent;
 pub use agent_kind::{AgentKind, MeshStation};
-pub use agent_persona::{
-    AGENT_CODE_ANALYST, AGENT_DEVELOPER, AgentPersona, AgentPersonaDelegation, AgentPersonaId,
-    AgentRuntimeConfig, DelegationPolicy, PRESET_CODE_ANALYST, PRESET_DEVELOPER,
+pub use agent_role::{
+    Agent, AgentRole, AgentRoleDelegation, AgentRoleProfile, AgentRuntimeConfig, DelegationPolicy,
+    MainAgent, MainAgentRole, SubAgent, SubAgentRole,
 };
 pub use aspects::{AspectHook, AspectPhase, AspectVerdict};
 pub use cognitive::{

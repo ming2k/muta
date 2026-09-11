@@ -108,8 +108,8 @@ the same step are deduplicated into one focus target.
 ## Source
 
 Shared header rendering: `draw_expandable_step_header` and `tool_header_line`
-in `apps/tui/crates/mutx/src/disclosure/renderers.rs`. Sticky-pin tracking:
+in `apps/terminal/crates/mutx/src/disclosure/renderers.rs`. Sticky-pin tracking:
 `StickyStep` in the same module. `BlockRegion` is defined in
-`apps/tui/crates/mutx/src/model/layout.rs`. The structured output the tool-step body
+`apps/terminal/crates/mutx/src/model/layout.rs`. The structured output the tool-step body
 renders from is documented in
 [ADR-0001](../../adr/0001-tool-rendering-redesign.md).

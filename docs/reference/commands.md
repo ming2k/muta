@@ -19,7 +19,7 @@ Project and user-defined commands are covered under
 | `/permissions [clear]` | Show or clear always-allowed tool rules |
 | `/unattended [on\|off]` | Toggle unattended execution mode (aliases: `/auto`, `/delegate`) |
 | `/confinement [on\|off]` | Toggle workspace filesystem confinement for this session (aliases: `/unconfine`, `/jail`) |
-| `/persona [code\|architect\|reviewer\|security\|conversational]` | Switch agent persona and capability — switches active identity and capability scope (aliases: `/role`, `/master`, `/preset`) |
+| `/role [code|architect|reviewer|security|conversational]` | Switch agent role and capability — switches active identity and capability scope (aliases: `/persona`, `/master`, `/preset`) |
 | `/search <query>` | Lexical search over the current session's transcript and command ledger |
 | `/sessions [id]` | Browse past sessions; with an id, open that session immediately. The retired `/resume` and `/session` are hidden aliases (legacy grammar still resolves) |
 | `/fork` | Fork the current conversation into a child session |
@@ -42,6 +42,7 @@ Project and user-defined commands are covered under
 | `/export` | Export the current conversation to the clipboard as Markdown |
 | `/debug trace [on\|off]` | Toggle per-project provider round-trip tracing for debugging |
 | `/debug preview` | Dry-run the next request body to a file (no provider call) |
+| `/help` | Show available commands and keybindings |
 | `/exit` | Exit the program (mirrors the app-wide double `Ctrl+C` quit gesture) |
 
 Several interactive management commands, including `/models`, `/connections`,
@@ -155,14 +156,14 @@ When on, the agent runs unattended: tool executions and file modifications are a
 
 When confinement is disabled (`off`), file tools can read and write any path on the host system bounded only by the OS user permissions of the daemon. When enabled (`on`, default), file operations outside admitted workspace roots are blocked.
 
-### `/persona`
+### `/role`
 
 | Form | Effect |
 |------|--------|
-| `/persona <id>` | Switch the active agent persona (identity, capability scope, and session metadata) (aliases: `/role`, `/master`, `/preset`) |
-| `/persona` | List available personas (shipped presets and user-configured personas) and the current one |
+| `/role <id>` | Switch the active agent role (identity, capability scope, and session metadata) (aliases: `/persona`, `/master`, `/preset`) |
+| `/role` | List available roles (shipped presets and user-configured roles) and the current one |
 
-Switches the session's agent persona and capability at runtime (ADR-0053, updated by ADR-0183 and ADR-0225). Switching resolves against user-configured personas in `~/.config/muta/personas.toml` first, then falls back to built-in presets:
+Switches the session's agent role and capability at runtime (ADR-0053, updated by ADR-0183 and ADR-0225). Switching resolves against user-configured roles in `~/.config/muta/roles.toml` (and legacy `personas.toml`) first, then falls back to built-in presets:
 
 | Built-in Preset | Scope |
 |-----------------|-------|
@@ -173,7 +174,7 @@ Switches the session's agent persona and capability at runtime (ADR-0053, update
 | `code_analyst` | Read-only code analysis & sandboxed execution |
 | `conversational` | Workspace-free conversational companion — web + ask_user tools only |
 
-Unknown persona identifiers are rejected with the list of valid personas. Legacy `/role`, `/master`, and `/preset` calls are transparently accepted as aliases.
+Unknown role identifiers are rejected with the list of valid roles. Legacy `/persona`, `/master`, and `/preset` calls are transparently accepted as aliases.
 
 ### `/btw`
 

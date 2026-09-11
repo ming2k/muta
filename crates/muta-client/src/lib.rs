@@ -44,7 +44,7 @@ mod boundary {
     /// violation fails the suite with the rule stated inline.
     #[test]
     fn mutx_depends_on_the_facade_not_on_runtime_internals() {
-        let manifest = include_str!("../../../apps/tui/crates/mutx/Cargo.toml");
+        let manifest = include_str!("../../../apps/terminal/crates/mutx/Cargo.toml");
         const BANNED: &[(&str, &str)] = &[
             (
                 "muta-runtime",

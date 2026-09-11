@@ -434,7 +434,9 @@ mod tests {
     use super::*;
     use crate::registry::HostParams;
     use crate::ui_bridge::{CopyOutcome, UiBridge};
-    use muta_contracts::{AgentPersona, MeshStation, Message, ModelRequest, Provider, Role};
+    use muta_contracts::{
+        AgentRoleProfile, MeshStation, Message, ModelRequest, Provider, Role,
+    };
 
     struct DummyUi;
     #[async_trait::async_trait]
@@ -474,7 +476,7 @@ mod tests {
     async fn hypervisor_construction_and_tools() {
         let params = HostParams {
             identity: AgentIdentity::from_mission("coding"),
-            preset: AgentPersona::developer(),
+            preset: AgentRoleProfile::developer(),
             ui: Arc::new(DummyUi),
         };
         let registry = SessionRegistry::new(params);

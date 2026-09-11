@@ -135,14 +135,14 @@ one-line header (the summary, colored by run state) with no marker glyph.
 
 ## Source
 
-`draw_tool_step` in `apps/tui/crates/mutx/src/disclosure/renderers.rs`. Shared
+`draw_tool_step` in `apps/terminal/crates/mutx/src/disclosure/renderers.rs`. Shared
 header via `draw_expandable_step_header` (from
-`apps/tui/crates/mutx/src/disclosure/mod.rs`). Expanded content dispatched by
+`apps/terminal/crates/mutx/src/disclosure/mod.rs`). Expanded content dispatched by
 `draw_tool_result` to `draw_listing_content`, `draw_matches_content`,
 `draw_bash_content` (which renders the `$ command` line + the structured
 `Shell` payload), `draw_diff_content`, or `draw_code_content`. The execute_command command
 is resolved by `bash_command_for`. Presenters (summary / `result_kind` /
-`arg_layout`) live in `apps/tui/crates/mutx/src/tools/`. The structured
+`arg_layout`) live in `apps/terminal/crates/mutx/src/tools/`. The structured
 payload comes from `ToolOutput`
 ([ADR-0001](../../adr/0001-tool-rendering-redesign.md)); header data from
 `tool_step_header()` and `parse_arguments_kv()` in `document.rs`.

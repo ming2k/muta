@@ -39,7 +39,7 @@ secretly reach into application state.
 
 ## The three layers
 
-### Engine — `apps/tui/crates/mutx-engine`
+### Engine — `apps/terminal/crates/mutx-engine`
 
 The in-house grid engine (ADR-0038). A retained 2-D cell grid with
 write-marks-dirty tracking, a back/front buffer diff, and a crossterm backend.
@@ -47,7 +47,7 @@ It exposes `Frame`, `Rect`, `Layout`, `Span`, `Style`, `Grid`, `TestTerminal`,
 and friends. It has **no muta dependencies** — it is a general terminal
 drawing engine that the view layer paints into.
 
-### View — `apps/tui/crates/mutx/src` (view modules)
+### View — `apps/terminal/crates/mutx/src` (view modules)
 
 The widget layer and the semantic document model. Everything here is a pure
 function of borrowed data: it reads `muta_contracts` domain types and a `Theme`
@@ -58,7 +58,7 @@ catalog the picker ranks). They **do not** depend on the shell modules — since
 ADR-0079 re-merged the view crate into the binary, the one-way boundary is a
 documented convention rather than compiler-enforced.
 
-The view modules live flat under `apps/tui/crates/mutx/src/`, grouped by concern:
+The view modules live flat under `apps/terminal/crates/mutx/src/`, grouped by concern:
 
 | Module | Responsibility |
 |--------|----------------|
@@ -73,7 +73,7 @@ The view modules live flat under `apps/tui/crates/mutx/src/`, grouped by concern
 | `model/` | Semantic data model: `document` (`TranscriptMessage`, `Block`, markdown parsing), `layout` (`LayoutMap`, `BlockRegion`, `SemanticCursor`, hit-testing), `selection` (`SelectionState`). |
 | `fuzzy` / `providers` / `surfaces` / `completion` | Helpers shared with the shell. |
 
-### App shell — `apps/tui/crates/mutx/src`
+### App shell — `apps/terminal/crates/mutx/src`
 
 The application: `App` state, the event loop, input→action mapping, terminal
 lifecycle, completion logic, clipboard, and session wiring. It owns all the

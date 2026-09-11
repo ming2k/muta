@@ -275,6 +275,31 @@ impl SessionStore {
         Ok(())
     }
 
+    pub async fn set_workspace(
+        &self,
+        workspace: Option<muta_contracts::WorkspaceBinding>,
+    ) -> Result<(), String> {
+        {
+            let mut ws_guard = self.workspace.write().unwrap();
+            *ws_guard = workspace.clone();
+        }
+        let (path, data, should_persist) = {
+            let mut state = self.state.lock().await;
+            state.data.workspace = workspace;
+            state.data.updated_at = unix_timestamp();
+            let empty_unpersisted = Self::should_skip_persist(&state);
+            if !empty_unpersisted {
+                state.defer_persist = false;
+            }
+            (state.path.clone(), state.data.clone(), !empty_unpersisted)
+        };
+        if should_persist {
+            self.persist_off_runtime(path, data, self.blob_store.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn round_counter(&self) -> u64 {
         self.state.lock().await.data.round_counter
     }
@@ -365,10 +390,20 @@ mod tests {
         let store = SessionStore::for_path(dir.path().join("session.json"));
         assert_eq!(store.active_persona().await, None);
 
-        store.set_persona(Some("architect".to_string())).await.unwrap();
-        assert_eq!(store.active_persona().await, Some("architect".to_string()));
+        store.set_persona(Some("philosophist".to_string())).await.unwrap();
+        assert_eq!(store.active_persona().await, Some("philosophist".to_string()));
 
         store.set_persona(None).await.unwrap();
         assert_eq!(store.active_persona().await, None);
+
+        // Test dynamic set_workspace
+        assert!(store.workspace().is_some());
+        store.set_workspace(None).await.unwrap();
+        assert!(store.workspace().is_none());
+        assert!(store.workspace_root().is_none());
+
+        let new_ws = muta_contracts::WorkspaceBinding::new(dir.path().to_path_buf());
+        store.set_workspace(Some(new_ws.clone())).await.unwrap();
+        assert_eq!(store.workspace(), Some(new_ws));
     }
 }

@@ -2,7 +2,7 @@ use crate::UiBridge;
 use crate::bootstrap::{self, BootstrapParams};
 use crate::monitor::MonitorTracker;
 use crate::serve::{AttachAction, AttachSyncBuffer, is_attach_sync_event};
-use muta_agent::{Agent, AgentIdentity, AgentPersona};
+use muta_agent::{Agent, AgentIdentity, AgentRoleProfile};
 use muta_contracts::{
     AgentRequest, AgentResponse, MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession,
     PermissionDecision, SessionHosting, SessionOverview, SessionStatus,
@@ -27,7 +27,7 @@ pub(crate) fn unix_epoch_ms() -> u64 {
 #[derive(Clone)]
 pub struct HostParams {
     pub identity: AgentIdentity,
-    pub preset: AgentPersona,
+    pub preset: AgentRoleProfile,
     pub ui: Arc<dyn UiBridge>,
 }
 pub struct HostedSession {
@@ -1342,27 +1342,37 @@ impl SessionRegistry {
         let persona_id = persona_selected.clone().or(binding.persona);
         if let Some(persona_id) = persona_id.as_deref() {
             let personas = muta_persistence::personas::PersonasConfig::load();
-            let persona = personas.get(persona_id).ok_or_else(|| {
-                AssembleErr::AssembleFailed(Box::new(std::io::Error::new(
+            if let Some(persona) = personas.get(persona_id) {
+                if persona_selected.is_some() {
+                    workspace = match persona.resolved_workspace() {
+                        muta_persistence::personas::PersonaWorkspace::None => None,
+                        muta_persistence::personas::PersonaWorkspace::Inherit => workspace,
+                        muta_persistence::personas::PersonaWorkspace::Fixed(root) => {
+                            Some(muta_contracts::WorkspaceBinding::new(root))
+                        }
+                    };
+                }
+                let persona_identity = persona.identity();
+                let mut role = muta_contracts::AgentRoleProfile::from_role(
+                    persona.preset_id(),
+                    &persona_identity,
+                );
+                role.identity = persona_identity.clone();
+                identity = persona_identity;
+                preset = role;
+            } else if let Some(builtin) = muta_contracts::MainAgentRole::parse(persona_id) {
+                if persona_selected.is_some() && builtin == muta_contracts::MainAgentRole::Philosophist {
+                    workspace = None;
+                }
+                let role = muta_contracts::AgentRoleProfile::from_role(builtin, &identity);
+                identity = role.identity.clone();
+                preset = role;
+            } else {
+                return Err(AssembleErr::AssembleFailed(Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("unknown persona '{persona_id}'"),
-                )))
-            })?;
-            if persona_selected.is_some() {
-                workspace = match persona.resolved_workspace() {
-                    muta_persistence::personas::PersonaWorkspace::None => None,
-                    muta_persistence::personas::PersonaWorkspace::Inherit => workspace,
-                    muta_persistence::personas::PersonaWorkspace::Fixed(root) => {
-                        Some(muta_contracts::WorkspaceBinding::new(root))
-                    }
-                };
+                    format!("unknown persona or role '{persona_id}'"),
+                ))));
             }
-            let persona_identity = persona.identity();
-            let mut role =
-                muta_contracts::AgentPersona::from_preset(persona.preset_id(), &persona_identity);
-            role.identity = persona_identity.clone();
-            identity = persona_identity;
-            preset = role;
         }
         let workspace_root = workspace.as_ref().map(|binding| binding.root.clone());
         // `--resume` (ADR-0226): pick the most recent matching session instead

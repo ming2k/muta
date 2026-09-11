@@ -116,7 +116,7 @@ impl SessionStore {
         );
         let defer_persist = !path.exists() && data.is_user_facing_empty();
         Self {
-            workspace,
+            workspace: std::sync::RwLock::new(workspace),
             persona: None,
             sessions_dir,
             db_path,
@@ -152,7 +152,7 @@ impl SessionStore {
             crate::db::PersistenceHandle::spawn(db_path.clone(), Some(blob_store.clone()))
         };
         Self {
-            workspace,
+            workspace: std::sync::RwLock::new(workspace),
             persona,
             sessions_dir,
             db_path,
@@ -164,14 +164,14 @@ impl SessionStore {
     }
 
     /// The optional workspace binding this store carries.
-    pub fn workspace(&self) -> Option<&muta_contracts::WorkspaceBinding> {
-        self.workspace.as_ref()
+    pub fn workspace(&self) -> Option<muta_contracts::WorkspaceBinding> {
+        self.workspace.read().unwrap().clone()
     }
 
     /// The history filter for this store's sessions: its workspace path, or
     /// unbound when there is no workspace.
     pub fn workspace_filter(&self) -> muta_contracts::WorkspaceFilter {
-        muta_contracts::WorkspaceFilter::from_binding(self.workspace.as_ref())
+        muta_contracts::WorkspaceFilter::from_binding(self.workspace.read().unwrap().as_ref())
     }
 
     /// The staffing persona recorded on fresh sessions, if any.
@@ -180,8 +180,8 @@ impl SessionStore {
     }
 
     /// The workspace root, when one is bound. `None` for the unbound set.
-    pub fn workspace_root(&self) -> Option<&std::path::Path> {
-        self.workspace.as_ref().map(|w| w.root.as_path())
+    pub fn workspace_root(&self) -> Option<PathBuf> {
+        self.workspace.read().unwrap().as_ref().map(|w| w.root.clone())
     }
 
     pub async fn id(&self) -> String {
@@ -220,7 +220,7 @@ impl SessionStore {
 
     /// Start a brand-new session and repoint this store at it.
     pub async fn reset(&self) -> Result<String, String> {
-        let workspace = self.workspace.clone();
+        let workspace = self.workspace.read().unwrap().clone();
         let persona = self.persona.clone();
         let mut state = self.state.lock().await;
         let sessions_dir = self.sessions_dir.clone();
@@ -265,7 +265,7 @@ impl SessionStore {
         if state.data.id == resolved {
             return Ok(());
         }
-        let workspace = self.workspace.clone();
+        let workspace = self.workspace.read().unwrap().clone();
         let persona = self.persona.clone();
         let blob_store = self.blob_store.clone();
         let writer = self.writer.clone();

@@ -19,8 +19,7 @@ use muta_providers::{
     ModelProviderSpec, RemoteCatalogSource, model_provider_spec, route_for_model,
 };
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::mpsc;
 
 const MODEL_LIST_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -37,8 +36,6 @@ enum DiscoverySource {
         client_profile: muta_contracts::ClientProfile,
         cached_etag: Option<String>,
     },
-    /// A third-party catalog entry (models.dev), keyed by provider id.
-    ModelsDev { provider: String },
 }
 
 impl DiscoverySource {
@@ -48,10 +45,6 @@ impl DiscoverySource {
         let mut digest = Sha256::new();
         digest.update(b"remote-catalog-request-v1\0");
         match self {
-            Self::ModelsDev { provider } => {
-                digest.update(b"models-dev\0");
-                digest.update(provider.as_bytes());
-            }
             Self::FirstParty {
                 protocol,
                 base_url,
@@ -82,9 +75,8 @@ impl DiscoverySource {
     }
 
     fn discard_validator(&mut self) {
-        if let Self::FirstParty { cached_etag, .. } = self {
-            *cached_etag = None;
-        }
+        let Self::FirstParty { cached_etag, .. } = self;
+        *cached_etag = None;
     }
 }
 
@@ -95,6 +87,7 @@ const fn discovery_protocol_id(protocol: DiscoveryProtocol) -> &'static str {
         DiscoveryProtocol::Google => "google",
         DiscoveryProtocol::GoogleCloudCode => "google-cloud-code",
         DiscoveryProtocol::Codex => "codex",
+        DiscoveryProtocol::OpencodeGo => "opencode-go",
     }
 }
 
@@ -110,39 +103,9 @@ struct DiscoveryFetch {
     update: Result<ModelDiscoveryUpdate, String>,
 }
 
-/// The shared models.dev fetch for one discovery pass. The first `ModelsDev`
-/// job to reach it starts the fetch; every sibling awaits the same result, and
-/// a failure is surfaced to each of them (never to first-party jobs).
-type ModelsDevRefresh = Arc<OnceCell<Result<(), String>>>;
-
-async fn fetch_models(job: DiscoveryJob, models_dev_refresh: ModelsDevRefresh) -> DiscoveryFetch {
+async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
     let source_identity = job.source.identity();
     match job.source {
-        DiscoverySource::ModelsDev { provider } => {
-            // ADR-0227: refresh the shared catalog at most once per pass,
-            // concurrently with any first-party fetches. A failed refresh makes
-            // each `ModelsDev` connection keep its persisted list.
-            let refresh = models_dev_refresh
-                .get_or_init(|| async {
-                    muta_providers::refresh_models_dev()
-                        .await
-                        .map_err(|error| error.to_string())
-                })
-                .await;
-            if let Err(error) = refresh {
-                return DiscoveryFetch {
-                    connection: job.connection,
-                    source_identity,
-                    update: Err(error.clone()),
-                };
-            }
-            let update = fetch_models_dev(&provider).await;
-            DiscoveryFetch {
-                connection: job.connection,
-                source_identity,
-                update,
-            }
-        }
         DiscoverySource::FirstParty {
             protocol,
             base_url,
@@ -189,15 +152,6 @@ async fn fetch_models(job: DiscoveryJob, models_dev_refresh: ModelsDevRefresh) -
             }
         }
     }
-}
-
-/// Resolve a models.dev provider entry into a discovery update. This is the
-/// models.dev source; endpoint discovery never falls back to another source.
-async fn fetch_models_dev(provider: &str) -> Result<ModelDiscoveryUpdate, String> {
-    muta_providers::models_dev_models(provider)
-        .await
-        .map(|models| ModelDiscoveryUpdate::Modified { models, etag: None })
-        .map_err(|error| error.to_string())
 }
 
 /// One connection's result from a live discovery pass. Emitted in completion
@@ -349,14 +303,8 @@ async fn discover_models_matching(
         return DiscoveryOutcome::default();
     }
 
-    // ADR-0227: one shared models.dev refresh for the pass, started lazily by
-    // the first `ModelsDev` job so it runs concurrently with first-party
-    // fetches. Requests are independent and bounded by their own timeout;
-    // reconcile each result as it completes so a slow connection never delays a
-    // fast one.
-    let models_dev_refresh: ModelsDevRefresh = Arc::new(OnceCell::new());
     let mut fetched = stream::iter(jobs)
-        .map(|job| fetch_models(job, Arc::clone(&models_dev_refresh)))
+        .map(fetch_models)
         .buffer_unordered(DISCOVERY_CONCURRENCY);
     let mut changed = false;
 
@@ -493,10 +441,8 @@ fn discovery_source(
     spec: &'static ModelProviderSpec,
 ) -> Option<DiscoverySource> {
     match connection.catalog_source.as_ref() {
-        Some(RemoteCatalogSourceOverride::ModelsDev { models_dev }) => {
-            Some(DiscoverySource::ModelsDev {
-                provider: models_dev.clone(),
-            })
+        Some(RemoteCatalogSourceOverride::ModelsDev { .. }) => {
+            build_first_party_source(connection, cache, spec, DiscoveryProtocol::OpencodeGo)
         }
         Some(RemoteCatalogSourceOverride::Endpoint { endpoint }) => {
             let protocol = match endpoint {
@@ -507,13 +453,11 @@ fn discovery_source(
                 RemoteCatalogEndpoint::Google => DiscoveryProtocol::Google,
                 RemoteCatalogEndpoint::GoogleCloudCode => DiscoveryProtocol::GoogleCloudCode,
                 RemoteCatalogEndpoint::Codex => DiscoveryProtocol::Codex,
+                RemoteCatalogEndpoint::OpencodeGo => DiscoveryProtocol::OpencodeGo,
             };
             build_first_party_source(connection, cache, spec, protocol)
         }
         None => match spec.catalog_source {
-            RemoteCatalogSource::ModelsDev { provider } => Some(DiscoverySource::ModelsDev {
-                provider: provider.to_string(),
-            }),
             RemoteCatalogSource::Endpoint(protocol) => {
                 build_first_party_source(connection, cache, spec, protocol)
             }

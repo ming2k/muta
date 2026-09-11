@@ -63,6 +63,8 @@ pub enum DiscoveryProtocol {
     GoogleCloudCode,
     /// ChatGPT Subscription Codex backend → `GET /backend-api/codex/models`.
     Codex,
+    /// OpenCode Go relay catalog → `GET https://models.opencode.ai/api.json`.
+    OpencodeGo,
 }
 
 impl DiscoveryProtocol {
@@ -296,6 +298,16 @@ pub fn models_endpoint_for(
         return Err(ModelListError::BadEndpoint("base URL is empty".to_string()));
     }
 
+    if protocol == DiscoveryProtocol::OpencodeGo {
+        return Ok(if trimmed.ends_with("/api.json") {
+            trimmed.to_string()
+        } else if trimmed.starts_with("http://") {
+            format!("{trimmed}/api.json")
+        } else {
+            "https://models.opencode.ai/api.json".to_string()
+        });
+    }
+
     // Split into the API root (scheme + host + version path) and drop any
     // method-specific suffix. We look for the known suffixes from the right so
     // a path like `/v1/chat/completions` keeps its `/v1` root.
@@ -326,6 +338,7 @@ pub fn models_endpoint_for(
             let base = base.strip_suffix('/').unwrap_or(base);
             std::borrow::Cow::Owned(base.to_string())
         }
+        DiscoveryProtocol::OpencodeGo => unreachable!(),
     };
     // A trailing slash on the root is noise for the path join below.
     while root.ends_with('/') {
@@ -337,6 +350,7 @@ pub fn models_endpoint_for(
         DiscoveryProtocol::Anthropic => format!("{root}/models"),
         DiscoveryProtocol::Google => format!("{root}/models"),
         DiscoveryProtocol::GoogleCloudCode => format!("{root}/v1internal:fetchAvailableModels"),
+        DiscoveryProtocol::OpencodeGo => unreachable!(),
     })
 }
 
@@ -471,6 +485,18 @@ pub async fn discover_models(
             }
             client.send(request).await.map_err(ModelListError::Http)?
         }
+        DiscoveryProtocol::OpencodeGo => {
+            let mut request = crate::http::Request::new(netune::Method::GET, &endpoint)
+                .header("user-agent", user_agent)
+                .header("accept", "application/json");
+            if let Some(etag) = options.etag {
+                request = request.header("if-none-match", etag);
+            }
+            for (name, value) in req.extra_headers {
+                request = request.header(name, *value);
+            }
+            client.send(request).await.map_err(ModelListError::Http)?
+        }
     };
 
     let status = response.status;
@@ -525,6 +551,7 @@ fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredMode
         DiscoveryProtocol::Anthropic => parse_data_models(json),
         DiscoveryProtocol::Google | DiscoveryProtocol::GoogleCloudCode => parse_google_models(json),
         DiscoveryProtocol::Codex => parse_codex_models(json),
+        DiscoveryProtocol::OpencodeGo => crate::registry::opencode_go::parse_catalog(json),
     }
 }
 
@@ -537,6 +564,10 @@ fn validate_catalog_shape(protocol: DiscoveryProtocol, json: &Value) -> Result<(
             .get("models")
             .is_some_and(|models| models.is_array() || models.is_object()),
         DiscoveryProtocol::Codex => json.get("models").is_some_and(Value::is_array),
+        DiscoveryProtocol::OpencodeGo => json
+            .get("opencode-go")
+            .and_then(|p| p.get("models"))
+            .is_some_and(Value::is_object),
     };
     valid.then_some(()).ok_or_else(|| {
         ModelListError::Parse(
@@ -548,6 +579,7 @@ fn validate_catalog_shape(protocol: DiscoveryProtocol, json: &Value) -> Result<(
                     "response is missing the required models collection"
                 }
                 DiscoveryProtocol::GoogleCloudCode => "response is missing the required models map",
+                DiscoveryProtocol::OpencodeGo => "response is missing the required opencode-go models map",
             }
             .to_string(),
         )
@@ -960,6 +992,26 @@ fn parse_antigravity_models_map(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn derives_opencode_go_models_endpoint() {
+        assert_eq!(
+            models_endpoint_for(
+                DiscoveryProtocol::OpencodeGo,
+                "https://opencode.ai/zen/go/v1/chat/completions"
+            )
+            .unwrap(),
+            "https://models.opencode.ai/api.json"
+        );
+        assert_eq!(
+            models_endpoint_for(
+                DiscoveryProtocol::OpencodeGo,
+                "http://127.0.0.1:8080"
+            )
+            .unwrap(),
+            "http://127.0.0.1:8080/api.json"
+        );
+    }
 
     #[test]
     fn derives_openai_models_endpoint_from_chat_url() {

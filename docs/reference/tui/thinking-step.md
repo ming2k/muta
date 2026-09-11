@@ -76,5 +76,5 @@ steps. `Enter` / `Space` opens or closes the focused thinking step.
 ## Source
 
 `draw_reasoning_trace` (and `draw_reasoning_trace_header`) in
-`apps/tui/crates/mutx/src/disclosure/renderers.rs`. Header data from
+`apps/terminal/crates/mutx/src/disclosure/renderers.rs`. Header data from
 `thinking_header()` in `document.rs`.

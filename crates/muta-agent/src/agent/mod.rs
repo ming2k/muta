@@ -1213,7 +1213,7 @@ mod execution;
 mod rounds;
 mod state;
 mod steering;
-pub use steering::SwitchedPersona;
+pub use steering::SwitchedRole;
 mod tools_admin;
 
 pub(crate) use rounds::ToolResultRecord;
@@ -1697,8 +1697,8 @@ mod tests {
     fn apply_preset_seeds_skip_interactive_input() {
         let agent = stdin_test_agent();
         assert!(!agent.skip_interactive_input(), "default off");
-        let profile = muta_contracts::AgentPersona::with_identity(
-            "code",
+        let profile = muta_contracts::AgentRoleProfile::with_identity(
+            "developer",
             muta_contracts::AgentIdentity::default(),
         )
         .with_runtime_config(muta_contracts::AgentRuntimeConfig {

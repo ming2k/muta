@@ -1,6 +1,6 @@
 //! The provider-side HTTP client, on the owned transport (ADR-0200).
 //!
-//! OAuth, usage, endpoint discovery and models.dev use this bounded client.
+//! OAuth, usage, and endpoint discovery use this bounded client.
 //! Inference and provider services share direct transport construction and
 //! platform trust; streaming inference owns its separate deadline policy.
 //!

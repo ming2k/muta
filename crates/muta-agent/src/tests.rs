@@ -490,19 +490,19 @@ fn apply_preset_switches_identity_into_the_system_prompt() {
         baseline[0].content
     );
 
-    let architect = muta_contracts::AgentPersona::from_preset(
-        muta_contracts::AgentPersonaId::Architect,
+    let philosophist = muta_contracts::AgentRoleProfile::from_role(
+        muta_contracts::MainAgentRole::Philosophist,
         &crate::AgentIdentity::default(),
     );
-    agent.apply_preset(&architect);
+    agent.apply_preset(&philosophist);
 
-    // The next assembled request must open with the architect role directive.
+    // The next assembled request must open with the philosophist role directive.
     let mut messages: Vec<Message> = Vec::new();
     agent.prepare_request_messages_debug(&mut messages);
     let prompt = &messages[0].content;
     assert!(
-        prompt.starts_with("Role: software architect."),
-        "switched prompt should open with the architect role directive; got: {prompt}"
+        prompt.starts_with("Role: philosophist."),
+        "switched prompt should open with the philosophist role directive; got: {prompt}"
     );
     assert!(
         !prompt.starts_with("You are a coding assistant."),

@@ -448,6 +448,7 @@ pub enum RemoteCatalogEndpoint {
     GoogleCloudCode,
     Codex,
     Copilot,
+    OpencodeGo,
 }
 
 /// Standard named pipe filter policies (ADR-0203).

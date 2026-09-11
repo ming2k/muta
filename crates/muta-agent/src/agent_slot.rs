@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
-use muta_contracts::{AgentPersona, AgentPersonaDelegation, MeshAddress};
+use muta_contracts::{AgentRoleDelegation, AgentRoleProfile, MeshAddress};
 
 use crate::agent::Agent;
 use crate::mesh::MeshTracker;
@@ -16,8 +16,8 @@ use crate::subagent_tool::SubagentRegistry;
 /// and transcript/word-source leaks.
 pub struct AgentSlot {
     agent: Arc<Agent>,
-    preset: AgentPersona,
-    delegation: AgentPersonaDelegation,
+    preset: AgentRoleProfile,
+    delegation: AgentRoleDelegation,
     session_id: String,
     tracker: Option<Arc<MeshTracker>>,
     subagent_registry: Option<Arc<SubagentRegistry>>,
@@ -28,8 +28,8 @@ impl AgentSlot {
     /// Create a new AgentSlot for a session.
     pub fn new(
         agent: Arc<Agent>,
-        preset: AgentPersona,
-        delegation: AgentPersonaDelegation,
+        preset: AgentRoleProfile,
+        delegation: AgentRoleDelegation,
         session_id: impl Into<String>,
     ) -> Self {
         Self {
@@ -60,12 +60,12 @@ impl AgentSlot {
     }
 
     /// The active agent preset.
-    pub fn preset(&self) -> &AgentPersona {
+    pub fn preset(&self) -> &AgentRoleProfile {
         &self.preset
     }
 
     /// The active preset delegation policy.
-    pub fn delegation(&self) -> &AgentPersonaDelegation {
+    pub fn delegation(&self) -> &AgentRoleDelegation {
         &self.delegation
     }
 
@@ -121,8 +121,8 @@ impl AgentSlot {
     pub fn replace(
         &mut self,
         new_agent: Arc<Agent>,
-        new_preset: AgentPersona,
-        new_delegation: AgentPersonaDelegation,
+        new_preset: AgentRoleProfile,
+        new_delegation: AgentRoleDelegation,
     ) -> usize {
         let drained = self.drain_subagents();
         self.agent = new_agent;
@@ -136,7 +136,7 @@ impl AgentSlot {
 mod tests {
     use super::*;
     use crate::AgentIdentity;
-    use muta_contracts::{AGENT_CODE_ANALYST, AGENT_DEVELOPER};
+    use muta_contracts::AgentRoleProfile;
 
     struct DummyProvider;
     #[async_trait::async_trait]
@@ -169,14 +169,14 @@ mod tests {
 
     #[tokio::test]
     async fn agent_slot_replaces_atomically_and_drains_subagents() {
-        let agent1 = make_agent("agent-1");
+        let initial_agent = make_agent("initial-root");
         let tracker = Arc::new(MeshTracker::new());
         let registry = Arc::new(SubagentRegistry::default());
 
         let mut slot = AgentSlot::new(
-            agent1,
-            AgentPersona::developer(),
-            AGENT_DEVELOPER,
+            initial_agent,
+            AgentRoleProfile::developer(),
+            AgentRoleProfile::DEVELOPER,
             "session-xyz",
         )
         .with_mesh(tracker.clone(), registry);
@@ -203,14 +203,18 @@ mod tests {
         assert!(!mailbox2.token().is_cancelled());
         assert_eq!(tracker.live_addresses().len(), 2);
 
-        // Replace preset with code analyst
-        let agent2 = make_agent("agent-2");
-        let drained = slot.replace(agent2, AgentPersona::code_analyst(), AGENT_CODE_ANALYST);
+        // Replace developer role with philosophist role
+        let successor_agent = make_agent("successor-root");
+        let drained = slot.replace(
+            successor_agent,
+            AgentRoleProfile::philosophist(),
+            AgentRoleProfile::PHILOSOPHIST,
+        );
 
         assert_eq!(drained, 2);
         assert!(mailbox1.token().is_cancelled());
         assert!(mailbox2.token().is_cancelled());
         assert_eq!(tracker.live_addresses().len(), 0);
-        assert_eq!(slot.delegation().preset_id, "code_analyst");
+        assert_eq!(slot.delegation().preset_id, "philosophist");
     }
 }

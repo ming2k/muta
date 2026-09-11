@@ -31,7 +31,7 @@ use crate::registry::{HostParams, SessionRegistry};
 use crate::serve::{ServeExpose, ServeOptions, StartupParts, start_server};
 use crate::serve_discovery as discovery;
 use crate::shutdown::{DrainProbe, ShutdownGate, ShutdownReason, SignalGuard, TaskBook};
-use muta_agent::{AgentIdentity, AgentPersona};
+use muta_agent::{AgentIdentity, AgentRoleProfile};
 use muta_persistence::config::Config;
 use muta_persistence::lock::ProcessLock;
 use std::sync::Arc;
@@ -54,7 +54,7 @@ pub struct HostOptions {
 
 pub struct HostIdentity {
     pub identity: AgentIdentity,
-    pub preset: AgentPersona,
+    pub preset: AgentRoleProfile,
     pub ui: Arc<dyn UiBridge>,
 }
 

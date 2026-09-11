@@ -5,7 +5,7 @@ It wires the agent runtime, persistence, providers, local control plane, and
 health endpoint without depending on either interactive frontend or bundling
 their assets.
 
-Terminal interaction lives in [`apps/tui`](../../apps/tui), whose `mutx`
+Terminal interaction lives in [`apps/terminal`](../../apps/terminal), whose `mutx`
 binary connects to this daemon. The browser app lives in
 [`apps/web`](../../apps/web) and uses the same control protocol.
 

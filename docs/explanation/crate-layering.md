@@ -148,14 +148,14 @@ ADR-0018 invariant, indexed `project → session`. The ADR-0037 Step 6 factory
 pays the assembly cost once per session, not once per process. The
 per-project, one-server-per-session model of ADR-0081 is superseded.
 
-### Core and app layer — `muta`, `apps/tui`, and `apps/web`
+### Core and app layer — `muta`, `apps/terminal`, and `apps/web`
 
 The user-facing presentation layers:
 
 1. **`muta`** — the core binary. It owns daemon lifecycle and service commands
    (`auth`, `config`, `mcp`, `skill`, `session`, `daemon`, and `doctor`). It
    contains no frontend dependency or frontend assets.
-2. **`apps/tui`** — one Rust app subproject containing `crates/mutx` and its
+2. **`apps/terminal`** — one Rust app subproject containing `crates/mutx` and its
    private `crates/mutx-engine`. It owns interactive and headless prompt
    clients, attachment, the dashboard, clipboard behavior, and terminal
    rendering. It checks the daemon at startup and launches `muta` on demand,

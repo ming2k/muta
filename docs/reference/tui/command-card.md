@@ -60,6 +60,6 @@ vertical position naturally shifts downward according to Entry A's actual height
 ## Source
 
 `draw_command_result` / `command_summary_line` in
-`apps/tui/crates/mutx/src/disclosure/renderers.rs`; band tokens in
-`apps/tui/crates/mutx/src/theme.rs` (`command_surface`,
+`apps/terminal/crates/mutx/src/disclosure/renderers.rs`; band tokens in
+`apps/terminal/crates/mutx/src/theme.rs` (`command_surface`,
 `command_surface_hover`).

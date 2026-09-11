@@ -1,10 +1,10 @@
 [workspace]
 members = [
     "crates/*",
-    "apps/tui/crates/mutx",
-    "apps/tui/crates/mutx-engine",
+    "apps/terminal/crates/mutx",
+    "apps/terminal/crates/mutx-engine",
 ]
-default-members = ["crates/muta", "apps/tui/crates/mutx"]
+default-members = ["crates/muta", "apps/terminal/crates/mutx"]
 resolver = "2"
 
 [workspace.package]

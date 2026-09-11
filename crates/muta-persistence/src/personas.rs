@@ -3,7 +3,7 @@
 //! sessions live in the shared store independent of this definition's
 //! lifecycle (ADR-0226).
 
-use muta_contracts::{AgentIdentity, AgentPersonaId};
+use muta_contracts::{AgentIdentity, MainAgentRole};
 use serde::{Deserialize, Serialize, de::Deserializer};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -71,14 +71,14 @@ impl Default for Persona {
 }
 
 fn default_preset() -> String {
-    AgentPersonaId::Conversational.as_str().to_string()
+    MainAgentRole::Philosophist.as_str().to_string()
 }
 
 impl Persona {
-    /// The preset this persona binds, defaulting to `conversational` when absent
+    /// The preset this persona binds, defaulting to `philosophist` when absent
     /// or unrecognized.
-    pub fn preset_id(&self) -> AgentPersonaId {
-        AgentPersonaId::parse(&self.preset).unwrap_or(AgentPersonaId::Conversational)
+    pub fn preset_id(&self) -> MainAgentRole {
+        MainAgentRole::parse(&self.preset).unwrap_or(MainAgentRole::Philosophist)
     }
 
     /// The effective workspace policy: the explicit declaration when present,
@@ -86,7 +86,7 @@ impl Persona {
     /// a workspace preset inherits the launch directory).
     pub fn resolved_workspace(&self) -> PersonaWorkspace {
         self.workspace.clone().unwrap_or_else(|| {
-            if self.preset_id() == AgentPersonaId::Conversational {
+            if self.preset_id() == MainAgentRole::Philosophist {
                 PersonaWorkspace::None
             } else {
                 PersonaWorkspace::Inherit
@@ -110,11 +110,11 @@ impl Persona {
         if self.name.trim().is_empty() {
             self.name = self.preset.clone();
         }
-        if AgentPersonaId::parse(&self.preset).is_none() {
+        if MainAgentRole::parse(&self.preset).is_none() {
             return Err(format!(
                 "unknown preset '{}'; expected one of {}",
                 self.preset,
-                AgentPersonaId::ALL
+                MainAgentRole::ALL
                     .iter()
                     .map(|preset| preset.as_str())
                     .collect::<Vec<_>>()
@@ -209,7 +209,7 @@ workspace = "none"
         let config = PersonasConfig::from_toml_str(SAMPLE).unwrap();
         assert_eq!(config.ids().collect::<Vec<_>>(), vec!["english-practice"]);
         let persona = config.get("english-practice").unwrap();
-        assert_eq!(persona.preset_id(), AgentPersonaId::Conversational);
+        assert_eq!(persona.preset_id(), MainAgentRole::Philosophist);
         assert_eq!(persona.resolved_workspace(), PersonaWorkspace::None);
         assert_eq!(
             persona.identity().preamble(),

@@ -414,7 +414,7 @@ impl SubagentPresetPool {
 
     /// Filter subagent presets admitted by an agent delegation policy.
     pub fn admitted_for_delegation(
-        delegation: &crate::AgentPersonaDelegation,
+        delegation: &crate::AgentRoleDelegation,
     ) -> Vec<&'static SubagentPreset> {
         Self::ALL
             .iter()
@@ -704,14 +704,14 @@ mod tests {
         );
         assert_eq!(SubagentPresetPool::find("nonexistent"), None);
 
-        let dev_delegation = crate::AGENT_DEVELOPER;
+        let dev_delegation = crate::AgentRoleProfile::DEVELOPER;
         let dev_subagents = SubagentPresetPool::admitted_for_delegation(&dev_delegation);
         assert_eq!(dev_subagents.len(), 5);
 
-        let analyst_delegation = crate::AGENT_CODE_ANALYST;
-        let analyst_subagents = SubagentPresetPool::admitted_for_delegation(&analyst_delegation);
-        assert_eq!(analyst_subagents.len(), 3);
-        let names: Vec<&str> = analyst_subagents.iter().map(|p| p.name).collect();
-        assert_eq!(names, vec!["explore", "title", "skill"]);
+        let phil_delegation = crate::AgentRoleProfile::PHILOSOPHIST;
+        let phil_subagents = SubagentPresetPool::admitted_for_delegation(&phil_delegation);
+        assert_eq!(phil_subagents.len(), 1);
+        let names: Vec<&str> = phil_subagents.iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["explore"]);
     }
 }

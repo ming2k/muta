@@ -87,7 +87,7 @@ fn muta_home_redirects_the_daemon_footprint() {
 fn test_identity() -> HostIdentity {
     HostIdentity {
         identity: muta_contracts::AgentIdentity::new("probe", "lifecycle probe"),
-        preset: muta_contracts::AgentPersona::with_identity(
+        preset: muta_contracts::AgentRoleProfile::with_identity(
             "probe",
             muta_contracts::AgentIdentity::new("probe", "lifecycle probe"),
         ),

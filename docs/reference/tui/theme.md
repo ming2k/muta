@@ -1,6 +1,6 @@
 # Color palette & Theme System
 
-All built-in colors are defined in `Theme::default()` (`apps/tui/crates/mutx/src/theme.rs`).
+All built-in colors are defined in `Theme::default()` (`apps/terminal/crates/mutx/src/theme.rs`).
 
 ## Design Token Architecture
 

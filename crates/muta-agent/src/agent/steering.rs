@@ -3,10 +3,10 @@
 
 use super::*;
 
-/// The outcome of switching a live agent's persona (ADR-0225).
+/// The outcome of switching a live agent's role.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SwitchedPersona {
-    /// Stable persona or preset identifier (e.g. `"english-practice"` or `"architect"`).
+pub struct SwitchedRole {
+    /// Stable role or preset identifier (e.g. `"developer"` or `"philosophist"`).
     pub id: String,
     /// Human-facing display name.
     pub name: String,
@@ -147,7 +147,7 @@ impl Agent {
     }
 
     /// Apply a declarative agent preset (ADR-0053) — set every knob an
-    /// [`muta_contracts::AgentPersona`] declares in one call.
+    /// [`muta_contracts::AgentRoleProfile`] declares in one call.
     ///
     /// Sets: the capability scope ([`Self::set_tools`]) and the runtime
     /// execution knobs (`hard_stop` / doom guard / model-stdin /
@@ -155,7 +155,7 @@ impl Agent {
     /// re-applied here — identity is immutable past construction (it feeds the
     /// system-prompt preamble), so the embedding supplies it to `Agent::new` /
     /// `from_toolset`. A role whose identity should differ per instance composes
-    /// [`muta_contracts::AgentPersona::with_identity`] before construction.
+    /// [`muta_contracts::AgentRoleProfile::with_identity`] before construction.
     ///
     /// The archetype / kind of this agent, derived purely from its [`ExecutionPolicy`] (ADR-0183).
     pub fn kind(&self) -> muta_contracts::AgentKind {
@@ -229,12 +229,12 @@ impl Agent {
     }
 
     /// Apply a declarative agent preset (ADR-0183).
-    pub fn apply_preset(&self, preset: &muta_contracts::AgentPersona) {
+    pub fn apply_preset(&self, preset: &muta_contracts::AgentRoleProfile) {
         self.apply_profile(preset);
     }
 
-    /// Idempotent over defaults: applies an [`muta_contracts::AgentPersona`] (ADR-0183 / ADR-0211).
-    pub fn apply_profile(&self, profile: &muta_contracts::AgentPersona) {
+    /// Idempotent over defaults: applies an [`muta_contracts::AgentRoleProfile`].
+    pub fn apply_profile(&self, profile: &muta_contracts::AgentRoleProfile) {
         self.set_identity(profile.identity.clone());
         self.set_tools(profile.tools.clone());
         self.set_hard_stop_turns(profile.config.hard_stop_turns);
@@ -248,54 +248,46 @@ impl Agent {
         }
     }
 
-    /// Replace this agent's identity (name + mission, or a persona override).
+    /// Replace this agent's identity (name + mission, or a role override).
     pub fn set_identity(&self, identity: AgentIdentity) {
         if let Ok(mut guard) = self.identity.write() {
             *guard = identity;
         }
     }
 
-    /// Equip a persona profile with its preset extensions (ADR-0224).
+    /// Equip a role profile with its preset extensions (ADR-0224).
     fn equip_preset_extensions(
         &self,
-        profile: &mut muta_contracts::AgentPersona,
-        preset: muta_contracts::AgentPersonaId,
+        profile: &mut muta_contracts::AgentRoleProfile,
+        preset: muta_contracts::MainAgentRole,
     ) {
         match preset {
-            muta_contracts::AgentPersonaId::Code => {
+            muta_contracts::MainAgentRole::Developer => {
                 profile
                     .extensions
                     .push(Arc::new(crate::extension::CodeIntelligenceExtension::new()));
             }
-            muta_contracts::AgentPersonaId::CodeAnalyst
-            | muta_contracts::AgentPersonaId::Reviewer
-            | muta_contracts::AgentPersonaId::Architect => {
-                profile.extensions.push(Arc::new(
-                    crate::extension::CodeIntelligenceExtension::read_only(),
-                ));
-            }
-            muta_contracts::AgentPersonaId::Security => {}
-            muta_contracts::AgentPersonaId::Conversational => {}
+            muta_contracts::MainAgentRole::Philosophist => {}
         }
     }
 
-    /// Switch the live agent into a named persona or preset (ADR-0183 / ADR-0225).
+    /// Switch the live agent into a named role.
     ///
-    /// Resolves against user-configured personas in `personas.toml` first, then falls back
-    /// to built-in presets (`code`, `architect`, `reviewer`, `security`, `code_analyst`, `conversational`).
-    pub fn apply_persona(&self, target: &str) -> Option<SwitchedPersona> {
+    /// Resolves against user-configured roles in `personas.toml` first, then falls back
+    /// to built-in presets (`developer`, `philosophist`).
+    pub fn apply_role(&self, target: &str) -> Option<SwitchedRole> {
         let trimmed = target.trim();
         let personas_config = muta_persistence::personas::PersonasConfig::load();
         if let Some(user_persona) = personas_config.get(trimmed) {
             let preset_id = user_persona.preset_id();
             let identity = user_persona.identity();
-            let mut profile = muta_contracts::AgentPersona::from_preset(preset_id, &identity);
+            let mut profile = muta_contracts::AgentRoleProfile::from_role(preset_id, &identity);
             profile.identity = identity;
             profile.unattended = user_persona.unattended;
             self.equip_preset_extensions(&mut profile, preset_id);
             self.apply_profile(&profile);
             *self.extensions.write().unwrap_or_else(|e| e.into_inner()) = profile.extensions;
-            return Some(SwitchedPersona {
+            return Some(SwitchedRole {
                 id: trimmed.to_string(),
                 name: user_persona.name.clone(),
                 description: user_persona
@@ -305,24 +297,18 @@ impl Agent {
             });
         }
 
-        let resolved = muta_contracts::AgentPersonaId::parse(trimmed)?;
+        let resolved = muta_contracts::MainAgentRole::parse(trimmed)?;
         let base = self.identity();
-        let mut profile = muta_contracts::AgentPersona::from_preset(resolved, &base);
+        let mut profile = muta_contracts::AgentRoleProfile::from_role(resolved, &base);
         self.equip_preset_extensions(&mut profile, resolved);
         self.apply_profile(&profile);
         *self.extensions.write().unwrap_or_else(|e| e.into_inner()) = profile.extensions;
 
-        Some(SwitchedPersona {
+        Some(SwitchedRole {
             id: resolved.as_str().to_string(),
             name: resolved.as_str().to_string(),
             description: resolved.description().to_string(),
         })
-    }
-
-    /// Switch the live agent into a named role (legacy alias for [`Self::apply_persona`], ADR-0183 / ADR-0225).
-    pub fn apply_role(&self, role: &str) -> Option<muta_contracts::AgentPersonaId> {
-        let switched = self.apply_persona(role)?;
-        muta_contracts::AgentPersonaId::parse(&switched.id)
     }
 
     /// A snapshot of this agent's identity (name + mission, or a persona
@@ -829,23 +815,18 @@ mod tests {
         assert_eq!(agent.extensions().len(), 1);
         assert_eq!(agent.extensions()[0].id(), "code_intelligence");
 
-        // Applying security persona drops code intelligence (0 overhead).
-        assert!(agent.apply_role("security").is_some());
+        // Applying philosophist persona drops code intelligence (0 overhead).
+        assert!(agent.apply_role("philosophist").is_some());
         assert_eq!(agent.extensions().len(), 0);
 
-        // Applying code_analyst equips read-only code intelligence.
-        assert!(agent.apply_role("code_analyst").is_some());
-        assert_eq!(agent.extensions().len(), 1);
-        assert_eq!(agent.extensions()[0].id(), "code_intelligence");
+        // apply_role returns SwitchedRole with rich metadata
+        let switched = agent.apply_role("philosophist").expect("philosophist role resolves");
+        assert_eq!(switched.id, "philosophist");
+        assert_eq!(switched.name, "philosophist");
+        assert!(switched.description.contains("philosophical"));
+        assert_eq!(agent.extensions().len(), 0);
 
-        // apply_persona returns SwitchedPersona with rich metadata
-        let switched = agent.apply_persona("architect").expect("architect persona resolves");
-        assert_eq!(switched.id, "architect");
-        assert_eq!(switched.name, "architect");
-        assert!(switched.description.contains("architecture"));
-        assert_eq!(agent.extensions().len(), 1);
-
-        // Unknown persona returns None
-        assert!(agent.apply_persona("non-existent-persona").is_none());
+        // Unknown role returns None
+        assert!(agent.apply_role("non-existent-role").is_none());
     }
 }

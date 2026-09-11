@@ -194,7 +194,7 @@ pub struct SubagentTool {
     /// `request_cancel` for a finished call degrades to a no-op.
     active_cancels: std::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
     /// Agent preset delegation policy gating which subagent presets may be dispatched.
-    parent_delegation: std::sync::Mutex<Option<muta_contracts::AgentPersonaDelegation>>,
+    parent_delegation: std::sync::Mutex<Option<muta_contracts::AgentRoleDelegation>>,
     /// Parent execution policy enforcing recursion limits and depth bounds (ADR-0183).
     parent_execution_policy: std::sync::Mutex<Option<muta_contracts::ExecutionPolicy>>,
     /// Live source of MCP tools published to the parent's dynamic sink (ADR-0138).
@@ -336,7 +336,7 @@ impl SubagentTool {
     }
 
     /// Bind the agent preset delegation policy to enforce allowed subagent profiles.
-    pub fn bind_delegation(&self, delegation: muta_contracts::AgentPersonaDelegation) {
+    pub fn bind_delegation(&self, delegation: muta_contracts::AgentRoleDelegation) {
         *self
             .parent_delegation
             .lock()

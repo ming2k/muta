@@ -650,7 +650,7 @@ impl SessionStore {
     pub async fn open_side(&self, side_id: &str) -> Result<SessionStore, String> {
         let side_path = self.sessions_dir.join(format!("{side_id}.json"));
         let db_path = self.db_path.clone();
-        let workspace = self.workspace.clone();
+        let workspace = self.workspace.read().unwrap().clone();
         let persona = self.persona.clone();
         let blob_store = BlobStore::new(self.blob_store.root().to_path_buf());
         let reader = self.writer.reader().map_err(|e| e.to_string())?;
@@ -673,7 +673,7 @@ impl SessionStore {
             return Err(format!("Side session '{side_id}' was not found."));
         };
         Ok(SessionStore {
-            workspace,
+            workspace: std::sync::RwLock::new(workspace),
             persona,
             sessions_dir: self.sessions_dir.clone(),
             db_path,

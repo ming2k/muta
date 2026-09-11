@@ -124,7 +124,7 @@ Rendering is built on **`mutx-engine`**, muta's in-house terminal engine
 backend that emits the minimal escape-code delta per frame. This is the
 vim/nvim `ScreenGrid` model, not an immediate-mode rebuild.
 
-The back [`Grid`](../../apps/tui/crates/mutx-engine/src/grid.rs) is the single source of
+The back [`Grid`](../../apps/terminal/crates/mutx-engine/src/grid.rs) is the single source of
 truth for what the application wants on screen, and it is **retained** — not
 rebuilt from scratch each frame. Every write (`set`, `put`, `fill_rect`) marks
 the touched row dirty from the changed column leftward at *write time* (the
@@ -463,5 +463,5 @@ live in the lookup reference:
 - [Request flow](request-flow.md) — how streamed tokens reach the TUI
   over SSE.
 
-[mutx-engine]: ../../apps/tui/crates/mutx-engine/src/lib.rs
+[mutx-engine]: ../../apps/terminal/crates/mutx-engine/src/lib.rs
 [Markdown rendering]: markdown-rendering.md

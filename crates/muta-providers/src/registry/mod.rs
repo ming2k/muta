@@ -25,7 +25,7 @@ mod deepseek;
 mod google;
 mod kimi;
 mod openai;
-mod opencode_go;
+pub(crate) mod opencode_go;
 mod openrouter;
 mod xai;
 mod zai;
@@ -63,8 +63,6 @@ use anthropic::anthropic_model_max_tokens;
 pub enum RemoteCatalogSource {
     /// The provider's own model-catalog endpoint.
     Endpoint(DiscoveryProtocol),
-    /// A structured third-party catalog (e.g. models.dev), keyed by provider ID.
-    ModelsDev { provider: &'static str },
     /// No remote network sync; compiled baseline is authoritative.
     None,
 }
@@ -235,12 +233,12 @@ pub fn route_for_model(
         };
         return Some((*protocol, base_url, spec.user_agent));
     }
-    // models.dev describes catalog metadata, not inference routing. Only the
-    // OpenCode Go relay has the provider-specific multi-wire endpoint family;
-    // other models.dev-backed providers (notably OpenAI) retain their own
-    // transport endpoint.
+    // OpenCode Go relay has the provider-specific multi-wire endpoint family.
     if provider_id == "opencode-go"
-        && matches!(spec.catalog_source, RemoteCatalogSource::ModelsDev { .. })
+        && matches!(
+            spec.catalog_source,
+            RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpencodeGo)
+        )
     {
         let protocol = muta_contracts::model::resolve(model_id).protocol;
         let base_url = match protocol {

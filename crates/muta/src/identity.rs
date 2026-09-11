@@ -23,16 +23,16 @@
 //!
 //! A `/role` switch is the one place a framing line earns its
 //! tokens: the focused roles install an imperative role directive
-//! (see [`AgentPersona::from_preset`]).
+//! (see [`AgentRoleProfile::from_role`]).
 
-use muta_contracts::{AgentIdentity, AgentPersona};
+use muta_contracts::{AgentIdentity, AgentRoleProfile};
 
 /// The built-in **coding agent** profile (ADR-0183): the declarative
 /// form of the role this binary historically assembled inline. Its identity
 /// is empty — see the module docs for why the shipped agent describes no
 /// product.
-pub fn agent_code() -> AgentPersona {
-    AgentPersona::with_identity("code", AgentIdentity::default())
+pub fn agent_code() -> AgentRoleProfile {
+    AgentRoleProfile::with_identity("developer", AgentIdentity::default())
 }
 
 /// The daemon has no terminal or browser clipboard of its own. Clipboard
@@ -50,8 +50,7 @@ impl muta_runtime::UiBridge for DaemonUiBridge {
     }
 }
 
-// Persona presets (`architect`, `reviewer`, `security`, `code_analyst`, `conversational`)
-// and the `/persona` (aliases `/role`, `/master`, `/preset`) switching mechanism are
-// declared in `muta-contracts` as shared vocabulary (`AgentPersonaId`,
-// `AgentPersona::from_preset`) and applied via `Agent::apply_persona`,
+// Built-in roles (`developer`, `philosophist`) and the `/role` switching mechanism
+// are declared in `muta-contracts` as shared vocabulary (`MainAgentRole`,
+// `AgentRoleProfile::from_role`) and applied via `Agent::apply_role`,
 // so this binary does not need its own role registry — both frontends share one.

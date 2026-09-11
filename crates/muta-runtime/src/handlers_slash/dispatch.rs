@@ -208,12 +208,13 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                 RoundEvent::ConfinementChanged(next_confined),
             ));
         }
-        Some(BuiltinCmd::Persona) => {
-            // /persona [id] — switch the live agent persona (ADR-0225).
-            // Resolves the persona or preset onto the live agent, applies the
+        Some(BuiltinCmd::Role) => {
+            // /role [id] [workspace] — switch the live agent role (or legacy /persona).
+            // Resolves the role or preset onto the live agent, applies the
             // resulting profile (identity preamble, capability scope, extensions,
-            // runtime knobs, unattended posture), and records the session metadata.
-            // With no argument, lists the available built-in presets and user personas.
+            // runtime knobs, unattended posture), updates session workspace if applicable,
+            // and records the session metadata.
+            // With no argument, lists the available built-in roles and user personas.
             let target = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
             match target {
                 None => {
@@ -224,12 +225,16 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         .active_persona()
                         .await
                         .or_else(|| session.persona().map(str::to_string))
-                        .unwrap_or_else(|| "code".to_string());
-                    lines.push(format!("Active persona: `{current}`\n"));
+                        .unwrap_or_else(|| "developer".to_string());
+                    let ws_str = session
+                        .workspace_root()
+                        .map(|r| format!(" ({})", r.display()))
+                        .unwrap_or_default();
+                    lines.push(format!("Active role: `{current}`{ws_str}\n"));
 
-                    lines.push("Available personas:".to_string());
-                    lines.push("  Built-in presets:".to_string());
-                    for preset in muta_contracts::AgentPersonaId::ALL {
+                    lines.push("Available roles:".to_string());
+                    lines.push("  Built-in roles:".to_string());
+                    for preset in muta_contracts::MainAgentRole::ALL {
                         lines.push(format!("    • `{}` — {}", preset.as_str(), preset.description()));
                     }
 
@@ -243,7 +248,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     }
 
                     lines.push(String::new());
-                    lines.push("Usage: `/persona <id>` or `/role <id>`".to_string());
+                    lines.push("Usage: `/role philosophist` or `/role developer <workspace>`".to_string());
 
                     record_command(
                         session,
@@ -254,32 +259,13 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     )
                     .await;
                 }
-                Some(persona_id) => match agent.apply_persona(persona_id) {
-                    Some(switched) => {
-                        let _ = session.set_unattended(agent.unattended()).await;
-                        let _ = session.set_persona(Some(switched.id.clone())).await;
-                        let _ = resp_tx.send(round_response(
-                            &session.id().await,
-                            RoundEvent::UnattendedChanged(agent.unattended()),
-                        ));
-                        record_command(
-                            session,
-                            resp_tx,
-                            name,
-                            args,
-                            CommandResult::Text(format!(
-                                "Agent persona switched to `{}` (`{}`) — {}. The next response will \
-                                 speak with this persona's perspective and capability scope.",
-                                switched.name,
-                                switched.id,
-                                switched.description
-                            )),
-                        )
-                        .await;
-                    }
-                    None => {
-                        let personas_config = muta_persistence::personas::PersonasConfig::load();
-                        let mut available: Vec<String> = muta_contracts::AgentPersonaId::ALL
+                Some(role_id) => {
+                    let personas_config = muta_persistence::personas::PersonasConfig::load();
+                    let user_persona = personas_config.get(role_id);
+                    let builtin = muta_contracts::MainAgentRole::parse(role_id);
+
+                    if user_persona.is_none() && builtin.is_none() {
+                        let mut available: Vec<String> = muta_contracts::MainAgentRole::ALL
                             .iter()
                             .map(|p| format!("`{}`", p.as_str()))
                             .collect();
@@ -292,13 +278,135 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             name,
                             args,
                             format!(
-                                "Unknown persona `{persona_id}`. Available personas: {}.",
+                                "Unknown role `{role_id}`. Available roles: {}.",
                                 available.join(", ")
                             ),
                         )
                         .await;
+                        return;
                     }
-                },
+
+                    if builtin == Some(muta_contracts::MainAgentRole::Developer) {
+                        let ws_arg = parts
+                            .get(2..)
+                            .map(|p| p.join(" "))
+                            .filter(|s| !s.trim().is_empty());
+                        let target_workspace = match ws_arg {
+                            Some(ws_str) => {
+                                let trimmed = ws_str.trim();
+                                let raw_path = std::path::PathBuf::from(trimmed);
+                                let resolved = if raw_path.starts_with("~") {
+                                    if let Some(home) = dirs::home_dir() {
+                                        if let Ok(stripped) = raw_path.strip_prefix("~") {
+                                            home.join(stripped)
+                                        } else {
+                                            raw_path
+                                        }
+                                    } else {
+                                        raw_path
+                                    }
+                                } else {
+                                    raw_path
+                                };
+                                match std::fs::canonicalize(&resolved) {
+                                    Ok(canon) if canon.is_dir() => canon,
+                                    Ok(_) => {
+                                        record_error(
+                                            session,
+                                            resp_tx,
+                                            name,
+                                            args,
+                                            format!("Workspace path `{trimmed}` is not a directory"),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        record_error(
+                                            session,
+                                            resp_tx,
+                                            name,
+                                            args,
+                                            format!(
+                                                "Workspace path `{trimmed}` does not exist or is inaccessible: {e}"
+                                            ),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                }
+                            }
+                            None => {
+                                if let Some(ws_root) = session.workspace_root() {
+                                    ws_root
+                                } else {
+                                    record_error(
+                                        session,
+                                        resp_tx,
+                                        name,
+                                        args,
+                                        "Developer role requires a workspace path. Usage: `/role developer <workspace>`"
+                                            .to_string(),
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            }
+                        };
+
+                        let binding = muta_contracts::WorkspaceBinding::new(target_workspace.clone());
+                        let _ = session.set_workspace(Some(binding)).await;
+                        agent.set_project_root(Some(target_workspace.clone()));
+                        let sec_snapshot = workspace_security.snapshot(&target_workspace);
+                        agent.set_workspace_security(sec_snapshot);
+                    } else if builtin == Some(muta_contracts::MainAgentRole::Philosophist) {
+                        let _ = session.set_workspace(None).await;
+                        agent.set_project_root(None);
+                        agent.set_workspace_security(
+                            muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free"),
+                        );
+                    }
+
+                    match agent.apply_role(role_id) {
+                        Some(switched) => {
+                            let _ = session.set_unattended(agent.unattended()).await;
+                            let _ = session.set_persona(Some(switched.id.clone())).await;
+                            let _ = resp_tx.send(round_response(
+                                &session.id().await,
+                                RoundEvent::UnattendedChanged(agent.unattended()),
+                            ));
+                            let ws_info = if let Some(ws) = session.workspace() {
+                                format!(" with workspace `{}`", ws.root.display())
+                            } else {
+                                String::new()
+                            };
+                            record_command(
+                                session,
+                                resp_tx,
+                                name,
+                                args,
+                                CommandResult::Text(format!(
+                                    "Agent role switched to `{}` (`{}`){ws_info} — {}. The next response will \
+                                     speak with this role's perspective and capability scope.",
+                                    switched.name,
+                                    switched.id,
+                                    switched.description
+                                )),
+                            )
+                            .await;
+                        }
+                        None => {
+                            record_error(
+                                session,
+                                resp_tx,
+                                name,
+                                args,
+                                format!("Failed to apply role `{role_id}`"),
+                            )
+                            .await;
+                        }
+                    }
+                }
             }
         }
         Some(BuiltinCmd::Search) => {

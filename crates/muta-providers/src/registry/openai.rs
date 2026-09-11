@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{ModelProviderSpec, RemoteCatalogSource};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
@@ -281,7 +281,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     user_agent: None,
     protocol: WireProtocol::ChatCompletions,
     models: OPENAI_BUILTIN_MODELS,
-    catalog_source: RemoteCatalogSource::ModelsDev { provider: "openai" },
+    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
     wire_overrides: &[],

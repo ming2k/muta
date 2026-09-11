@@ -58,7 +58,7 @@
 //! This crate is application-neutral: it holds no product name, mission, or
 //! preset profile. The embedding binary supplies an
 //! [`muta_contracts::AgentIdentity`] to `Agent::new` / `from_toolset` and binds
-//! an [`muta_contracts::AgentPersona`] via `apply_preset`.
+//! an [`muta_contracts::AgentRoleProfile`] via `apply_preset`.
 //! `mutx` keeps the coding identity. The `/btw` side-session reuses
 //! the primary agent's identity (`Agent::identity()`) rather than naming a product here.
 

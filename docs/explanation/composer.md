@@ -273,11 +273,11 @@ To ensure zero draft loss:
 
 | Subsystem | Source Location | Responsibility |
 |-----------|-----------------|----------------|
-| Composer View | `apps/tui/crates/mutx/src/composer.rs` | Retained panel drawing, text wrapping, chip styling, layout map recording |
-| App Composer State | `apps/tui/crates/mutx/src/app/composer.rs` | Caret ownership, selection adoption, draft parking, Esc/Ctrl+C timers |
-| Hint Row Component | `apps/tui/crates/mutx/src/components/composer_hints.rs` | `ComposeTarget` derivation, hint row sentence construction, consequence coloring |
-| Attachment Chips | `apps/tui/crates/mutx/src/composer_attachments.rs` | Chip parsing, payload staging, label formatting, atomic deletion |
-| Two-Tier Completion | `apps/tui/crates/mutx/src/completion.rs` | Synchronous Tier 1 fast-path, SWR cache retention, daemon IPC integration |
+| Composer View | `apps/terminal/crates/mutx/src/composer.rs` | Retained panel drawing, text wrapping, chip styling, layout map recording |
+| App Composer State | `apps/terminal/crates/mutx/src/app/composer.rs` | Caret ownership, selection adoption, draft parking, Esc/Ctrl+C timers |
+| Hint Row Component | `apps/terminal/crates/mutx/src/components/composer_hints.rs` | `ComposeTarget` derivation, hint row sentence construction, consequence coloring |
+| Attachment Chips | `apps/terminal/crates/mutx/src/composer_attachments.rs` | Chip parsing, payload staging, label formatting, atomic deletion |
+| Two-Tier Completion | `apps/terminal/crates/mutx/src/completion.rs` | Synchronous Tier 1 fast-path, SWR cache retention, daemon IPC integration |
 
 ## References
 
