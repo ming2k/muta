@@ -40,9 +40,7 @@ pub const GOOGLE_BUILTIN_MODELS: &[&str] = &[
 ];
 
 pub const ANTIGRAVITY_OAUTH_MODELS: &[&str] = &[
-    "gemini-3.8-flash",
     "gemini-3.8-flash-tiered",
-    "gemini-3.7-flash",
     "gemini-3.7-flash-tiered",
     "gemini-pro-agent",
     "gemini-3.1-pro-low",

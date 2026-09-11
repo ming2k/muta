@@ -949,40 +949,12 @@ fn parse_antigravity_models_map(
             vision,
             effort_levels: None,
         };
-        push_antigravity_model(&mut out, &mut emitted, discovered, model_id);
+        if emitted.insert(discovered.id.clone()) {
+            out.push(discovered);
+        }
     }
 
     out
-}
-
-/// Push one discovered model, then derive its user-facing alias when the
-/// canonical id is effort-tiered.
-///
-/// Antigravity addresses each tiered generation through a single canonical
-/// `-tiered` wire id (`gemini-3.7-flash-tiered`, `gemini-3.8-flash-tiered`,
-/// …) while every user-facing surface speaks the public name without the
-/// suffix (`gemini-3.8-flash`). Live discovery therefore exposes the alias
-/// alongside the canonical id — rule-based over any preserved `-tiered`
-/// entry, so a new tiered generation (3.9, 4.x, …) surfaces with zero
-/// per-version code, mirroring the reverse mapping the Antigravity wire
-/// envelope applies when sending (`gemini-3.8-flash` → `gemini-3.8-flash-tiered`).
-fn push_antigravity_model(
-    out: &mut Vec<DiscoveredModel>,
-    emitted: &mut HashSet<String>,
-    model: DiscoveredModel,
-    canonical_id: &str,
-) {
-    if emitted.insert(model.id.clone()) {
-        out.push(model.clone());
-    }
-    if let Some(alias) = canonical_id.strip_suffix("-tiered")
-        && emitted.insert(alias.to_string())
-    {
-        out.push(DiscoveredModel {
-            id: alias.to_string(),
-            ..model
-        });
-    }
 }
 
 #[cfg(test)]
@@ -1119,9 +1091,9 @@ mod tests {
             .map(|model| model.id)
             .collect();
         assert!(got.contains(&"gemini-3.8-flash-tiered".to_string()));
-        assert!(got.contains(&"gemini-3.8-flash".to_string()));
+        assert!(!got.contains(&"gemini-3.8-flash".to_string()));
         assert!(got.contains(&"gemini-3.7-flash-tiered".to_string()));
-        assert!(got.contains(&"gemini-3.7-flash".to_string()));
+        assert!(!got.contains(&"gemini-3.7-flash".to_string()));
         assert!(got.contains(&"gemini-pro-agent".to_string()));
         assert!(
             !got.contains(&"gemini-3.6-flash-high".to_string()),

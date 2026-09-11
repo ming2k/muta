@@ -772,13 +772,11 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
         .connection_models
         .get("agy-live")
         .expect("catalog lands in the cache");
-    // The current tiered generation materializes in canonical and alias form.
+    // Upstream tiered generation materializes in its canonical wire id without client-synthesized aliases.
     assert!(models.contains(&"gemini-3.8-flash-tiered".to_string()));
-    assert!(
-        models.contains(&"gemini-3.8-flash".to_string()),
-        "user-facing alias for the tiered wire id must be served"
-    );
-    assert!(models.contains(&"gemini-3.7-flash".to_string()));
+    assert!(!models.contains(&"gemini-3.8-flash".to_string()));
+    assert!(models.contains(&"gemini-3.7-flash-tiered".to_string()));
+    assert!(!models.contains(&"gemini-3.7-flash".to_string()));
     assert!(models.contains(&"gemini-pro-agent".to_string()));
     // Internal helpers, the legacy 3.6 generation, and deprecated ids stay out.
     assert!(!models.iter().any(|m| m.starts_with("chat_")));
@@ -1122,7 +1120,7 @@ fn antigravity_models_derivation_and_hidden_filter() {
         .find(|r| r.id == "g11")
         .expect("g11 in picker");
 
-    assert!(g11_row.models.contains(&"gemini-3.7-flash".to_string()));
+    assert!(g11_row.models.contains(&"gemini-3.7-flash-tiered".to_string()));
     assert!(
         !g11_row
             .models

@@ -19,29 +19,7 @@ pub use muta_contracts::model_providers::ANTIGRAVITY_OAUTH_MODELS;
 /// Baseline capability metadata for the models this provider serves.
 pub const MODELS: &[Model] = &[
     Model {
-        id: "gemini-3.8-flash",
-        family: "google",
-        context_window: 1_000_000,
-        thinking: ReasoningSupport::ReasoningContent,
-        tool_call: true,
-        vision: true,
-        protocol: WireProtocol::GoogleGemini,
-        model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
-    },
-    Model {
         id: "gemini-3.8-flash-tiered",
-        family: "google",
-        context_window: 1_000_000,
-        thinking: ReasoningSupport::ReasoningContent,
-        tool_call: true,
-        vision: true,
-        protocol: WireProtocol::GoogleGemini,
-        model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
-    },
-    Model {
-        id: "gemini-3.7-flash",
         family: "google",
         context_window: 1_000_000,
         thinking: ReasoningSupport::ReasoningContent,
