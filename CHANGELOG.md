@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.1] - 2026-09-11
+
+### Added
+
+- Add `/persona` slash command for switching and inspecting active agent personas (ADR-0225).
+
+### Changed
+
+- Restrict image-refusal probe gating to deterministic payload validation status codes (400, 413, 415, 422).
+- Clean up composer actions, key bindings, and session switching in mutx.
+
 ## [0.46.0] - 2026-09-11
 
 ### Added
@@ -6987,7 +6998,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.46.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.46.1...HEAD
+[0.46.1]: https://github.com/ming2k/muta/compare/v0.46.0...v0.46.1
 [0.46.0]: https://github.com/ming2k/muta/compare/v0.45.3...v0.46.0
 [0.45.3]: https://github.com/ming2k/muta/compare/v0.45.2...v0.45.3
 [0.45.2]: https://github.com/ming2k/muta/compare/v0.45.1...v0.45.2
