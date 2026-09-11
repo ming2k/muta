@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Durable turn commits and recoverable projections (ADR-0236).** A turn commit
+  is now a typed, revisioned operation: `CommitTurn` accepts an idempotency
+  `operation_id` and an optional `expected_revision`, and the single writer
+  applies it in one transaction that advances a per-session revision and records
+  a durable commit receipt. Replaying an operation whose acknowledgement was lost
+  returns the original receipt instead of applying the deltas twice; a stale
+  revision or a reused operation identity with different content is refused
+  (`PersistenceError::StaleRevision` / `OperationConflict`). `DbReader` exposes
+  `session_revision` and the latest `commit_receipt` so recovery resolves an
+  unknown outcome by operation identity rather than assuming it did not commit.
+- Request admission is durable before dispatch, and crash residue is settled:
+  attempts still `InFlight` when a session is re-hosted are committed as
+  `Abandoned` (with the projected prompt as a lower bound), so they are visible
+  to every reader instead of being filtered out as unresolved.
+- Usage accounting is normalized per attempt: `usage_records` is keyed by
+  `(session, actor, round, turn, attempt)`, survives session deletion, and
+  projects through a durable `usage_dirty` outbox applied atomically with a
+  monotonic revision guard. Conflicting historical facts are reported during the
+  schema migration instead of silently selecting by import order.
+- Round completion (`RoundSummary`) carries the committed `session_revision`, and
+  is published from the acknowledged commit **before** optional projections
+  (context estimates, state mirrors), so no display-only work gates a completed
+  round (`AgentResponse::TokenUsageReport` is unchanged).
+- Storage pressure is observable on the writer thread — WAL and main-file size,
+  usage-projection backlog and lag, active reader count, oldest reader age —
+  and bounded: above a WAL threshold a `PASSIVE` checkpoint reclaims what it can
+  without blocking readers or writers, and an over-age reader is reported as the
+  pressure that keeps the WAL from being reclaimed.
 - Authorized autonomous continuation (ADR-0234). In an **unattended** session, a
   background job that settles can now start one follow-up round on its own: the
   agent sees a harness-authored report of what finished and continues without
