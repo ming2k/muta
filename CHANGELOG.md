@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.3] - 2026-09-11
+
+### Changed
+
+- **Relocate TUI to terminal app structure.** Moved `apps/tui` to `apps/terminal` for consistent application layering.
+- **Agent role profiles.** Generalized agent persona taxonomy into `AgentRoleProfile` (`MainAgentRole` / `SubAgentRole`) across contracts, agent, persistence, and runtime.
+- **Provider catalog improvements.** Added `opencode_go` catalog discovery support and removed legacy `models.dev` offline snapshot.
+
 ## [0.47.2] - 2026-09-11
 
 ### Added
@@ -7206,7 +7214,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.2...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.3...HEAD
+[0.47.3]: https://github.com/ming2k/muta/compare/v0.47.2...v0.47.3
 [0.47.2]: https://github.com/ming2k/muta/compare/v0.47.1...v0.47.2
 [0.47.1]: https://github.com/ming2k/muta/compare/v0.47.0...v0.47.1
 [0.47.0]: https://github.com/ming2k/muta/compare/v0.46.1...v0.47.0
