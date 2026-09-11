@@ -467,6 +467,47 @@ impl PersistenceHandle {
             db_path: self.db_path.clone(), _permit: Some(permit), _age: Some(age) })
     }
 
+    /// Execute a scoped read closure against a fresh [`DbReader`].
+    ///
+    /// Guarantees that the reader permit and snapshot transaction are dropped
+    /// immediately upon closure return, preventing long-running read transactions
+    /// from accidentally pinning the WAL log across async suspensions.
+    pub fn with_reader<T, F>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&DbReader) -> Result<T>,
+    {
+        let reader = self.reader()?;
+        f(&reader)
+    }
+
+    /// Create an online hot backup snapshot of the database using SQLite's `VACUUM INTO`.
+    ///
+    /// The backup is written to `target_path` in a defragmented, standalone,
+    /// consistent state while concurrent readers continue uninterrupted.
+    pub async fn create_backup(&self, target_path: PathBuf) -> Result<(), PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
+            .send(PersistenceCommand::CreateBackup {
+                target_path,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
+    }
+
+    /// Synchronous/blocking variant of [`Self::create_backup`].
+    pub fn create_backup_blocking(&self, target_path: PathBuf) -> Result<(), PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.run_blocking(
+            PersistenceCommand::CreateBackup {
+                target_path,
+                ack: ack_tx,
+            },
+            ack_rx,
+        )
+    }
+
     /// A storage-observability snapshot (ADR-0236 D7): WAL size, active reader
     /// count, and the oldest reader snapshot's age. A large WAL or an old
     /// reader is the pressure that blocks checkpoint reclamation.

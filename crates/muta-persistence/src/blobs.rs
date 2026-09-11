@@ -38,10 +38,40 @@ impl BlobStore {
         if path.exists() {
             return Ok(hash);
         }
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        let Some(parent) = path.parent() else {
+            return Err(format!("invalid blob path for hash {hash}"));
+        };
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+
+        // Atomic write via unique temporary file in the same directory, sync to disk,
+        // and atomic rename. This guarantees no partial/truncated files can ever exist at `path`.
+        use std::io::Write;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_name = format!(".tmp.{}.{}.{}", hash, std::process::id(), nanos);
+        let tmp_path = parent.join(tmp_name);
+
+        let write_res = (|| -> std::io::Result<()> {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp_path)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            drop(file);
+            fs::rename(&tmp_path, &path)?;
+            Ok(())
+        })();
+
+        if let Err(e) = write_res {
+            let _ = fs::remove_file(&tmp_path);
+            if !path.exists() {
+                return Err(format!("could not write blob {}: {}", hash, e));
+            }
         }
-        fs::write(&path, bytes).map_err(|e| format!("could not write blob {}: {}", hash, e))?;
+
         Ok(hash)
     }
 
@@ -94,6 +124,13 @@ impl BlobStore {
             };
             for blob in blobs.flatten() {
                 let hash = blob.file_name().to_string_lossy().into_owned();
+                if hash.starts_with(".tmp.") {
+                    let size = blob.metadata().map(|m| m.len()).unwrap_or(0);
+                    let _ = fs::remove_file(blob.path());
+                    reclaimed += 1;
+                    reclaimed_bytes += size;
+                    continue;
+                }
                 if live.contains(&hash) {
                     continue;
                 }
@@ -167,5 +204,27 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = BlobStore::new(root.path().join("does-not-exist"));
         assert_eq!(store.retain_only(&std::collections::HashSet::new()), (0, 0));
+    }
+
+    #[test]
+    fn put_atomic_writes_and_retains_cleanly() {
+        let root = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(root.path().join("blobs"));
+        let bytes = b"atomic blob test content";
+        let hash = store.put(bytes).unwrap();
+        assert_eq!(store.get(&hash).as_deref(), Some(&bytes[..]));
+
+        // Fake an orphaned temporary file
+        let parent = store.path(&hash).parent().unwrap().to_path_buf();
+        let orphan_tmp = parent.join(".tmp.orphan.12345.6789");
+        fs::write(&orphan_tmp, b"garbage").unwrap();
+        assert!(orphan_tmp.exists());
+
+        let live = [hash.clone()].into_iter().collect();
+        let (count, bytes_reclaimed) = store.retain_only(&live);
+        assert_eq!(count, 1);
+        assert_eq!(bytes_reclaimed, 7);
+        assert!(!orphan_tmp.exists());
+        assert!(store.exists(&hash));
     }
 }

@@ -258,7 +258,7 @@ fn mouse_selection_drag_tracks_within_selectable_modals() {
 }
 
 #[test]
-fn question_mark_in_dialog_browse_mode_is_inert() {
+fn question_mark_in_dialog_browse_mode_toggles_dialog_keys() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -275,7 +275,124 @@ fn question_mark_in_dialog_browse_mode_is_inert() {
         &SceneKeys::default(),
         &mut drag,
     );
+    assert_eq!(action, InputAction::ToggleDialogKeys);
+}
+
+#[test]
+fn question_mark_when_dialog_keys_open_toggles_off() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let modal_keys = ModalKeys {
+        dialog_keys: true,
+        ..Default::default()
+    };
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Sessions)),
+            ..Default::default()
+        },
+        &modal_keys,
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ToggleDialogKeys);
+}
+
+#[test]
+fn esc_when_dialog_keys_open_toggles_off() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let modal_keys = ModalKeys {
+        dialog_keys: true,
+        ..Default::default()
+    };
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Sessions)),
+            ..Default::default()
+        },
+        &modal_keys,
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ToggleDialogKeys);
+}
+
+#[test]
+fn arrows_when_dialog_keys_open_scroll() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let modal_keys = ModalKeys {
+        dialog_keys: true,
+        ..Default::default()
+    };
+    let up_action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Sessions)),
+            ..Default::default()
+        },
+        &modal_keys,
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(up_action, InputAction::DialogKeysScroll { delta: -1 });
+
+    let down_action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Sessions)),
+            ..Default::default()
+        },
+        &modal_keys,
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(down_action, InputAction::DialogKeysScroll { delta: 1 });
+}
+
+#[test]
+fn dialog_verbs_are_swallowed_when_dialog_keys_open() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let modal_keys = ModalKeys {
+        dialog_keys: true,
+        ..Default::default()
+    };
+    // 'd' is delete session in Sessions dialog, but must be swallowed when dialog_keys is open
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        Dispatch {
+            overlay: Some(OverlaySurface::Dialog(DialogKind::Sessions)),
+            ..Default::default()
+        },
+        &modal_keys,
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
     assert_eq!(action, InputAction::None);
+    assert!(input.is_empty(), "input must not receive the character");
 }
 
 #[test]

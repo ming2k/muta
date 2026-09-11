@@ -1400,6 +1400,21 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.telemetry_scroll = 0;
             }
         }
+        input::InputAction::ToggleDialogKeys => {
+            app.dialog_keys = !app.dialog_keys;
+            if !app.dialog_keys {
+                app.dialog_keys_scroll = 0;
+            }
+        }
+        input::InputAction::DialogKeysScroll { delta } => {
+            if delta < 0 {
+                app.dialog_keys_scroll =
+                    app.dialog_keys_scroll.saturating_sub((-delta) as usize);
+            } else {
+                app.dialog_keys_scroll =
+                    app.dialog_keys_scroll.saturating_add(delta as usize);
+            }
+        }
         input::InputAction::ScrollUp => {
             scroll_tick(app, false);
         }

@@ -60,6 +60,8 @@ pub struct ModalKeys {
     /// `n` new session). While true, printable keys edit the prompt text and
     /// Enter submits it. Mirrors `App::host_prompting`.
     pub host_prompting: bool,
+    /// Whether the active dialog is displaying its localized key reference sub-view.
+    pub dialog_keys: bool,
 }
 
 use crate::surfaces::{DialogKind, OverlaySurface, SceneKind, SheetKind};
@@ -128,6 +130,10 @@ pub(crate) fn resolve_modal_key(
         }
     } else if scene == SceneKind::Dashboard && keys.host_prompting {
         return Some(resolve_host_prompt_key(key, input, cursor_position));
+    }
+
+    if keys.dialog_keys && matches!(overlay, Some(OverlaySurface::Dialog(_))) {
+        return Some(resolve_dialog_keys_key(key));
     }
 
     match key.code {
@@ -356,6 +362,12 @@ pub(crate) fn resolve_modal_key(
     }
 
     if let Some(overlay) = overlay {
+        if c == '?'
+            && matches!(overlay, OverlaySurface::Dialog(_))
+            && !modal_claims_composer_line(Some(overlay), scene, keys)
+        {
+            return Some(InputAction::ToggleDialogKeys);
+        }
         match overlay {
             OverlaySurface::Dialog(DialogKind::Tools) if c == ' ' => {
                 Some(InputAction::SessionActivate)
@@ -526,6 +538,26 @@ fn resolve_config_key(c: char, keys: &ModalKeys) -> Option<InputAction> {
         }
     }
     None
+}
+
+/// Dialog key reference sub-view input routing.
+fn resolve_dialog_keys_key(key: crate::keymap::Key) -> InputAction {
+    match key.code {
+        KeyCode::Esc => InputAction::ToggleDialogKeys,
+        KeyCode::Char('?')
+            if !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) =>
+        {
+            InputAction::ToggleDialogKeys
+        }
+        KeyCode::Up => InputAction::DialogKeysScroll { delta: -1 },
+        KeyCode::Down => InputAction::DialogKeysScroll { delta: 1 },
+        KeyCode::PageUp => InputAction::DialogKeysScroll { delta: -5 },
+        KeyCode::PageDown => InputAction::DialogKeysScroll { delta: 5 },
+        KeyCode::Home => InputAction::DialogKeysScroll { delta: -100 },
+        _ => InputAction::None,
+    }
 }
 
 /// Models / Connections picker browse-mode verbs. While the search sub-layer

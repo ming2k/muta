@@ -55,6 +55,9 @@ impl App {
     }
 
     pub(crate) fn modal_scroll_field(&mut self) -> Option<(&mut usize, Option<&mut bool>)> {
+        if self.dialog_keys && self.surfaces.active_overlay().is_some() {
+            return Some((&mut self.dialog_keys_scroll, None));
+        }
         if self.active_sheet() == Some(crate::sheet::SheetKind::Question)
             && self.surfaces.active_overlay().is_none()
         {
@@ -308,6 +311,8 @@ impl App {
 
     /// Run the exit hook for one exact dialog.
     pub(crate) fn deactivate_dialog(&mut self, id: DialogKind) {
+        self.dialog_keys = false;
+        self.dialog_keys_scroll = 0;
         self.save_dialog_state(id);
         if self.owns_composer_draft(id) {
             self.restore_draft_from(id);
@@ -441,6 +446,11 @@ impl App {
 
     /// Pop the deepest sub-layer of a view or dialog.
     pub(crate) fn pop_sublayer(&mut self) -> bool {
+        if self.dialog_keys {
+            self.dialog_keys = false;
+            self.dialog_keys_scroll = 0;
+            return true;
+        }
         if self.current_scene() == SceneKind::Settings {
             if self.config_dropdown.is_some() {
                 self.config_dropdown = None;

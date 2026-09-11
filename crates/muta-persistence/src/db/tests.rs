@@ -1206,3 +1206,35 @@ fn latest_session_filters_by_workspace_and_persona() {
         Some(unbound.id)
     );
 }
+
+#[tokio::test]
+async fn create_backup_and_with_reader_roundtrip() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let handle = PersistenceHandle::spawn(tmp.path().join("muta.db"), None);
+
+    handle
+        .set_kv("backup:key".into(), "backup:val".into())
+        .await
+        .expect("set_kv");
+
+    // Scoped with_reader reads key and immediately releases lease
+    let read_val = handle
+        .with_reader(|reader| reader.get_kv("backup:key"))
+        .expect("with_reader");
+    assert_eq!(read_val.as_deref(), Some("backup:val"));
+
+    // Online hot backup
+    let backup_file = tmp.path().join("backup.db");
+    handle
+        .create_backup(backup_file.clone())
+        .await
+        .expect("create_backup");
+    assert!(backup_file.exists());
+
+    // Verify backup is a valid standalone SQLite database
+    let backup_handle = PersistenceHandle::spawn(backup_file, None);
+    let val = backup_handle
+        .with_reader(|reader| reader.get_kv("backup:key"))
+        .expect("read from backup");
+    assert_eq!(val.as_deref(), Some("backup:val"));
+}

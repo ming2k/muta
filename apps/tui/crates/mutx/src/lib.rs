@@ -1869,6 +1869,8 @@ pub async fn run_tui(
         telemetry_turn: None,
         usage_stats: None,
         usage_stats_scroll: 0,
+        dialog_keys: false,
+        dialog_keys_scroll: 0,
         modal_body_height: 0,
         sticky_summary_line: None,
         pin_summary_line: None,

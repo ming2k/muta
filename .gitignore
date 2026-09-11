@@ -23,6 +23,7 @@
 # Local chat/session transcript exports — private conversation artifacts, not
 # source. Never check these in.
 /kimi-export-session_*.md
+/session-*.md
 
 # IDE files
 # Project-shared settings are tracked; only per-machine state is ignored.

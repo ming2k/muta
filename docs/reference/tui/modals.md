@@ -164,6 +164,17 @@ editor) and the decision modals (Question, Permission sheet) stay open so an
 accidental click never discards an API key or a pending decision. The single
 source of truth is `Modal::dismissable_by_outside_click()`.
 
+**`?` — Contextual in-dialog key reference.** Pressing `?` in any active dialog
+(when the composer line is not claimed by text search or an editor field)
+toggles a localized key reference sub-view. The reference conforms directly to
+the host dialog's design:
+- **Hierarchy:** header renders `{Dialog} › Keys` via the standard breadcrumb convention;
+- **Layout:** inherits the dialog's exact panel geometry (`FixedModalSpec` or `ContentModalSpec`);
+- **Scoped verbs:** lists authoritative actions registered for that dialog in
+  `COMMAND_REGISTRY` (`Scope::Dialog(dialog)`), followed by navigation keys;
+- **Sub-layer dismissal:** pressing `?` again or `Esc` dismisses the reference
+  back to the host dialog without closing the dialog itself.
+
 ## Models modal
 
 Flat (provider, model) picker — the daily-driver switch surface. Every model

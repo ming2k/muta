@@ -462,6 +462,10 @@ pub struct App {
     pub usage_stats: Option<muta_contracts::usage_stats::UsageStatsReport>,
     /// Scroll offset of the usage-statistics overlay body.
     pub usage_stats_scroll: usize,
+    /// Whether the active dialog is currently displaying its localized in-dialog key reference sub-view.
+    pub dialog_keys: bool,
+    /// Scroll offset of the in-dialog key reference overlay body.
+    pub dialog_keys_scroll: usize,
     /// The body (scrollable content) height of the currently-open overlay
     /// modal, captured each render from the rect the modal renderer paints
     /// its body into. This is the per-modal equivalent of `view_height` (which

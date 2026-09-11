@@ -878,6 +878,28 @@ fn compose_frame(
     // Overlays and Scenes (ADR-0205)
     let drawn_modal_rect = if let Some(overlay) = app.surfaces.active_overlay() {
         match overlay {
+            OverlaySurface::Dialog(d) if app.dialog_keys => {
+                let app_ctx = crate::keymap::AppContext {
+                    has_overlay: true,
+                    active_dialog: Some(d),
+                    is_responding: viewed_running,
+                    has_selection: !matches!(
+                        app.selection,
+                        crate::model::selection::SelectionState::None
+                    ),
+                    has_running_task: viewed_running,
+                    queue_count: app.pending_dispatch.len(),
+                };
+                Some(render::draw_dialog_keys(
+                    f,
+                    d,
+                    &mut app.dialog_keys_scroll,
+                    &app_ctx,
+                    &app.theme,
+                    &app.selection,
+                    &mut layout_map,
+                ))
+            }
             OverlaySurface::Dialog(d) => match d {
                 DialogKind::Connections => {
                     let providers = app.providers_filtered();

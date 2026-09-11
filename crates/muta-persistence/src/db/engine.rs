@@ -58,6 +58,21 @@ impl DatabaseEngine {
         Ok(prepared.len())
     }
 
+    /// Create an online hot backup snapshot using `VACUUM INTO`.
+    pub(crate) fn create_backup(&self, target_path: &Path) -> Result<()> {
+        if let Some(parent) = target_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if target_path.exists() {
+            let _ = std::fs::remove_file(target_path);
+        }
+        let target_str = target_path.to_str().ok_or_else(|| {
+            rusqlite::Error::InvalidParameterName("backup path is not valid utf-8".into())
+        })?;
+        self.conn.execute("VACUUM INTO ?1", params![target_str])?;
+        Ok(())
+    }
+
     // Session Operations
 
     /// Create or update a session record.

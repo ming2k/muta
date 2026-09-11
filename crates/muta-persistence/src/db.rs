@@ -832,6 +832,11 @@ pub(crate) enum PersistenceCommand {
     CollectEntryGarbage {
         ack: oneshot::Sender<Result<usize, PersistenceError>>,
     },
+    /// Create an online hot backup snapshot using `VACUUM INTO`.
+    CreateBackup {
+        target_path: PathBuf,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
+    },
     /// Test-only: the writer acks and then exits its loop, simulating actor
     /// death so the supervisor's respawn path is exercisable (ADR-0196 D6).
     #[cfg(test)]

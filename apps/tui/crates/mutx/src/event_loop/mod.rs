@@ -548,6 +548,7 @@ async fn process_one_event(
                 session_info_detail,
                 connection_info_detail,
                 host_prompting,
+                dialog_keys: app.dialog_keys,
             },
             &crate::sheet::SheetKeys {
                 question_other_highlighted,

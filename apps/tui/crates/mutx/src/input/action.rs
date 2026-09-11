@@ -523,6 +523,12 @@ pub enum InputAction {
     /// Interrupt the viewed aside's in-flight round (Esc inside an aside
     /// view, ADR-0103 §2). Interrupting never closes the aside.
     InterruptSide,
+    /// Toggle the in-dialog localized key reference overlay (`?` inside an active dialog).
+    ToggleDialogKeys,
+    /// Scroll the in-dialog localized key reference overlay (`↑`/`↓`/`PgUp`/`PgDn`).
+    DialogKeysScroll {
+        delta: i8,
+    },
     /// Move to the previous sibling subagent task.
     PrevSibling,
     /// Move to the next sibling subagent task.

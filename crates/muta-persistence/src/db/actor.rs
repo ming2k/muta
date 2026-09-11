@@ -76,6 +76,10 @@ impl PersistenceCommand {
                 let res = guarded(|| engine.collect_entry_garbage());
                 let _ = ack.send(res);
             }
+            Self::CreateBackup { target_path, ack } => {
+                let res = guarded(|| engine.create_backup(&target_path));
+                let _ = ack.send(res);
+            }
             Self::RecordInputHistory { entry, dedup, ack } => {
                 let res = guarded(|| engine.record_input_history(&entry, dedup));
                 if let Some(ack) = ack {
@@ -170,6 +174,9 @@ impl PersistenceCommand {
                 if let Some(ack) = ack {
                     let _ = ack.send(Err(error));
                 }
+            }
+            Self::CreateBackup { ack, .. } => {
+                let _ = ack.send(Err(error));
             }
             #[cfg(test)]
             Self::Die { ack } => {
@@ -335,10 +342,15 @@ const WAL_CHECKPOINT_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024;
 const READER_AGE_WARN_MS: u64 = 30_000;
 
 /// ADR-0236 D7: bound WAL growth and surface reader pressure. Runs on the
-/// writer thread between transactions. Above the threshold a `PASSIVE`
-/// checkpoint reclaims what it can without blocking readers or writers; an
-/// old reader is reported as the reason full reclamation may be impossible.
-/// Bounded: at most one checkpoint per maintenance sample.
+/// writer thread between transactions.
+///
+/// Graduated policy:
+/// - When no reader snapshots are active (`reader_ages.active() == 0`), attempts
+///   `TRUNCATE` checkpoint to reclaim and shrink the WAL to zero bytes.
+/// - When active readers exist, attempts `PASSIVE` checkpoint to reclaim
+///   unpinned frames without blocking reader threads.
+/// - If WAL exceeds 2x threshold while readers remain active, escalates warning.
+/// - Runs `PRAGMA optimize` to refresh SQLite query planner statistics.
 fn maintain_storage_pressure(
     db_path: &Path,
     engine: &DatabaseEngine,
@@ -346,11 +358,13 @@ fn maintain_storage_pressure(
     wal_threshold_bytes: u64,
     reader_warn_ms: u64,
 ) {
+    let active_readers = reader_ages.active();
     if let Some(age_ms) = reader_ages.oldest_age().map(|age| age.as_millis() as u64)
         && age_ms >= reader_warn_ms
     {
         warn!(
             oldest_reader_ms = age_ms,
+            active_readers,
             "a long-lived reader snapshot is pinning the WAL"
         );
     }
@@ -359,9 +373,23 @@ fn maintain_storage_pressure(
     if wal_bytes < wal_threshold_bytes {
         return;
     }
+
+    let checkpoint_sql = if active_readers == 0 {
+        "PRAGMA wal_checkpoint(TRUNCATE)"
+    } else {
+        if wal_bytes >= wal_threshold_bytes.saturating_mul(2) {
+            warn!(
+                wal_bytes,
+                active_readers,
+                "WAL size exceeded 2x threshold with active readers; checkpointing in degraded PASSIVE mode"
+            );
+        }
+        "PRAGMA wal_checkpoint(PASSIVE)"
+    };
+
     match engine
         .conn
-        .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+        .query_row(checkpoint_sql, [], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
@@ -369,15 +397,18 @@ fn maintain_storage_pressure(
             ))
         })
     {
-        Ok((0, log_frames, checkpointed)) => info!(
-            wal_bytes,
-            log_frames, checkpointed, "reclaimed WAL after pressure threshold"
-        ),
+        Ok((0, log_frames, checkpointed)) => {
+            info!(
+                wal_bytes,
+                log_frames, checkpointed, active_readers, "reclaimed WAL after pressure threshold"
+            );
+            let _ = engine.conn.execute_batch("PRAGMA optimize;");
+        }
         Ok((busy, log_frames, checkpointed)) => warn!(
             wal_bytes,
-            busy, log_frames, checkpointed, "WAL checkpoint could not complete"
+            busy, log_frames, checkpointed, active_readers, "WAL checkpoint could not complete"
         ),
-        Err(error) => warn!(%error, "WAL checkpoint failed"),
+        Err(error) => warn!(%error, checkpoint_sql, "WAL checkpoint failed"),
     }
 }
 
@@ -482,6 +513,23 @@ mod tests {
         // Threshold 0 forces the checkpoint branch; warn bound 0 forces the
         // reader-pressure report. Must not panic and must leave the engine
         // usable.
+        maintain_storage_pressure(&path, &engine, &reader_ages, 0, 0);
+
+        let version: u32 = engine
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, CURRENT_DB_VERSION);
+    }
+
+    #[test]
+    fn maintain_storage_pressure_truncates_when_no_active_readers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("muta.db");
+        let engine = DatabaseEngine::open(&path, None).unwrap();
+        let reader_ages = ReaderAges::default();
+        assert_eq!(reader_ages.active(), 0);
+
         maintain_storage_pressure(&path, &engine, &reader_ages, 0, 0);
 
         let version: u32 = engine

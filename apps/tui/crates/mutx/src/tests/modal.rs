@@ -1546,3 +1546,43 @@ fn modal_over_dialog_dismiss_restores_underlying_dialog() {
     );
     assert_eq!(app.modal_index, 2, "Sessions selection index is preserved");
 }
+
+#[test]
+fn dialog_keys_sublayer_pop_and_deactivate_behavior() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.open_dialog(crate::surfaces::DialogKind::Sessions);
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Sessions)
+    );
+
+    // Turn on dialog keys sub-view
+    app.dialog_keys = true;
+    app.dialog_keys_scroll = 5;
+
+    // While dialog_keys is active, modal_scroll_field directs to dialog_keys_scroll
+    {
+        let (scroll, follow) = app.modal_scroll_field().expect("scroll field exists");
+        assert_eq!(*scroll, 5);
+        assert!(follow.is_none());
+        *scroll += 1;
+    }
+    assert_eq!(app.dialog_keys_scroll, 6);
+
+    // Popping sublayer dismisses dialog_keys but leaves the dialog active
+    assert!(app.pop_sublayer(), "dialog_keys sublayer was popped");
+    assert!(!app.dialog_keys, "dialog_keys is now false");
+    assert_eq!(app.dialog_keys_scroll, 0, "dialog_keys_scroll was reset");
+    assert_eq!(
+        app.active_dialog(),
+        Some(crate::surfaces::DialogKind::Sessions),
+        "parent dialog remains open"
+    );
+
+    // Turning on dialog_keys again, then dismissing the dialog resets dialog_keys
+    app.dialog_keys = true;
+    app.dialog_keys_scroll = 3;
+    assert!(app.dismiss_active_dialog(), "dismissed active dialog");
+    assert!(!app.dialog_keys, "dialog_keys reset on dialog deactivate");
+    assert_eq!(app.dialog_keys_scroll, 0);
+}

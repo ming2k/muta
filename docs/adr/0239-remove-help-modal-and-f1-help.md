@@ -56,9 +56,11 @@ binding, and no `?`/`Ctrl+H`/`/help` entry point.**
    (`draw_help_modal`), and every render/scroll/state arm that dispatched on
    them are deleted. The `DialogKind::ALL` switcher list drops to 13 entries.
 3. **Remove the entry points.** The dispatcher's `CommandId::Help` and `Ctrl+H`
-   arms, the `modal_keys` `?` arm (and its `DialogKind::Help` close/scroll
-   cases), and the `Ctrl+H` special case are removed. `?` is now an ordinary
-   printable that inserts where text is editable and is inert where it is not;
+   arms, the global `modal_keys` help dispatch, and the `Ctrl+H` special case
+   are removed. Global `F1` and `/help` no longer open a help modal. `?` inserts
+   where text is editable; within an active dialog where no free-text field claims
+   the composer line, `?` opens a localized in-dialog key reference sub-view
+   (`{Dialog} › Keys`) conforming to the host dialog's layout and scope.
    `Ctrl+H` is explicitly swallowed so it never inserts a literal `h`.
 4. **Remove the discovery apologia.** The modal footer's mandatory `? help`
    chip (`MORE_FULL`, `render_modal_footer_with_more`) is deleted;

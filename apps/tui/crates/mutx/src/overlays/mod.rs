@@ -16,6 +16,7 @@ pub mod btw;
 pub mod command_palette;
 pub mod common;
 pub mod dashboard;
+pub mod dialog_keys;
 pub mod history;
 pub mod mcp;
 pub mod permission;
@@ -49,6 +50,7 @@ pub use history::draw_history_panel;
 // `dashboard` surface and removed; `/host` now opens the dashboard.
 pub use btw::{BtwModalProps, draw_btw_modal};
 pub(crate) use command_palette::draw_command_palette;
+pub use dialog_keys::draw_dialog_keys;
 pub use mcp::draw_mcp_modal;
 pub use permission::{
     draw_input_injection, draw_permission_sheet, draw_question_modal, permission_action_count,

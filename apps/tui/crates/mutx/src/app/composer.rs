@@ -446,6 +446,10 @@ impl App {
     pub fn caret_owner(&self) -> CaretOwner {
         use crate::surfaces::{DialogKind, SheetKind};
         if self.surfaces.active_overlay().is_some() || self.active_sheet().is_some() {
+            // Dialog key reference overlay suppresses caret
+            if self.dialog_keys {
+                return CaretOwner::None;
+            }
             // Confirmation sub-layers suppress caret
             if self.pending_provider_delete.is_some() {
                 return CaretOwner::None;

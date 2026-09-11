@@ -270,6 +270,20 @@ fn redesigned_components_render_without_panicking() {
             &selection,
             &mut layout_map,
         );
+        let mut keys_scroll = 0;
+        let ctx = crate::keymap::AppContext {
+            active_dialog: Some(crate::surfaces::DialogKind::Sessions),
+            ..Default::default()
+        };
+        draw_dialog_keys(
+            f,
+            crate::surfaces::DialogKind::Sessions,
+            &mut keys_scroll,
+            &ctx,
+            &theme,
+            &selection,
+            &mut layout_map,
+        );
         let question_request = UserQuestionRequest {
             id: "q1".to_string(),
             questions: vec![muta_contracts::UserQuestion {
