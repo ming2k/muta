@@ -44,7 +44,8 @@ pub trait DynamicToolSink: Send + Sync {
 /// Read-side counterpart of [`DynamicToolSink`]: a live view of everything
 /// dynamic sources currently publish. The master agent's registry implements
 /// this; subagent dispatch consults it at spawn time so an mcp_specialist child
-/// sees the *current* MCP toolset, not a stale bootstrap-time copy (ADR-0138).
+/// sees the *current* MCP toolset, not a stale bootstrap-time copy
+/// (ADR-0138 §2, archived — superseded by ADR-0144).
 pub trait DynamicToolSource: Send + Sync {
     /// Every currently published tool across all sources, in deterministic
     /// (source, name) order. Duplicate names across sources are preserved;

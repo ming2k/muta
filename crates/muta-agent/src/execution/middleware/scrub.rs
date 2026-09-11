@@ -88,9 +88,14 @@ impl ToolMiddleware for SecretScrubMiddleware {
                     *l = Self::scrub(l);
                 }
             }
-            ToolOutput::Patch { old, new, .. } => {
+            ToolOutput::Patch {
+                old, new, warnings, ..
+            } => {
                 *old = Self::scrub(old);
                 *new = Self::scrub(new);
+                for warning in warnings {
+                    *warning = Self::scrub(warning);
+                }
             }
             _ => {}
         }

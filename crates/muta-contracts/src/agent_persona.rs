@@ -355,7 +355,7 @@ impl AgentPersonaDelegation {
         "list_dir",
         "read_image",
         "search_text",
-        "get_outline",
+        "code_query",
         "run_command",
         "edit_text",
         "write_file",

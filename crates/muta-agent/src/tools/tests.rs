@@ -393,4 +393,72 @@ mod tests {
 
         std::fs::remove_dir_all(&unadmitted_root).ok();
     }
+
+    /// ADR-0188 / ADR-0215: the model-visible tool surface is a **permanent,
+    /// per-request** context cost, so its growth must be a deliberate decision
+    /// rather than a side effect of adding a capability. This pins the surface
+    /// every session advertises — the inventory-registered built-ins plus the
+    /// explicitly assembled `spawn_agent` — to the cost measured with the
+    /// project's own accounting (cl100k BPE via [`ToolSchemaWeights`], the same
+    /// unit `/context` and the compaction gates use).
+    ///
+    /// Scope note: the instance-bound `todo` tool (`Agent::new` adds it with its
+    /// live task-list context) is not part of this pin, so its cost is additive
+    /// to the number below rather than included in it.
+    ///
+    /// If this fails, the surface grew. That is allowed — but decide it on
+    /// purpose and raise the budget in the same change, quoting the measured
+    /// total in the commit. Failures print the per-tool breakdown so the new
+    /// cost is attributable without re-deriving it.
+    ///
+    /// Budget history (each line is a deliberate decision, not drift):
+    ///
+    /// - 1579 — baseline when this pin was introduced.
+    /// - 1864 (ADR-0237) — `code_query` (274) replaces `get_outline` (88), and
+    ///   `edit_text` (141) / `write_file` (88) gain `expected_version`. Net
+    ///   +264 for two capabilities: structural lookup that returns a
+    ///   declaration's source instead of a whole file, and an optimistic
+    ///   precondition that refuses a write based on a snapshot the caller
+    ///   never saw. The prose on all three tools was tightened first, which
+    ///   recovered 77 tokens, and 3 more came back from injecting the mode enum
+    ///   into the schema. (The surface also carried +21 from an unrelated
+    ///   `process` change already in the tree when this was measured.)
+    #[test]
+    fn builtin_tool_surface_stays_within_its_token_budget() {
+        const BUDGET_TOKENS: usize = 1_864;
+
+        let ctx = muta_contracts::ToolContextBuilder::new().build();
+        let mut tools = muta_contracts::collect_toolset(&ctx).default_view();
+        tools.push(std::sync::Arc::new(crate::SubagentTool::new(
+            std::sync::Arc::new(crate::NoProvider),
+            muta_contracts::ToolSet::default(),
+            &muta_contracts::SUBAGENT_EXPLORE,
+        )) as std::sync::Arc<dyn Tool>);
+
+        let weights = muta_contracts::ToolSchemaWeights::new();
+        let mut rows: Vec<(String, usize)> = tools
+            .iter()
+            .map(|tool| {
+                let spec = muta_contracts::ToolSpec::from_tool(tool.as_ref());
+                let tokens = weights.weight(&spec);
+                (spec.name, tokens)
+            })
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.1));
+
+        let total: usize = rows.iter().map(|(_, tokens)| tokens).sum();
+        let breakdown = rows
+            .iter()
+            .map(|(name, tokens)| format!("{name}={tokens}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        assert!(
+            total <= BUDGET_TOKENS,
+            "built-in tool surface costs {total} tokens/request, over the {BUDGET_TOKENS}-token \
+             budget ({} tools: {breakdown}). Either shrink the surface or raise BUDGET_TOKENS \
+             deliberately with the measured total in the commit message.",
+            rows.len()
+        );
+    }
 }

@@ -1,22 +1,17 @@
 //! Atomic harness extensions implementation (ADR-0224).
 //!
-//! `CodeIntelligenceExtension` is a hook-only extension that routes pending
-//! file mutations through the single production syntax policy.
+//! `CodeIntelligenceExtension` retains its identity for existing catalogs but
+//! never gates mutations. Writing tools return post-write syntax diagnostics.
 
 use muta_contracts::extension::{HookContext, HookOutcome};
 use muta_contracts::{Extension, HookPhase};
 
 /// Code-intelligence extension (ADR-0211, revised by ADR-0214 / ADR-0224).
 ///
-/// Ambient behavior only: it declares the [`HookPhase::InterceptFileMutation`]
-/// phase and routes that gate to the production `syntax_guard` policy the write
-/// tools already use, so it cannot diverge. Per ADR-0214 it projects no ambient
-/// repository map — code structure is retrieved on demand via the separately
-/// registered `get_outline` tool.
+/// ADR-0233 removes syntax interception; ADR-0214 prohibits ambient repository
+/// maps. Structure remains available through the separate `code_query` tool.
 #[derive(Debug, Clone)]
-pub struct CodeIntelligenceExtension {
-    read_only: bool,
-}
+pub struct CodeIntelligenceExtension;
 
 impl Default for CodeIntelligenceExtension {
     fn default() -> Self {
@@ -25,25 +20,19 @@ impl Default for CodeIntelligenceExtension {
 }
 
 impl CodeIntelligenceExtension {
-    /// Mutation gating enabled.
     pub fn new() -> Self {
-        Self { read_only: false }
+        Self
     }
 
-    /// Read-only variant (for Explore roles): no mutation gating.
+    /// Compatibility constructor for Explore roles; permissions live elsewhere.
     pub fn read_only() -> Self {
-        Self { read_only: true }
+        Self
     }
 
-    /// Validate a pending mutation, or `None` when allowed.
-    pub fn check_mutation(&self, path: &std::path::Path, content: &str) -> Option<String> {
-        if self.read_only {
-            return None;
-        }
-        match crate::tools::syntax_guard::verify_syntax(path, content) {
-            crate::tools::syntax_guard::SyntaxCheckResult::Invalid(err) => Some(err),
-            crate::tools::syntax_guard::SyntaxCheckResult::Valid => None,
-        }
+    /// Compatibility entry point: syntax never vetoes mutations (ADR-0233).
+    /// The writing tool owns diagnostics after a successful filesystem commit.
+    pub fn check_mutation(&self, _path: &std::path::Path, _content: &str) -> Option<String> {
+        None
     }
 }
 
@@ -53,22 +42,11 @@ impl Extension for CodeIntelligenceExtension {
     }
 
     fn hooks(&self) -> &'static [HookPhase] {
-        &[HookPhase::InterceptFileMutation]
+        &[]
     }
 
-    fn run(&self, phase: HookPhase, ctx: &HookContext<'_>) -> HookOutcome {
-        match phase {
-            HookPhase::InterceptFileMutation => {
-                let Some((path, content)) = ctx.mutation else {
-                    return HookOutcome::None;
-                };
-                match self.check_mutation(path, content) {
-                    Some(error) => HookOutcome::Block(error),
-                    None => HookOutcome::None,
-                }
-            }
-            HookPhase::ProjectTemporaryContext => HookOutcome::None,
-        }
+    fn run(&self, _phase: HookPhase, _ctx: &HookContext<'_>) -> HookOutcome {
+        HookOutcome::None
     }
 }
 
@@ -79,11 +57,11 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn extension_blocks_broken_syntax() {
+    fn extension_allows_broken_syntax() {
         let ext = CodeIntelligenceExtension::new();
         assert!(
             ext.check_mutation(Path::new("main.rs"), "fn broken(")
-                .is_some()
+                .is_none()
         );
         assert!(
             ext.check_mutation(Path::new("main.rs"), "fn ok() {}")
@@ -101,11 +79,11 @@ mod tests {
     }
 
     #[test]
-    fn mutation_gate_uses_the_production_syntax_policy() {
+    fn mutation_gate_allows_invalid_config() {
         let ext = CodeIntelligenceExtension::new();
         assert!(
             ext.check_mutation(Path::new("config.json"), r#"{"a":}"#)
-                .is_some()
+                .is_none()
         );
         assert!(
             ext.check_mutation(Path::new("config.json"), r#"{"a":1}"#)
@@ -114,14 +92,14 @@ mod tests {
     }
 
     #[test]
-    fn hook_dispatch_blocks_and_allows() {
+    fn hook_dispatch_never_blocks_syntax() {
         let ext = CodeIntelligenceExtension::new();
         assert!(matches!(
             ext.run(
                 HookPhase::InterceptFileMutation,
                 &HookContext::mutation(Path::new("main.rs"), "fn broken(")
             ),
-            HookOutcome::Block(_)
+            HookOutcome::None
         ));
         assert_eq!(
             ext.run(
@@ -140,10 +118,10 @@ mod tests {
     }
 
     #[test]
-    fn extension_declares_only_the_mutation_phase() {
+    fn extension_declares_no_mutation_gate() {
         let ext = CodeIntelligenceExtension::new();
         assert_eq!(ext.id(), "code_intelligence");
-        assert_eq!(ext.hooks(), &[HookPhase::InterceptFileMutation]);
+        assert!(ext.hooks().is_empty());
     }
 
     /// ADR-0214: `model_request` must not append an ambient code-structure

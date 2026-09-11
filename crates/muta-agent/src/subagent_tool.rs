@@ -24,6 +24,22 @@ use crate::agent::{Agent, SubagentHandle};
 /// Canonical tool name for spawning a delegated child agent (ADR-0183).
 pub const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 
+/// The roles a **model-facing** dispatch tool may request, in the order the
+/// schema advertises them.
+///
+/// This is the single source of truth for both the `role` enum in
+/// [`Tool::parameters`] and the runtime check in `run_subagent_outcome`, so the
+/// advertised contract and the enforced one cannot drift: a role the schema
+/// offers is always resolvable, and a role it does not offer is rejected
+/// instead of being silently treated as the bound default (ADR-0179's
+/// "actionable diagnostics for mode errors").
+///
+/// Deliberately narrower than [`muta_contracts::SubagentPresetPool::ALL`]:
+/// `title` is a harness-internal role (session titling drives it directly
+/// through the cognitive pipeline) and must not become spawnable just because
+/// it lives in the same pool.
+pub const DISPATCH_ROLES: &[&str] = &["explore", "code", "mcp", "skill"];
+
 /// Canonical description of the default `spawn_agent` dispatch tool (ADR-0183).
 pub const SPAWN_AGENT_TOOL_DESCRIPTION: &str = "\
 Spawn an isolated child agent to perform a focused subtask in a separate \
@@ -336,7 +352,8 @@ impl SubagentTool {
     }
 
     /// Bind a live source of the parent's dynamic (MCP) tools, consulted when
-    /// an mcp_specialist subagent spawns (ADR-0138 §2). The snapshot is read at
+    /// an mcp_specialist subagent spawns (ADR-0138 §2, archived — superseded by
+    /// ADR-0144). The snapshot is read at
     /// spawn — not at bind — so periodic MCP re-discovery (McpCatalog's 10-min
     /// refresh, `/mcp` reconnects) reaches subsequent children without
     /// re-binding. `None`-bound (the default) also leaves the mcp_specialist
@@ -471,12 +488,8 @@ impl Tool for SubagentTool {
                 "prompt": { "type": "string", "description": "The full, self-contained instructions for the sub-agent" },
                 "role": {
                     "type": "string",
-                    "enum": ["explore", "code", "mcp", "skill"],
+                    "enum": DISPATCH_ROLES,
                     "description": "Optional sub-agent role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), 'mcp' (specialized tool integration), or 'skill' (skill discovery, inspection, and domain guideline synthesis). Defaults to 'explore'."
-                },
-                "background": {
-                    "type": "boolean",
-                    "description": "Set to true to dispatch this sub-agent asynchronously in the background. Only supported for read-only roles ('explore', 'skill'). You will be notified automatically when the exploration completes."
                 }
             },
             "required": ["description", "prompt"]
@@ -627,22 +640,54 @@ impl SubagentTool {
             return Err("'prompt' must not be empty.".to_string());
         }
 
-        let requested_preset = args
-            .get("role")
-            .and_then(|p| p.as_str())
-            .unwrap_or(self.profile.name);
-        let profile =
-            muta_contracts::SubagentPresetPool::find(requested_preset).unwrap_or(self.profile);
+        // The role is a capability grant, not a free-form label: an explicit
+        // value must be one this tool advertises, and is refused with the
+        // dispatchable set named instead of being silently downgraded to the
+        // bound default (which would hand the caller a read-only child while it
+        // planned for a write-capable one).
+        let profile = match args.get("role").and_then(|role| role.as_str()) {
+            // Absent role: the bound profile, verbatim. It is deliberately
+            // resolved without the pool — a dispatch tool may be bound to a
+            // caller-supplied preset that has no pool entry (session-specific
+            // and test profiles do exactly that), and rewriting that to a pool
+            // default would silently change the child's capability grant.
+            None => self.profile,
+            Some(role) => {
+                if !DISPATCH_ROLES.contains(&role) {
+                    return Err(format!(
+                        "Unknown 'role' '{role}'. Dispatchable roles: {DISPATCH_ROLES:?}. \
+                         Omit 'role' to use the default ('{}').",
+                        self.profile.name
+                    ));
+                }
+                muta_contracts::SubagentPresetPool::find(role).ok_or_else(|| {
+                    format!(
+                        "Role '{role}' is advertised by this dispatch tool but has no preset in \
+                         the pool. This is a dispatch-tool configuration error, not a caller \
+                         error."
+                    )
+                })?
+            }
+        };
 
         let is_background = args
             .get("background")
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
-        if is_background && profile.name != "explore" && profile.name != "skill" {
-            return Err(format!(
-                "Background execution is only permitted for read-only subagents ('explore', 'skill') to guarantee task orthogonality and prevent workspace write conflicts (requested role: '{}').",
-                profile.name
-            ));
+        if is_background {
+            // ADR-0234: the parameter is gone from the schema, and the
+            // execution path below awaits the child round inside this tool
+            // call — there is no background job registration, no `job_id`, and
+            // no result to poll. Rejecting an explicitly requested background
+            // dispatch is honest; silently blocking would let the caller plan
+            // around a continuation that never arrives.
+            return Err(
+                "Background sub-agent dispatch is not available: this sub-agent runs to \
+                 completion inside the calling turn. Re-issue the call without `background` \
+                 to run it synchronously and receive its result, or run long independent \
+                 work through the run_command tool's `background`/`service` modes."
+                    .to_string(),
+            );
         }
 
         if let Some(delegation) = self
@@ -690,11 +735,13 @@ impl SubagentTool {
             muta_contracts::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
         let mut sub_tools = profile.resolve_tools(&self.toolset, &model, &model_sel);
 
-        // ADR-0138 §2: the mcp_specialist subagent receives the session's live
-        // dynamic (MCP) toolset on top of the static snapshot. Reading the
-        // source at spawn (not at bind) means McpCatalog's periodic
-        // re-discovery and `/mcp` reconnects reach later children without
-        // re-binding. The admission filter still applies: a recursive or
+        // Tool-source binding for the mcp_specialist child (ADR-0138 §2, archived;
+        // superseded by ADR-0144 — cited for the runner-sandboxing rationale this
+        // binding descends from, not as a current binding rule): the subagent
+        // receives the session's live dynamic (MCP) toolset on top of the static
+        // snapshot. Reading the source at spawn (not at bind) means McpCatalog's
+        // periodic re-discovery and `/mcp` reconnects reach later children
+        // without re-binding. The admission filter still applies: a recursive or
         // control-flow dynamic tool would be silently dropped here, mirroring
         // `resolve_tools`'s hard rules for static tools.
         if profile.name == "mcp_specialist"
@@ -1641,6 +1688,34 @@ mod tests {
         assert!(tool.call(r#"{"prompt":"x"}"#).await.is_err());
     }
 
+    /// ADR-0234: the tool cannot dispatch a background child (the call awaits
+    /// the child round and returns its result), so both the schema and an
+    /// explicit request must say so instead of promising a notification that
+    /// never arrives.
+    #[tokio::test]
+    async fn subagent_schema_hides_and_rejects_background_dispatch() {
+        let tool = SubagentTool::new(
+            std::sync::Arc::new(CannedProvider),
+            muta_contracts::ToolSet::default(),
+            &SUBAGENT_EXPLORE,
+        );
+        assert!(
+            tool.parameters()
+                .get("properties")
+                .and_then(|p| p.get("background"))
+                .is_none(),
+            "the unsupported background parameter must not be advertised"
+        );
+        let err = tool
+            .call(r#"{"description":"x","prompt":"y","background":true}"#)
+            .await
+            .expect_err("background dispatch must be rejected explicitly");
+        assert!(
+            err.contains("not available") && err.contains("without `background`"),
+            "rejection must be actionable: {err}"
+        );
+    }
+
     /// A non-whitelisted stub, used to prove the explore profile rejects tools
     /// by name (it is not in READ_ONLY_TOOLS).
     struct StubWriteTool;
@@ -1922,6 +1997,88 @@ mod tests {
             .expect("skill subagent dispatch succeeds");
 
         assert_eq!(summary, "found 3 relevant files");
+    }
+
+    /// The `role` enum in the schema is the enforced contract, not a hint: an
+    /// unadvertised value is refused with the dispatchable set named, instead
+    /// of being silently downgraded to the bound default (a caller that asked
+    /// for a write-capable child must not receive a read-only one without
+    /// being told).
+    #[tokio::test]
+    async fn unknown_role_is_rejected_with_the_dispatchable_set() {
+        let provider = std::sync::Arc::new(CannedProvider);
+        let tool = SubagentTool::new(
+            provider.clone(),
+            muta_contracts::ToolSet::default(),
+            &SUBAGENT_EXPLORE,
+        );
+
+        let error = tool
+            .call(r#"{"description":"typo","prompt":"do something","role":"explort"}"#)
+            .await
+            .expect_err("an unadvertised role must not silently run");
+        assert!(error.contains("Unknown 'role' 'explort'"), "got: {error}");
+        assert!(
+            error.contains("explore"),
+            "must name dispatchable roles: {error}"
+        );
+    }
+
+    /// `title` lives in the preset pool but is harness-internal (session
+    /// titling drives it directly). It must not be spawnable through the
+    /// model-facing dispatch tool just because the pool contains it.
+    #[tokio::test]
+    async fn internal_title_role_is_not_dispatchable() {
+        let provider = std::sync::Arc::new(CannedProvider);
+        let tool = SubagentTool::new(
+            provider.clone(),
+            muta_contracts::ToolSet::default(),
+            &SUBAGENT_EXPLORE,
+        );
+
+        let error = tool
+            .call(r#"{"description":"title","prompt":"name this session","role":"title"}"#)
+            .await
+            .expect_err("the internal titling role must not be model-dispatchable");
+        assert!(error.contains("Unknown 'role' 'title'"), "got: {error}");
+    }
+
+    /// The advertised enum and the enforced check come from one constant, so a
+    /// role can never be offered by the schema and refused at runtime (or
+    /// accepted at runtime and hidden from the schema).
+    #[test]
+    fn schema_role_enum_matches_the_enforced_dispatch_roles() {
+        let tool = SubagentTool::new(
+            std::sync::Arc::new(CannedProvider),
+            muta_contracts::ToolSet::default(),
+            &SUBAGENT_EXPLORE,
+        );
+
+        let advertised: Vec<String> = tool.parameters()["properties"]["role"]["enum"]
+            .as_array()
+            .expect("role enum is an array")
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("role entries are strings")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(
+            advertised,
+            DISPATCH_ROLES
+                .iter()
+                .map(|r| r.to_string())
+                .collect::<Vec<_>>()
+        );
+        // Every advertised role must resolve to a real preset.
+        for role in DISPATCH_ROLES {
+            assert!(
+                muta_contracts::SubagentPresetPool::find(role).is_some(),
+                "advertised role '{role}' has no preset"
+            );
+        }
     }
 
     #[tokio::test]

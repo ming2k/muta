@@ -154,7 +154,16 @@ fn list_skill_files(root: &std::path::Path) -> String {
 }
 
 // Tools available for programmatic invocation / tests
-// Note: Skills are now progressively disclosed in the system prompt metadata and read via standard file tools.
+//
+// Not admitted to any agent toolset: `Agent::with_skills` attaches the registry
+// only, and no code path installs `UseSkillTool`/`ListSkillsTool`. The intended
+// design is progressive disclosure — skill metadata in the request with bodies
+// loaded on demand — and that is not yet implemented either, so today the model
+// reaches skills through mention injection and the `skill` subagent role, and
+// reaches skill files with the ordinary file tools. See ADR-0237.
+//
+// Do not describe these tools as available to the model until a call site
+// installs them.
 
 #[cfg(test)]
 mod tests {

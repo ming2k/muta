@@ -4,8 +4,8 @@ use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
 
 use crate::tools::helpers::{
-    WorkspaceBase, env_from_root, execution_environment, json_string, resolve_workspace_path,
-    workspace_base,
+    WorkspaceBase, check_expected_version, env_from_root, execution_environment, json_string,
+    read_optional, resolve_workspace_path, workspace_base,
 };
 
 #[derive(ToolSchema, Deserialize)]
@@ -17,6 +17,10 @@ struct WriteFileArgs {
     path: String,
     #[tool(desc = "The complete file content to write")]
     content: String,
+    #[tool(
+        desc = "Optional content version the caller last saw for this file (as reported by read_text or code_query). The write is rejected if the file has changed or no longer exists since."
+    )]
+    expected_version: Option<String>,
 }
 
 /// Write content to a file (overwrites).
@@ -93,14 +97,15 @@ impl Tool for WriteFileTool {
             .unwrap_or_else(|| env_from_root(&self.root));
         let resolved = resolve_workspace_path(&self.root, path);
 
-        // Syntax defense guard: verify syntactic integrity before committing changes to disk.
-        if let super::syntax_guard::SyntaxCheckResult::Invalid(err) =
-            super::syntax_guard::verify_syntax(&resolved, content)
-        {
-            return Err(format!(
-                "Syntax check failed for '{}': {err}. The file was NOT written. Please fix the syntax error and try again.",
-                path
-            ));
+        // Freshness precondition (ADR-0237): a full overwrite has no
+        // `old_string` anchor, so a supplied version is the only thing standing
+        // between an out-of-date model and silently lost content. Checked
+        // before the write, and fail-closed when the file vanished.
+        if args.expected_version.is_some() {
+            let current = read_optional(env.as_ref(), &resolved)
+                .await
+                .map_err(|error| format!("Failed to read '{path}' for version check: {error}"))?;
+            check_expected_version(path, args.expected_version.as_deref(), current.as_deref())?;
         }
 
         // Write atomically (temp file + fsync + rename) so an interrupted write
@@ -110,16 +115,133 @@ impl Tool for WriteFileTool {
             .await
             .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
 
-        Ok(muta_contracts::ToolOutput::Patch {
-            path: path.to_string(),
-            op: muta_contracts::PatchOp::Create,
-            old: String::new(),
-            new: content.to_string(),
-            start_line: 0,
-        })
+        Ok(super::syntax_guard::mutation_output(
+            &resolved,
+            content,
+            muta_contracts::ToolOutput::Patch {
+                path: path.to_string(),
+                op: muta_contracts::PatchOp::Create,
+                old: String::new(),
+                new: content.to_string(),
+                start_line: 0,
+                warnings: Vec::new(),
+            },
+        ))
     }
 }
 muta_contracts::register_tool!(WriteFileFactory => |ctx| WriteFileTool {
     root: workspace_base(ctx),
     env: Some(execution_environment(ctx)),
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::helpers::content_version;
+
+    /// A full overwrite has no `old_string` anchor, so `expected_version` is
+    /// the only thing standing between an out-of-date model and silently lost
+    /// content (ADR-0237).
+    #[tokio::test]
+    async fn expected_version_blocks_an_overwrite_of_unseen_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.rs");
+        std::fs::write(&file, "const A: u8 = 1;\n").unwrap();
+        let tool = WriteFileTool::new(Some(dir.path().to_path_buf()));
+
+        let stale = content_version(b"const A: u8 = 0;\n");
+        let error = tool
+            .call(
+                &serde_json::json!({
+                    "path": "config.rs",
+                    "content": "const A: u8 = 2;\n",
+                    "expected_version": stale,
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("has changed since version"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "const A: u8 = 1;\n",
+            "the rejected overwrite must not have landed"
+        );
+    }
+
+    /// A file that vanished since it was read is *not* recreated silently: the
+    /// precondition fails closed rather than resurrecting deleted content.
+    #[tokio::test]
+    async fn expected_version_fails_closed_when_the_file_vanished() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = WriteFileTool::new(Some(dir.path().to_path_buf()));
+
+        let error = tool
+            .call(
+                &serde_json::json!({
+                    "path": "gone.rs",
+                    "content": "const A: u8 = 2;\n",
+                    "expected_version": "deadbeef0000",
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("no longer exists"), "{error}");
+        assert!(!dir.path().join("gone.rs").exists());
+    }
+
+    /// Creating a new file and overwriting without a precondition keep working
+    /// exactly as before.
+    #[tokio::test]
+    async fn creates_and_overwrites_without_a_precondition() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = WriteFileTool::new(Some(dir.path().to_path_buf()));
+
+        tool.call(r#"{"path":"new.rs","content":"const A: u8 = 1;\n"}"#)
+            .await
+            .expect("create without precondition");
+        tool.call(r#"{"path":"new.rs","content":"const A: u8 = 3;\n"}"#)
+            .await
+            .expect("overwrite without precondition");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("new.rs")).unwrap(),
+            "const A: u8 = 3;\n"
+        );
+    }
+
+    /// The version a structural query reports is the value this parameter
+    /// accepts — the two halves of the freshness contract must agree.
+    #[tokio::test]
+    async fn accepts_the_version_a_code_query_reports() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("lib.rs");
+        std::fs::write(&file, "pub fn alpha() {}\n").unwrap();
+
+        let query = crate::tools::CodeQueryTool::new(Some(dir.path().to_path_buf()));
+        let outline = query
+            .call(r#"{"mode":"outline","path":"lib.rs"}"#)
+            .await
+            .unwrap();
+        let version = outline
+            .split("(version ")
+            .nth(1)
+            .and_then(|rest| rest.split(',').next())
+            .expect("outline reports a version")
+            .to_string();
+
+        let write = WriteFileTool::new(Some(dir.path().to_path_buf()));
+        write
+            .call(
+                &serde_json::json!({
+                    "path": "lib.rs",
+                    "content": "pub fn beta() {}\n",
+                    "expected_version": version,
+                })
+                .to_string(),
+            )
+            .await
+            .expect("the version a code_query reported must be accepted by a write");
+        assert!(std::fs::read_to_string(&file).unwrap().contains("beta"));
+    }
+}

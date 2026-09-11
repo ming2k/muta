@@ -13,11 +13,11 @@ pub mod search;
 mod ssrf;
 
 mod ask_user;
+mod code_query;
 mod edit_text;
 mod execute_command;
 mod file_search;
 mod find_files;
-mod get_outline;
 mod helpers;
 mod list_dir;
 pub mod process_jobs;
@@ -34,10 +34,10 @@ pub use syntax_guard::{SyntaxCheckResult, verify_syntax};
 // Re-export every tool struct at the module root so existing consumers
 // (`crate::tools::ReadTextTool`, etc.) keep resolving unchanged.
 pub use ask_user::AskUserTool;
+pub use code_query::CodeQueryTool;
 pub use edit_text::EditTextTool;
 pub use execute_command::ExecuteCommandTool;
 pub use find_files::FindFilesTool;
-pub use get_outline::GetOutlineTool;
 pub use list_dir::ListDirTool;
 pub use process_jobs::ProcessTool;
 pub use read_image::ReadImageTool;

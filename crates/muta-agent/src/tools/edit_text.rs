@@ -4,8 +4,8 @@ use muta_tool_derive::ToolSchema;
 use serde::Deserialize;
 
 use crate::tools::helpers::{
-    WorkspaceBase, env_from_root, execution_environment, json_string, resolve_workspace_path,
-    workspace_base,
+    WorkspaceBase, check_expected_version, env_from_root, execution_environment, json_string,
+    resolve_workspace_path, workspace_base,
 };
 
 #[derive(ToolSchema, Deserialize)]
@@ -19,6 +19,10 @@ struct EditTextArgs {
     old_string: String,
     #[tool(desc = "The replacement text to insert in place of old_string")]
     new_string: String,
+    #[tool(
+        desc = "Optional content version the caller last saw for this file (as reported by read_text or code_query). The edit is rejected if the file has changed since."
+    )]
+    expected_version: Option<String>,
 }
 
 /// Apply a text edit to a file (safer than write_file — requires old_string match).
@@ -351,6 +355,16 @@ impl Tool for EditTextTool {
             .await
             .map_err(|e| format!("Failed to read '{}': {}", path, e))?;
 
+        // Freshness precondition first, before any matching work: a caller that
+        // read a snapshot refuses to edit drift it never saw (ADR-0237). The
+        // `old_string` anchor below pins the edited region only; this pins the
+        // whole file.
+        check_expected_version(
+            path,
+            args.expected_version.as_deref(),
+            Some(content.as_bytes()),
+        )?;
+
         // Exact match first; fall back to a CRLF-normalized comparison so an
         // edit authored with LF line endings works against a CRLF file. Either
         // path requires the match to be *unique* — an ambiguous old_string is an
@@ -369,29 +383,24 @@ impl Tool for EditTextTool {
             }
         };
 
-        // Syntax defense guard: verify syntactic integrity before committing changes to disk.
-        if let super::syntax_guard::SyntaxCheckResult::Invalid(err) =
-            super::syntax_guard::verify_syntax(&resolved, &edit.new_content)
-        {
-            return Err(format!(
-                "Syntax check failed for '{}': {err}. The edit was NOT applied. Please fix the syntax error and re-apply.",
-                path
-            ));
-        }
-
         // Atomically commit the new content (temp file + fsync + rename) so an
         // interrupted edit never corrupts the file in place.
         env.fs()
             .write(&resolved, edit.new_content.as_bytes())
             .await
             .map_err(|e| format!("Failed to write '{}': {}", path, e))?;
-        Ok(muta_contracts::ToolOutput::Patch {
-            path: path.to_string(),
-            op: muta_contracts::PatchOp::Edit,
-            old: edit.old_ctx,
-            new: edit.new_ctx,
-            start_line: edit.ctx_start,
-        })
+        Ok(super::syntax_guard::mutation_output(
+            &resolved,
+            &edit.new_content,
+            muta_contracts::ToolOutput::Patch {
+                path: path.to_string(),
+                op: muta_contracts::PatchOp::Edit,
+                old: edit.old_ctx,
+                new: edit.new_ctx,
+                start_line: edit.ctx_start,
+                warnings: Vec::new(),
+            },
+        ))
     }
 }
 
@@ -532,5 +541,74 @@ mod tests {
         let old = "fn bar() {}";
         let diag = diagnose_edit_failure(content, old, "test.rs");
         assert!(diag.contains("0 matches found"), "diagnostic: {diag}");
+    }
+
+    /// ADR-0237: `expected_version` refuses an edit whose basis snapshot is
+    /// gone, and does so *before* any matching work — an `old_string` anchor
+    /// only pins the edited region, so it cannot see drift elsewhere in the
+    /// file.
+    #[tokio::test]
+    async fn expected_version_rejects_an_edit_against_a_stale_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("lib.rs");
+        std::fs::write(&file, "pub fn alpha() {}\n").unwrap();
+        let tool = EditTextTool::new(Some(dir.path().to_path_buf()));
+
+        let stale = crate::tools::helpers::content_version(b"pub fn something_else() {}\n");
+        let error = tool
+            .call(
+                &serde_json::json!({
+                    "path": "lib.rs",
+                    "old_string": "pub fn alpha() {}",
+                    "new_string": "pub fn alpha_v2() {}",
+                    "expected_version": stale,
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("has changed since version"), "{error}");
+        assert!(
+            std::fs::read_to_string(&file).unwrap().contains("alpha()"),
+            "the rejected edit must not have been written"
+        );
+    }
+
+    /// The happy path: a matching version lets the edit through, and omitting
+    /// the parameter preserves the previous behaviour exactly.
+    #[tokio::test]
+    async fn expected_version_admits_a_matching_snapshot_and_is_optional() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("lib.rs");
+        let original = "pub fn alpha() {}\n";
+        std::fs::write(&file, original).unwrap();
+        let tool = EditTextTool::new(Some(dir.path().to_path_buf()));
+
+        let version = crate::tools::helpers::content_version(original.as_bytes());
+        tool.call(
+            &serde_json::json!({
+                "path": "lib.rs",
+                "old_string": "alpha",
+                "new_string": "beta",
+                "expected_version": version,
+            })
+            .to_string(),
+        )
+        .await
+        .expect("matching version must admit the edit");
+        assert!(std::fs::read_to_string(&file).unwrap().contains("beta"));
+
+        // No precondition supplied: unchanged legacy behaviour.
+        tool.call(
+            &serde_json::json!({
+                "path": "lib.rs",
+                "old_string": "beta",
+                "new_string": "gamma",
+            })
+            .to_string(),
+        )
+        .await
+        .expect("omitting expected_version must not change behaviour");
+        assert!(std::fs::read_to_string(&file).unwrap().contains("gamma"));
     }
 }

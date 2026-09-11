@@ -118,6 +118,9 @@ pub enum ToolOutput {
         old: String,
         new: String,
         start_line: usize,
+        /// Advisory diagnostics for a committed change; never a mutation failure.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
     /// A read-only subagent run (produced by the `task` tool). Carries the
     /// subagent's full internal transcript so it can be persisted on the
@@ -594,14 +597,27 @@ impl ToolOutput {
             }
             ToolOutput::Listing { entries } => entries.join("\n"),
             ToolOutput::Matches { lines, .. } => lines.join("\n"),
-            ToolOutput::Patch { path, op, new, .. } => match op {
-                PatchOp::Create => format!(
-                    "Successfully wrote {} tokens to {path}",
-                    crate::tokenizer::count_tokens(new)
-                ),
-                PatchOp::Edit => format!("Edited '{}' successfully", path),
-                PatchOp::Delete => format!("Deleted '{}'", path),
-            },
+            ToolOutput::Patch {
+                path,
+                op,
+                new,
+                warnings,
+                ..
+            } => {
+                let mut text = match op {
+                    PatchOp::Create => format!(
+                        "Successfully wrote {} tokens to {path}",
+                        crate::tokenizer::count_tokens(new)
+                    ),
+                    PatchOp::Edit => format!("Edited '{}' successfully", path),
+                    PatchOp::Delete => format!("Deleted '{}'", path),
+                };
+                for warning in warnings {
+                    text.push_str("\nWarning: ");
+                    text.push_str(warning);
+                }
+                text
+            }
             // The parent model sees the subagent's textual summary only; the
             // structured transcript travels out-of-band via the parent harness
             // attaching `messages` to the Tool-role message's `children`.
@@ -796,10 +812,10 @@ pub fn termination_model_note(termination: ShellTermination) -> Option<&'static 
         }
         ShellTermination::Detached => Some(
             "[running: the sync budget expired but the command is still alive. \
-             It was NOT killed — it continues as a background job and its \
-             completion (or the service's failure) will be reported here \
-             automatically. Use the process tool (action: 'status' or 'logs') \
-             to inspect it now.]",
+             It was NOT killed — it continues as a background job, independent \
+             of this turn, and nothing resumes your turn when it finishes. \
+             Collect its outcome with the process tool (action: 'wait' to block \
+             until it finishes, 'status' or 'logs' to inspect it now).]",
         ),
     }
 }
@@ -867,6 +883,31 @@ fn web_article_to_text(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn patch_warnings_preserve_wire_compatibility_and_text() {
+        let legacy = serde_json::json!({"Patch": {
+            "path": "a.rs", "op": "Edit", "old": "before", "new": "after", "start_line": 7
+        }});
+        let mut patch: super::ToolOutput = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&patch).unwrap(), legacy);
+        let clean_text = patch.to_text();
+        if let super::ToolOutput::Patch { warnings, .. } = &mut patch {
+            warnings.push("advisory syntax diagnostic".into());
+        }
+        let restored: super::ToolOutput =
+            serde_json::from_value(serde_json::to_value(&patch).unwrap()).unwrap();
+        assert!(restored.to_text().starts_with(&clean_text));
+        assert!(
+            restored
+                .to_text()
+                .contains("Warning: advisory syntax diagnostic")
+        );
+        assert!(
+            matches!(restored, super::ToolOutput::Patch { old, new, start_line: 7, warnings, .. }
+            if old == "before" && new == "after" && warnings.len() == 1)
+        );
+    }
+
     use super::*;
 
     #[test]

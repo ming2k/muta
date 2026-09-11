@@ -13,6 +13,13 @@
 //! Any other type — nested structs, maps, arrays of them — falls back to
 //! `"object"`.
 //!
+//! **A Rust `enum` field is not supported and falls back to `"object"`**, which
+//! tells the model to send an object where a string is expected. Declare such a
+//! field as `String` and inject the value list into the generated schema from a
+//! single const, so the advertised set and the accepted set cannot drift (see
+//! `CodeQueryTool::parameters` in `muta-agent`'s `tools::code_query` for the
+//! pattern and its test).
+//!
 //! Field attributes: `#[tool(desc = "...")]` sets the property description;
 //! fields without it get no `description` key. Any other key inside
 //! `#[tool(...)]` is a compile error — silently ignoring a typo'd key is how

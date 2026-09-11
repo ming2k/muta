@@ -190,7 +190,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "find_files",
     "list_dir",
     "search_text",
-    "get_outline",
+    "code_query",
     "read_url",
     "search_web",
 ];
@@ -326,7 +326,14 @@ of turns, then answer.",
     allow_model_stdin: false,
 };
 
-/// The MCP specialist subagent role for running external and dynamic MCP tools in an isolated sandbox (ADR-0138).
+/// The MCP specialist subagent role for running external and dynamic MCP tools
+/// in an isolated sandbox (rationale: ADR-0138, archived — superseded by
+/// [ADR-0144](../../../docs/adr/0144-three-tier-agent-hierarchy-and-tool-pool.md)).
+///
+/// Scope note: `allowed_tools: None` admits the **full** parent toolset — every
+/// built-in write/execute tool included — not only the dynamic MCP tools the
+/// role's description names. Narrowing that grant to the dynamic set is an open
+/// question; this note records the current behaviour rather than endorsing it.
 pub const SUBAGENT_MCP_SPECIALIST: SubagentPreset = SubagentPreset {
     name: "mcp_specialist",
     system_prompt: "\

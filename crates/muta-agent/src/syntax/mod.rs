@@ -3,12 +3,21 @@
 //! Provides:
 //! - Pre-mutation syntax verification (`verify_ast_syntax`)
 //! - Structural symbol extraction for on-demand outlines (`extract_symbols`)
+//! - Named-declaration extraction for structural queries
+//!   ([`extract_declarations`], for the `code_query` tool)
+//! - The closed structural-query grammar ([`parse_syntax_pattern`])
 //!
 //! Per ADR-0214 there is no ambient repository-wide Repo Map generator here:
 //! structure enters the model context only through the scoped, bounded
-//! `get_outline` tool. This module owns parsing; it does not own freshness or
+//! `code_query` tool. This module owns parsing; it does not own freshness or
 //! context delivery, and an on-demand parse of the current bytes is the
 //! correctness baseline.
+
+pub mod declarations;
+pub mod query;
+
+pub use declarations::{DECLARATION_KINDS, Declaration, extract_declarations};
+pub use query::{SyntaxPattern, matches_name, parse_syntax_pattern};
 
 use tree_sitter::{Node, Parser};
 
@@ -119,114 +128,6 @@ fn node_snippet<'a>(node: Node, source: &'a str) -> &'a str {
     }
 }
 
-/// Extract top-level symbol outline from source content.
-pub fn extract_symbols(ext: &str, content: &str) -> Vec<String> {
-    let Some(lang) = SupportedLanguage::from_extension(ext) else {
-        return Vec::new();
-    };
-
-    let mut parser = Parser::new();
-    if parser.set_language(&lang.tree_sitter_language()).is_err() {
-        return Vec::new();
-    }
-
-    let Some(tree) = parser.parse(content, None) else {
-        return Vec::new();
-    };
-
-    let root = tree.root_node();
-    let mut symbols = Vec::new();
-    let mut cursor = root.walk();
-
-    for child in root.children(&mut cursor) {
-        if let Some(sig) = format_symbol_signature(lang, child, content) {
-            symbols.push(sig);
-        }
-    }
-
-    symbols
-}
-
-/// Format a concise signature line for a top-level AST node.
-fn format_symbol_signature(lang: SupportedLanguage, node: Node, source: &str) -> Option<String> {
-    let kind = node.kind();
-    match lang {
-        SupportedLanguage::Rust => match kind {
-            "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item" => {
-                let text = node_text(node, source);
-                let first_line = text.lines().next().unwrap_or("").trim();
-                let clean = first_line.trim_end_matches('{').trim();
-                Some(format!("  {clean}"))
-            }
-            "impl_item" => {
-                let text = node_text(node, source);
-                let first_line = text.lines().next().unwrap_or("").trim();
-                let clean = first_line.trim_end_matches('{').trim();
-                Some(format!("  {clean}"))
-            }
-            _ => None,
-        },
-        SupportedLanguage::TypeScript | SupportedLanguage::Tsx => match kind {
-            "export_statement" => {
-                let text = node_text(node, source);
-                let first_line = text.lines().next().unwrap_or("").trim();
-                let clean = first_line.trim_end_matches('{').trim();
-                Some(format!("  {clean}"))
-            }
-            "function_declaration"
-            | "class_declaration"
-            | "interface_declaration"
-            | "type_alias_declaration" => {
-                let text = node_text(node, source);
-                let first_line = text.lines().next().unwrap_or("").trim();
-                let clean = first_line.trim_end_matches('{').trim();
-                Some(format!("  {clean}"))
-            }
-            _ => None,
-        },
-        SupportedLanguage::Python => match kind {
-            "class_definition" | "function_definition" => {
-                let text = node_text(node, source);
-                let first_line = text.lines().next().unwrap_or("").trim();
-                let clean = first_line.trim_end_matches(':').trim();
-                Some(format!("  {clean}"))
-            }
-            _ => None,
-        },
-        SupportedLanguage::C | SupportedLanguage::Cpp => match kind {
-            "function_definition" | "declaration" | "class_specifier" | "struct_specifier" => {
-                let text = node_text(node, source);
-                let first_line = text.lines().next().unwrap_or("").trim();
-                let clean = first_line.trim_end_matches('{').trim();
-                if !clean.is_empty() {
-                    Some(format!("  {clean}"))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        },
-        SupportedLanguage::Go => match kind {
-            "function_declaration" | "method_declaration" | "type_declaration" => {
-                let text = node_text(node, source);
-                let first_line = text.lines().next().unwrap_or("").trim();
-                let clean = first_line.trim_end_matches('{').trim();
-                Some(format!("  {clean}"))
-            }
-            _ => None,
-        },
-    }
-}
-
-fn node_text<'a>(node: Node, source: &'a str) -> &'a str {
-    let range = node.byte_range();
-    if range.end <= source.len() {
-        &source[range.start..range.end]
-    } else {
-        ""
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,17 +161,31 @@ mod tests {
     }
 
     #[test]
-    fn symbol_extraction_extracts_rust_items() {
-        let code = r#"
-            pub struct User { id: u64 }
-            pub trait Greeter { fn greet(&self); }
-            pub fn run() {}
-        "#;
-        let symbols = extract_symbols("rs", code);
-        assert_eq!(symbols.len(), 3);
-        assert!(symbols[0].contains("pub struct User"));
-        assert!(symbols[1].contains("pub trait Greeter"));
-        assert!(symbols[2].contains("pub fn run()"));
+    fn declaration_extraction_covers_the_rust_item_kinds() {
+        let code = r#"pub struct User { id: u64 }
+pub trait Greeter {
+    fn greet(&self);
+}
+pub fn run() {}
+"#;
+        let declarations = extract_declarations("rs", code);
+        let rendered: Vec<&str> = declarations
+            .iter()
+            .map(|decl| decl.signature.as_str())
+            .collect();
+        assert!(
+            rendered.contains(&"pub struct User { id: u64 }"),
+            "{rendered:?}"
+        );
+        assert!(rendered.contains(&"pub trait Greeter"), "{rendered:?}");
+        assert!(rendered.contains(&"pub fn run()"), "{rendered:?}");
+        // Members are part of the same index, not a second code path.
+        assert!(
+            declarations
+                .iter()
+                .any(|decl| decl.kind == "method" && decl.qualified_name() == "Greeter::greet"),
+            "{declarations:?}"
+        );
     }
 
     #[test]

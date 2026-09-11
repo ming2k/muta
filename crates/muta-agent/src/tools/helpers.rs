@@ -98,6 +98,88 @@ pub(crate) const IGNORED_DIRS: &[&str] = &[
     "run",
 ];
 
+/// Content-addressed version identity for a source snapshot.
+///
+/// Deterministic over the bytes actually read, so the same content always
+/// yields the same short digest, and a same-size replacement still changes it.
+/// This is provenance for the freshness contract (ADR-0214 §4, ADR-0237): the
+/// version a structural query reports is what a later mutation's
+/// `expected_version` is checked against.
+///
+/// It is deliberately *not* a security boundary — it identifies content, it
+/// does not authenticate it.
+pub(crate) fn content_version(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(12);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in digest.iter().take(6) {
+        hex.push(HEX[(byte >> 4) as usize] as char);
+        hex.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    hex
+}
+
+/// Enforce a caller-supplied content-version precondition before a mutation.
+///
+/// The optimistic-concurrency arm of the freshness contract (ADR-0237): a
+/// caller that read a snapshot may hand its version back and refuse to write
+/// over drift it never saw. Fails **closed** in every direction:
+///
+/// - `expected` is `None` → no precondition (the caller did not read a snapshot).
+/// - `expected` is `Some`, `current` is `None` → the file vanished since it was
+///   read; creating it fresh would silently resurrect deleted content.
+/// - `expected` is `Some`, versions differ → the file changed; the caller's
+///   `old_string` anchors or full-file intent describe a snapshot that is gone.
+///
+/// `content_version` is a whole-file digest, so this is a *coarser* check than
+/// an `old_string` anchor (which pins the exact region). That is the point: the
+/// anchor cannot see a change to a part of the file the edit does not touch.
+pub(crate) fn check_expected_version(
+    path: &str,
+    expected: Option<&str>,
+    current: Option<&[u8]>,
+) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    match current {
+        None => Err(format!(
+            "'expected_version' was supplied for '{path}', but the file no longer exists. \
+             Re-read the path and retry, or omit 'expected_version' to create it."
+        )),
+        Some(bytes) => {
+            let actual = content_version(bytes);
+            if actual == expected {
+                Ok(())
+            } else {
+                Err(format!(
+                    "'{path}' has changed since version '{expected}' was read (current version \
+                     '{actual}'). The write was rejected so it cannot overwrite content you have \
+                     not seen. Re-read '{path}' and retry against its current version."
+                ))
+            }
+        }
+    }
+}
+
+/// Read a file's bytes for a precondition check: `None` means "does not exist",
+/// while any other error is surfaced (an unreadable file must not look absent,
+/// or a broken read would disable the check rather than fail closed).
+pub(crate) async fn read_optional(
+    env: &dyn muta_contracts::ExecutionEnvironment,
+    resolved: &std::path::Path,
+) -> Result<Option<Vec<u8>>, String> {
+    match env.fs().read(resolved).await {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(muta_contracts::execution::FsError::NotFound(_)) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 /// Extract a string field from JSON arguments for `permission_scope`.
 pub(crate) fn json_string(arguments: &str, key: &str) -> String {
     serde_json::from_str::<serde_json::Value>(arguments)
