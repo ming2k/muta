@@ -965,8 +965,17 @@ impl TokenSourceLedger {
     pub fn pending_records_for_session(&self, session_id: &str) -> Vec<RequestUsageRecord> {
         let requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         let dirty = self.dirty_usage.lock().unwrap_or_else(|e| e.into_inner());
-        dirty.iter().filter(|key| key.session_id == session_id)
-            .filter_map(|key| requests.get(key).cloned()).collect()
+        // `dirty_usage` is a HashSet: iteration order is arbitrary. Persisting
+        // in that order made the durable `request_usage_records` mirror
+        // nondeterministic (and diverge from the sorted `records_for_session`
+        // view), so sort into the stable display order before returning.
+        let mut records: Vec<RequestUsageRecord> = dirty
+            .iter()
+            .filter(|key| key.session_id == session_id)
+            .filter_map(|key| requests.get(key).cloned())
+            .collect();
+        records.sort_by(|a, b| request_display_order(a).cmp(&request_display_order(b)));
+        records
     }
 
     pub fn acknowledge_records(&self, records: &[RequestUsageRecord]) {
