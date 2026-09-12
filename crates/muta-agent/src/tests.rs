@@ -2967,8 +2967,8 @@ fn agent_config_defaults_match_runtime_constants() {
     // The config struct's defaults must match the seeds the agent uses when
     // no config is loaded, so a missing `[agent]` table is indistinguishable
     // from one that explicitly sets the defaults (ADR-0018).
-    use muta_persistence::config::MasterConfig;
-    let cfg = MasterConfig::default();
+    use muta_persistence::config::AgentConfig;
+    let cfg = AgentConfig::default();
     assert_eq!(cfg.hard_stop_turns, 0);
     // The agent seeds the same hard-stop budget by default (uncapped).
     let agent = agent();

@@ -110,6 +110,14 @@ impl DbReader {
         self.engine.lookup_session_workspace(session_id)
     }
 
+    /// A session's immutable role manifest snapshot (ADR-0245).
+    pub fn lookup_session_manifest(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<muta_contracts::SessionRoleManifest>> {
+        self.engine.lookup_session_manifest(session_id)
+    }
+
     /// Resolve an id prefix to every matching session id.
     pub fn resolve_session_prefix(
         &self,

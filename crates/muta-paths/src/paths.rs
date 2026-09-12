@@ -124,11 +124,6 @@ impl Dirs {
         self.config_dir.join("roles.toml")
     }
 
-    /// Legacy alias for [`Self::roles_file`] (`personas.toml`).
-    pub fn personas_file(&self) -> PathBuf {
-        self.config_dir.join("personas.toml")
-    }
-
     /// User-declared model provider customizations
     /// (`$XDG_CONFIG_HOME/muta/model_providers.toml`, ADR-0199, ADR-0201).
     pub fn model_providers_file(&self) -> PathBuf {

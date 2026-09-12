@@ -8,6 +8,8 @@
 //! repurposed as a different persona or for a different mission (research, ops,
 //! writing) by passing different values.
 
+use serde::{Deserialize, Serialize};
+
 /// Who an agent is and what it is for. Identity-agnostic: it does not hardcode
 /// "muta" or "coding". The embedding (the CLI, a future frontend) supplies
 /// the fields so the same engine can be repurposed as a different persona or
@@ -34,7 +36,7 @@
 /// [`AgentIdentity::default`] yields empty fields (no preamble — the system
 /// prompt opens straight at the host-environment section); tests and the
 /// shipped CLI use it.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentIdentity {
     /// What this agent is called, e.g. `"hypervisor"`. Empty means "unnamed" —
     /// the preamble then opens with the mission alone.

@@ -1,4 +1,4 @@
-//! Persistent agent roles (`roles.toml`, legacy `personas.toml`): user-authored
+//! Persistent agent roles (`roles.toml`): user-authored
 //! custom roles. A role is user-edited config, never program state; its
 //! sessions live in the shared store independent of this definition's
 //! lifecycle (ADR-0226).
@@ -41,100 +41,75 @@ impl<'de> Deserialize<'de> for RoleWorkspace {
     }
 }
 
-/// One declared custom role. See [`RolesConfig`] for the file shape.
+/// One declared custom role (ADR-0246). See [`RolesConfig`] for the file shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CustomRole {
     pub name: String,
-    pub mission: Option<String>,
-    #[serde(alias = "persona")]
-    pub directive: Option<String>,
-    pub preset: String,
+    pub description: Option<String>,
+    pub instructions: Option<String>,
     pub workspace: Option<RoleWorkspace>,
-    pub unattended: bool,
-    pub connection: Option<String>,
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub admit_mcp: Option<Vec<String>>,
+    #[serde(default = "default_tools")]
+    pub tools: Vec<String>,
+    #[serde(default = "default_admit_mcp")]
+    pub admit_mcp: Vec<String>,
+}
+
+fn default_tools() -> Vec<String> {
+    vec!["*".to_string()]
+}
+
+fn default_admit_mcp() -> Vec<String> {
+    vec!["*".to_string()]
 }
 
 impl Default for CustomRole {
     fn default() -> Self {
         Self {
             name: String::new(),
-            mission: None,
-            directive: None,
-            preset: default_preset(),
+            description: None,
+            instructions: None,
             workspace: None,
-            unattended: false,
-            connection: None,
-            model: None,
-            admit_mcp: None,
+            tools: default_tools(),
+            admit_mcp: default_admit_mcp(),
         }
     }
 }
 
-fn default_preset() -> String {
-    MainAgentRole::Philosophist.as_str().to_string()
-}
-
 impl CustomRole {
-    /// The preset this role binds, defaulting to `philosophist` when absent
-    /// or unrecognized.
-    pub fn preset_id(&self) -> MainAgentRole {
-        MainAgentRole::parse(&self.preset).unwrap_or(MainAgentRole::Philosophist)
-    }
-
-    /// The effective workspace policy: the explicit declaration when present,
-    /// otherwise derived from the preset (a workspace-free preset binds nothing;
-    /// a workspace preset inherits the launch directory).
+    /// The effective workspace policy: explicit declaration when present,
+    /// otherwise default to `RoleWorkspace::Inherit`.
     pub fn resolved_workspace(&self) -> RoleWorkspace {
-        self.workspace.clone().unwrap_or_else(|| {
-            if self.preset_id() == MainAgentRole::Philosophist {
-                RoleWorkspace::None
-            } else {
-                RoleWorkspace::Inherit
-            }
-        })
+        self.workspace.clone().unwrap_or(RoleWorkspace::Inherit)
     }
 
     /// The identity bound at agent construction.
     pub fn identity(&self) -> AgentIdentity {
-        if let Some(directive) = self.directive.as_ref().filter(|p| !p.trim().is_empty()) {
-            AgentIdentity::from_directive(directive.clone())
-        } else if let Some(mission) = self.mission.as_ref().filter(|m| !m.trim().is_empty()) {
-            AgentIdentity::new(self.name.clone(), mission.clone())
+        if let Some(instructions) = self.instructions.as_ref().filter(|p| !p.trim().is_empty()) {
+            AgentIdentity::from_directive(instructions.clone())
+        } else if let Some(description) = self.description.as_ref().filter(|m| !m.trim().is_empty())
+        {
+            AgentIdentity::new(self.name.clone(), description.clone())
         } else {
             AgentIdentity::new(self.name.clone(), "")
         }
     }
 
-    /// Validate the role against its bound preset.
-    pub fn validate(&mut self) -> Result<(), String> {
+    /// Validate the role against its declaration.
+    pub fn validate(&mut self, id: &str) -> Result<(), String> {
         if self.name.trim().is_empty() {
-            self.name = self.preset.clone();
-        }
-        if MainAgentRole::parse(&self.preset).is_none() {
-            return Err(format!(
-                "unknown preset '{}'; expected one of {}",
-                self.preset,
-                MainAgentRole::ALL
-                    .iter()
-                    .map(|preset| preset.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+            self.name = id.to_string();
         }
         Ok(())
     }
 
-    /// Whether this role admits tools from the given MCP server name (ADR-0242).
+    /// Whether this role admits tools from the given MCP server name (ADR-0242, ADR-0246).
     /// An absent pattern or `["*"]` admits all configured servers.
     pub fn admits_mcp_server(&self, server: &str) -> bool {
-        let Some(patterns) = &self.admit_mcp else {
-            return true;
-        };
-        patterns.iter().any(|pat| {
+        if self.admit_mcp.is_empty() {
+            return false;
+        }
+        self.admit_mcp.iter().any(|pat| {
             if pat == "*" {
                 true
             } else if let Some(prefix) = pat.strip_suffix('*') {
@@ -144,26 +119,37 @@ impl CustomRole {
             }
         })
     }
+
+    /// Whether this role admits the given native tool name (ADR-0246 pure allowlist).
+    pub fn admits_tool(&self, tool: &str) -> bool {
+        if self.tools.is_empty() {
+            return false;
+        }
+        self.tools.iter().any(|pat| {
+            if pat == "*" {
+                true
+            } else if let Some(prefix) = pat.strip_suffix('*') {
+                tool.starts_with(prefix)
+            } else {
+                pat == tool
+            }
+        })
+    }
 }
 
-/// The parsed `roles.toml` (or legacy `personas.toml`) registry, keyed by stable role id.
+/// The parsed `roles.toml` registry, keyed by stable role id.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RolesConfig {
-    #[serde(default, alias = "personas")]
+    #[serde(default)]
     pub roles: BTreeMap<String, CustomRole>,
 }
 
 impl RolesConfig {
-    /// Load `roles.toml` from the resolved config directory, falling back to legacy `personas.toml`.
+    /// Load `roles.toml` from the resolved config directory.
     /// Absent file = no roles. A parse or validation error is logged and
     /// degrades to an empty registry rather than failing startup.
     pub fn load() -> Self {
-        let roles_path = crate::paths::get().roles_file();
-        let path = if roles_path.exists() {
-            roles_path
-        } else {
-            crate::paths::get().personas_file()
-        };
+        let path = crate::paths::get().roles_file();
         match std::fs::read_to_string(&path) {
             Ok(raw) => match Self::from_toml_str(&raw) {
                 Ok(config) => config,
@@ -177,17 +163,19 @@ impl RolesConfig {
     }
 
     /// Load with optional workspace override (ADR-0243).
-    /// If `workspace_root` contains `.muta/config.toml` with `[roles.<name>]`,
+    /// If `workspace_root` contains `.muta/roles.toml` or `.muta/config.toml` with `[roles.<name>]`,
     /// those definitions override or extend the global roles.
     pub fn load_for_workspace(workspace_root: Option<&std::path::Path>) -> Self {
         let mut config = Self::load();
         if let Some(root) = workspace_root {
-            let project_cfg_path = root.join(".muta").join("config.toml");
-            if project_cfg_path.exists() {
-                if let Ok(raw) = std::fs::read_to_string(&project_cfg_path) {
-                    if let Ok(override_cfg) = Self::from_toml_str(&raw) {
-                        for (id, role) in override_cfg.roles {
-                            config.roles.insert(id, role);
+            for candidate in &["roles.toml", "config.toml"] {
+                let project_cfg_path = root.join(".muta").join(candidate);
+                if project_cfg_path.exists() {
+                    if let Ok(raw) = std::fs::read_to_string(&project_cfg_path) {
+                        if let Ok(override_cfg) = Self::from_toml_str(&raw) {
+                            for (id, role) in override_cfg.roles {
+                                config.roles.insert(id, role);
+                            }
                         }
                     }
                 }
@@ -196,7 +184,7 @@ impl RolesConfig {
         config
     }
 
-    /// Parse and validate a `roles.toml` / `personas.toml` body.
+    /// Parse and validate a `roles.toml` body.
     pub fn from_toml_str(raw: &str) -> Result<Self, String> {
         let mut config: Self =
             toml::from_str(raw).map_err(|error| format!("roles.toml parse error: {error}"))?;
@@ -208,10 +196,10 @@ impl RolesConfig {
         for (id, role) in self.roles.iter_mut() {
             if !is_valid_id(id) {
                 return Err(format!(
-                    "invalid role id '{id}': use lowercase letters, digits, '-' or '_'"
+                    "invalid role id '{id}': must be strict kebab-case (e.g. 'code-reviewer', lowercase letters, digits, and hyphens)"
                 ));
             }
-            role.validate()
+            role.validate(id)
                 .map_err(|error| format!("role '{id}': {error}"))?;
         }
         Ok(())
@@ -230,11 +218,52 @@ impl RolesConfig {
     }
 }
 
-fn is_valid_id(id: &str) -> bool {
+/// Validate whether an identifier strictly conforms to kebab-case (ADR-0246).
+/// Must consist of lowercase ASCII alphanumeric segments separated by single hyphens.
+pub fn is_valid_id(id: &str) -> bool {
     !id.is_empty()
+        && !id.starts_with('-')
+        && !id.ends_with('-')
+        && !id.contains("--")
         && id
             .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Resolve an immutable SessionRoleManifest for a role ID within a workspace context (ADR-0245, ADR-0246).
+pub fn resolve_role_manifest(
+    workspace_root: Option<&std::path::Path>,
+    role_id: Option<&str>,
+) -> muta_contracts::SessionRoleManifest {
+    let role_id = role_id.unwrap_or("developer");
+    let roles_cfg = RolesConfig::load_for_workspace(workspace_root);
+    if let Some(user_role) = roles_cfg.get(role_id) {
+        let identity = user_role.identity();
+        let now_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        muta_contracts::SessionRoleManifest {
+            role_id: role_id.to_string(),
+            name: user_role.name.clone(),
+            description: user_role.description.clone(),
+            instructions: user_role.instructions.clone(),
+            identity,
+            tools: user_role.tools.clone(),
+            admit_mcp: user_role.admit_mcp.clone(),
+            created_at_s: now_s,
+        }
+    } else if let Some(builtin) = MainAgentRole::parse(role_id) {
+        match builtin {
+            MainAgentRole::Developer => muta_contracts::SessionRoleManifest::developer(),
+            MainAgentRole::Philosophist => muta_contracts::SessionRoleManifest::philosophist(),
+        }
+    } else {
+        let mut manifest = muta_contracts::SessionRoleManifest::developer();
+        manifest.role_id = role_id.to_string();
+        manifest.name = role_id.to_string();
+        manifest
+    }
 }
 
 #[cfg(test)]
@@ -244,52 +273,36 @@ mod tests {
     const SAMPLE: &str = r#"
 [roles.english-practice]
 name = "English Practice"
-mission = "a patient English conversation partner who corrects gently in context"
-preset = "philosophist"
+description = "a patient English conversation partner who corrects gently in context"
+instructions = "You are a patient English conversation partner."
 workspace = "none"
-unattended = false
+tools = ["ask_user", "read_url"]
 admit_mcp = ["obsidian", "phil*"]
 
 [roles.coder]
 name = "Coder"
-preset = "developer"
 
-[roles.wizard]
-name = "Wizard"
-preset = "developer"
-workspace = "none"
-"#;
-
-    const SAMPLE_LEGACY: &str = r#"
-[personas.english-practice]
-name = "English Practice"
-mission = "a patient English conversation partner who corrects gently in context"
-preset = "philosophist"
-workspace = "none"
-unattended = false
+[roles.code-reviewer]
+name = "Code Reviewer"
+workspace = "inherit"
+tools = ["read_*", "code_query"]
 "#;
 
     #[test]
     fn parses_and_round_trips_a_role() {
         let config = RolesConfig::from_toml_str(SAMPLE).unwrap();
         let role = config.get("english-practice").unwrap();
-        assert_eq!(role.preset_id(), MainAgentRole::Philosophist);
         assert_eq!(role.resolved_workspace(), RoleWorkspace::None);
         assert_eq!(
             role.identity().preamble(),
-            "You are English Practice, a patient English conversation partner who corrects gently in context."
+            "You are a patient English conversation partner."
         );
-        assert!(!role.unattended);
         assert!(role.admits_mcp_server("obsidian"));
         assert!(role.admits_mcp_server("philpapers"));
         assert!(!role.admits_mcp_server("postgres"));
-    }
-
-    #[test]
-    fn parses_legacy_personas_format() {
-        let config = RolesConfig::from_toml_str(SAMPLE_LEGACY).unwrap();
-        let role = config.get("english-practice").unwrap();
-        assert_eq!(role.preset_id(), MainAgentRole::Philosophist);
+        assert!(role.admits_tool("ask_user"));
+        assert!(role.admits_tool("read_url"));
+        assert!(!role.admits_tool("execute_command"));
     }
 
     #[test]
@@ -297,17 +310,36 @@ unattended = false
         let config = RolesConfig::from_toml_str(SAMPLE).unwrap();
         let role = config.get("coder").unwrap();
         assert_eq!(role.resolved_workspace(), RoleWorkspace::Inherit);
+        assert!(role.admits_tool("execute_command"));
+        assert!(role.admits_mcp_server("anything"));
+    }
+
+    #[test]
+    fn wildcard_tool_allowlist_matches_prefixes() {
+        let config = RolesConfig::from_toml_str(SAMPLE).unwrap();
+        let role = config.get("code-reviewer").unwrap();
+        assert!(role.admits_tool("read_text"));
+        assert!(role.admits_tool("read_image"));
+        assert!(role.admits_tool("code_query"));
+        assert!(!role.admits_tool("write_file"));
+        assert!(!role.admits_tool("execute_command"));
     }
 
     #[test]
     fn invalid_role_id_is_rejected() {
-        let raw = r#"
-[roles."Bad Id"]
+        for bad_id in &["Bad Id", "bad_id", "bad--id", "-bad", "bad-", "UPPERCASE"] {
+            let raw = format!(
+                r#"
+[roles."{bad_id}"]
 name = "Bad"
-preset = "developer"
-"#;
-        let error = RolesConfig::from_toml_str(raw).unwrap_err();
-        assert!(error.contains("invalid role id"), "{error}");
+"#
+            );
+            let error = RolesConfig::from_toml_str(&raw).unwrap_err();
+            assert!(
+                error.contains("invalid role id"),
+                "expected error for '{bad_id}', got: {error}"
+            );
+        }
     }
 
     #[test]
@@ -318,7 +350,6 @@ preset = "developer"
         let project_cfg = r#"
 [roles.coder]
 name = "Workspace Coder"
-preset = "developer"
 admit_mcp = ["internal_pg"]
 "#;
         std::fs::write(muta_dir.join("config.toml"), project_cfg).unwrap();
@@ -326,6 +357,6 @@ admit_mcp = ["internal_pg"]
         let cfg = RolesConfig::load_for_workspace(Some(temp.path()));
         let coder = cfg.get("coder").unwrap();
         assert_eq!(coder.name, "Workspace Coder");
-        assert_eq!(coder.admit_mcp.as_deref(), Some(&["internal_pg".to_string()][..]));
+        assert_eq!(coder.admit_mcp, vec!["internal_pg".to_string()]);
     }
 }

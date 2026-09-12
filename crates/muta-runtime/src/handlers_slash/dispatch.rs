@@ -9,7 +9,7 @@ use super::record::{
 use super::security_ops::{TrustRoute, reload_trusted_assets, trust_route};
 use super::session_ops::{
     fork_current_session, restore_session_runtime, start_fresh_session,
-    supersede_for_session_switch, teardown_sides_for_session_switch,
+    start_fresh_session_with_role, supersede_for_session_switch, teardown_sides_for_session_switch,
 };
 use super::session_route::{
     SessionRoute, parse_confinement_arg, parse_unattended_arg, session_route,
@@ -209,12 +209,12 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             ));
         }
         Some(BuiltinCmd::Role) => {
-            // /role [id] [workspace] — switch the live agent role (or legacy /persona).
+            // /role [id] [workspace] — switch the live agent role.
             // Resolves the role or preset onto the live agent, applies the
             // resulting profile (identity preamble, capability scope, extensions,
             // runtime knobs, unattended posture), updates session workspace if applicable,
             // and records the session metadata.
-            // With no argument, lists the available built-in roles and user personas.
+            // With no argument, lists the available built-in and user roles.
             let target = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
             match target {
                 None => {
@@ -226,7 +226,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     let current = session
                         .active_role()
                         .await
-                        .or_else(|| session.role().map(str::to_string))
+                        .or_else(|| session.role())
                         .unwrap_or_else(|| "developer".to_string());
                     let ws_str = session
                         .workspace_root()
@@ -237,25 +237,39 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     lines.push("Available roles:".to_string());
                     lines.push("  Built-in roles:".to_string());
                     for preset in muta_contracts::MainAgentRole::ALL {
-                        lines.push(format!("    • `{}` — {}", preset.as_str(), preset.description()));
+                        lines.push(format!(
+                            "    • `{}` — {}",
+                            preset.as_str(),
+                            preset.description()
+                        ));
                     }
 
                     if !roles_config.is_empty() {
                         lines.push(String::new());
                         lines.push("  User roles (~/.config/muta/roles.toml):".to_string());
                         for (id, p) in &roles_config.roles {
-                            let desc = p.mission.as_deref().unwrap_or(p.name.as_str());
-                            let mcp_info = if let Some(admit) = &p.admit_mcp {
-                                format!(" [mcp: {}]", admit.join(", "))
+                            let desc = p.description.as_deref().unwrap_or(p.name.as_str());
+                            let mcp_info = if !p.admit_mcp.is_empty()
+                                && p.admit_mcp != vec!["*".to_string()]
+                            {
+                                format!(" [mcp: {}]", p.admit_mcp.join(", "))
                             } else {
                                 String::new()
                             };
-                            lines.push(format!("    • `{id}` (preset: `{}`){mcp_info} — {desc}", p.preset));
+                            let tools_info =
+                                if !p.tools.is_empty() && p.tools != vec!["*".to_string()] {
+                                    format!(" [tools: {}]", p.tools.join(", "))
+                                } else {
+                                    String::new()
+                                };
+                            lines.push(format!("    • `{id}`{tools_info}{mcp_info} — {desc}"));
                         }
                     }
 
                     lines.push(String::new());
-                    lines.push("Usage: `/role philosophist` or `/role developer <workspace>`".to_string());
+                    lines.push(
+                        "Usage: `/role philosophist` or `/role developer <workspace>`".to_string(),
+                    );
 
                     record_command(
                         session,
@@ -295,12 +309,14 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         return;
                     }
 
-                    if builtin == Some(muta_contracts::MainAgentRole::Developer) {
+                    let target_workspace = if builtin
+                        == Some(muta_contracts::MainAgentRole::Developer)
+                    {
                         let ws_arg = parts
                             .get(2..)
                             .map(|p| p.join(" "))
                             .filter(|s| !s.trim().is_empty());
-                        let target_workspace = match ws_arg {
+                        let target_path = match ws_arg {
                             Some(ws_str) => {
                                 let trimmed = ws_str.trim();
                                 let raw_path = std::path::PathBuf::from(trimmed);
@@ -325,7 +341,9 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                             resp_tx,
                                             name,
                                             args,
-                                            format!("Workspace path `{trimmed}` is not a directory"),
+                                            format!(
+                                                "Workspace path `{trimmed}` is not a directory"
+                                            ),
                                         )
                                         .await;
                                         return;
@@ -362,59 +380,23 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                                 }
                             }
                         };
-
-                        let binding = muta_contracts::WorkspaceBinding::new(target_workspace.clone());
-                        let _ = session.set_workspace(Some(binding)).await;
-                        agent.set_project_root(Some(target_workspace.clone()));
-                        let sec_snapshot = workspace_security.snapshot(&target_workspace);
-                        agent.set_workspace_security(sec_snapshot);
+                        Some(muta_contracts::WorkspaceBinding::new(target_path))
                     } else if builtin == Some(muta_contracts::MainAgentRole::Philosophist) {
-                        let _ = session.set_workspace(None).await;
-                        agent.set_project_root(None);
-                        agent.set_workspace_security(
-                            muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free"),
-                        );
-                    }
+                        None
+                    } else if let Some(user_role) = user_role {
+                        match user_role.resolved_workspace() {
+                            muta_persistence::roles::RoleWorkspace::None => None,
+                            muta_persistence::roles::RoleWorkspace::Inherit => session.workspace(),
+                            muta_persistence::roles::RoleWorkspace::Fixed(root) => {
+                                Some(muta_contracts::WorkspaceBinding::new(root))
+                            }
+                        }
+                    } else {
+                        None
+                    };
 
-                    match agent.apply_role(role_id) {
-                        Some(switched) => {
-                            let _ = session.set_unattended(agent.unattended()).await;
-                            let _ = session.set_role(Some(switched.id.clone())).await;
-                            let _ = resp_tx.send(round_response(
-                                &session.id().await,
-                                RoundEvent::UnattendedChanged(agent.unattended()),
-                            ));
-                            let ws_info = if let Some(ws) = session.workspace() {
-                                format!(" with workspace `{}`", ws.root.display())
-                            } else {
-                                String::new()
-                            };
-                            record_command(
-                                session,
-                                resp_tx,
-                                name,
-                                args,
-                                CommandResult::Text(format!(
-                                    "Agent role switched to `{}` (`{}`){ws_info} — {}. The next response will \
-                                     speak with this role's perspective and capability scope.",
-                                    switched.name,
-                                    switched.id,
-                                    switched.description
-                                )),
-                            )
-                            .await;
-                        }
-                        None => {
-                            record_error(
-                                session,
-                                resp_tx,
-                                name,
-                                args,
-                                format!("Failed to apply role `{role_id}`"),
-                            )
-                            .await;
-                        }
-                    }
+                    start_fresh_session_with_role(&mut env, role_id, target_workspace, name, args)
+                        .await;
                 }
             }
         }

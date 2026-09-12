@@ -147,7 +147,7 @@ pub struct SessionInitOptions {
     pub confined: bool,
     /// Role id to staff this session with. `None` = the default
     /// workspace-scoped coding principal.
-    #[serde(default, alias = "persona", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// Resume the most recent matching session instead of creating a new one.
     /// With `role`, matches by role (and workspace when the role binds one).

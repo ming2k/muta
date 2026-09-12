@@ -115,9 +115,10 @@ impl SessionStore {
             Some(&path),
         );
         let defer_persist = !path.exists() && data.is_user_facing_empty();
+        let role = data.role.clone();
         Self {
             workspace: std::sync::RwLock::new(workspace),
-            role: None,
+            role: std::sync::RwLock::new(role),
             sessions_dir,
             db_path,
             blob_store,
@@ -140,10 +141,16 @@ impl SessionStore {
     ) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
         let path = sessions_dir.join(format!("{id}.json"));
+        let role = role.or_else(|| Some("developer".to_string()));
+        let role_manifest = Some(crate::roles::resolve_role_manifest(
+            workspace.as_ref().map(|w| w.root.as_path()),
+            role.as_deref(),
+        ));
         let data = SessionData {
             id,
             workspace: workspace.clone(),
             role: role.clone(),
+            role_manifest,
             ..Default::default()
         };
         let writer = if db_path == paths::get().db_file() {
@@ -153,7 +160,7 @@ impl SessionStore {
         };
         Self {
             workspace: std::sync::RwLock::new(workspace),
-            role,
+            role: std::sync::RwLock::new(role),
             sessions_dir,
             db_path,
             blob_store,
@@ -175,8 +182,8 @@ impl SessionStore {
     }
 
     /// The staffing role recorded on fresh sessions, if any.
-    pub fn role(&self) -> Option<&str> {
-        self.role.as_deref()
+    pub fn role(&self) -> Option<String> {
+        self.role.read().unwrap().clone()
     }
 
     /// The workspace root, when one is bound. `None` for the unbound set.
@@ -218,20 +225,30 @@ impl SessionStore {
         state.defer_persist && state.data.is_user_facing_empty()
     }
 
-    /// Start a brand-new session and repoint this store at it.
+    /// Start a brand-new session and repoint this store at it, inheriting
+    /// the current session's workspace and role (ADR-0244, ADR-0245).
     pub async fn reset(&self) -> Result<String, String> {
-        let workspace = self.workspace.read().unwrap().clone();
-        let role = self.role.clone();
         let mut state = self.state.lock().await;
+        let workspace = state.data.workspace.clone();
+        let role = state.data.role.clone().or_else(|| Some("developer".to_string()));
+        let role_manifest = state.data.role_manifest.clone().or_else(|| {
+            Some(crate::roles::resolve_role_manifest(
+                workspace.as_ref().map(|w| w.root.as_path()),
+                role.as_deref(),
+            ))
+        });
         let sessions_dir = self.sessions_dir.clone();
         let id = uuid::Uuid::new_v4().to_string();
         let path = sessions_dir.join(format!("{id}.json"));
         let data = SessionData {
             id: id.clone(),
-            workspace,
-            role,
+            workspace: workspace.clone(),
+            role: role.clone(),
+            role_manifest,
             ..Default::default()
         };
+        *self.workspace.write().unwrap() = workspace;
+        *self.role.write().unwrap() = role;
         state.path = path;
         state.data = data;
         // Same staleness hazard as `open`: a fresh session must not inherit
@@ -240,6 +257,42 @@ impl SessionStore {
         state.invalidate_projection_cache();
         state.defer_persist = true;
         Ok(id)
+    }
+
+    /// Start a brand-new session with explicit workspace and role (ADR-0244, ADR-0245).
+    pub async fn reset_with(
+        &self,
+        workspace: Option<muta_contracts::WorkspaceBinding>,
+        role: Option<String>,
+    ) -> Result<String, String> {
+        let role = role.or_else(|| Some("developer".to_string()));
+        let role_manifest = Some(crate::roles::resolve_role_manifest(
+            workspace.as_ref().map(|w| w.root.as_path()),
+            role.as_deref(),
+        ));
+        let mut state = self.state.lock().await;
+        let sessions_dir = self.sessions_dir.clone();
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = sessions_dir.join(format!("{id}.json"));
+        let data = SessionData {
+            id: id.clone(),
+            workspace: workspace.clone(),
+            role: role.clone(),
+            role_manifest,
+            ..Default::default()
+        };
+        *self.workspace.write().unwrap() = workspace;
+        *self.role.write().unwrap() = role;
+        state.path = path;
+        state.data = data;
+        state.invalidate_projection_cache();
+        state.defer_persist = true;
+        Ok(id)
+    }
+
+    /// The immutable role manifest snapshot captured for this session, if any (ADR-0245).
+    pub async fn role_manifest(&self) -> Option<muta_contracts::SessionRoleManifest> {
+        self.state.lock().await.data.role_manifest.clone()
     }
 
     pub async fn resume(&self, id: Option<&str>) -> Result<String, String> {
@@ -266,7 +319,7 @@ impl SessionStore {
             return Ok(());
         }
         let workspace = self.workspace.read().unwrap().clone();
-        let role = self.role.clone();
+        let role = self.role.read().unwrap().clone();
         let blob_store = self.blob_store.clone();
         let writer = self.writer.clone();
         let load_path = path.clone();
@@ -284,6 +337,8 @@ impl SessionStore {
         })
         .await
         .map_err(|e| format!("session open task failed: {e}"))?;
+        *self.workspace.write().unwrap() = data.workspace.clone();
+        *self.role.write().unwrap() = data.role.clone();
         state.path = path;
         state.data = data;
         // ADR-0189: the projection cache belongs to the session being left.

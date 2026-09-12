@@ -1561,6 +1561,12 @@ pub struct HarnessSnapshot {
     /// instead of scanning the transcript for error notices.
     #[serde(default)]
     pub retry_pending: bool,
+    /// Active staffing role for this session (e.g. "developer", "philosophist").
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Bound workspace path for this session, or None for workspace-free sessions.
+    #[serde(default)]
+    pub workspace: Option<String>,
 }
 
 const fn default_confined() -> bool {

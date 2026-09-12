@@ -389,6 +389,8 @@ pub struct Agent {
     tool_schema_weights: std::sync::Arc<muta_contracts::ToolSchemaWeights>,
     /// Atomic extensions bound to this agent instance (ADR-0224).
     pub(crate) extensions: Arc<std::sync::RwLock<Vec<Arc<dyn muta_contracts::Extension>>>>,
+    /// Active staffing role for this agent (e.g. "developer", "philosophist") (ADR-0244).
+    pub(crate) active_role: std::sync::RwLock<Option<String>>,
 }
 
 /// Capability handle for steering a running agent from the outside — the

@@ -1106,6 +1106,11 @@ async fn handle_wire_stream(
             confined: bound.shared_confinement.is_confined(),
             workspace_security: bound.security_snapshot(),
             retry_pending: bound.session.retry_pending().await.is_some(),
+            role: bound.session.role(),
+            workspace: bound
+                .session
+                .workspace()
+                .map(|w| w.root.to_string_lossy().to_string()),
         };
         let frame = Wire::Response {
             response: AgentResponse::Round {

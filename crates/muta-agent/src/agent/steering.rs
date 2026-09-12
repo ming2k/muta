@@ -86,7 +86,7 @@ impl Agent {
     }
 
     /// ADR-0141: how an autonomous session settles a parked question.
-    /// Sourced from `[master] ask_user_fallback` config; defaults to
+    /// Sourced from `[agent] ask_user_fallback` config; defaults to
     /// fail-closed (a missing human is an error, not an opinion).
     pub fn autonomous_fallback_policy(&self) -> AutonomousFallbackPolicy {
         self.interaction.autonomous_fallback_policy()
@@ -235,6 +235,8 @@ impl Agent {
 
     /// Idempotent over defaults: applies an [`muta_contracts::AgentRoleProfile`].
     pub fn apply_profile(&self, profile: &muta_contracts::AgentRoleProfile) {
+        *self.active_role.write().unwrap_or_else(|e| e.into_inner()) =
+            Some(profile.name.to_string());
         self.set_identity(profile.identity.clone());
         self.set_tools(profile.tools.clone());
         self.set_admit_mcp(profile.admit_mcp.clone());
@@ -278,27 +280,29 @@ impl Agent {
     /// to built-in presets (`developer`, `philosophist`).
     pub fn apply_role(&self, target: &str) -> Option<SwitchedRole> {
         let trimmed = target.trim();
-        let roles_config =
-            muta_persistence::roles::RolesConfig::load_for_workspace(self.workspace_root().as_deref());
+        let roles_config = muta_persistence::roles::RolesConfig::load_for_workspace(
+            self.workspace_root().as_deref(),
+        );
         if let Some(user_role) = roles_config.get(trimmed) {
-            let preset_id = user_role.preset_id();
             let identity = user_role.identity();
-            let mut profile = muta_contracts::AgentRoleProfile::from_role(preset_id, &identity);
-            profile.identity = identity;
-            profile.unattended = user_role.unattended;
-            if let Some(admit) = &user_role.admit_mcp {
-                profile.admit_mcp = admit.clone();
+            let mut profile =
+                muta_contracts::AgentRoleProfile::with_identity("role", identity.clone());
+            profile.tools = muta_contracts::ToolSelection::from_allowlist(&user_role.tools);
+            profile.admit_mcp = user_role.admit_mcp.clone();
+            if user_role.resolved_workspace().requires_binding() {
+                profile
+                    .extensions
+                    .push(Arc::new(crate::extension::CodeIntelligenceExtension::new()));
             }
-            self.equip_preset_extensions(&mut profile, preset_id);
             self.apply_profile(&profile);
             *self.extensions.write().unwrap_or_else(|e| e.into_inner()) = profile.extensions;
             return Some(SwitchedRole {
                 id: trimmed.to_string(),
                 name: user_role.name.clone(),
                 description: user_role
-                    .mission
+                    .description
                     .clone()
-                    .unwrap_or_else(|| preset_id.description().to_string()),
+                    .unwrap_or_else(|| user_role.name.clone()),
             });
         }
 
@@ -314,6 +318,19 @@ impl Agent {
             name: resolved.as_str().to_string(),
             description: resolved.description().to_string(),
         })
+    }
+
+    /// Active staffing role for this agent (e.g. "developer", "philosophist") (ADR-0244).
+    pub fn active_role(&self) -> Option<String> {
+        self.active_role
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Set the active staffing role for this agent (ADR-0244).
+    pub fn set_active_role(&self, role: Option<String>) {
+        *self.active_role.write().unwrap_or_else(|e| e.into_inner()) = role;
     }
 
     /// A snapshot of this agent's identity (name + mission, or a persona
@@ -825,7 +842,9 @@ mod tests {
         assert_eq!(agent.extensions().len(), 0);
 
         // apply_role returns SwitchedRole with rich metadata
-        let switched = agent.apply_role("philosophist").expect("philosophist role resolves");
+        let switched = agent
+            .apply_role("philosophist")
+            .expect("philosophist role resolves");
         assert_eq!(switched.id, "philosophist");
         assert_eq!(switched.name, "philosophist");
         assert!(switched.description.contains("philosophical"));

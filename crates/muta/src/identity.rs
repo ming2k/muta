@@ -1,8 +1,8 @@
-//! This CLI's identity + master profile.
+//! This CLI's identity + role profile.
 //!
 //! Lives in the application layer (`muta`), NOT in `muta-runtime`.
 //! The server layer stays application-neutral — a future sibling binary
-//! brings its own identity/master. The server's `/btw` side
+//! brings its own identity/role. The server's `/btw` side
 //! session reuses the primary agent's identity via `Agent::identity()`,
 //! so it never asks the server to name a product.
 //!
@@ -25,14 +25,12 @@
 //! tokens: the focused roles install an imperative role directive
 //! (see [`AgentRoleProfile::from_role`]).
 
-use muta_contracts::{AgentIdentity, AgentRoleProfile};
+use muta_contracts::AgentRoleProfile;
 
-/// The built-in **coding agent** profile (ADR-0183): the declarative
-/// form of the role this binary historically assembled inline. Its identity
-/// is empty — see the module docs for why the shipped agent describes no
-/// product.
+/// The built-in **coding agent** profile (ADR-0183, ADR-0244): the declarative
+/// form of the standard developer role with canonical Base-Tier identity directive.
 pub fn agent_code() -> AgentRoleProfile {
-    AgentRoleProfile::with_identity("developer", AgentIdentity::default())
+    AgentRoleProfile::developer()
 }
 
 /// The daemon has no terminal or browser clipboard of its own. Clipboard

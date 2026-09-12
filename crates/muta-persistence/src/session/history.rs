@@ -615,6 +615,8 @@ impl SessionStore {
         // Repoint this store at the child; the parent state is already current.
         state.path = child_path;
         state.data = child;
+        *self.workspace.write().unwrap() = state.data.workspace.clone();
+        *self.role.write().unwrap() = state.data.role.clone();
         state.invalidate_projection_cache();
         state.defer_persist = false;
         Ok((fork_child_id, parent_id))
@@ -651,7 +653,7 @@ impl SessionStore {
         let side_path = self.sessions_dir.join(format!("{side_id}.json"));
         let db_path = self.db_path.clone();
         let workspace = self.workspace.read().unwrap().clone();
-        let role = self.role.clone();
+        let role = self.role.read().unwrap().clone();
         let blob_store = BlobStore::new(self.blob_store.root().to_path_buf());
         let reader = self.writer.reader().map_err(|e| e.to_string())?;
         let data = if let Some(data) = reader
@@ -674,7 +676,7 @@ impl SessionStore {
         };
         Ok(SessionStore {
             workspace: std::sync::RwLock::new(workspace),
-            role,
+            role: std::sync::RwLock::new(role),
             sessions_dir: self.sessions_dir.clone(),
             db_path,
             blob_store,

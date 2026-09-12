@@ -160,21 +160,17 @@ When confinement is disabled (`off`), file tools can read and write any path on 
 
 | Form | Effect |
 |------|--------|
-| `/role <id>` | Switch the active agent role (identity, capability scope, and session metadata) (aliases: `/persona`, `/master`, `/preset`) |
-| `/role` | List available roles (shipped presets and user-configured roles) and the current one |
+| `/role <id>` | Switch the active agent role by creating/resuming a dedicated session bound to that role (ADR-0244, ADR-0246) |
+| `/role` | List available roles (built-in and user-configured roles in `roles.toml`) and the current one |
 
-Switches the session's agent role and capability at runtime (ADR-0053, updated by ADR-0183 and ADR-0225). Switching resolves against user-configured roles in `~/.config/muta/roles.toml` (and legacy `personas.toml`) first, then falls back to built-in presets:
+Switches the session's agent role and capability at runtime (ADR-0244, ADR-0246). Switching resolves against user-configured roles in `~/.config/muta/roles.toml` first, then falls back to built-in roles (`developer`, `philosophist`):
 
-| Built-in Preset | Scope |
+| Built-in Role | Scope |
 |-----------------|-------|
-| `code` | The default developer master — full native capabilities, unrestricted writes, no role directive |
-| `architect` | Design and review focus — full read, writes retained but directive steers toward analysis and design rationale |
-| `reviewer` | Read-only code review — read/search/inspect tools only (no `write_file`, `edit_text`, or `execute_command`) |
-| `security` | Read-only, command-confined security audit — read/search plus narrow command allowlist |
-| `code_analyst` | Read-only code analysis & sandboxed execution |
-| `conversational` | Workspace-free conversational companion — web + ask_user tools only |
+| `developer` | The default developer role — full native capabilities with workspace (`tools = ["*"]`, `admit_mcp = ["*"]`) |
+| `philosophist` | Philosophical inquiry & reflection — workspace-free, read_url/search_web/ask_user only |
 
-Unknown role identifiers are rejected with the list of valid roles. Legacy `/persona`, `/master`, and `/preset` calls are transparently accepted as aliases.
+Unknown role identifiers are rejected with the list of valid roles. Role definitions are declared in `~/.config/muta/roles.toml` or overridden in `<workspace>/.muta/config.toml`.
 
 ### `/btw`
 

@@ -653,8 +653,8 @@ impl SubagentTool {
             && !delegation.admits_subagent(profile.name)
         {
             return Err(format!(
-                "Agent preset '{}' does not admit subagent preset '{}'. Admitted presets: {:?}",
-                delegation.preset_id, profile.name, delegation.subagent_presets
+                "Agent role '{}' does not admit subagent role '{}'. Admitted roles: {:?}",
+                delegation.role_id, profile.name, delegation.subagent_roles
             ));
         }
 

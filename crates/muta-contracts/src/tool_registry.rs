@@ -587,11 +587,33 @@ impl ToolScope {
         ToolScope::Only(names.into_iter().map(Into::into).collect())
     }
 
+    /// Build a scope from an allowlist of capability names or patterns (ADR-0246).
+    pub fn from_allowlist<I, S>(patterns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let set: BTreeSet<String> = patterns.into_iter().map(Into::into).collect();
+        if set.contains("*") {
+            ToolScope::All
+        } else {
+            ToolScope::Only(set)
+        }
+    }
+
     /// Whether this scope admits the capability `name`.
     pub fn admits(&self, name: &str) -> bool {
         match self {
             ToolScope::All => true,
-            ToolScope::Only(set) => set.contains(name),
+            ToolScope::Only(set) => set.iter().any(|pat| {
+                if pat == "*" {
+                    true
+                } else if let Some(prefix) = pat.strip_suffix('*') {
+                    name.starts_with(prefix)
+                } else {
+                    pat == name
+                }
+            }),
         }
     }
 
@@ -630,6 +652,18 @@ impl ToolSelection {
     /// principal agent's baseline before per-model variants are applied.
     pub fn unrestricted() -> Self {
         Self::default()
+    }
+
+    /// A selection that admits only capabilities matching the given allowlist patterns (ADR-0246).
+    pub fn from_allowlist<I, S>(patterns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self {
+            scope: ToolScope::from_allowlist(patterns),
+            variants: VariantSelection::new(),
+        }
     }
 
     /// A selection that admits only the named capabilities (default variants).

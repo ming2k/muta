@@ -215,6 +215,6 @@ mod tests {
         assert!(mailbox1.token().is_cancelled());
         assert!(mailbox2.token().is_cancelled());
         assert_eq!(tracker.live_addresses().len(), 0);
-        assert_eq!(slot.delegation().preset_id, "philosophist");
+        assert_eq!(slot.delegation().role_id, "philosophist");
     }
 }

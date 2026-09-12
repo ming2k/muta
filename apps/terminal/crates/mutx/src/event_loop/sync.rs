@@ -232,9 +232,10 @@ pub(crate) async fn sync_transcripts_and_session(
     // Publish the routing fact to the translator (loop → translator).
     *runtime.viewed_session_id.lock().await = Some(viewed_session_id.clone());
 
-    let workspace = crate::chrome::tilde_home(&app.cwd);
-    if app.current_workspace != workspace {
-        app.current_workspace = workspace;
+    if app.current_role.as_deref() == Some("philosophist") {
+        app.current_workspace.clear();
+    } else if app.current_workspace.is_empty() && app.current_role.is_none() {
+        app.current_workspace = crate::chrome::tilde_home(&app.cwd);
     }
 
     app.context_tokens = app

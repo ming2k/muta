@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     /// Root agent: full cognitive loop, intent driver, conversation & tool authority.
-    #[serde(alias = "master")]
     Root,
     /// Subagent: mission-scoped worker, isolated/sandboxed, single-task lifecycle.
     Subagent,
@@ -149,10 +148,6 @@ mod tests {
             let back: AgentKind = serde_json::from_str(&s).unwrap();
             assert_eq!(back, *kind);
         }
-        assert_eq!(
-            serde_json::from_str::<AgentKind>("\"master\"").unwrap(),
-            AgentKind::Root
-        );
         for station in MeshStation::ALL {
             let s = serde_json::to_string(station).unwrap();
             let back: MeshStation = serde_json::from_str(&s).unwrap();

@@ -46,6 +46,7 @@ fn render_full_view(
                 session_head: Some(SessionHead {
                     session_id: "sess-01a2b3c4",
                     workspace: "~/projects/xx",
+                    role: Some("developer"),
                     unattended: false,
                     confined: true,
                     switching_target: None,

@@ -543,6 +543,8 @@ pub async fn run_tui(
                 confined: true,
                 workspace_security: muta_contracts::WorkspaceSecuritySnapshot::default(),
                 retry_pending: false,
+                role: None,
+                workspace: None,
             };
             // How many provider attempts the round currently in flight has
             // spent. It exists for exactly one purpose: the terminal `Error`
@@ -2010,6 +2012,7 @@ pub async fn run_tui(
         cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         current_session_id: String::new(),
         current_workspace: String::new(),
+        current_role: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
         harness_retry_pending: false,

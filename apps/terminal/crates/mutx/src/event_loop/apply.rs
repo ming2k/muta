@@ -59,6 +59,14 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             app.confined = snapshot.confined;
             app.harness_retry_pending = snapshot.retry_pending;
             app.workspace_security = snapshot.workspace_security.clone();
+            if let Some(role) = snapshot.role {
+                app.current_role = Some(role);
+            }
+            if let Some(ws) = snapshot.workspace {
+                app.current_workspace = crate::chrome::tilde_home(std::path::Path::new(&ws));
+            } else if app.current_role.as_deref() == Some("philosophist") {
+                app.current_workspace.clear();
+            }
             // PreAttach unmount (ADR-0175): when the snapshot transitions to
             // trusted (or the workspace is no longer quarantined), clear the
             // interstitial and latch the per-run gate so a subsequent

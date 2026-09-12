@@ -111,6 +111,21 @@ pub(crate) async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args
             let _ = resp_tx.send(AgentResponse::ConversationCleared {
                 session_id: session.id().await,
             });
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::HarnessState(muta_contracts::HarnessSnapshot {
+                    loop_status: muta_contracts::LoopStatus::Idle,
+                    round_counter: 0,
+                    unattended: fresh_posture,
+                    confined: shared_confinement.is_confined(),
+                    workspace_security: agent.workspace_security(),
+                    retry_pending: false,
+                    role: session.role(),
+                    workspace: session
+                        .workspace()
+                        .map(|w| w.root.to_string_lossy().to_string()),
+                }),
+            ));
             record_command(
                 session,
                 resp_tx,
@@ -126,12 +141,163 @@ pub(crate) async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args
     }
 }
 
+pub(crate) async fn start_fresh_session_with_role(
+    env: &mut SlashEnv<'_>,
+    role_id: &str,
+    target_workspace: Option<muta_contracts::WorkspaceBinding>,
+    name: &str,
+    args: &str,
+) {
+    let (
+        side,
+        session,
+        config,
+        agent,
+        lifecycle,
+        resp_tx,
+        provider_for_task,
+        shared_confinement,
+        workspace_security,
+    ) = (
+        env.side,
+        env.session,
+        env.config,
+        env.agent,
+        env.lifecycle,
+        env.resp_tx,
+        env.provider_for_task,
+        env.shared_confinement,
+        env.workspace_security,
+    );
+    let provider_usage = &mut *env.provider_usage;
+    supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+    teardown_sides_for_session_switch(side, resp_tx).await;
+    agent.clear_todos();
+
+    let switched = match agent.apply_role(role_id) {
+        Some(s) => s,
+        None => {
+            record_error(
+                session,
+                resp_tx,
+                name,
+                args,
+                format!("Could not apply role `{role_id}`"),
+            )
+            .await;
+            return;
+        }
+    };
+    agent.set_project_root(target_workspace.as_ref().map(|w| w.root.clone()));
+    if let Some(ws) = &target_workspace {
+        let sec_snapshot = workspace_security.snapshot(&ws.root);
+        agent.set_workspace_security(sec_snapshot);
+    } else {
+        agent.set_workspace_security(muta_contracts::WorkspaceSecuritySnapshot::new(
+            "workspace-free",
+        ));
+    }
+
+    match session
+        .reset_with(target_workspace.clone(), Some(role_id.to_string()))
+        .await
+    {
+        Ok(id) => {
+            agent.set_thread_id(&id);
+            let fresh_posture = session.unattended().await;
+            if agent.unattended() != fresh_posture {
+                agent.set_unattended(fresh_posture);
+                let _ = resp_tx.send(round_response(
+                    &id,
+                    RoundEvent::UnattendedChanged(fresh_posture),
+                ));
+            }
+            if !shared_confinement.is_confined() {
+                shared_confinement.set_confined(true);
+                let _ = resp_tx.send(round_response(&id, RoundEvent::ConfinementChanged(true)));
+            }
+            agent.restore_round_count(session.round_counter().await);
+            crate::handlers_provider::reapply_session_selection(
+                config,
+                agent,
+                provider_for_task,
+                session,
+                resp_tx,
+                provider_usage,
+            )
+            .await;
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::TodosUpdated(muta_contracts::TodoList::default()),
+            ));
+            let _ = resp_tx.send(AgentResponse::ConversationCleared {
+                session_id: session.id().await,
+            });
+            let _ = resp_tx.send(round_response(
+                &session.id().await,
+                RoundEvent::HarnessState(muta_contracts::HarnessSnapshot {
+                    loop_status: muta_contracts::LoopStatus::Idle,
+                    round_counter: 0,
+                    unattended: fresh_posture,
+                    confined: shared_confinement.is_confined(),
+                    workspace_security: agent.workspace_security(),
+                    retry_pending: false,
+                    role: Some(role_id.to_string()),
+                    workspace: target_workspace
+                        .as_ref()
+                        .map(|w| w.root.to_string_lossy().to_string()),
+                }),
+            ));
+            let ws_info = if let Some(ws) = &target_workspace {
+                format!(" with workspace `{}`", ws.root.display())
+            } else {
+                String::new()
+            };
+            record_command(
+                session,
+                resp_tx,
+                name,
+                args,
+                CommandResult::Text(format!(
+                    "Started new session {id} with role `{}` (`{}`){ws_info} — {}. Conversation reset for this role.",
+                    switched.name,
+                    switched.id,
+                    switched.description,
+                )),
+            )
+            .await;
+        }
+        Err(error) => {
+            record_error(session, resp_tx, name, args, error).await;
+        }
+    }
+}
+
 pub(crate) async fn restore_session_runtime(
     session: &Arc<SessionStore>,
     agent: &Arc<Agent>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     source: muta_contracts::SessionSource,
 ) {
+    // Restore role and identity from the session's manifest (ADR-0245, ADR-0246) or role metadata
+    if let Some(manifest) = session.role_manifest().await {
+        let role_identity = manifest.identity.clone();
+        let mut role =
+            muta_contracts::AgentRoleProfile::with_identity("session", role_identity.clone());
+        role.tools = muta_contracts::ToolSelection::from_allowlist(&manifest.tools);
+        role.admit_mcp = manifest.admit_mcp.clone();
+        if session.workspace_root().is_some() {
+            role.extensions.push(Arc::new(
+                muta_agent::extension::CodeIntelligenceExtension::new(),
+            ));
+        }
+        agent.apply_profile(&role);
+        agent.set_active_role(Some(manifest.role_id));
+    } else if let Some(role_id) = session.role() {
+        let _ = agent.apply_role(&role_id);
+    }
+    agent.set_project_root(session.workspace_root());
+
     let todos = session.todos().await;
     agent.set_todos(todos.clone());
     let _ = resp_tx.send(round_response(

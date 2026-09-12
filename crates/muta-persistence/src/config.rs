@@ -1,6 +1,6 @@
 //! User configuration schema and persistence.
 //!
-//! Deserializes/serializes the TOML config file (`master`, `tui`, providers,
+//! Deserializes/serializes the TOML config file (`agent`, `tui`, providers,
 //! channels, MCP servers, hooks, skills, web-search) via [`crate::fsutil`]'s
 //! atomic-write helpers, and loads/saves the input history. Config is state
 //! (recency-merged under a companion file lock, ADR-0018); the live
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 pub const THINKING_KEY: &str = "thinking";
 
 /// User-tunable top-level agent behaviour, deserialized from the optional `[agent]`
-/// table of `config.toml` (legacy `[master]` spelling accepted on load).
+/// table of `config.toml`.
 /// All fields default sensibly, so a `config.toml` with no `[agent]` table
 /// (or a partially specified one) is valid.
 ///
@@ -82,7 +82,7 @@ pub struct AgentConfig {
     /// form). Wired through `Agent::set_skip_interactive_input`.
     ///
     /// Note: this only governs the *interactive-input* path; it does not turn
-    /// the master delegated, so ordinary tool confirmations still apply.
+    /// the agent delegated, so ordinary tool confirmations still apply.
     pub skip_interactive_input: bool,
     /// ADR-0141: how an autonomous session (no human channel attached —
     /// piped headless, CI, cron) settles an `ask_user` question. Wire
@@ -97,18 +97,15 @@ pub struct AgentConfig {
     /// Doom-loop guard configuration (`muta_agent::doom_guard`). Default
     /// **enabled** (`window: 16`, `threshold: 3` — ADR-0113 §5 flipped it
     /// on, ADR-0148 relaxed the trip point) — opt out via
-    /// `[master.doom_guard] enabled = false`, or restore the strict
+    /// `[agent.doom_guard] enabled = false`, or restore the strict
     /// first-repeat block with `threshold = 2`. See [`DoomGuardConfig`]
     /// for the per-field semantics.
     #[serde(default, alias = "nudge")]
     pub doom_guard: DoomGuardConfig,
 }
 
-/// Legacy alias for [`AgentConfig`].
-pub type MasterConfig = AgentConfig;
-
 // `DoomGuardConfig` is defined in `muta_contracts::doom_guard_config` and re-exported
-// above via `use muta_contracts::DoomGuardConfig`. It is the `[master.doom_guard]`
+// above via `use muta_contracts::DoomGuardConfig`. It is the `[agent.doom_guard]`
 // TOML table and the wire type for `AgentRequest::UpdateDoomGuardConfig`. See
 // `muta_contracts::DoomGuardConfig` for the per-field semantics and defaults.
 
@@ -844,10 +841,10 @@ pub struct Config {
     /// Web-tool behavior (`[web]`): one provider per axis and shared network policy.
     #[serde(default)]
     pub web: WebConfig,
-    /// Top-level agent behaviour (`[agent]` table, legacy `[master]` alias accepted on load):
+    /// Top-level agent behaviour (`[agent]` table):
     /// opt-in hard-stop budget and the doom-loop guard toggle. See [`AgentConfig`]
     /// for the per-field semantics and TOML examples.
-    #[serde(default, alias = "master")]
+    #[serde(default)]
     pub agent: AgentConfig,
     /// Lifecycle event hooks (`[[hooks]]` array, ADR-0025). Each entry fires a
     /// shell command at one lifecycle point; see [`HookSpec`].
@@ -1021,8 +1018,6 @@ struct RawConfig {
     #[serde(default)]
     agent: Option<AgentConfig>,
     #[serde(default)]
-    master: Option<AgentConfig>,
-    #[serde(default)]
     hooks: Option<Vec<HookSpec>>,
     #[serde(default)]
     tool_variants: Option<ToolVariantsConfig>,
@@ -1104,7 +1099,7 @@ impl<'de> Deserialize<'de> for Config {
         if let Some(web) = raw.web.or(raw.websearch) {
             cfg.web = web;
         }
-        if let Some(a) = raw.agent.or(raw.master) {
+        if let Some(a) = raw.agent {
             cfg.agent = a;
         }
         if let Some(h) = raw.hooks {
@@ -1607,21 +1602,13 @@ mod tests {
     #[test]
     fn agent_table_round_trips_through_toml() {
         // The `[agent]` table must round-trip: partial TOML keeps defaults,
-        // full TOML preserves explicit overrides. Legacy `[master]` table is
-        // accepted on load.
+        // full TOML preserves explicit overrides.
         let toml_canonical = r#"
             [agent]
             hard_stop_turns = 40
         "#;
         let cfg: Config = toml::from_str(toml_canonical).unwrap();
         assert_eq!(cfg.agent.hard_stop_turns, 40);
-
-        let toml_legacy_master = r#"
-            [master]
-            hard_stop_turns = 40
-        "#;
-        let cfg_legacy: Config = toml::from_str(toml_legacy_master).unwrap();
-        assert_eq!(cfg_legacy.agent.hard_stop_turns, 40);
 
         // Missing `[agent]` table → defaults match the documented values.
         let cfg: Config = toml::from_str("").unwrap();
@@ -2299,7 +2286,7 @@ name = "DeepSeek"
         std::fs::write(
             root.join(".muta/config.toml"),
             r#"
-                [master]
+                [agent]
                 hard_stop_turns = 7
 
                 [mcp.ok]
@@ -2308,7 +2295,7 @@ name = "DeepSeek"
         )
         .unwrap();
         let mcp = Config::load_project_mcp(&root);
-        assert_eq!(mcp.len(), 1, "master ignored, mcp.ok projected");
+        assert_eq!(mcp.len(), 1, "agent ignored, mcp.ok projected");
 
         // A structurally invalid TOML → empty (never panics).
         let root2 = scratch_project_root();

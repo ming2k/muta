@@ -266,10 +266,11 @@ async fn run_daemon_foreground(flags: DaemonStart) -> Result<(), Box<dyn std::er
     let port = flags
         .port
         .unwrap_or(muta_runtime::startup::env_default_port());
+    let preset = agent_code();
     let outcome = muta_runtime::host::run_with_gate(
         muta_runtime::host::HostIdentity {
-            identity: muta_contracts::AgentIdentity::default(),
-            preset: agent_code(),
+            identity: preset.identity.clone(),
+            preset,
             ui: Arc::new(DaemonUiBridge),
         },
         muta_runtime::host::HostOptions {

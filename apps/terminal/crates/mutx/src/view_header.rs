@@ -137,9 +137,10 @@ pub(crate) struct SessionHead<'a> {
     /// The session's persistent id (full string). Only its last four
     /// characters are shown, dimmed, as a disambiguating tag.
     pub session_id: &'a str,
-    /// Tilde-shortened workspace path (e.g. `~/projects/xx`). Already
-    /// abbreviated by the caller; rendered as-is.
+    /// Tilde-shortened workspace path (e.g. `~/projects/xx`), or empty when unbound.
     pub workspace: &'a str,
+    /// Active staffing role for this session (ADR-0244).
+    pub role: Option<&'a str>,
     /// `true` while the session runs in unattended execution mode
     /// (`--unattended` / `/unattended on`). Shown as a warning-toned
     /// `UNATTENDED` tag on the right — the session's persistent mode flag.
@@ -200,10 +201,14 @@ pub(crate) fn draw_view_header(
             } else {
                 id_tail(head.session_id)
             };
+            let badge = head
+                .role
+                .map(|r| format!("[{}]", r.to_uppercase()))
+                .unwrap_or_default();
             HeaderContent {
                 title: " SESSION ",
                 tag,
-                badge: String::new(),
+                badge,
                 primary: head.workspace.to_string(),
                 meta: String::new(),
                 action,
@@ -820,12 +825,13 @@ mod tests {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
+            role: Some("developer"),
             unattended: true,
             confined: true,
             switching_target: None,
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
-        assert!(row.starts_with("   SESSION b3c4 ~/projects/xx"));
+        assert!(row.starts_with("   SESSION b3c4 [DEVELOPER] ~/projects/xx"));
         let pos = row.find("UNATTENDED").expect("mode flag on the right");
         assert!(
             row[pos..].contains("Ctrl-p palette"),
@@ -835,10 +841,26 @@ mod tests {
     }
 
     #[test]
+    fn session_header_workspace_free_hides_workspace_path_and_shows_role_badge() {
+        let head = SessionHead {
+            session_id: "sess-01a2b3c4",
+            workspace: "",
+            role: Some("philosophist"),
+            unattended: false,
+            confined: true,
+            switching_target: None,
+        };
+        let row = rendered_row(80, ViewHeader::Session(&head));
+        assert!(row.starts_with("   SESSION b3c4 [PHILOSOPHIST]"));
+        assert!(!row.contains("~/"));
+    }
+
+    #[test]
     fn session_header_shows_switching_target_loading() {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
+            role: None,
             unattended: false,
             confined: true,
             switching_target: Some("7c405d7e"),
@@ -856,6 +878,7 @@ mod tests {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",
             workspace: "~/projects/xx",
+            role: Some("developer"),
             unattended: true,
             confined: true,
             switching_target: None,

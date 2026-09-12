@@ -1191,10 +1191,12 @@ impl SessionRegistry {
                     (0, 0)
                 }
             };
-            let entries = handle.collect_entry_garbage_blocking().unwrap_or_else(|error| {
-                tracing::warn!(%error, "entry garbage collection failed; skipping pass");
-                0
-            });
+            let entries = handle
+                .collect_entry_garbage_blocking()
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "entry garbage collection failed; skipping pass");
+                    0
+                });
             let days = usage.prune_old_days();
             if count > 0 || entries > 0 || days > 0 {
                 tracing::info!(
@@ -1340,7 +1342,36 @@ impl SessionRegistry {
         let mut workspace = binding.workspace;
         let role_selected = init_options.role.clone();
         let role_id = role_selected.clone().or(binding.role);
-        if let Some(role_id) = role_id.as_deref() {
+
+        // `--resume` (ADR-0226): pick the most recent matching session instead
+        // of a fresh one. With a role, match by role (+ workspace when the
+        // role binds one); otherwise match the workspace (or unbound) set.
+        let mut startup = startup;
+        if init_options.resume && matches!(startup, crate::startup::SessionStart::Fresh) {
+            let filter = muta_contracts::WorkspaceFilter::from_binding(workspace.as_ref());
+            if let Some(id) = lookup_latest_session(&filter, role_id.as_deref()) {
+                startup = crate::startup::SessionStart::Resume(id);
+            }
+        }
+
+        // Hermetic session manifest restoration (ADR-0245):
+        // If resuming an existing session, restore directly from its immutable birth manifest.
+        // This guarantees 100% byte-identical prompt cache and zero crash if external roles.toml was modified/deleted.
+        let resumed_session_id = match &startup {
+            crate::startup::SessionStart::Resume(id) => Some(id.as_str()),
+            _ => None,
+        };
+        let manifest = resumed_session_id.and_then(lookup_session_manifest);
+
+        if let Some(manifest) = manifest {
+            let role_identity = manifest.identity;
+            let mut role =
+                muta_contracts::AgentRoleProfile::with_identity("session", role_identity.clone());
+            role.tools = muta_contracts::ToolSelection::from_allowlist(&manifest.tools);
+            role.admit_mcp = manifest.admit_mcp.clone();
+            identity = role_identity;
+            preset = role;
+        } else if let Some(role_id) = role_id.as_deref() {
             let ws_root = workspace.as_ref().map(|b| b.root.as_path());
             let roles_cfg = muta_persistence::roles::RolesConfig::load_for_workspace(ws_root);
             if let Some(role_entry) = roles_cfg.get(role_id) {
@@ -1354,18 +1385,15 @@ impl SessionRegistry {
                     };
                 }
                 let role_identity = role_entry.identity();
-                let mut role = muta_contracts::AgentRoleProfile::from_role(
-                    role_entry.preset_id(),
-                    &role_identity,
-                );
-                role.identity = role_identity.clone();
-                if let Some(admit) = &role_entry.admit_mcp {
-                    role.admit_mcp = admit.clone();
-                }
+                let mut role =
+                    muta_contracts::AgentRoleProfile::with_identity("role", role_identity.clone());
+                role.tools = muta_contracts::ToolSelection::from_allowlist(&role_entry.tools);
+                role.admit_mcp = role_entry.admit_mcp.clone();
                 identity = role_identity;
                 preset = role;
             } else if let Some(builtin) = muta_contracts::MainAgentRole::parse(role_id) {
-                if role_selected.is_some() && builtin == muta_contracts::MainAgentRole::Philosophist {
+                if role_selected.is_some() && builtin == muta_contracts::MainAgentRole::Philosophist
+                {
                     workspace = None;
                 }
                 let role = muta_contracts::AgentRoleProfile::from_role(builtin, &identity);
@@ -1379,16 +1407,6 @@ impl SessionRegistry {
             }
         }
         let workspace_root = workspace.as_ref().map(|binding| binding.root.clone());
-        // `--resume` (ADR-0226): pick the most recent matching session instead
-        // of a fresh one. With a role, match by role (+ workspace when the
-        // role binds one); otherwise match the workspace (or unbound) set.
-        let mut startup = startup;
-        if init_options.resume && matches!(startup, crate::startup::SessionStart::Fresh) {
-            let filter = muta_contracts::WorkspaceFilter::from_binding(workspace.as_ref());
-            if let Some(id) = lookup_latest_session(&filter, role_id.as_deref()) {
-                startup = crate::startup::SessionStart::Resume(id);
-            }
-        }
         // The session's lifetime token (ADR-0125): shared by the driver
         // select below and the background `/schedule` scheduler inside the
         // assemble, so one cancel stops the harness *and* its tick loop.
@@ -1790,6 +1808,15 @@ fn lookup_session_workspace(id: &str) -> Option<SessionBinding> {
         .ok()
         .flatten()?;
     Some(SessionBinding { workspace, role })
+}
+
+fn lookup_session_manifest(id: &str) -> Option<muta_contracts::SessionRoleManifest> {
+    muta_persistence::db::get_persistence_handle()
+        .reader()
+        .ok()?
+        .lookup_session_manifest(id)
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]

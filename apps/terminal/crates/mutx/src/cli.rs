@@ -187,7 +187,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 ));
             }
             "--unattended" => unattended = true,
-            "--role" | "--persona" => role = Some(flag_value(name, inline, &mut iter)?),
+            "--role" => role = Some(flag_value(name, inline, &mut iter)?),
             "--resume" => resume = true,
             "--no-confinement" => no_confinement = true,
             "--interactive" | "-i" => interactive = true,
@@ -405,27 +405,20 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("  -i, --interactive      force interactive TUI mode\n");
             out.push_str("  -j, --json             emit structured JSON where supported\n");
             out.push_str(
-                "  --unattended           run unattended without interactive human confirmations\n",
+                "      --role <id>        staff the new session with a role (developer, philosophist, or custom)\n",
             );
-            out.push_str("  --no-confinement       disable workspace filesystem confinement (unconfined file access)\n");
+            out.push_str(
+                "      --resume           resume the most recent matching session instead of a new one\n",
+            );
+            out.push_str(
+                "      --unattended       run unattended without interactive human confirmations\n",
+            );
+            out.push_str("      --no-confinement   disable workspace filesystem confinement (unconfined file access)\n");
             out.push_str("      --project <path>   operate on the project at <path>\n");
             out.push_str("      --remote <addr>    connect to a remote Muta daemon\n");
             out.push_str("      --token <token>    bearer token for daemon connection\n");
             out.push_str("  -h, --help             print help ('mutx help <command>' for more)\n");
             out.push_str("  -V, --version          print the version and exit\n");
-            out.push_str("\nEnvironment:\n");
-            out.push_str(
-                "  MUTA_HOME              instance root for isolated execution (<dir>/muta)\n",
-            );
-            out.push_str(
-                "  MUTA_PORT              override default daemon TCP port (default: 9800)\n",
-            );
-            out.push_str(
-                "  MUTX_STARTUP_VIEW      boot view override (e.g. 'settings', 'settings:web', 'dashboard')\n",
-            );
-            out.push_str(
-                "  MUTX_SETTINGS_NAV      initial settings category (appearance, transcript, behavior, search, web, system)\n",
-            );
             out.push_str("\nWith no command, mutx opens a fresh interactive session.\n");
             out.push_str("It checks the Muta daemon first and starts `muta` when needed.\n");
             out.push_str("Daemon and service administration remains under the `muta` command.\n");
@@ -476,7 +469,7 @@ pub fn completion_script(shell: Shell) -> String {
              \x20   local cur\n\
              \x20   cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
              \x20   if [[ $COMP_CWORD -eq 1 ]]; then\n\
-             \x20       COMPREPLY=($(compgen -W \"{commands} --project --remote --token --prompt -p --interactive -i --json -j --unattended --no-confinement --help --version\" -- \"$cur\"))\n\
+             \x20       COMPREPLY=($(compgen -W \"{commands} --project --remote --token --prompt -p --interactive -i --json -j --role --resume --unattended --no-confinement --help --version\" -- \"$cur\"))\n\
              \x20   fi\n\
              }}\n\
              complete -F _mutx mutx\n"
@@ -597,5 +590,35 @@ mod tests {
         assert!(parse(&["--escape"]).is_err());
         assert!(parse(&["-y"]).is_err());
         assert!(parse(&["--auto"]).is_err());
+    }
+
+    #[test]
+    fn role_and_resume_flags_parse_cleanly() {
+        let parsed = parse(&["--role", "philosophist"]).unwrap();
+        assert_eq!(parsed.role.as_deref(), Some("philosophist"));
+        assert!(!parsed.resume);
+
+        let parsed = parse(&["--role=developer", "--resume"]).unwrap();
+        assert_eq!(parsed.role.as_deref(), Some("developer"));
+        assert!(parsed.resume);
+    }
+
+    #[test]
+    fn top_level_help_includes_role_and_omits_environment() {
+        let help = help_text(None).expect("top-level help text");
+        assert!(help.contains("--role <id>"), "help should document --role");
+        assert!(help.contains("--resume"), "help should document --resume");
+        assert!(
+            !help.contains("Environment:"),
+            "help should not expose environment variables"
+        );
+        assert!(
+            !help.contains("MUTA_HOME"),
+            "help should not expose MUTA_HOME"
+        );
+        assert!(
+            !help.contains("MUTX_STARTUP_VIEW"),
+            "help should not expose MUTX_STARTUP_VIEW"
+        );
     }
 }

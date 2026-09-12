@@ -257,24 +257,6 @@ impl SessionStore {
         self.state.lock().await.data.role.clone()
     }
 
-    pub async fn set_role(&self, role: Option<String>) -> Result<(), String> {
-        let (path, data, should_persist) = {
-            let mut state = self.state.lock().await;
-            state.data.role = role;
-            state.data.updated_at = unix_timestamp();
-            let empty_unpersisted = Self::should_skip_persist(&state);
-            if !empty_unpersisted {
-                state.defer_persist = false;
-            }
-            (state.path.clone(), state.data.clone(), !empty_unpersisted)
-        };
-        if should_persist {
-            self.persist_off_runtime(path, data, self.blob_store.clone())
-                .await?;
-        }
-        Ok(())
-    }
-
     pub async fn set_workspace(
         &self,
         workspace: Option<muta_contracts::WorkspaceBinding>,
@@ -385,25 +367,35 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn active_role_and_set_role_roundtrip() {
+    async fn active_role_and_reset_with_roundtrip() {
         let dir = tempdir().unwrap();
         let store = SessionStore::for_path(dir.path().join("session.json"));
         assert_eq!(store.active_role().await, None);
 
-        store.set_role(Some("philosophist".to_string())).await.unwrap();
+        // Under ADR-0244, role is immutable per session; role switching spawns a new session via reset_with
+        let new_id = store
+            .reset_with(None, Some("philosophist".to_string()))
+            .await
+            .unwrap();
+        assert!(!new_id.is_empty());
         assert_eq!(store.active_role().await, Some("philosophist".to_string()));
-
-        store.set_role(None).await.unwrap();
-        assert_eq!(store.active_role().await, None);
+        assert_eq!(store.role(), Some("philosophist".to_string()));
+        assert!(store.workspace().is_none());
 
         // Test dynamic set_workspace
-        assert!(store.workspace().is_some());
+        let new_ws = muta_contracts::WorkspaceBinding::new(dir.path().to_path_buf());
+        store.set_workspace(Some(new_ws.clone())).await.unwrap();
+        assert_eq!(store.workspace(), Some(new_ws));
         store.set_workspace(None).await.unwrap();
         assert!(store.workspace().is_none());
         assert!(store.workspace_root().is_none());
 
-        let new_ws = muta_contracts::WorkspaceBinding::new(dir.path().to_path_buf());
-        store.set_workspace(Some(new_ws.clone())).await.unwrap();
-        assert_eq!(store.workspace(), Some(new_ws));
+        // Test role_manifest snapshot is hermetic and persists (ADR-0245)
+        let manifest = store.role_manifest().await;
+        assert!(manifest.is_some());
+        let m = manifest.unwrap();
+        assert_eq!(m.role_id, "philosophist");
+        assert_eq!(m.tools, vec!["read_url", "search_web", "ask_user"]);
+        assert!(m.identity.preamble().starts_with("Role: philosophist."));
     }
 }

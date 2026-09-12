@@ -591,6 +591,10 @@ pub fn send_harness_state_running(
             confined: agent.is_confined(),
             workspace_security: agent.workspace_security(),
             retry_pending: false,
+            role: agent.active_role(),
+            workspace: agent
+                .workspace_root()
+                .map(|p| p.to_string_lossy().to_string()),
         }),
     ));
 }
@@ -624,6 +628,11 @@ pub async fn send_harness_state_for_session(
             confined: agent.is_confined(),
             workspace_security: agent.workspace_security(),
             retry_pending,
+            role: agent.active_role().or_else(|| session.role()),
+            workspace: session
+                .workspace()
+                .map(|w| w.root.to_string_lossy().to_string())
+                .or_else(|| agent.workspace_root().map(|p| p.to_string_lossy().to_string())),
         }),
     ));
     if let Some(performance) =

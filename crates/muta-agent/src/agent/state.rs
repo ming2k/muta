@@ -204,6 +204,7 @@ impl Agent {
             extensions: Arc::new(std::sync::RwLock::new(vec![Arc::new(
                 crate::extension::CodeIntelligenceExtension::default(),
             )])),
+            active_role: std::sync::RwLock::new(Some("developer".to_string())),
         }
     }
 
@@ -574,7 +575,7 @@ impl Agent {
         Arc::clone(&self.variant_selection)
     }
 
-    /// Override the opt-in hard-stop budget. Mirrors `[master] hard_stop_turns`
+    /// Override the opt-in hard-stop budget. Mirrors `[agent] hard_stop_turns`
     /// in `config.toml` but can be flipped at runtime. `0` (the default) leaves
     /// the round uncapped, matching ADR-0009. The reviewer subagent gets a
     /// tight non-zero bound so a runaway diagnostic cannot loop.
@@ -598,7 +599,7 @@ impl Agent {
     /// reconstructs its per-round guard from the new settings; the current
     /// round, if any, keeps its already-built guard state.
     ///
-    /// Wired from `[master.doom_guard]` in `config.toml` at startup and forced to
+    /// Wired from `[agent.doom_guard]` in `config.toml` at startup and forced to
     /// [`muta_contracts::DoomGuardConfig::disabled`] on subagents and the review
     /// diagnostic so they run unobstructed regardless of user settings.
     pub fn set_doom_guard_config(&self, config: muta_contracts::DoomGuardConfig) {
@@ -624,7 +625,7 @@ impl Agent {
     }
 
     /// Enable or disable the model-supplied-stdin path for `bash` (L3.5 α).
-    /// Mirrors `[master] allow_model_stdin` in `config.toml`. When off
+    /// Mirrors `[agent] allow_model_stdin` in `config.toml`. When off
     /// (the default), the bash schema exposes no `stdin` parameter and a
     /// command needing input either gets it from a human (interactive
     /// classifier → input panel) or fails fast. When on, the model may feed
@@ -651,12 +652,12 @@ impl Agent {
         self.interaction.allow_model_stdin()
     }
 
-    /// Mirrors `[master] skip_interactive_input` in `config.toml`. When on,
+    /// Mirrors `[agent] skip_interactive_input` in `config.toml`. When on,
     /// an interactive `bash` command (matched by the interactive classifier)
     /// never pops the inline input panel and instead runs with stdin closed —
     /// fast failure with a non-interactive remedy, as in delegated mode.
     /// Lets an operator who finds the prompt disruptive opt out of it without
-    /// turning the master itself delegated.
+    /// turning the agent itself delegated.
     pub fn set_skip_interactive_input(&self, enabled: bool) {
         self.interaction.set_skip_interactive_input(enabled);
     }

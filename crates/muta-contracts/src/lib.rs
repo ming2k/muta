@@ -115,7 +115,7 @@ pub mod subagent;
 pub use agent_kind::{AgentKind, MeshStation};
 pub use agent_role::{
     Agent, AgentRole, AgentRoleDelegation, AgentRoleProfile, AgentRuntimeConfig, DelegationPolicy,
-    MainAgent, MainAgentRole, SubAgent, SubAgentRole,
+    MainAgent, MainAgentRole, SessionRoleManifest, SubAgent, SubAgentRole,
 };
 pub use aspects::{AspectHook, AspectPhase, AspectVerdict};
 pub use cognitive::{

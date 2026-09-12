@@ -175,6 +175,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         cwd: cwd.clone(),
         current_session_id: String::new(),
         current_workspace: String::new(),
+        current_role: None,
         session_context: None,
         loop_status: LoopStatus::Idle,
         harness_retry_pending: false,

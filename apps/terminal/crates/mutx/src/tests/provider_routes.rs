@@ -153,7 +153,7 @@ fn completions_intent_keywords_suggest_canonical_command() {
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert!(labels.contains(&"/models"));
-    assert!(labels.contains(&"/role") || labels.contains(&"/persona"));
+    assert!(labels.contains(&"/role"));
 }
 
 #[test]

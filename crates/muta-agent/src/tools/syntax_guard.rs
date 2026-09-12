@@ -57,10 +57,7 @@ pub(crate) fn mutation_output(
         let muta_contracts::ToolOutput::Patch { warnings, .. } = &mut patch else {
             unreachable!("mutation feedback requires a committed patch")
         };
-        warnings.push(format!(
-            "Write succeeded for '{}'; changes were applied. Warning (non-blocking syntax diagnostic): {diagnostic}\nThe file remains written; repair it in a subsequent edit. This is not a compiler or type check.",
-            path.display(),
-        ));
+        warnings.push(format!("non-blocking syntax diagnostic: {diagnostic}"));
     }
     patch
 }
@@ -89,8 +86,8 @@ mod tests {
                     matches!(&output, ToolOutput::Patch { warnings, new, .. } if !warnings.is_empty() && new == content)
                 );
                 let text = output.to_text();
-                assert!(text.contains("Write succeeded"));
-                assert!(text.contains("Warning (non-blocking syntax diagnostic)"));
+                assert!(text.contains("Successfully wrote"));
+                assert!(text.contains("Warning: non-blocking syntax diagnostic:"));
                 assert_eq!(
                     std::fs::read_to_string(dir.path().join(path)).unwrap(),
                     content
@@ -112,7 +109,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(output.to_text().contains("Warning (non-blocking"), warning);
+            assert_eq!(output.to_text().contains("Warning: non-blocking syntax diagnostic"), warning);
             assert_eq!(
                 std::fs::read_to_string(dir.path().join("config.json")).unwrap(),
                 before.replacen(old, new, 1)
@@ -142,7 +139,7 @@ mod tests {
                 .call(r#"{"path":"legacy.json","content":"{"}"#)
                 .await
                 .unwrap()
-                .contains("Warning (non-blocking")
+                .contains("Warning: non-blocking syntax diagnostic")
         );
         assert!(matches!(
             writer

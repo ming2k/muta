@@ -887,22 +887,7 @@ mod tests {
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(labels, vec!["/debug trace off"]);
 
-        // /persona offers all built-in presets (and /role alias preserves it)
-        let AgentResponse::ComposerCompletions { items, .. } =
-            engine.complete(16, "/persona ".into(), 9).await
-        else {
-            panic!("unexpected response")
-        };
-        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        assert_eq!(
-            labels,
-            vec![
-                "/persona developer",
-                "/persona philosophist",
-            ]
-        );
-
-        // /role alias also expands subcommands
+        // /role expands subcommands
         let AgentResponse::ComposerCompletions { items, .. } =
             engine.complete(17, "/role ".into(), 6).await
         else {

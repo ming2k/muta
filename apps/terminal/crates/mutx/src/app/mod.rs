@@ -664,9 +664,10 @@ pub struct App {
     /// Ctrl+R searches the whole cross-session history.
     pub current_session_id: String,
     /// The workspace label for the current session — the project root's
-    /// display path (already tilde-shortened). Stamped onto recorded entries
-    /// and surfaced by the history panel's selected-row origin line.
+    /// display path (already tilde-shortened), or empty when no workspace is bound.
     pub current_workspace: String,
+    /// The active staffing role for the current session (e.g. "developer", "philosophist") (ADR-0244).
+    pub current_role: Option<String>,
     /// Latest session-context snapshot for the Tools / Mcp / Skills /
     /// Permissions managers, or `None` before the first `QuerySessionContext`
     /// round-trip completes. Refreshed each frame from the response listener.

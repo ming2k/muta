@@ -285,8 +285,8 @@ define_builtin_commands! {
             ("/role philosophist", "Switch to philosophist role (workspace-free)"),
         ],
         intent_keywords: [
-            "role", "persona", "preset", "mode", "identity", "developer", "philosophist",
-            "switch", "switch-role", "switch-persona", "master",
+            "role", "preset", "mode", "identity", "developer", "philosophist",
+            "switch", "switch-role",
         ],
         category: Agent,
         subcommands: [
@@ -497,8 +497,6 @@ impl BuiltinCmd {
             "/auto" | "/delegate" | "/autopilot" | "/yolo" => Some(BuiltinCmd::Unattended),
             // `/unconfine`, `/unconfined`, `/jail`, `/escape` are aliases for `/confinement`.
             "/unconfine" | "/unconfined" | "/jail" | "/escape" => Some(BuiltinCmd::Confinement),
-            // `/persona`, `/master` and `/preset` are aliases for `/role`.
-            "/persona" | "/master" | "/preset" => Some(BuiltinCmd::Role),
             _ => None,
         }
     }
@@ -621,7 +619,7 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
                     let user_roles = muta_persistence::roles::RolesConfig::load();
                     for (id, p) in user_roles.roles {
                         if !subs.iter().any(|s| s.name == id) {
-                            let desc = p.mission.as_deref().unwrap_or(p.name.as_str());
+                            let desc = p.description.as_deref().unwrap_or(p.name.as_str());
                             subs.push(muta_contracts::CommandSubcommandSpec {
                                 name: id,
                                 summary: desc.to_string(),
@@ -662,9 +660,6 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
             ("/unconfined", "/confinement"),
             ("/jail", "/confinement"),
             ("/escape", "/confinement"),
-            ("/persona", "/role"),
-            ("/master", "/role"),
-            ("/preset", "/role"),
         ]
         .into_iter()
         .map(|(name, target)| muta_contracts::CommandAlias {

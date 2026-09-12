@@ -301,8 +301,8 @@ impl DatabaseEngine {
 
             self.conn.execute(
                 r#"
-                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, additional_roots, persona, msg_count, last_user_prompt, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+                INSERT INTO sessions (id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, additional_roots, persona, msg_count, last_user_prompt, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version, role_manifest)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
                 ON CONFLICT(id) DO UPDATE SET
                     parent_id = excluded.parent_id,
                     fork_kind = excluded.fork_kind,
@@ -326,7 +326,8 @@ impl DatabaseEngine {
                     retry_resolutions = excluded.retry_resolutions,
                     retry_pending = excluded.retry_pending,
                     checksum = excluded.checksum,
-                    schema_version = excluded.schema_version;
+                    schema_version = excluded.schema_version,
+                    role_manifest = COALESCE(excluded.role_manifest, sessions.role_manifest);
                 "#,
                 params![
                     data.id,
@@ -354,6 +355,7 @@ impl DatabaseEngine {
                     data.retry_pending.as_ref().and_then(|p| serde_json::to_string(p).ok()),
                     data.checksum.map(|c| c as i64),
                     data.schema_version as i64,
+                    data.role_manifest.as_ref().and_then(|m| serde_json::to_string(m).ok()),
                 ],
             )?;
 
@@ -672,7 +674,7 @@ impl DatabaseEngine {
         let row = self
             .conn
             .query_row(
-                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, additional_roots, persona, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version FROM sessions WHERE id = ?1",
+                "SELECT id, parent_id, fork_kind, title, created_at_s, updated_at_s, workspace_root, additional_roots, persona, digest, digest_anchor, tree, transcript_generation, provider_connection, round_counter, unattended, disabled_tools, commands, round_interrupts, retry_resolutions, retry_pending, checksum, schema_version, role_manifest FROM sessions WHERE id = ?1",
                 params![session_id],
                 |row| {
                     Ok((
@@ -699,6 +701,7 @@ impl DatabaseEngine {
                         row.get::<_, Option<String>>(20)?,
                         row.get::<_, Option<i64>>(21)?,
                         row.get::<_, i64>(22)?,
+                        row.get::<_, Option<String>>(23)?,
                     ))
                 },
             )
@@ -727,6 +730,7 @@ impl DatabaseEngine {
             retry_pending,
             checksum,
             schema_version,
+            role_manifest,
         )) = row
         else {
             return Ok(None);
@@ -903,6 +907,9 @@ impl DatabaseEngine {
             created_at: created_at_s.max(0) as u64,
             updated_at: updated_at_s.max(0) as u64,
             role: persona,
+            role_manifest: role_manifest
+                .as_deref()
+                .and_then(|raw| serde_json::from_str(raw).ok()),
             workspace: workspace_root.map(|root| muta_contracts::WorkspaceBinding {
                 root: PathBuf::from(root),
                 additional_roots: serde_json::from_str(&additional_roots).unwrap_or_else(|error| {
@@ -1057,6 +1064,25 @@ impl DatabaseEngine {
             additional_roots: serde_json::from_str(&additional_roots).unwrap_or_default(),
         });
         Ok(Some((workspace, persona)))
+    }
+
+    /// Look up a session's immutable role manifest snapshot (ADR-0245).
+    pub(crate) fn lookup_session_manifest(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<muta_contracts::SessionRoleManifest>> {
+        let row: Option<Option<String>> = self
+            .conn
+            .query_row(
+                "SELECT role_manifest FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?;
+        let Some(Some(raw_manifest)) = row else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_str(&raw_manifest).ok())
     }
 
     /// List session summaries for a derived grouping, sorted by `updated_at_s`
@@ -1455,8 +1481,8 @@ impl DatabaseEngine {
 
     /// Retrieve and deserialize a JSON value from `kv_store`.
     pub(crate) fn get_json<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<Option<T>> {
-        if let Some(raw) = self.get_kv(key)? {
-            match serde_json::from_str::<T>(&raw) {
+        if let Some(raw_json) = self.get_kv(key)? {
+            match serde_json::from_str::<T>(&raw_json) {
                 Ok(val) => Ok(Some(val)),
                 Err(err) => {
                     tracing::warn!(key = %key, error = %err, "Failed to deserialize JSON from kv_store");

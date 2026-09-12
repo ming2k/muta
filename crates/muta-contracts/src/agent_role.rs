@@ -4,6 +4,8 @@
 //! - [`MainAgent`]: interactive top-level agent staffed with a [`MainAgentRole`].
 //! - [`SubAgent`]: autonomous delegated agent staffed with a [`SubAgentRole`].
 
+use serde::{Deserialize, Serialize};
+
 use crate::{AgentIdentity, ToolScope, ToolSelection};
 
 /// User-tunable agent runtime behaviour.
@@ -80,9 +82,8 @@ impl AgentRoleProfile {
     pub fn developer() -> Self {
         Self::with_identity(
             "developer",
-            AgentIdentity::new(
-                "developer",
-                "an expert AI software engineer with native tool access",
+            role_directive(
+                "Role: developer. You are an expert AI software engineer with native tool access and deep system architecture capability. Execute commands and edit files with surgical precision, maintain strict testing discipline, and prioritize root-cause solutions over superficial patches.",
             ),
         )
     }
@@ -128,10 +129,7 @@ impl AgentRoleProfile {
         match role {
             MainAgentRole::Developer => {
                 let id = if base.preamble().is_empty() {
-                    AgentIdentity::new(
-                        "developer",
-                        "an expert AI software engineer with native tool access",
-                    )
+                    Self::developer().identity
                 } else {
                     base.clone()
                 };
@@ -191,6 +189,106 @@ pub type MainAgent = Agent<MainAgentRole>;
 /// An autonomous delegated subagent staffed with a [`SubAgentRole`].
 pub type SubAgent = Agent<SubAgentRole>;
 
+/// An immutable, self-contained snapshot of a session's governing role manifest (ADR-0245, ADR-0246).
+/// Captured at session birth to guarantee hermetic restoration and deterministic prompt caching,
+/// completely decoupled from external mutable `roles.toml` files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRoleManifest {
+    pub role_id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    pub identity: AgentIdentity,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub admit_mcp: Vec<String>,
+    #[serde(default)]
+    pub created_at_s: u64,
+}
+
+impl SessionRoleManifest {
+    pub fn new(
+        role_id: impl Into<String>,
+        name: impl Into<String>,
+        identity: AgentIdentity,
+    ) -> Self {
+        Self {
+            role_id: role_id.into(),
+            name: name.into(),
+            description: None,
+            instructions: None,
+            identity,
+            tools: vec!["*".to_string()],
+            admit_mcp: vec!["*".to_string()],
+            created_at_s: 0,
+        }
+    }
+
+    pub fn with_description(mut self, desc: Option<String>) -> Self {
+        self.description = desc;
+        self
+    }
+
+    pub fn with_instructions(mut self, inst: Option<String>) -> Self {
+        self.instructions = inst;
+        self
+    }
+
+    pub fn with_tools(mut self, tools: Vec<String>) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    pub fn with_admit_mcp(mut self, admit: Vec<String>) -> Self {
+        self.admit_mcp = admit;
+        self
+    }
+
+    pub fn with_created_at(mut self, created_at_s: u64) -> Self {
+        self.created_at_s = created_at_s;
+        self
+    }
+
+    /// Build a manifest for standard developer role.
+    pub fn developer() -> Self {
+        let profile = AgentRoleProfile::developer();
+        Self {
+            role_id: "developer".to_string(),
+            name: "developer".to_string(),
+            description: Some(
+                "the default developer role (full native capabilities with workspace)".to_string(),
+            ),
+            instructions: profile.identity.directive.clone(),
+            identity: profile.identity,
+            tools: vec!["*".to_string()],
+            admit_mcp: vec!["*".to_string()],
+            created_at_s: 0,
+        }
+    }
+
+    /// Build a manifest for standard philosophist role.
+    pub fn philosophist() -> Self {
+        let profile = AgentRoleProfile::philosophist();
+        Self {
+            role_id: "philosophist".to_string(),
+            name: "philosophist".to_string(),
+            description: Some("philosophical inquiry & reflection (workspace-free)".to_string()),
+            instructions: profile.identity.directive.clone(),
+            identity: profile.identity,
+            tools: vec![
+                "read_url".to_string(),
+                "search_web".to_string(),
+                "ask_user".to_string(),
+            ],
+            admit_mcp: Vec::new(),
+            created_at_s: 0,
+        }
+    }
+}
+
 impl MainAgent {
     /// Switch this main agent's role.
     pub fn switch_role(&mut self, new_role: MainAgentRole) {
@@ -212,9 +310,11 @@ impl MainAgent {
 
 /// Roles an interactive MainAgent may switch into.
 /// Only two built-in roles exist: `developer` (workspace-bound) and `philosophist` (workspace-free).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MainAgentRole {
     /// The default developer role (full native capabilities with workspace).
+    #[default]
     Developer,
     /// Philosophist: philosophical inquiry & reflection (workspace-free).
     Philosophist,
@@ -222,10 +322,7 @@ pub enum MainAgentRole {
 
 impl MainAgentRole {
     /// Every main role in its canonical display order.
-    pub const ALL: &[MainAgentRole] = &[
-        MainAgentRole::Developer,
-        MainAgentRole::Philosophist,
-    ];
+    pub const ALL: &[MainAgentRole] = &[MainAgentRole::Developer, MainAgentRole::Philosophist];
 
     /// The stable string name used in `/role <name>`.
     pub fn as_str(self) -> &'static str {
@@ -248,10 +345,10 @@ impl MainAgentRole {
     /// A short human description of what this role does, for confirmations.
     pub fn description(self) -> &'static str {
         match self {
-            MainAgentRole::Developer => "the default developer role (full native capabilities with workspace)",
-            MainAgentRole::Philosophist => {
-                "philosophical inquiry & reflection (workspace-free)"
+            MainAgentRole::Developer => {
+                "the default developer role (full native capabilities with workspace)"
             }
+            MainAgentRole::Philosophist => "philosophical inquiry & reflection (workspace-free)",
         }
     }
 }
@@ -272,11 +369,9 @@ impl AgentRole for MainAgentRole {
     fn tool_selection(&self) -> ToolSelection {
         match self {
             MainAgentRole::Developer => ToolSelection::unrestricted(),
-            MainAgentRole::Philosophist => ToolSelection::only([
-                "read_url",
-                "search_web",
-                "ask_user",
-            ]),
+            MainAgentRole::Philosophist => {
+                ToolSelection::only(["read_url", "search_web", "ask_user"])
+            }
         }
     }
 }
@@ -357,20 +452,17 @@ impl AgentRole for SubAgentRole {
                 "search_web",
             ]),
             SubAgentRole::Mcp => ToolSelection::unrestricted(),
-            SubAgentRole::Skill => ToolSelection::only([
-                "read_text",
-                "find_files",
-                "list_dir",
-                "search_text",
-            ]),
+            SubAgentRole::Skill => {
+                ToolSelection::only(["read_text", "find_files", "list_dir", "search_text"])
+            }
         }
     }
 }
 
-/// The developer master preset: native toolchain authority.
+/// The developer agent role: native toolchain authority.
 pub const AGENT_ROLE_DEVELOPER: AgentRoleDelegation = AgentRoleDelegation {
-    preset_id: "developer",
-    subagent_presets: &[
+    role_id: "developer",
+    subagent_roles: &[
         crate::subagent::SUBAGENT_EXPLORE.name,
         crate::subagent::SUBAGENT_TITLE.name,
         crate::subagent::SUBAGENT_CODE.name,
@@ -383,27 +475,27 @@ pub const AGENT_ROLE_DEVELOPER: AgentRoleDelegation = AgentRoleDelegation {
 #[derive(Debug, Clone)]
 pub struct AgentRoleDelegation {
     /// Stable id.
-    pub preset_id: &'static str,
-    /// Subagent names this master may load, in preference order.
-    pub subagent_presets: &'static [&'static str],
-    /// The tool scope this master declares against the pool.
+    pub role_id: &'static str,
+    /// Subagent role names this agent may load, in preference order.
+    pub subagent_roles: &'static [&'static str],
+    /// The tool scope this agent declares against the pool.
     pub tool_scope: ToolScope,
 }
 
 pub type DelegationPolicy = AgentRoleDelegation;
 
 impl AgentRoleDelegation {
-    /// Whether a master bound to this preset may load the subagent preset
+    /// Whether an agent bound to this role may load the subagent role
     pub fn admits_subagent(&self, name: &str) -> bool {
-        self.subagent_presets.contains(&name)
+        self.subagent_roles.contains(&name)
     }
 
-    /// All shipping master delegations, developer first.
+    /// All shipping agent role delegations, developer first.
     pub const ALL: &'static [AgentRoleDelegation] =
         &[AGENT_ROLE_DEVELOPER, AGENT_ROLE_PHILOSOPHIST];
 
     pub fn declared_tools(&self) -> Option<&'static [&'static str]> {
-        match self.preset_id {
+        match self.role_id {
             "philosophist" => Some(&["read_url", "search_web", "ask_user"]),
             _ => None,
         }
@@ -417,10 +509,10 @@ impl AgentRoleDelegation {
     }
 }
 
-/// The philosophist master preset: workspace-free philosophical exploration.
+/// The philosophist agent role: workspace-free philosophical exploration.
 pub const AGENT_ROLE_PHILOSOPHIST: AgentRoleDelegation = AgentRoleDelegation {
-    preset_id: "philosophist",
-    subagent_presets: &[crate::subagent::SUBAGENT_EXPLORE.name],
+    role_id: "philosophist",
+    subagent_roles: &[crate::subagent::SUBAGENT_EXPLORE.name],
     tool_scope: ToolScope::All,
 };
 
@@ -471,7 +563,10 @@ mod tests {
             let parsed = MainAgentRole::parse(role.as_str());
             assert_eq!(parsed, Some(*role), "{} should parse back", role.as_str());
         }
-        assert_eq!(MainAgentRole::parse("Coder"), Some(MainAgentRole::Developer));
+        assert_eq!(
+            MainAgentRole::parse("Coder"),
+            Some(MainAgentRole::Developer)
+        );
         assert_eq!(MainAgentRole::parse("dev"), Some(MainAgentRole::Developer));
         assert_eq!(
             MainAgentRole::parse("philosopher"),
@@ -490,6 +585,14 @@ mod tests {
         let dev = AgentRoleProfile::from_role(MainAgentRole::Developer, &base);
         assert_eq!(dev.identity.preamble(), base.preamble());
         assert_eq!(dev.name, "developer");
+
+        let default_dev = AgentRoleProfile::developer();
+        assert!(
+            default_dev
+                .identity
+                .preamble()
+                .starts_with("Role: developer.")
+        );
 
         let phil = AgentRoleProfile::from_role(MainAgentRole::Philosophist, &base);
         assert_eq!(phil.name, "philosophist");
@@ -535,5 +638,36 @@ mod tests {
 
         main_agent.switch_role(MainAgentRole::Philosophist);
         assert_eq!(main_agent.role_name(), "philosophist");
+    }
+
+    #[test]
+    fn session_role_manifest_defaults_and_serde() {
+        let dev_manifest = SessionRoleManifest::developer();
+        assert_eq!(dev_manifest.role_id, "developer");
+        assert_eq!(dev_manifest.tools, vec!["*"]);
+        assert!(
+            dev_manifest
+                .identity
+                .preamble()
+                .starts_with("Role: developer.")
+        );
+
+        let phil_manifest = SessionRoleManifest::philosophist();
+        assert_eq!(phil_manifest.role_id, "philosophist");
+        assert_eq!(
+            phil_manifest.tools,
+            vec!["read_url", "search_web", "ask_user"]
+        );
+        assert!(
+            phil_manifest
+                .identity
+                .preamble()
+                .starts_with("Role: philosophist.")
+        );
+
+        let serialized = serde_json::to_string(&dev_manifest).expect("serialize manifest");
+        let deserialized: SessionRoleManifest =
+            serde_json::from_str(&serialized).expect("deserialize manifest");
+        assert_eq!(dev_manifest, deserialized);
     }
 }

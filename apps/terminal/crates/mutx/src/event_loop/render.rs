@@ -403,6 +403,7 @@ fn compose_frame(
                 session_head: Some(render::SessionHead {
                     session_id: viewed_session_id,
                     workspace: &app.current_workspace,
+                    role: app.current_role.as_deref(),
                     unattended: app.unattended,
                     confined: app.confined,
                     switching_target: app.switching_session.as_deref(),

@@ -364,11 +364,8 @@ mod role_command_tests {
     use muta_contracts::MainAgentRole;
 
     #[test]
-    fn role_and_aliases_resolve_to_builtin_role() {
+    fn role_command_resolves_to_builtin_role() {
         assert_eq!(BuiltinCmd::from_slash("/role"), Some(BuiltinCmd::Role));
-        assert_eq!(BuiltinCmd::from_slash("/persona"), Some(BuiltinCmd::Role));
-        assert_eq!(BuiltinCmd::from_slash("/master"), Some(BuiltinCmd::Role));
-        assert_eq!(BuiltinCmd::from_slash("/preset"), Some(BuiltinCmd::Role));
     }
 
     #[test]

@@ -22,7 +22,7 @@
 //!   window is tolerated — a transient retry, or re-running the same test
 //!   command after an edit — and the second repeat is blocked. The strict
 //!   ADR-0113 behavior (block on the first repeat) is `threshold = 2` in
-//!   `[master.doom_guard]`.
+//!   `[agent.doom_guard]`.
 //!
 //! Detection is pure signature bookkeeping — no model call. The action is a
 //! [`crate::guard::GuardAction::Block`]: the signature is masked for the

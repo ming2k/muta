@@ -5,14 +5,14 @@
 use super::*;
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 18;
+pub const CURRENT_DB_VERSION: u32 = 19;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 pub const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "e58e01efd46582c0cfd82dc434b2b5b4b69c102504fb1dd8ea4482c4eef7ca10";
+    "a407b5acd04fdb5fc6a231bf94d483e39d0db6d8b1dbf1b6c577263ad03ca23c";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -455,6 +455,12 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 18,
         sql: "",
     },
+    Migration {
+        // Session Role Manifest Snapshotting (ADR-0245):
+        // add immutable role_manifest column to sessions table.
+        version: 19,
+        sql: "",
+    },
 ];
 
 /// Working-state columns the final ADR-0186 `sessions` rebuild must carry,
@@ -475,6 +481,7 @@ pub const SESSIONS_WORKING_STATE_COLUMNS: &[(&str, &str)] = &[
     ("request_usage_records", "TEXT NOT NULL DEFAULT '[]'"),
     ("checksum", "INTEGER"),
     ("schema_version", "INTEGER NOT NULL DEFAULT 13"),
+    ("role_manifest", "TEXT"),
 ];
 
 /// Columns persistence v2 (ADR-0187) added to `sessions`. Guard-only:
@@ -1078,6 +1085,16 @@ pub fn apply_asset_attestation_schema(tx: &rusqlite::Transaction) -> Result<()> 
     Ok(())
 }
 
+/// Migration 19 (ADR-0245): Session Role Manifest Snapshotting.
+/// Adds `role_manifest TEXT` JSON column to `sessions` table.
+pub fn apply_role_manifest_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    let existing = sessions_columns(tx)?;
+    if !existing.contains("role_manifest") {
+        tx.execute_batch("ALTER TABLE sessions ADD COLUMN role_manifest TEXT;")?;
+    }
+    Ok(())
+}
+
 pub fn insert_usage_record_tx(conn: &Connection, session_id: &str, record: &muta_contracts::RequestUsageRecord) -> Result<()> {
     if record.key.session_id != session_id {
         return Err(rusqlite::Error::InvalidParameterName("usage belongs to another session".into()));
@@ -1320,6 +1337,9 @@ pub fn apply_migrations(conn: &mut Connection, observed_version: u32) -> Result<
                 }
                 if migration.version == 18 {
                     apply_asset_attestation_schema(&tx)?;
+                }
+                if migration.version == 19 {
+                    apply_role_manifest_schema(&tx)?;
                 }
             }
         }
