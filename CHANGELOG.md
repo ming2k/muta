@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-09-12
+
+### Added
+
+- **Canonical Session IR & Causal Graph (ADR-0241):** Replaced the legacy dual-representation model (`SessionTree` vs `Transcript`) with an authoritative in-memory `SessionIR` triad: immutable `CausalGraph` (`history`), deterministic working registers and cursor (`state`), and declarative constraints and capabilities (`policy`).
+- **Multi-Pass Request Compiler Pipeline:** Formalized outbound LLM request generation into a 4-pass optimizing compiler pipeline (`active_branch_projection`, `context_budgeting`, `cache_boundary_analysis`, and `target_lowering`) with deterministic SHA-256 KV-cache prefix fingerprinting.
+- **Incremental Commit Delta Engine ([INV-SESSION-05]):** Introduced `SessionDelta` and $O(\Delta)$ `drain_delta`/`apply_delta` mechanics, ensuring turn commit overhead remains independent of historical conversation length.
+- **Clean-Break Persistence Schema & Migration 17:** Established headless, unpolluted storage tables (`sessions_v2`, `session_policies`, `causal_nodes`) and dynamic CQRS read model `session_list_view`, purging all terminal UI presentation leaks from the database write model.
+- **Forensic Scene Preservation:** Elevated human interrupts (`Ctrl+C`), suspended approval gates (`NeedsApproval`, `NeedsInput`), and asynchronous system wakes into first-class, crash-resilient causal facts and state registers.
+
 ## [0.47.7] - 2026-09-12
 
 ### Added
@@ -7249,7 +7259,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.7...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.0...HEAD
+[0.48.0]: https://github.com/ming2k/muta/compare/v0.47.7...v0.48.0
 [0.47.7]: https://github.com/ming2k/muta/compare/v0.47.6...v0.47.7
 [0.47.6]: https://github.com/ming2k/muta/compare/v0.47.5...v0.47.6
 [0.47.5]: https://github.com/ming2k/muta/compare/v0.47.4...v0.47.5
