@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.7] - 2026-09-12
+
+### Added
+
+- **Main-Agent Direct MCP Unification (ADR-0240):** Unified MCP tool execution directly into the Master Agent with native JSON function calling, eliminating the historical `mcp_specialist` subagent isolation detour.
+- **Kernel-level inotify MCP configuration watcher:** Asynchronously monitors user and workspace MCP configuration files using debounced reactive filesystem events (`FsWatcher`) to trigger automatic hot-updates and user notices without requiring daemon restarts.
+- **MCP Output Compaction Guard ([INV-MCP-05]):** Automatically spills MCP tool responses exceeding 16KB or 200 lines to `$TMPDIR` and presents a structured head/tail preview with the file path to prevent transcript poisoning.
+- **Activity Bar Bootstrapping & Lifecycle Progress ([INV-MCP-04]):** Upgraded the terminal Activity Bar into a prioritized state machine that displays animated MCP connection progress during cold-start.
+
+### Removed
+
+- **Retired subagent MCP quarantine:** Removed `SUBAGENT_MCP_SPECIALIST`, `DynamicToolSource`, and `delegate_mcp` cross-agent dynamic tool borrowing.
+
 ## [0.47.6] - 2026-09-12
 
 ### Changed
@@ -7236,7 +7249,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.6...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.7...HEAD
+[0.47.7]: https://github.com/ming2k/muta/compare/v0.47.6...v0.47.7
 [0.47.6]: https://github.com/ming2k/muta/compare/v0.47.5...v0.47.6
 [0.47.5]: https://github.com/ming2k/muta/compare/v0.47.4...v0.47.5
 [0.47.4]: https://github.com/ming2k/muta/compare/v0.47.3...v0.47.4
