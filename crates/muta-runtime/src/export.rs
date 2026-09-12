@@ -1,19 +1,14 @@
 //! Conversation exporter: renders the durable [`Message`] stream as a single
-//! Markdown document suitable for handing off to a fresh agent. Triggered by
-//! the `/export` slash command, which copies the result to the system
-//! clipboard so it can be pasted into another tool's prompt.
+//! Markdown document suitable for clipboard copying and handoff. Triggered by
+//! the `/export` slash command, which copies the result to the system clipboard.
 //!
-//! Format is intentionally agent-readable: a metadata header (session id,
-//! provider / model, exported-at) followed by a preamble that
-//! tells the receiving agent how to use the document, then a chronological
-//! transcript of user prompts, assistant replies, tool calls, and tool
-//! results. Hidden and system messages are skipped (mirroring
-//! `crate::tui::transcript` rendering), and subagent transcripts nested
-//! under `task` tool results are summarised inline rather than dumped in full
-//! so the export stays scannable.
+//! Format matches the clean conversational Markdown specification:
+//! - Top-level `# Muta conversation` title.
+//! - Clean `## User`, `## Reasoning`, `## Assistant`, and `## Activity` sections.
+//! - Activities render tool invocations and outputs as indented code blocks (4 spaces).
+//! - Hidden and system messages are skipped. Subagent transcripts are summarised inline.
 
-use chrono::Utc;
-use muta_contracts::{Message, Role, ToolCall};
+use muta_contracts::{Message, Role, SubagentMeta, ToolCall};
 
 /// Metadata carried from the harness into the exporter so the header reflects
 /// the live session state at the moment of export.
@@ -31,28 +26,11 @@ pub struct ExportContext<'a> {
 /// distinct blockquote block after the dialogue instead of a `## User`
 /// heading, keeping the dialogue pure.
 pub fn format_export_markdown(
-    ctx: ExportContext<'_>,
+    _ctx: ExportContext<'_>,
     messages: &[Message],
     commands: &[muta_contracts::CommandRecord],
 ) -> String {
-    let mut out = String::new();
-    out.push_str("# muta session export\n\n");
-
-    let exported_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    out.push_str(&format!("- **Session ID:** `{}`\n", ctx.session_id));
-    out.push_str(&format!(
-        "- **Provider / Model:** {} / {}\n",
-        ctx.provider, ctx.model
-    ));
-    out.push_str(&format!("- **Exported at:** {}\n\n", exported_at));
-
-    out.push_str(
-        "The transcript below records what was done in this session. A fresh \
-         agent can read it as context and continue the work. Tool calls and \
-         their results are inlined chronologically so the full chain of \
-         decisions and side effects is visible.\n\n---\n\n",
-    );
-
+    let mut out = String::from("# Muta conversation\n\n");
     let mut emitted_any = false;
     let mut tool_call_cursor: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::new();
@@ -63,59 +41,52 @@ pub fn format_export_markdown(
         }
         match message.role {
             Role::User => {
-                let content = pick_content(message);
+                let content = pick_content(message).trim();
                 if content.is_empty() {
                     continue;
                 }
                 emitted_any = true;
                 out.push_str("## User\n\n");
-                out.push_str(content.trim());
+                out.push_str(content);
+                if let Some(images) = message.images.as_ref() {
+                    for (i, _) in images.iter().enumerate() {
+                        let label = format!("[Image #{}]", i + 1);
+                        if !content.contains(&label) {
+                            out.push_str("\n\n");
+                            out.push_str(&label);
+                        }
+                    }
+                }
                 out.push_str("\n\n");
             }
             Role::Assistant => {
-                let mut wrote_header = false;
                 if let Some(reasoning) = message.reasoning_content.as_deref()
                     && !reasoning.trim().is_empty()
                 {
                     emitted_any = true;
-                    out.push_str("<details>\n<summary>Reasoning</summary>\n\n");
+                    out.push_str("## Reasoning\n\n");
                     out.push_str(reasoning.trim());
-                    out.push_str("\n\n</details>\n\n");
+                    out.push_str("\n\n");
                 }
-                let content = pick_content(message);
-                if !content.trim().is_empty() {
+                let content = pick_content(message).trim();
+                if !content.is_empty() {
                     emitted_any = true;
-                    let attribution = attribution_suffix(message);
-                    out.push_str("## Assistant");
-                    if let Some(tag) = attribution {
-                        out.push_str(&format!(" ({tag})"));
-                    }
+                    out.push_str("## Assistant\n\n");
+                    out.push_str(content);
                     out.push_str("\n\n");
-                    out.push_str(content.trim());
-                    out.push_str("\n\n");
-                    wrote_header = true;
                 }
                 if let Some(calls) = message.tool_calls.as_ref() {
                     for call in calls {
                         emitted_any = true;
-                        if !wrote_header {
-                            let attribution = attribution_suffix(message);
-                            out.push_str("## Assistant");
-                            if let Some(tag) = attribution {
-                                out.push_str(&format!(" ({tag})"));
-                            }
-                            out.push_str("\n\n");
-                            wrote_header = true;
-                        }
-                        render_tool_call(call, messages, &mut tool_call_cursor, &mut out);
+                        render_activity(call, messages, &mut tool_call_cursor, &mut out);
                     }
                 }
             }
             Role::Tool => {
-                // Tool results are inlined next to their originating call by
-                // `render_tool_call`, so a standalone Tool message here is a
-                // result whose matching call lived in a turn we skipped (e.g.
-                // a hidden injection). Drop it to keep the transcript clean.
+                // Tool results are inlined next to their originating call under
+                // ## Activity by `render_activity`, so a standalone Tool message
+                // here is a result whose matching call lived in a turn we skipped
+                // (e.g. a hidden injection). Drop it to keep the transcript clean.
             }
             Role::System => {}
         }
@@ -156,8 +127,7 @@ pub fn format_export_markdown(
 }
 
 /// Choose the text we render for a message: `display_content` (the harness's
-/// curated view) when present, otherwise the raw `content`. Mirrors
-/// `crate::tui::transcript::transcript_message_from_core`.
+/// curated view) when present, otherwise the raw `content`.
 fn pick_content(message: &Message) -> &str {
     if let Some(display) = message.display_content.as_deref() {
         display
@@ -166,110 +136,346 @@ fn pick_content(message: &Message) -> &str {
     }
 }
 
-/// `provider / model` attribution line for an assistant message, when the
-/// harness stamped one. Returns `None` when both fields are absent, which is
-/// the case for synthesised or test messages.
-fn attribution_suffix(message: &Message) -> Option<String> {
-    match (message.provider.as_deref(), message.model.as_deref()) {
-        (Some(p), Some(m)) if !p.is_empty() || !m.is_empty() => Some(format!("{} / {}", p, m)),
-        _ => None,
-    }
-}
-
-/// Render a single tool invocation: its arguments plus the matching result,
-/// when one can be found later in the transcript. The durable transcript
-/// stores results as `[name result]:output`, keyed only by tool name, so we
-/// pair calls with same-named results in encounter order (mirroring
-/// `crate::tui::transcript::transcript_messages_from_core`).
-fn render_tool_call<'a>(
+/// Render a single tool invocation and its matching result under an indented
+/// `## Activity` code block.
+fn render_activity<'a>(
     call: &'a ToolCall,
     messages: &[Message],
     cursor: &mut std::collections::HashMap<&'a str, usize>,
     out: &mut String,
 ) {
-    out.push_str(&format!("### Tool call: `{}`\n\n", call.name));
-    let pretty_args = serde_json::from_str::<serde_json::Value>(&call.arguments)
-        .ok()
-        .and_then(|v| serde_json::to_string_pretty(&v).ok())
-        .unwrap_or_else(|| call.arguments.clone());
-    out.push_str("```json\n");
-    out.push_str(&pretty_args);
-    out.push_str("\n```\n\n");
-
-    // Two `bash` calls in the same turn map to two distinct results rather
-    // than both latching onto the first: each render advances a per-name
-    // cursor and picks the result at that position among same-named matches.
-    let slot = {
-        let entry = cursor.entry(call.name.as_str()).or_insert(0);
-        let current = *entry;
-        *entry += 1;
-        current
-    };
-
-    let matches: Vec<&Message> = messages
+    let matched_result = messages
         .iter()
         .filter(|m| m.role == Role::Tool)
-        .filter(|m| parse_tool_result(&m.content).is_some_and(|(name, _)| name == call.name))
-        .collect();
-    if let Some(result) = matches.get(slot) {
-        if let Some((_, output)) = parse_tool_result(&result.content) {
-            out.push_str("**Result:**\n\n");
-            let fence = choose_fence(output);
-            out.push_str(&fence);
-            out.push('\n');
-            out.push_str(output.trim());
-            out.push('\n');
-            out.push_str(&fence);
-            out.push_str("\n\n");
+        .find(|m| m.tool_call_id.as_deref() == Some(&call.id))
+        .or_else(|| {
+            let slot = {
+                let entry = cursor.entry(call.name.as_str()).or_insert(0);
+                let current = *entry;
+                *entry += 1;
+                current
+            };
+            let matches: Vec<&Message> = messages
+                .iter()
+                .filter(|m| m.role == Role::Tool)
+                .filter(|m| {
+                    parse_tool_result(&m.content).is_some_and(|(name, _)| name == call.name)
+                })
+                .collect();
+            matches.get(slot).copied()
+        });
+
+    let parsed_output = matched_result.and_then(|m| {
+        parse_tool_result(&m.content)
+            .map(|(_, output)| output)
+            .or(Some(&m.content))
+    });
+    let children = matched_result.and_then(|m| m.children.as_deref());
+    let subagent_meta = matched_result.and_then(|m| m.subagent_meta.as_ref());
+
+    let (header, status, body) = format_tool_activity(call, parsed_output, children, subagent_meta);
+    push_activity_block(out, &header, &status, &body);
+}
+
+/// Format the activity lines: command / tool summary line, status line, and body lines.
+fn format_tool_activity(
+    call: &ToolCall,
+    result_output: Option<&str>,
+    children: Option<&[Message]>,
+    subagent_meta: Option<&SubagentMeta>,
+) -> (String, String, Vec<String>) {
+    let json_args: Option<serde_json::Value> = serde_json::from_str(&call.arguments).ok();
+
+    let (header, status, mut body) = match call.name.as_str() {
+        "run_command" | "execute_command" | "bash" | "sh" => {
+            let cmd = json_args
+                .as_ref()
+                .and_then(|v| v.get("command").and_then(|c| c.as_str()))
+                .unwrap_or(&call.arguments);
+            let header = format!("$ {cmd}");
+            match result_output {
+                None => (
+                    header,
+                    "status: Interrupted".to_string(),
+                    vec!["(no result recorded — the call may have been interrupted)".to_string()],
+                ),
+                Some(output) => {
+                    let (status, lines) = parse_shell_output(output);
+                    (header, status, lines)
+                }
+            }
         }
-        if let Some(children) = result.children.as_ref() {
-            render_subagent_summary(children, out);
+        "read_text" | "read_file" => {
+            let path = json_args
+                .as_ref()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()))
+                .unwrap_or("");
+            let offset = json_args
+                .as_ref()
+                .and_then(|v| v.get("offset").and_then(|o| o.as_u64()));
+            let limit = json_args
+                .as_ref()
+                .and_then(|v| v.get("limit").and_then(|l| l.as_u64()));
+            let header = match (offset, limit) {
+                (Some(o), Some(l)) => format!("read: {path} (offset: {o}, limit: {l})"),
+                (Some(o), None) => format!("read: {path} (offset: {o})"),
+                (None, Some(l)) => format!("read: {path} (limit: {l})"),
+                (None, None) => format!("read: {path}"),
+            };
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
         }
-    } else {
-        out.push_str("_(no result recorded — the call may have been interrupted.)_\n\n");
+        "edit_text" => {
+            let path = json_args
+                .as_ref()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()))
+                .unwrap_or("");
+            let header = format!("edit: {path}");
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        "write_file" => {
+            let path = json_args
+                .as_ref()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()))
+                .unwrap_or("");
+            let header = format!("write: {path}");
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        "search_text" => {
+            let query = json_args
+                .as_ref()
+                .and_then(|v| v.get("query").and_then(|q| q.as_str()))
+                .unwrap_or("");
+            let path = json_args
+                .as_ref()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()));
+            let header = match path {
+                Some(p) if !p.is_empty() && p != "." => format!("search: \"{query}\" in {p}"),
+                _ => format!("search: \"{query}\""),
+            };
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        "find_files" => {
+            let patterns = json_args
+                .as_ref()
+                .and_then(|v| v.get("patterns"))
+                .and_then(|p| serde_json::to_string(p).ok())
+                .unwrap_or_else(|| "*".to_string());
+            let path = json_args
+                .as_ref()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()));
+            let header = match path {
+                Some(p) if !p.is_empty() && p != "." => format!("find files: {patterns} in {p}"),
+                _ => format!("find files: {patterns}"),
+            };
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        "list_dir" => {
+            let path = json_args
+                .as_ref()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()))
+                .unwrap_or(".");
+            let header = format!("list dir: {path}");
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        "code_query" => {
+            let mode = json_args
+                .as_ref()
+                .and_then(|v| v.get("mode").and_then(|m| m.as_str()))
+                .unwrap_or("query");
+            let path = json_args
+                .as_ref()
+                .and_then(|v| v.get("path").and_then(|p| p.as_str()))
+                .unwrap_or("");
+            let sym = json_args
+                .as_ref()
+                .and_then(|v| v.get("symbol").and_then(|s| s.as_str()));
+            let pat = json_args
+                .as_ref()
+                .and_then(|v| v.get("pattern").and_then(|p| p.as_str()));
+            let target = sym.or(pat).unwrap_or(path);
+            let header = format!("code query: {mode} {target}");
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        "spawn_agent" => {
+            let desc = json_args
+                .as_ref()
+                .and_then(|v| v.get("description").and_then(|d| d.as_str()))
+                .unwrap_or("");
+            let role = json_args
+                .as_ref()
+                .and_then(|v| v.get("role").and_then(|r| r.as_str()));
+            let header = match role {
+                Some(r) => format!("spawn agent: {desc} ({r})"),
+                None => format!("spawn agent: {desc}"),
+            };
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        "todo" => {
+            let header = "todo".to_string();
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        "ask_user" => {
+            let header = "ask user".to_string();
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+        name => {
+            let compact_args = json_args
+                .as_ref()
+                .and_then(|v| serde_json::to_string(v).ok())
+                .unwrap_or_else(|| call.arguments.clone());
+            let header = if compact_args == "{}" || compact_args.is_empty() {
+                format!("tool: {name}")
+            } else {
+                format!("tool: {name}({compact_args})")
+            };
+            let (status, lines) = format_generic_result(result_output);
+            (header, status, lines)
+        }
+    };
+
+    if let Some(children) = children
+        && !children.is_empty()
+    {
+        let user_count = children.iter().filter(|m| m.role == Role::User).count();
+        let assistant_count = children
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .count();
+        let tool_count = children.iter().filter(|m| m.role == Role::Tool).count();
+        body.push(format!(
+            "Subagent transcript: {user_count} user / {assistant_count} assistant / {tool_count} tool messages."
+        ));
+    }
+    if let Some(meta) = subagent_meta {
+        if let Some(desc) = meta.description.as_deref()
+            && !desc.is_empty()
+        {
+            body.push(format!("Subagent task: {desc}"));
+        }
+        if let Some(duration_ms) = meta.duration_ms {
+            body.push(format!("Subagent duration: {duration_ms}ms"));
+        }
+    }
+
+    (header, status, body)
+}
+
+/// Parse shell stdout/stderr and exit status from Muta's shell tool output.
+fn parse_shell_output(output: &str) -> (String, Vec<String>) {
+    let trimmed = output.trim_matches('\n');
+    if trimmed.is_empty() {
+        return ("status: Completed · exit 0".to_string(), Vec::new());
+    }
+
+    if let Some(rest) = trimmed.strip_prefix("Exit ") {
+        if let Some((exit_code_str, streams)) = rest.split_once('\n') {
+            let code = exit_code_str.trim();
+            let status = format!("status: Failed · exit {code}");
+            let mut lines = Vec::new();
+            if let Some((stdout_part, stderr_part)) = streams.split_once("\nSTDERR:\n") {
+                let stdout_clean = stdout_part.strip_prefix("STDOUT:\n").unwrap_or(stdout_part);
+                for line in stdout_clean.lines() {
+                    if !line.is_empty() {
+                        lines.push(line.to_string());
+                    }
+                }
+                for line in stderr_part.lines() {
+                    if !line.is_empty() {
+                        lines.push(line.to_string());
+                    }
+                }
+            } else {
+                for line in streams.lines() {
+                    lines.push(line.to_string());
+                }
+            }
+            return (status, lines);
+        }
+    }
+
+    if let Some(stderr) = trimmed.strip_prefix("(success, stderr):\n") {
+        let lines = stderr.lines().map(|l| l.to_string()).collect();
+        return ("status: Completed · exit 0".to_string(), lines);
+    }
+
+    if trimmed.starts_with("Error:") || trimmed.starts_with("Failed:") {
+        let lines = trimmed.lines().map(|l| l.to_string()).collect();
+        return ("status: Failed".to_string(), lines);
+    }
+
+    let lines = trimmed.lines().map(|l| l.to_string()).collect();
+    ("status: Completed · exit 0".to_string(), lines)
+}
+
+/// Fallback output parser for non-shell tools.
+fn format_generic_result(output: Option<&str>) -> (String, Vec<String>) {
+    match output {
+        None => (
+            "status: Interrupted".to_string(),
+            vec!["(no result recorded — the call may have been interrupted)".to_string()],
+        ),
+        Some(out) => {
+            let trimmed = out.trim_matches('\n');
+            if trimmed.starts_with("Error:") || trimmed.starts_with("Failed:") {
+                (
+                    "status: Failed".to_string(),
+                    trimmed.lines().map(|l| l.to_string()).collect(),
+                )
+            } else {
+                (
+                    "status: Completed".to_string(),
+                    trimmed.lines().map(|l| l.to_string()).collect(),
+                )
+            }
+        }
     }
 }
 
-/// Summarise a subagent transcript inlined on a `task` tool result. Dumping
-/// the full nested transcript would balloon the export past what a receiving
-/// agent needs; instead we surface the task description, message count, and
-/// whether the run finished in an error state.
-fn render_subagent_summary(children: &[Message], out: &mut String) {
-    if children.is_empty() {
-        return;
+/// Write a single indented code block under `## Activity`.
+fn push_activity_block(
+    out: &mut String,
+    header_line: &str,
+    status_line: &str,
+    body_lines: &[String],
+) {
+    out.push_str("## Activity\n\n");
+    for line in header_line.lines() {
+        out.push_str("    ");
+        out.push_str(line.trim_end());
+        out.push('\n');
     }
-    let user_count = children.iter().filter(|m| m.role == Role::User).count();
-    let assistant_count = children
-        .iter()
-        .filter(|m| m.role == Role::Assistant)
-        .count();
-    let tool_count = children.iter().filter(|m| m.role == Role::Tool).count();
-    out.push_str(&format!(
-        "_Subagent transcript: {} user / {} assistant / {} tool messages._\n\n",
-        user_count, assistant_count, tool_count
-    ));
+    out.push_str("    ");
+    out.push_str(status_line);
+    out.push('\n');
+    for line in body_lines {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            out.push_str("      \n");
+        } else {
+            out.push_str("      ");
+            out.push_str(trimmed);
+            out.push('\n');
+        }
+    }
+    out.push('\n');
 }
 
 /// Parse the `[<name> result]:<output>` envelope that wraps Tool-role
-/// messages. Mirrors `crate::tui::transcript::parse_tool_result` but
-/// operates on an owned `&str` so it composes with the iterator pipeline in
-/// [`render_tool_call`].
+/// messages.
 fn parse_tool_result(content: &str) -> Option<(&str, &str)> {
     let content = content.strip_prefix('[')?;
     let (name, output) = content.split_once(" result]:")?;
     Some((name, output.trim_start_matches('\n')))
-}
-
-/// Pick a Markdown fence tall enough that the embedded result content (which
-/// may itself contain ``` fences) does not prematurely close the block. Scans
-/// for the longest run of consecutive backticks and adds one.
-fn choose_fence(content: &str) -> String {
-    let longest = content
-        .split(|c: char| c != '`')
-        .map(|run| run.len())
-        .max()
-        .unwrap_or(0);
-    "`".repeat((longest + 1).max(3))
 }
 
 #[cfg(test)]
@@ -297,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_metadata_header_and_preamble() {
+    fn renders_conversation_title_and_user_message() {
         let out = format_export_markdown(
             ExportContext {
                 session_id: "abcd1234ef",
@@ -307,9 +513,8 @@ mod tests {
             &[user("hello")],
             &[],
         );
-        assert!(out.contains("Session ID:** `abcd1234ef`"));
-        assert!(out.contains("Provider / Model:** kimi-code / kimi-k2.7-code"));
-        assert!(out.contains("A fresh agent can read it as context"));
+        assert!(out.starts_with("# Muta conversation\n\n"));
+        assert!(out.contains("## User\n\nhello"));
     }
 
     #[test]
@@ -334,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn inlines_tool_call_and_result() {
+    fn inlines_tool_call_and_result_as_activity() {
         let call = ToolCall {
             id: "bash_1".to_string(),
             name: "execute_command".to_string(),
@@ -354,10 +559,49 @@ mod tests {
             &messages,
             &[],
         );
-        assert!(out.contains("### Tool call: `execute_command`"));
-        assert!(out.contains(r#""command": "ls""#));
-        assert!(out.contains("**Result:**"));
-        assert!(out.contains("file1"));
+        assert!(out.contains("## Activity\n\n    $ ls\n    status: Completed · exit 0\n      file1\n      file2\n"));
+        // Assistant header should not be emitted when its content was empty
+        assert!(!out.contains("## Assistant"));
+    }
+
+    #[test]
+    fn renders_reasoning_and_assistant_content() {
+        let mut msg = Message::new(Role::Assistant, "Here is the plan.");
+        msg.reasoning_content = Some("Thinking through options...".to_string());
+        let out = format_export_markdown(
+            ExportContext {
+                session_id: "id",
+                provider: "p",
+                model: "m",
+            },
+            &[user("plan"), msg],
+            &[],
+        );
+        assert!(out.contains("## Reasoning\n\nThinking through options...\n\n"));
+        assert!(out.contains("## Assistant\n\nHere is the plan.\n\n"));
+    }
+
+    #[test]
+    fn renders_shell_error_exit_status() {
+        let call = ToolCall {
+            id: "bash_err".to_string(),
+            name: "run_command".to_string(),
+            arguments: r#"{"command":"cargo test"}"#.to_string(),
+        };
+        let messages = vec![
+            assistant_with_call("", call),
+            tool_result("run_command", "Exit 101\nSTDOUT:\ntest failed\nSTDERR:\nassertion failed"),
+        ];
+        let out = format_export_markdown(
+            ExportContext {
+                session_id: "id",
+                provider: "p",
+                model: "m",
+            },
+            &messages,
+            &[],
+        );
+        assert!(out.contains("## Activity\n\n    $ cargo test\n    status: Failed · exit 101\n      test failed\n      assertion failed\n"));
     }
 
     #[test]
@@ -387,7 +631,6 @@ mod tests {
             &messages,
             &[],
         );
-        // The first call must pair with "first", the second with "second".
         let first_call = out.find("echo a").unwrap();
         let first_result = out.find("first").unwrap();
         let second_call = out.find("echo b").unwrap();
@@ -414,6 +657,7 @@ mod tests {
             &messages,
             &[],
         );
+        assert!(out.contains("status: Interrupted"));
         assert!(out.contains("no result recorded"));
     }
 
@@ -432,10 +676,80 @@ mod tests {
     }
 
     #[test]
+    fn renders_file_and_search_tools_cleanly() {
+        let read_call = ToolCall {
+            id: "read_1".to_string(),
+            name: "read_text".to_string(),
+            arguments: r#"{"path":"src/lib.rs","offset":10,"limit":20}"#.to_string(),
+        };
+        let search_call = ToolCall {
+            id: "search_1".to_string(),
+            name: "search_text".to_string(),
+            arguments: r#"{"query":"hello","path":"src"}"#.to_string(),
+        };
+        let messages = vec![
+            assistant_with_call("", read_call),
+            tool_result("read_text", "10: fn hello() {}\n11: fn world() {}"),
+            assistant_with_call("", search_call),
+            tool_result("search_text", "src/lib.rs:10: fn hello() {}"),
+        ];
+        let out = format_export_markdown(
+            ExportContext {
+                session_id: "id",
+                provider: "p",
+                model: "m",
+            },
+            &messages,
+            &[],
+        );
+        assert!(out.contains("## Activity\n\n    read: src/lib.rs (offset: 10, limit: 20)\n    status: Completed\n      10: fn hello() {}\n      11: fn world() {}\n"));
+        assert!(out.contains("## Activity\n\n    search: \"hello\" in src\n    status: Completed\n      src/lib.rs:10: fn hello() {}\n"));
+    }
+
+    #[test]
+    fn renders_user_images_and_subagent_activity() {
+        let mut user_msg = user("check this diagram");
+        user_msg.images = Some(vec![muta_contracts::ImagePart {
+            mime: "image/png".to_string(),
+            data: "abcd".to_string(),
+        }]);
+
+        let spawn_call = ToolCall {
+            id: "sub_1".to_string(),
+            name: "spawn_agent".to_string(),
+            arguments: r#"{"description":"analyze performance","role":"explore"}"#.to_string(),
+        };
+        let mut res = tool_result("spawn_agent", "found no bottleneck");
+        res.children = Some(vec![
+            user("sub task"),
+            assistant_with_call("", ToolCall::new("1", "run_command", "{}")),
+            tool_result("run_command", "ok"),
+        ]);
+        res.subagent_meta = Some(SubagentMeta {
+            description: Some("analyze performance".to_string()),
+            duration_ms: Some(1500),
+            ..Default::default()
+        });
+
+        let messages = vec![user_msg, assistant_with_call("", spawn_call), res];
+        let out = format_export_markdown(
+            ExportContext {
+                session_id: "id",
+                provider: "p",
+                model: "m",
+            },
+            &messages,
+            &[],
+        );
+        assert!(out.contains("## User\n\ncheck this diagram\n\n[Image #1]\n\n"));
+        assert!(out.contains("spawn agent: analyze performance (explore)"));
+        assert!(out.contains("Subagent transcript: 1 user / 1 assistant / 1 tool messages."));
+        assert!(out.contains("Subagent task: analyze performance"));
+        assert!(out.contains("Subagent duration: 1500ms"));
+    }
+
+    #[test]
     fn renders_command_ledger_as_distinct_blockquotes() {
-        // ADR-0091: commands are operations, not dialogue — they export as a
-        // blockquote block (never a `## User` heading), and the invocation +
-        // typed result both survive.
         let commands = vec![
             muta_contracts::CommandRecord::new("search", "foo").with_result(
                 muta_contracts::CommandResult::Search {
@@ -469,7 +783,6 @@ mod tests {
             out.contains("> `/compact`"),
             "result-less command invocation exports: {out}"
         );
-        // The command must not masquerade as a user message.
         assert!(
             !out.contains("## User"),
             "commands never render as user headings: {out}"

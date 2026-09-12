@@ -39,7 +39,7 @@ pub use error::{
 };
 
 pub mod message;
-pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, ToolCall, ToolResult};
+pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, SubagentMeta, ToolCall, ToolResult};
 
 pub mod transcript;
 pub use transcript::{

@@ -1292,8 +1292,9 @@ pub fn draw_message_body(
                 if *skip_rows > 0 {
                     *skip_rows = skip_rows.saturating_sub(1);
                 } else if *current_y < area.y + area.height {
-                    let width = area.width.saturating_sub(3) as usize;
-                    let text = format!("   {}", "─".repeat(width));
+                    let indent = TRANSCRIPT_BODY_LEADING_INDENT as usize;
+                    let width = (area.width as usize).saturating_sub(indent);
+                    let text = format!("{}{}", " ".repeat(indent), "─".repeat(width));
                     let line =
                         Line::from(vec![Span::styled(text, Style::default().fg(theme.dim()))]);
                     let line_rect = Rect::new(area.x, *current_y, area.width, 1);
@@ -1482,6 +1483,46 @@ mod tests {
             cell_drag_selected_span(&selection, &cell, 60, &" ".repeat(20)),
             None,
             "rows/cells outside the origin cell must not inherit generic range selection"
+        );
+    }
+
+    #[test]
+    fn rule_aligns_with_transcript_body_leading_indent() {
+        let mut grid = mutx_engine::Grid::new(20, 3);
+        let mut frame = mutx_engine::Frame::new(&mut grid);
+        let msg = TranscriptMessage::new(muta_contracts::Role::Assistant, "---");
+        let selection = SelectionState::None;
+        let theme = Theme::default();
+        let mut layout_map = LayoutMap::new();
+        let mut skip_rows = 0;
+        let mut current_y = 0;
+        let mut content_lines = 0;
+        let mut wrap = BlockWrapCache::default();
+
+        draw_message_body(
+            &mut frame,
+            Rect::new(0, 0, 20, 3),
+            &msg,
+            0,
+            &selection,
+            None,
+            &theme,
+            &mut layout_map,
+            &mut skip_rows,
+            &mut current_y,
+            &mut content_lines,
+            false,
+            &mut wrap,
+        );
+
+        // Leading cells before TRANSCRIPT_BODY_LEADING_INDENT must be blank
+        for x in 0..TRANSCRIPT_BODY_LEADING_INDENT {
+            assert_eq!(grid.get(x, 0).unwrap().symbol, " ");
+        }
+        // Cell at TRANSCRIPT_BODY_LEADING_INDENT must be the horizontal rule glyph '─'
+        assert_eq!(
+            grid.get(TRANSCRIPT_BODY_LEADING_INDENT, 0).unwrap().symbol,
+            "─"
         );
     }
 }
