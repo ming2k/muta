@@ -1333,6 +1333,7 @@ pub async fn run_doctor(project_root: Option<&std::path::Path>) -> Result<(), St
 
 mod fields;
 mod history;
+pub(crate) mod ir_bridge;
 
 pub use history::CommitTurn;
 #[cfg(test)]

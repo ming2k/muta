@@ -877,3 +877,34 @@ async fn delete_persisted_session_and_idempotent_delete() {
         .expect("repeat delete of full UUID must be idempotent");
     assert_eq!(re_deleted, id);
 }
+
+#[tokio::test]
+async fn test_session_store_ir_and_compile_request() {
+    let store = store("session_ir_compile").await;
+    let user_msg = user("Implement compiler pass");
+    store.replace_messages(vec![user_msg]).await.unwrap();
+
+    // 1. Fetch SessionIR
+    let ir = store.session_ir().await;
+    assert_eq!(ir.session_id, store.id().await);
+    assert_eq!(ir.history.nodes.len(), 1);
+
+    // 2. Compile request using SessionStore::compile_request (4-pass pipeline)
+    let options = muta_contracts::CompilerOptions {
+        tool_specs: vec![muta_contracts::ToolSpec {
+            name: "run_command".into(),
+            description: "Run shell command".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        }],
+        temporary_context: vec![],
+        ephemeral_instruction: Some("Focus on correctness".into()),
+        target_dialect: Some("anthropic".into()),
+    };
+
+    let compiled = store.compile_request(options).await.unwrap();
+    assert_eq!(compiled.request.messages.len(), 1);
+    assert_eq!(compiled.request.messages[0].content, "Implement compiler pass");
+    assert_eq!(compiled.request.tool_specs.len(), 1);
+    assert_eq!(compiled.request.tool_specs[0].name, "run_command");
+    assert!(!compiled.cache_boundary.prefix_fingerprint.is_empty());
+}

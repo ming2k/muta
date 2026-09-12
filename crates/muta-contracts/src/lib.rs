@@ -164,6 +164,15 @@ pub use workspace::{WorkspaceBinding, WorkspaceFilter};
 
 pub mod session_title;
 
+pub mod session_ir;
+pub use session_ir::{
+    compile_session_request, BudgetPolicy, CacheBoundary, CapabilityPolicy, CausalGraph,
+    CausalNode, CompilationArtifact, CompilationStats, CompilerError, CompilerOptions,
+    ExecutionStatus, GuardrailPolicy, NodeId, NodeKind, NodePayload, RuleSet, SessionDelta,
+    SessionIR, SessionPolicy, SessionState, StateUpdate, SuspensionReason, SystemNoticePayload,
+    TerminationReason,
+};
+
 pub mod session_tree;
 pub use session_tree::{
     CompactionPayload, SessionEntry, SessionEntryId, SessionEntryKind, SessionTree,

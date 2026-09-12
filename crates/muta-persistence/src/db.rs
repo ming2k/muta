@@ -19,6 +19,7 @@ mod engine;
 mod handle;
 mod migrations;
 mod reader;
+pub mod session_ir;
 
 pub use handle::get_persistence_handle;
 pub use migrations::CURRENT_DB_VERSION;

@@ -731,6 +731,36 @@ impl SessionStore {
         persist_to(&self.writer, &data, &self.blob_store)?;
         Ok(messages)
     }
+
+    /// Project the current session state into canonical [`muta_contracts::SessionIR`] (ADR-0241).
+    pub async fn session_ir(&self) -> muta_contracts::SessionIR {
+        let state = self.state.lock().await;
+        super::ir_bridge::session_data_to_ir(&state.data)
+    }
+
+    /// Commit mutations from a [`muta_contracts::SessionIR`] back into the session store.
+    pub async fn commit_session_ir(&self, ir: &muta_contracts::SessionIR) -> Result<(), String> {
+        let data = {
+            let mut state = self.state.lock().await;
+            super::ir_bridge::apply_ir_to_session_data(ir, &mut state.data);
+            state.data.generation = uuid::Uuid::new_v4().to_string();
+            state.invalidate_projection_cache();
+            state.data.updated_at = unix_timestamp();
+            state.data.clone()
+        };
+        persist_to(&self.writer, &data, &self.blob_store)?;
+        Ok(())
+    }
+
+    /// Compile a model request directly from the session's in-memory IR
+    /// using the 4-pass optimizing compiler pipeline (ADR-0241).
+    pub async fn compile_request(
+        &self,
+        options: muta_contracts::CompilerOptions,
+    ) -> Result<muta_contracts::CompilationArtifact, muta_contracts::CompilerError> {
+        let ir = self.session_ir().await;
+        muta_contracts::compile_session_request(&ir, options)
+    }
 }
 
 /// Intercept subagent results in an admission delta (ADR-0186 §6): each nested

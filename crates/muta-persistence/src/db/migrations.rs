@@ -5,14 +5,14 @@
 use super::*;
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 16;
+pub const CURRENT_DB_VERSION: u32 = 17;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 pub const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "4e6a565d1666c4046a078fd123d3bdc7027bef04041319f99661d5a168d4bcef";
+    "d92ec5dce03b9af80a80319d109f0916d21f6238a70b492d749f32c953d9f995";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -442,6 +442,13 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration { version: 15, sql: "" },
     Migration { version: 16, sql: "" },
+    Migration {
+        // Session IR clean break (ADR-0241): initialize pure headless
+        // `sessions_v2`, `session_policies`, `causal_nodes` schema and create
+        // `session_list_view` read projection.
+        version: 17,
+        sql: "",
+    },
 ];
 
 /// Working-state columns the final ADR-0186 `sessions` rebuild must carry,
@@ -934,6 +941,97 @@ pub fn apply_fast_fts_triggers_schema(tx: &rusqlite::Transaction) -> Result<()> 
     Ok(())
 }
 
+/// Session IR Clean Break (ADR-0241), applied by migration 17:
+/// Initializes headless `sessions_v2`, `session_policies`, `causal_nodes` schema,
+/// migrates historical data out of legacy tables, and establishes `session_list_view`.
+pub fn apply_session_ir_clean_break_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    crate::db::session_ir::initialize_session_ir_schema(tx)?;
+
+    // Create the CQRS Read Model projection view
+    tx.execute_batch(
+        r#"
+        CREATE VIEW IF NOT EXISTS session_list_view AS
+        SELECT
+            s.id,
+            s.parent_session_id AS parent_id,
+            'trunk' AS fork_kind,
+            NULL AS title,
+            s.created_at_s,
+            s.updated_at_s,
+            (SELECT json_extract(rules_json, '$.workspace_root') FROM session_policies p WHERE p.session_id = s.id) AS workspace_root,
+            (SELECT json_extract(rules_json, '$.system_persona') FROM session_policies p WHERE p.session_id = s.id) AS persona,
+            COALESCE((SELECT COUNT(*) FROM causal_nodes c WHERE c.session_id = s.id AND c.kind = 'dialogue'), 0) AS msg_count,
+            (SELECT json_extract(c.payload_json, '$.message.content')
+             FROM causal_nodes c
+             WHERE c.session_id = s.id AND json_extract(c.payload_json, '$.message.role') = 'user'
+             ORDER BY c.seq DESC LIMIT 1) AS last_user_prompt,
+            NULL AS digest
+        FROM sessions_v2 s;
+        "#,
+    )?;
+
+    // Migrate any existing sessions in legacy `sessions` table into `sessions_v2` and `session_policies`
+    if table_exists(tx, "sessions")? {
+        tx.execute_batch(
+            r#"
+            INSERT OR IGNORE INTO sessions_v2 (
+                id, parent_session_id, active_leaf, status, suspension_payload,
+                pending_notifications, round_counter, created_at_s, updated_at_s
+            )
+            SELECT
+                id,
+                parent_id,
+                CASE WHEN json_valid(tree) THEN json_extract(tree, '$.active_leaf_id') ELSE NULL END,
+                CASE WHEN retry_pending IS NOT NULL THEN 'suspended' ELSE 'idle' END,
+                retry_pending,
+                '[]',
+                round_counter,
+                created_at_s,
+                updated_at_s
+            FROM sessions;
+
+            INSERT OR IGNORE INTO session_policies (
+                session_id, rules_json, capabilities_json, guardrails_json, budget_json, updated_at_s
+            )
+            SELECT
+                id,
+                json_object('system_persona', persona, 'workspace_root', workspace_root, 'project_rules', json('[]')),
+                json_object('enabled_tools', json('[]'), 'disabled_tools', json(disabled_tools), 'provider_pin', provider_connection),
+                json_object('unattended', unattended != 0, 'require_approval_tools', json('[]')),
+                json_object('max_context_tokens', 128000, 'compaction_trigger_tokens', 96000, 'max_tool_output_tokens', 8000),
+                updated_at_s
+            FROM sessions;
+            "#,
+        )?;
+    }
+
+    // Migrate existing entries into causal_nodes if `entries` and `entry_memberships` exist
+    if table_exists(tx, "entries")? && table_exists(tx, "entry_memberships")? {
+        tx.execute_batch(
+            r#"
+            INSERT OR IGNORE INTO causal_nodes (
+                id, session_id, parent_id, seq, kind, payload_json, timestamp_ms
+            )
+            SELECT
+                m.entry_id,
+                m.session_id,
+                NULL,
+                m.seq,
+                CASE WHEN e.origin = 'checkpoint' THEN 'compaction' ELSE 'dialogue' END,
+                CASE 
+                    WHEN e.kind = 'message' THEN json_object('type', 'message', 'message', json_object('role', e.role, 'content', COALESCE(e.content, '')))
+                    ELSE json_object('type', 'system_notice', 'source', 'transcript', 'notice_type', 'state', 'content', COALESCE(e.content, ''))
+                END,
+                e.created_at_ms
+            FROM entry_memberships m
+            JOIN entries e ON e.id = m.entry_id;
+            "#,
+        )?;
+    }
+
+    Ok(())
+}
+
 pub fn insert_legacy_usage_record_tx(
     tx: &rusqlite::Connection,
     session_id: &str,
@@ -1191,6 +1289,9 @@ pub fn apply_migrations(conn: &mut Connection, observed_version: u32) -> Result<
                 }
                 if migration.version == 16 {
                     apply_fast_fts_triggers_schema(&tx)?;
+                }
+                if migration.version == 17 {
+                    apply_session_ir_clean_break_schema(&tx)?;
                 }
             }
         }

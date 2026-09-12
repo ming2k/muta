@@ -8,6 +8,7 @@ history; the decisions themselves stay in
 
 | Blueprint | Subsystem |
 |-----------|-----------|
+| [Session IR architecture](session-ir.md) | Canonical in-memory Session IR (history, state, policy), clean-break persistence schema, forensic scene preservation, and multi-pass request compilation |
 | [Web tools architecture](web-tools.md) | `search_web` / `read_url` provider selection, credential readiness, and configuration revisioning |
 | [Model catalog architecture](model-catalog.md) | Model membership, capability resolution, remote catalog sources, and what the model picker renders |
 
