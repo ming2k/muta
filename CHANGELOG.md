@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.5] - 2026-09-12
+
+### Changed
+
+- **Terminal resize handling and clean frame re-anchoring.** Track terminal geometry in `TerminalResized` actions, home the cursor before clearing to avoid rendering artifacts during terminal resize events, clear layout height cache, and settle scroll position.
+- **Preserve provider retry diagnostics on round interruption.** Settle transient provider retry countdown rows into persistent failure notices when a round is interrupted, ensuring failure diagnostics are preserved in transcript history.
+- **Direct selectable row layout in connection overlay.** Refactored connection detail body generation to construct selectable rows directly.
+
 ## [0.47.4] - 2026-09-12
 
 ### Added
@@ -7221,7 +7229,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.4...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.5...HEAD
+[0.47.5]: https://github.com/ming2k/muta/compare/v0.47.4...v0.47.5
 [0.47.4]: https://github.com/ming2k/muta/compare/v0.47.3...v0.47.4
 [0.47.3]: https://github.com/ming2k/muta/compare/v0.47.2...v0.47.3
 [0.47.2]: https://github.com/ming2k/muta/compare/v0.47.1...v0.47.2
