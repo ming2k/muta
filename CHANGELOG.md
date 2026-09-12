@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.6] - 2026-09-12
+
+### Changed
+
+- **Optimized markdown export format.** Aligned conversation export layout with clean conversational Markdown conventions: top-level `# Muta conversation`, standardized `## User` / `## Assistant` / `## Reasoning` sections, and indented `## Activity` blocks for tool invocations and command results.
+- **Terminal horizontal rule alignment.** Aligned transcript message divider horizontal rules with `TRANSCRIPT_BODY_LEADING_INDENT`.
+
 ## [0.47.5] - 2026-09-12
 
 ### Changed
@@ -7229,7 +7236,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.5...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.6...HEAD
+[0.47.6]: https://github.com/ming2k/muta/compare/v0.47.5...v0.47.6
 [0.47.5]: https://github.com/ming2k/muta/compare/v0.47.4...v0.47.5
 [0.47.4]: https://github.com/ming2k/muta/compare/v0.47.3...v0.47.4
 [0.47.3]: https://github.com/ming2k/muta/compare/v0.47.2...v0.47.3
