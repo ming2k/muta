@@ -149,8 +149,9 @@ pub(crate) enum TranscriptEdit {
         fallback: Option<TranscriptMessage>,
     },
     /// The newest user prompt matching the interruption semantics is marked
-    /// cancelled, a round-interrupt projection row is appended, and retry
-    /// disclosure rows are evicted.
+    /// cancelled, any in-flight provider retry is settled into a static failure
+    /// notice preserving diagnostics, and a round-interrupt projection row is
+    /// appended.
     Interrupted {
         record: muta_contracts::RoundInterrupt,
     },

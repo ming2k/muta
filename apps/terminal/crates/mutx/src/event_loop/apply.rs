@@ -757,7 +757,10 @@ fn apply_transcript(app: &mut App, buffer: Buffer, edit: TranscriptEdit) -> bool
             }
             TranscriptEdit::Interrupted { record } => {
                 let at_ms = record.at_ms;
-                messages.retain(|m| !m.is_provider_retry());
+                for m in messages.iter_mut().filter(|m| m.is_provider_retry()) {
+                    m.settle_interrupted_provider_retry();
+                    post = PostEdit::Invalidate(m.id);
+                }
                 if let Some(user_msg) = messages.iter_mut().rev().find(|m| {
                     m.role == Role::User
                         && (m.is_sending()

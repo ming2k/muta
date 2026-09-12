@@ -1080,11 +1080,11 @@ pub fn route_event(
                 InputAction::None
             }
         }
-        Event::Resize(..) => {
+        Event::Resize(cols, rows) => {
             // The event loop does the real work (redraw + re-arm mouse capture)
-            // off this signal; here we just surface that the terminal geometry
-            // changed rather than leaving it to the catch-all `None`.
-            InputAction::TerminalResized
+            // off this signal; here we surface the exact geometry the terminal
+            // signaled rather than leaving it to the catch-all `None`.
+            InputAction::TerminalResized { cols, rows }
         }
         _ => InputAction::None,
     }

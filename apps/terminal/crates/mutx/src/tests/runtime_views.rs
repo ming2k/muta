@@ -466,3 +466,33 @@ async fn permission_sheet_does_not_steal_focus_rearmed_behind_it() {
         "browse focus re-armed behind the pass-through sheet must survive"
     );
 }
+
+#[tokio::test]
+async fn terminal_resize_action_clears_height_cache_and_marks_scroll_settle() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    // Populate a height cache entry
+    app.layout_height_cache.set(1, 10);
+    assert_eq!(app.layout_height_cache.get(1), Some(10));
+
+    // When scrolled into history (!follow_bottom)
+    app.follow_bottom = false;
+    app.scroll_settle_pending = false;
+
+    crate::event_loop::actions::dispatch_action_for_test(
+        &mut app,
+        &runtime,
+        crate::input::InputAction::TerminalResized {
+            cols: 120,
+            rows: 40,
+        },
+        "session-1",
+    )
+    .await;
+
+    // Height cache must be cleared for re-layout
+    assert_eq!(app.layout_height_cache.get(1), None);
+    // Scroll settle must be pending to re-clamp scroll offset
+    assert!(app.scroll_settle_pending);
+}

@@ -886,6 +886,45 @@ fn user_message_origin_defaults_to_chat_and_can_be_overridden() {
 }
 
 #[test]
+fn provider_retry_settles_on_interruption() {
+    let retry_at = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let mut msg = TranscriptMessage::provider_retry(
+        2,
+        5,
+        retry_at,
+        "Anthropic HTTP 529: Overloaded",
+    );
+    assert!(msg.is_provider_retry());
+    let initial_rev = msg.rev;
+
+    msg.settle_interrupted_provider_retry();
+
+    assert!(!msg.is_provider_retry());
+    assert!(msg.is_notice());
+    assert!(msg.rev > initial_rev);
+
+    let MessageKind::Notice { severity, ref parts, .. } = msg.kind else {
+        panic!("expected Notice");
+    };
+    assert_eq!(severity, NoticeSeverity::Warning);
+    let parts = parts.as_ref().expect("expected parts");
+    assert_eq!(parts.topic.as_deref(), Some("retry"));
+    assert_eq!(parts.title, "Provider request failed (attempt 2/5)");
+    assert_eq!(parts.detail.as_deref(), Some("Anthropic HTTP 529: Overloaded"));
+    assert_eq!(
+        parts.origin,
+        Some(crate::model::document::NoticeOrigin::Provider {
+            provider_name: None,
+            attempt: Some((2, 5)),
+        })
+    );
+    assert_eq!(
+        msg.raw,
+        "Provider request failed (attempt 2/5): Anthropic HTTP 529: Overloaded"
+    );
+}
+
+#[test]
 fn round_interrupt_creates_structured_notice() {
     use muta_contracts::{RoundInterrupt, RoundInterruptReason};
     let marker = TranscriptMessage::round_interrupted(RoundInterrupt {

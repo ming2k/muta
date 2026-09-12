@@ -519,6 +519,88 @@ async fn interrupt_marks_in_flight_prompt_cancelled_without_retracting() {
 }
 
 #[tokio::test]
+async fn interrupted_round_preserves_retry_history_and_appends_interrupt_entry() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    let runtime = crate::event_loop::UiRuntime::minimal_for_test();
+
+    // 1. User prompt is delivered
+    let prompt = crate::model::document::TranscriptMessage::new(
+        muta_contracts::Role::User,
+        "calculate pi",
+    )
+    .sending();
+    app.messages.push(prompt);
+
+    // 2. Provider retry occurs
+    let retry_at = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let retry_msg = crate::model::document::TranscriptMessage::provider_retry(
+        2,
+        5,
+        retry_at,
+        "Anthropic HTTP 529: Overloaded",
+    );
+    app.messages.push(retry_msg);
+    assert_eq!(app.messages.len(), 2);
+    assert!(app.messages[1].is_provider_retry());
+
+    // 3. User interrupts via Esc Esc -> RoundInterrupted event applied
+    let record = muta_contracts::RoundInterrupt {
+        reason: muta_contracts::RoundInterruptReason::User,
+        round: Some(1),
+        at_ms: 1_234_567,
+        detail: None,
+    };
+    crate::event_loop::apply::apply(
+        &mut app,
+        &runtime,
+        crate::event_loop::AppMutation::Transcript {
+            buffer: crate::event_loop::Buffer::Primary,
+            edit: crate::event_loop::TranscriptEdit::Interrupted { record },
+        },
+    );
+
+    // 4. Verify messages:
+    //    [0] User prompt (cancelled)
+    //    [1] Settled provider retry failure notice (NOT deleted!)
+    //    [2] Interrupt entry ("Round 1 — cancelled via [Esc Esc]")
+    assert_eq!(app.messages.len(), 3, "retry entry must be preserved alongside interrupt entry");
+
+    assert_eq!(
+        app.messages[0].delivery,
+        crate::model::document::DeliveryStatus::Cancelled
+    );
+
+    // Settled retry entry checks
+    let retry_entry = &app.messages[1];
+    assert!(!retry_entry.is_provider_retry(), "settled retry is no longer an active ticking retry");
+    assert!(retry_entry.is_notice(), "settled retry becomes a static notice");
+    let crate::model::document::MessageKind::Notice { severity, ref parts, .. } = retry_entry.kind else {
+        panic!("expected Notice kind");
+    };
+    assert_eq!(severity, crate::model::document::NoticeSeverity::Warning);
+    let parts = parts.as_ref().expect("expected parts");
+    assert_eq!(parts.topic.as_deref(), Some("retry"));
+    assert_eq!(parts.title, "Provider request failed (attempt 2/5)");
+    assert_eq!(parts.detail.as_deref(), Some("Anthropic HTTP 529: Overloaded"));
+
+    // Interrupt entry checks
+    let interrupt_entry = &app.messages[2];
+    assert!(interrupt_entry.is_round_interrupt());
+    assert_eq!(interrupt_entry.raw, "Round 1 — cancelled via [Esc Esc]");
+
+    // 5. Subsequent RetainNotRetry (e.g. from a future round completion) must NOT drop the settled retry
+    crate::event_loop::apply::apply(
+        &mut app,
+        &runtime,
+        crate::event_loop::AppMutation::Transcript {
+            buffer: crate::event_loop::Buffer::Primary,
+            edit: crate::event_loop::TranscriptEdit::RetainNotRetry,
+        },
+    );
+    assert_eq!(app.messages.len(), 3, "settled retry must survive RetainNotRetry");
+}
+
+#[tokio::test]
 async fn tool_result_does_not_forge_reasoning_phase() {
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     let runtime = crate::event_loop::UiRuntime::minimal_for_test();

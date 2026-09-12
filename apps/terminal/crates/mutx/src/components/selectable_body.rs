@@ -87,7 +87,6 @@ impl SelectableRow {
     }
 
     /// A row from pre-built segments, in order.
-    #[cfg(test)]
     pub(crate) fn from_segments(segments: Vec<RowSegment>) -> Self {
         Self {
             prefix: None,

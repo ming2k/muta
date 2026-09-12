@@ -11,6 +11,7 @@ use super::common::{
 };
 use crate::components::options::{ChoiceTone, choice_style};
 use crate::components::row::{GUTTER, ListRow, RowGroup, RowStyledAtom};
+use crate::components::selectable_body::{RowSegment, SelectableRow, render_selectable_body};
 use crate::model::layout::LayoutMap;
 use crate::model::selection::SelectionState;
 use crate::primitives::{
@@ -132,27 +133,24 @@ pub fn draw_connections_modal(
                 FooterHint::secondary("e", "edit"),
             ]
         };
-        let body = match connection_detail {
+        let rows = match connection_detail {
             None => {
                 let spin = theme.glyphs.spinner_frame(spinner_phase);
                 vec![
-                    Line::from(""),
-                    Line::from(vec![
-                        Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
-                        Span::styled(
-                            "Loading connection details and provider usage…",
-                            Style::default().fg(theme.muted()),
-                        ),
-                    ]),
+                    SelectableRow::empty(),
+                    SelectableRow::styled(
+                        "Loading connection details and provider usage…",
+                        Style::default().fg(theme.muted()),
+                    )
+                    .with_prefix(RowSegment::styled(
+                        format!("{spin} "),
+                        Style::default().fg(theme.primary),
+                    )),
                 ]
             }
             Some(detail) => connection_detail_body(detail, spinner_phase, theme),
         };
-        let rows: Vec<crate::components::selectable_body::SelectableRow> = body
-            .into_iter()
-            .map(crate::components::selectable_body::SelectableRow::from_line)
-            .collect();
-        crate::components::selectable_body::render_selectable_body(
+        render_selectable_body(
             frame,
             f.body,
             &rows,
@@ -403,12 +401,12 @@ pub(crate) fn render_progress_bar_spans(
     ]
 }
 
-/// Render the detail body lines for one connection (configuration + caller identity + models + provider usage).
+/// Render the detail body rows for one connection (configuration + caller identity + models + provider usage).
 pub(crate) fn connection_detail_body(
     detail: &muta_contracts::ConnectionDetail,
     spinner_phase: usize,
     theme: &Theme,
-) -> Vec<Line<'static>> {
+) -> Vec<SelectableRow> {
     let label = Style::default().fg(theme.dim());
     let value = Style::default().fg(theme.fg());
     let header_style = Style::default()
@@ -419,14 +417,12 @@ pub(crate) fn connection_detail_body(
     let warning = Style::default().fg(theme.warning);
 
     let kv = |k: &str, v: &str| {
-        Line::from(vec![
-            Span::styled(format!("{k:<16}"), label),
-            Span::styled(v.to_string(), value),
-        ])
+        SelectableRow::styled(v.to_string(), value)
+            .with_prefix(RowSegment::styled(format!("{k:<16}"), label))
     };
 
-    let mut lines: Vec<Line<'static>> = vec![
-        Line::from(Span::styled("Configuration", header_style)),
+    let mut rows: Vec<SelectableRow> = vec![
+        SelectableRow::styled("Configuration", header_style),
         kv("Name", &detail.name),
         kv("Provider", &detail.provider_label),
         kv("Provider ID", &detail.provider),
@@ -435,121 +431,109 @@ pub(crate) fn connection_detail_body(
         kv("Auth Type", &detail.auth_type),
     ];
     if let Some(masked) = &detail.api_key_masked {
-        lines.push(Line::from(vec![
-            Span::styled(format!("{:<16}", "API Key"), label),
-            Span::styled(masked.clone(), value),
-            Span::styled(format!(" ({})", detail.api_key_source), muted),
-        ]));
+        rows.push(
+            SelectableRow::from_segments(vec![
+                RowSegment::styled(masked.clone(), value),
+                RowSegment::styled(format!(" ({})", detail.api_key_source), muted),
+            ])
+            .with_prefix(RowSegment::styled(format!("{:<16}", "API Key"), label)),
+        );
     } else {
-        lines.push(kv("Credential", &detail.api_key_source));
+        rows.push(kv("Credential", &detail.api_key_source));
     }
     if let Some(active) = &detail.active_model {
-        let mut default_str = active.clone();
+        let mut segments = vec![RowSegment::styled(active.clone(), value)];
         if let Some(effort) = &detail.active_model_effort {
-            default_str.push_str(&format!("  ·  reasoning: {effort}"));
+            segments.push(RowSegment::styled(format!("  ·  reasoning: {effort}"), muted));
         } else if detail.active_model_thinking == Some(true) {
-            default_str.push_str("  ·  thinking: enabled");
+            segments.push(RowSegment::styled("  ·  thinking: enabled", muted));
         }
-        lines.push(kv("Default Active", &default_str));
+        rows.push(
+            SelectableRow::from_segments(segments)
+                .with_prefix(RowSegment::styled(format!("{:<16}", "Default Active"), label)),
+        );
     }
 
     // Client Profile
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("Client Profile", header_style)));
-    lines.push(kv("Preset", detail.client_identity.label()));
-    lines.push(kv("User-Agent", &detail.user_agent));
+    rows.push(SelectableRow::empty());
+    rows.push(SelectableRow::styled("Client Profile", header_style));
+    rows.push(kv("Preset", detail.client_identity.label()));
+    rows.push(kv("User-Agent", &detail.user_agent));
     let client_headers = detail.client_identity.headers();
     if !client_headers.is_empty() {
-        lines.push(Line::from(Span::styled(
+        rows.push(SelectableRow::styled(
             format!("{:<16}", "Client Headers"),
             label,
-        )));
+        ));
         for (k, v) in client_headers {
-            lines.push(Line::from(vec![
-                Span::styled("  • ", label),
-                Span::styled(format!("{k}: "), label),
-                Span::styled(v.to_string(), value),
-            ]));
+            rows.push(
+                SelectableRow::from_segments(vec![
+                    RowSegment::styled(format!("{k}: "), label),
+                    RowSegment::styled(v.to_string(), value),
+                ])
+                .with_prefix(RowSegment::styled("  • ", label)),
+            );
         }
     }
 
     // Served Models
-    lines.push(Line::from(""));
+    rows.push(SelectableRow::empty());
     let models_title = if detail.models.is_empty() {
         "Served Models".to_string()
     } else {
         format!("Served Models ({})", detail.models.len())
     };
-    lines.push(Line::from(Span::styled(models_title, header_style)));
+    rows.push(SelectableRow::styled(models_title, header_style));
     if detail.models.is_empty() {
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled("(no models configured)", muted),
-        ]));
+        rows.push(
+            SelectableRow::styled("(no models configured)", muted)
+                .with_prefix(RowSegment::styled("  ", muted)),
+        );
     } else {
         for model in &detail.models {
             let is_active = detail.active_model.as_deref() == Some(model.as_str());
-            let dot = if is_active { "  ● " } else { "  ○ " };
-            let dot_style = if is_active {
-                Style::default().fg(theme.primary)
-            } else {
-                Style::default().fg(theme.dim())
-            };
             let model_style = if is_active {
                 value.add_modifier(Modifier::BOLD)
             } else {
                 value
             };
-            let mut spans = vec![
-                Span::styled(dot, dot_style),
-                Span::styled(model.clone(), model_style),
-            ];
-            if let Some(info) = detail.model_info.iter().find(|m| &m.model == model) {
-                if let Some(effort) = &info.effort {
-                    let show = match info.protocol.as_str() {
-                        "anthropic" => info.thinking == Some(true),
-                        _ => true,
-                    };
-                    if show {
-                        spans.push(Span::styled(format!("  ·  reasoning: {effort}"), muted));
-                    }
-                } else if info.thinking == Some(true) {
-                    spans.push(Span::styled("  ·  thinking: enabled", muted));
-                }
-            }
-            lines.push(Line::from(spans));
+            rows.push(
+                SelectableRow::styled(model.clone(), model_style)
+                    .with_prefix(RowSegment::styled("  - ", label)),
+            );
         }
     }
 
     // Provider Usage & Quota
-    lines.push(Line::from(""));
-    let mut quota_header_spans = vec![Span::styled("Provider Usage & Quota", header_style)];
+    rows.push(SelectableRow::empty());
+    let mut quota_header_segments = vec![RowSegment::styled("Provider Usage & Quota", header_style)];
     if let muta_contracts::ConnectionUsageState::Available(usage) = &detail.usage
         && let Some(plan) = &usage.plan
         && plan.len() <= 40
         && !plan.contains('\n')
     {
-        quota_header_spans.push(Span::raw("  "));
-        quota_header_spans.push(Span::styled(
+        quota_header_segments.push(RowSegment::styled("  ", Style::default()));
+        quota_header_segments.push(RowSegment::styled(
             format!("[ {plan} ]"),
             Style::default()
                 .fg(theme.info())
                 .add_modifier(Modifier::BOLD),
         ));
     }
-    lines.push(Line::from(quota_header_spans));
+    rows.push(SelectableRow::from_segments(quota_header_segments));
 
     match &detail.usage {
         muta_contracts::ConnectionUsageState::Available(usage) => {
             let mut rendered_quota = false;
 
             if let Some(quota_data) = &usage.quota {
+                let mut quota_lines = Vec::new();
                 match quota_data {
                     muta_contracts::ProviderQuotaData::Periodic(periodic) => {
                         rendered_quota = true;
                         render_periodic_quota_buckets(
                             &periodic.buckets,
-                            &mut lines,
+                            &mut quota_lines,
                             value,
                             label,
                             muted,
@@ -560,7 +544,7 @@ pub(crate) fn connection_detail_body(
                     muta_contracts::ProviderQuotaData::Balance(balance) => {
                         rendered_quota = true;
                         render_balance_quota_block(
-                            balance, &mut lines, label, value, highlight, theme,
+                            balance, &mut quota_lines, label, value, highlight, theme,
                         );
                     }
                     muta_contracts::ProviderQuotaData::Composite {
@@ -571,13 +555,13 @@ pub(crate) fn connection_detail_body(
                         rendered_quota = true;
                         if let Some(bal) = balance {
                             render_balance_quota_block(
-                                bal, &mut lines, label, value, highlight, theme,
+                                bal, &mut quota_lines, label, value, highlight, theme,
                             );
                         }
                         if let Some(per) = periodic {
                             render_periodic_quota_buckets(
                                 &per.buckets,
-                                &mut lines,
+                                &mut quota_lines,
                                 value,
                                 label,
                                 muted,
@@ -586,7 +570,7 @@ pub(crate) fn connection_detail_body(
                             );
                         }
                         for rl in rate_limits {
-                            lines.push(Line::from(vec![
+                            quota_lines.push(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled(format!("{:<16}", "Rate Limit"), label),
                                 Span::styled(
@@ -597,67 +581,67 @@ pub(crate) fn connection_detail_body(
                         }
                     }
                 }
+                rows.extend(quota_lines.into_iter().map(SelectableRow::from_line));
             }
 
             if !rendered_quota {
                 if let Some(bal) = &usage.primary_balance {
-                    lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(format!("{:<16}", "Primary Balance"), label),
-                        Span::styled(bal.clone(), highlight.add_modifier(Modifier::BOLD)),
-                    ]));
+                    rows.push(
+                        SelectableRow::styled(bal.clone(), highlight.add_modifier(Modifier::BOLD))
+                            .with_prefix(RowSegment::styled(format!("  {:<16}", "Primary Balance"), label)),
+                    );
                 }
                 for metric in &usage.metrics {
                     let val = match &metric.unit {
                         Some(u) => format!("{} {}", metric.value, u),
                         None => metric.value.clone(),
                     };
-                    lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(format!("{:<16}", metric.label), label),
-                        Span::styled(val, value),
-                    ]));
+                    rows.push(
+                        SelectableRow::styled(val, value)
+                            .with_prefix(RowSegment::styled(format!("  {:<16}", metric.label), label)),
+                    );
                 }
             }
 
             if let Some(desc) = &usage.description {
-                lines.push(Line::from(""));
-                let wrapped = crate::text_layout::wrap_text(desc, 72);
-                for line in wrapped {
-                    lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(line.text, muted),
-                    ]));
-                }
+                rows.push(SelectableRow::empty());
+                rows.push(
+                    SelectableRow::styled(desc.clone(), muted)
+                        .with_prefix(RowSegment::styled("  ", muted)),
+                );
             }
         }
         muta_contracts::ConnectionUsageState::Unsupported => {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
+            rows.push(
+                SelectableRow::styled(
                     "Usage and quota query is not supported for this provider endpoint.",
                     muted,
-                ),
-            ]));
+                )
+                .with_prefix(RowSegment::styled("  ", muted)),
+            );
         }
         muta_contracts::ConnectionUsageState::Error(err) => {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled("⚠ Usage query failed: ", warning),
-                Span::styled(err.clone(), value),
-            ]));
+            rows.push(
+                SelectableRow::from_segments(vec![
+                    RowSegment::styled("⚠ Usage query failed: ", warning),
+                    RowSegment::styled(err.clone(), value),
+                ])
+                .with_prefix(RowSegment::styled("  ", muted)),
+            );
         }
         muta_contracts::ConnectionUsageState::Fetching => {
             let spin = theme.glyphs.spinner_frame(spinner_phase);
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(format!("{spin} "), Style::default().fg(theme.primary)),
-                Span::styled("Querying upstream provider quota & balance…", muted),
-            ]));
+            rows.push(
+                SelectableRow::from_segments(vec![
+                    RowSegment::styled(format!("{spin} "), Style::default().fg(theme.primary)),
+                    RowSegment::styled("Querying upstream provider quota & balance…", muted),
+                ])
+                .with_prefix(RowSegment::styled("  ", muted)),
+            );
         }
     }
 
-    lines
+    rows
 }
 
 pub(crate) fn render_balance_quota_block(

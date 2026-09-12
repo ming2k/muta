@@ -180,3 +180,33 @@ fn frame_loop_converges() {
     let second = diff::diff(&back, &front);
     assert!(second.draws.is_empty(), "idle frame emits nothing");
 }
+
+#[test]
+fn resize_to_clears_screen_and_homes_cursor_on_commit() {
+    let mut buf = Vec::new();
+    {
+        let backend = Backend::with_bce(&mut buf, Bce::Yes);
+        let mut term = Terminal::new(backend);
+        term.resize_to(20, 5);
+        term.draw(|f| {
+            f.render_widget(Paragraph::new(Line::raw("hello")), Rect::new(0, 0, 10, 1));
+        })
+        .unwrap();
+
+        // Now resize again
+        term.resize_to(30, 8);
+        term.draw(|f| {
+            f.render_widget(Paragraph::new(Line::raw("resized")), Rect::new(0, 0, 10, 1));
+        })
+        .unwrap();
+    }
+    let output = String::from_utf8_lossy(&buf);
+    assert!(
+        output.contains("\x1b[2J"),
+        "resize commit must clear screen: {output:?}"
+    );
+    assert!(
+        output.contains("\x1b[1;1H") || output.contains("\x1b[H"),
+        "resize commit must home cursor before clear: {output:?}"
+    );
+}

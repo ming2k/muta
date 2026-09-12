@@ -591,3 +591,27 @@ fn up_arrow_clamps_column_to_shorter_line() {
     assert_eq!(action, InputAction::None);
     assert_eq!(cur, 2, "column should clamp to the first line's length");
 }
+
+#[test]
+fn resize_event_routes_to_terminal_resized_with_dimensions() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = route_event(
+        Event::Resize(120, 42),
+        &mut input,
+        &mut cursor,
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(
+        action,
+        InputAction::TerminalResized {
+            cols: 120,
+            rows: 42
+        }
+    );
+}

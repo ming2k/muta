@@ -132,6 +132,7 @@ pub async fn run_app_loop(
     let mut was_animating = true;
     let mut last_carousel_index = 0usize;
     let mut mutation_rx = mutation_rx;
+    let mut terminal_resized = false;
 
     loop {
         if app.should_quit.load(Ordering::SeqCst) {
@@ -206,7 +207,10 @@ pub async fn run_app_loop(
         }
         app.refresh_backend_completion_request();
 
-        if app.follow_bottom {
+        let resized_this_frame = terminal_resized;
+        terminal_resized = false;
+
+        if app.follow_bottom && !resized_this_frame {
             app.scroll = app.max_scroll;
         }
 
@@ -251,7 +255,8 @@ pub async fn run_app_loop(
             || runtime.dirty.swap(false, Ordering::AcqRel);
         was_animating = animation_draw;
 
-        let stage_bottom_follow = displayed_transcript_changed && app.follow_bottom;
+        let stage_bottom_follow =
+            (displayed_transcript_changed || resized_this_frame) && app.follow_bottom;
         let stage_settle = app.scroll_settle_pending && !stage_bottom_follow;
 
         let painted_scroll = app.scroll;
@@ -368,6 +373,9 @@ pub async fn run_app_loop(
                     batch.push(ev);
                 }
                 for event in batch {
+                    if matches!(event, Event::Resize(..)) {
+                        terminal_resized = true;
+                    }
                     let flow = process_one_event(
                         &event,
                         app,
@@ -621,7 +629,10 @@ async fn process_one_event(
         app.input_scroll_follow_cursor = true;
     }
 
-    if matches!(event, Event::Key(_) | Event::Mouse(_) | Event::Paste(_)) {
+    if matches!(
+        event,
+        Event::Key(_) | Event::Mouse(_) | Event::Paste(_) | Event::Resize(..)
+    ) {
         *input_redraw_pending = true;
     }
 

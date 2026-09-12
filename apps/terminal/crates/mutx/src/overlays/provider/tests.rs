@@ -1166,8 +1166,8 @@ fn connections_modal_detail_view_renders_info_and_usage() {
     assert!(text.contains("sk-12...abcd"));
     assert!(text.contains("Client Profile"));
     assert!(text.contains("Served Models (2)"));
-    assert!(text.contains("● deepseek-chat"));
-    assert!(text.contains("○ deepseek-reasoner"));
+    assert!(text.contains("- deepseek-chat"));
+    assert!(text.contains("- deepseek-reasoner"));
 
     // Scroll to view usage section
     terminal.draw(|f| {
@@ -1556,9 +1556,11 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
     assert!(text.contains("Default Active"));
     assert!(text.contains("gemini-3.7-flash  ·  reasoning: high"));
     assert!(text.contains("Served Models (3)"));
-    assert!(text.contains("● gemini-3.7-flash  ·  reasoning: high"));
-    assert!(text.contains("○ gemini-3.1-pro"));
-    assert!(text.contains("○ claude-3-7-sonnet  ·  reasoning: max"));
+    assert!(text.contains("- gemini-3.7-flash"));
+    assert!(!text.contains("- gemini-3.7-flash  ·  reasoning:"));
+    assert!(text.contains("- gemini-3.1-pro"));
+    assert!(text.contains("- claude-3-7-sonnet"));
+    assert!(!text.contains("- claude-3-7-sonnet  ·  reasoning:"));
 
     // Scroll to view grouped quota
     terminal.draw(|f| {
@@ -1662,6 +1664,81 @@ fn connections_modal_standalone_detail_renders_single_level_header() {
     // Footer hint should say "close" instead of "list"
     assert!(text.contains("close"));
     assert!(!text.contains("list"));
+}
+
+#[test]
+fn connections_modal_detail_wraps_second_column_with_indent() {
+    let theme = Theme::default();
+    let mut terminal = mutx_engine::TestTerminal::new(76, 30);
+    let detail = muta_contracts::ConnectionDetail {
+        name: "ggl-fox".to_string(),
+        provider: "google-antigravity".to_string(),
+        provider_label: "google-antigravity".to_string(),
+        protocol: "google".to_string(),
+        base_url: "https://daily-cloudcode-pa.googleapis.com".to_string(),
+        auth_type: "OAuth (AntigravityOAuth)".to_string(),
+        api_key_masked: Some("ya29...0213".to_string()),
+        api_key_source: "OAuth".to_string(),
+        client_identity: muta_contracts::ClientIdentity::Native,
+        user_agent: "antigravity/1.23.2".to_string(),
+        models: vec![
+            "claude-opus-4-6-thinking".to_string(),
+            "claude-sonnet-4-6".to_string(),
+        ],
+        model_info: Vec::new(),
+        active_model: Some("claude-opus-4-6-thinking".to_string()),
+        active_model_effort: None,
+        active_model_thinking: None,
+        usage: muta_contracts::ConnectionUsageState::Unsupported,
+    };
+
+    terminal.draw(|f| {
+        let mut lm = crate::model::layout::LayoutMap::new();
+        let mut scroll = 0;
+        let selection = crate::model::selection::SelectionState::None;
+        draw_connections_modal(
+            f,
+            &mut lm,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                show_caret: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: true,
+                refreshing: false,
+            },
+            &theme,
+            &selection,
+        );
+    });
+
+    let text = buffer_text(&terminal);
+    let lines: Vec<&str> = text.lines().collect();
+    let base_url_idx = lines.iter().position(|l| l.contains("Base URL")).expect("Base URL line");
+    let base_line = lines[base_url_idx];
+    let next_line = lines[base_url_idx + 1];
+    assert!(base_line.contains("https://"), "base_line: {base_line:?}");
+    assert!(next_line.contains(".com"), "next_line: {next_line:?}");
+    // Second visual line must start at the second column (16-char indent), aligning with "https://"
+    assert_eq!(
+        next_line.find(next_line.trim_start()),
+        base_line.find("https://"),
+        "base: {base_line}\nnext: {next_line}"
+    );
+    // Served models uses plain '-' bullet
+    assert!(text.contains("- claude-opus-4-6-thinking"));
+    assert!(text.contains("- claude-sonnet-4-6"));
+    assert!(!text.contains('●'));
+    assert!(!text.contains('○'));
 }
 
 #[test]

@@ -2216,6 +2216,61 @@ impl TranscriptMessage {
         }
     }
 
+    /// Settle a transient provider-retry entry into a static failure notice when
+    /// the round is interrupted.
+    ///
+    /// Freezes the dynamic countdown and preserves the retry failure diagnostics
+    /// so the user knows why the round was interrupted.
+    pub fn settle_interrupted_provider_retry(&mut self) {
+        if let MessageKind::ProviderRetry {
+            attempt,
+            max_attempts,
+            failure,
+            expanded,
+            user_pinned,
+            ..
+        } = &self.kind
+        {
+            let attempt = *attempt;
+            let max_attempts = *max_attempts;
+            let failure = failure.clone();
+            let expanded = *expanded;
+            let user_pinned = *user_pinned;
+
+            let title = format!("Provider request failed (attempt {attempt}/{max_attempts})");
+            let raw = if failure.trim().is_empty() {
+                title.clone()
+            } else {
+                format!("{title}: {failure}")
+            };
+            self.blocks = parse_blocks(&raw);
+            self.raw = raw;
+            self.resume_byte = self.raw.len();
+            self.live_blocks = 0;
+
+            let parts = NoticeParts {
+                origin: Some(NoticeOrigin::Provider {
+                    provider_name: None,
+                    attempt: Some((attempt, max_attempts)),
+                }),
+                topic: Some("retry".to_string()),
+                title,
+                detail: if failure.trim().is_empty() {
+                    None
+                } else {
+                    Some(failure)
+                },
+            };
+            self.kind = MessageKind::Notice {
+                severity: NoticeSeverity::Warning,
+                parts: Some(Box::new(parts)),
+                expanded,
+                user_pinned,
+            };
+            self.rev = self.rev.wrapping_add(1);
+        }
+    }
+
     /// A reasoning trace that has not yet been stamped with a duration — i.e.
     /// its stream is still open. The renderer treats this as the "spinner
     /// should keep breathing" state, and `finalize_streaming_reasoning` uses

@@ -202,7 +202,7 @@ fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts:
 /// are passed explicitly instead of captured.
 pub(super) async fn dispatch_action<W: std::io::Write>(
     app: &mut App,
-    _terminal: &mut Terminal<W>,
+    terminal: &mut Terminal<W>,
     action: input::InputAction,
     ctx: &mut ActionContext<'_>,
 ) -> ActionFlow {
@@ -246,20 +246,19 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
 
     match action {
         input::InputAction::None => {}
-        input::InputAction::TerminalResized => {
+        input::InputAction::TerminalResized { cols, rows } => {
             // A resize is the prime trigger for crossterm splitting an
             // in-flight SGR mouse sequence across reads (issue #854).
             // Re-arm mouse capture so both crossterm's parser and the
-            // terminal's mouse-tracking state start from a clean slate,
-            // and force an immediate redraw to replace the stale frame
-            // at the old geometry. The re-arm is best-effort: if the
-            // terminal is mid-shutdown the write is ignored.
+            // terminal's mouse-tracking state start from a clean slate.
+            terminal.resize_to(cols, rows);
+            app.layout_height_cache.clear();
+            if !app.follow_bottom {
+                app.scroll_settle_pending = true;
+            }
             use crossterm::event::EnableMouseCapture;
             let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
             sgr_guard.reset();
-            // No need to set `frame_dirty` here: every drained event
-            // already raised `input_redraw_pending`, which forces a
-            // redraw on the very next frame at the new geometry.
         }
         input::InputAction::Quit => {
             app.send_intent(AgentRequest::EndSession);

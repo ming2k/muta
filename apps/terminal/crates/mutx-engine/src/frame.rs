@@ -207,11 +207,7 @@ impl<W: io::Write> Terminal<W> {
         if let Ok((w, h)) = crossterm::terminal::size()
             && self.back.size() != (w, h)
         {
-            self.back.resize(w, h);
-            self.front = Grid::new(w, h);
-            self.back.mark_all_dirty();
-            self.pending_clear = true;
-            self.presented_cursor = None;
+            self.resize_to(w, h);
         }
         let mut frame = Frame::new(&mut self.back);
         render(&mut frame);
@@ -280,6 +276,7 @@ impl<W: io::Write> Terminal<W> {
         }
 
         if self.pending_clear {
+            self.backend.writer().queue(crossterm::cursor::MoveTo(0, 0))?;
             self.backend.writer().queue(crossterm::terminal::Clear(
                 crossterm::terminal::ClearType::All,
             ))?;
