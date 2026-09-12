@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.1] - 2026-09-12
+
 ### Added
 
 - **Universal Asset Attestation & Zero-Trust Hazard Mesh (ADR-0243):** Decoupled asset trust from directory-bound workspace roots into a universal `AssetAttestationLedger` (SQLite migration 18).
@@ -7269,7 +7271,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.1...HEAD
+[0.48.1]: https://github.com/ming2k/muta/compare/v0.48.0...v0.48.1
 [0.48.0]: https://github.com/ming2k/muta/compare/v0.47.7...v0.48.0
 [0.47.7]: https://github.com/ming2k/muta/compare/v0.47.6...v0.47.7
 [0.47.6]: https://github.com/ming2k/muta/compare/v0.47.5...v0.47.6
