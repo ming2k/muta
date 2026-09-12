@@ -188,25 +188,14 @@ This least-privilege default prevents a database or private API connection
 from spreading to every temporary agent merely because the server labels it
 read-only.
 
-### The mcp_specialist delegation (ADR-0138)
+### Master-Only Direct Execution (ADR-0240)
 
-One profile embeds exactly that explicit delegation: the `mcp_specialist`
-subagent preset. At spawn, subagent dispatch reads the master's live dynamic-tool
-registry (`DynamicToolSource` — the read port of the sink the MCP runtime
-publishes into) and adds its tools to the child's capability set on top of
-the static snapshot. Reading at *spawn* (not at bind) means the 10-minute
-re-discovery loop and `/mcp` reconnects reach later children without
-re-binding. Two rules still hold:
-
-- Only `mcp_specialist` consults the source; `explore` / `code` / `title`
-  children never see MCP tools.
-- The profile's runtime hard rules (no recursion, no control-flow, no
-  blocking-on-user tools) apply to the injected tools too, and a static tool
-  always wins a name collision with a dynamic one.
-
-This is the sandboxing half of ADR-0138: heavy or chatty MCP integrations run
-in a scratchpad subagent that returns a summary, keeping the principal's context
-clean and its stable-prefix (`S`) tool schema unchanged.
+Under ADR-0240, MCP tools are dedicated strictly and directly to the Master
+Agent (`[INV-MCP-01]`). Subagents (`explore`, `code`, `skill`) never inherit
+MCP capabilities. The historical `mcp_specialist` subagent quarantine from
+ADR-0138 is retired: the Master Agent calls MCP tools directly with native
+function schemas, and large payloads (>16KB or >200 lines) are automatically
+compacted to temporary spill files (`[INV-MCP-05]`) to prevent transcript bloat.
 
 ## Permission broker
 

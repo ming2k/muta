@@ -1,4 +1,4 @@
-# `spawn_agent` / `delegate_code` / `delegate_mcp`
+# `spawn_agent` / `delegate_code`
 
 `SubagentTool` (`crates/muta-agent/src/subagent_tool.rs`) is the dispatch tool
 that spawns a focused subagent. It overrides `call_structured_with_events` to
@@ -10,7 +10,7 @@ guard).
 |-----------|------|----------|-------|
 | `description` | string | yes | Max 60 chars |
 | `prompt` | string | yes | Self-contained instructions for the subagent |
-| `role` | string | no | `"explore"` (default), `"code"`, `"mcp"`, or `"skill"` |
+| `role` | string | no | `"explore"` (default), `"code"`, or `"skill"` |
 
 The call returns when the child finishes: it runs inside the calling turn, so
 `delegate_code` and its siblings cannot be dispatched to the background job
@@ -49,18 +49,18 @@ dispatchable set named — it is never silently downgraded to the bound default.
 |------|-------|-------|
 | `explore` | read-only inspection | The default. Read-only, non-interactive, non-recursive. |
 | `code` | read-only + write/execute | Delegated implementation work; the delegation is the authorization (ADR-0087). |
-| `mcp` | admits the parent's full toolset, plus the session's live dynamic tools bound at spawn | Narrower grants are an open question — see ADR-0237. |
 | `skill` | read-only inspection | Persona framing for skill discovery. Shares `explore`'s toolset exactly. |
 
 `title` is deliberately **not** dispatchable: it is a harness-internal role
 (session titling drives it directly) and must not become spawnable just because
 it lives in the same preset pool.
 
-There is no separate `delegate_code` / `delegate_mcp` tool in the shipped
+There is no separate `delegate_code` tool in the shipped
 binary. `SubagentTool::named` can construct such instances — the type supports
 it, and the TUI renders those names — but only `spawn_agent` is registered, and
 its `role` enum is how a caller reaches the other grants. A `role` therefore
-costs no extra tool schema.
+costs no extra tool schema. Under ADR-0240, MCP tools are dedicated exclusively
+to the Master Agent, so the retired `mcp` subagent role and `delegate_mcp` have been removed.
 
 Each child receives only the tools its preset admits
 (`crates/muta-contracts/src/subagent.rs`), regardless of role. A role can only

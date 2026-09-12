@@ -520,14 +520,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     subagent_tool_handle.bind_variant_selection(agent.variant_selection_handle());
     subagent_tool_handle.bind_workspace_security(agent.workspace_security_handle());
     subagent_tool_handle.bind_execution_policy(agent.execution_policy());
-    // Tool-source binding for the mcp_specialist child (see ADR-0138 §2, archived
-    // — superseded by ADR-0144): expose the master's live dynamic (MCP) tool
-    // registry to
-    // subagent dispatch. The mcp_specialist child resolves its toolset from this
-    // source at spawn time, so McpCatalog re-discovery reaches later children
-    // without re-binding. Other profiles are unaffected — only mcp_specialist
-    // consults the source.
-    subagent_tool_handle.bind_dynamic_tool_source(agent.dynamic_tool_source());
     // ADR-0141: subagents inherit the session's live human channel.
     if let Some(accountant) = human_channel.as_ref() {
         subagent_tool_handle.bind_human_channel(Arc::clone(accountant));
@@ -646,6 +638,15 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         mcp_runtime_for_bg.refresh_all().await;
     });
     muta_agent::dynamic::spawn_refresh(McpCatalog::new(mcp_runtime.clone()));
+
+    // ADR-0240: Kernel-driven reactive configuration watcher for MCP hot-updates.
+    spawn_mcp_config_watcher(
+        Arc::clone(&mcp_runtime),
+        workspace_root.clone(),
+        Arc::clone(&workspace_security),
+        resp_tx.clone(),
+        session.id().await,
+    );
     if unattended_at_start {
         agent.set_unattended(true);
         if let Err(error) = session.set_unattended(true).await {
@@ -1010,4 +1011,118 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         shared_additional_roots,
         shared_confinement,
     })
+}
+
+/// ADR-0240: Asynchronous inotify-backed filesystem watcher for automatic MCP hot-updates.
+fn spawn_mcp_config_watcher(
+    mcp_runtime: Arc<McpRuntime>,
+    workspace_root: Option<PathBuf>,
+    workspace_security: Arc<WorkspaceSecurityStore>,
+    resp_tx: mpsc::UnboundedSender<AgentResponse>,
+    session_id: String,
+) {
+    tokio::spawn(async move {
+        let mut watcher = match muta_platform::FsWatcher::new(std::time::Duration::from_millis(500)) {
+            Ok(w) => w,
+            Err(err) => {
+                tracing::warn!(error = %err, "could not initialize MCP config filesystem watcher");
+                return;
+            }
+        };
+
+        // 1. Watch user config directory
+        let user_config_file = muta_paths::paths::Dirs::system().config_file();
+        if let Some(user_config_dir) = user_config_file.parent() {
+            if user_config_dir.exists() {
+                let _ = watcher.watch(user_config_dir, false);
+            }
+        }
+
+        // 2. Watch workspace .muta directory if present
+        if let Some(ref root) = workspace_root {
+            let workspace_muta_dir = root.join(".muta");
+            if workspace_muta_dir.exists() {
+                let _ = watcher.watch(&workspace_muta_dir, false);
+            }
+        }
+
+        let mut events_rx = watcher.subscribe();
+
+        while let Ok(event) = events_rx.recv().await {
+            let mut affects_mcp = false;
+            let mut is_workspace_mcp = false;
+
+            for path in &event.paths {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name == "config.toml" || name == "mcp.json" {
+                        affects_mcp = true;
+                        if let Some(ref root) = workspace_root {
+                            if path.starts_with(root) {
+                                is_workspace_mcp = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !affects_mcp {
+                continue;
+            }
+
+            // Check workspace trust for workspace-level config
+            let is_trusted = workspace_root
+                .as_ref()
+                .map(|root| workspace_security.snapshot(root).mcp.is_trusted())
+                .unwrap_or(true);
+
+            if is_workspace_mcp && !is_trusted {
+                let _ = resp_tx.send(round_response(
+                    &session_id,
+                    RoundEvent::Notice(
+                        AgentNotice::new(
+                            muta_contracts::NoticeKind::TrustChanged,
+                            muta_contracts::NoticeSeverity::Warning,
+                            "Workspace MCP configuration changed",
+                            muta_contracts::NoticeSource::Harness,
+                        )
+                        .with_surface(muta_contracts::NoticeSurface::Toast)
+                        .with_body(
+                            "Untrusted workspace MCP configuration detected. Run `/trust mcp` to review and enable.",
+                        ),
+                    ),
+                ));
+                continue;
+            }
+
+            // Reload configuration and reconfigure MCP runtime
+            let mut effective = Config::load();
+            if let Some(ref root) = workspace_root {
+                if is_trusted {
+                    effective.merge_project_mcp(Config::load_project_mcp(root));
+                }
+            }
+
+            let report = mcp_runtime.reconfigure(effective.mcp).await;
+            let connected_count = report.connected.iter().filter(|(_, ok)| *ok).count();
+            let removed_count = report.removed.len();
+
+            if connected_count > 0 || removed_count > 0 {
+                let _ = resp_tx.send(round_response(
+                    &session_id,
+                    RoundEvent::Notice(
+                        AgentNotice::new(
+                            muta_contracts::NoticeKind::CommandAck,
+                            muta_contracts::NoticeSeverity::Info,
+                            "MCP configuration reloaded",
+                            muta_contracts::NoticeSource::Harness,
+                        )
+                        .with_surface(muta_contracts::NoticeSurface::Toast)
+                        .with_body(format!(
+                            "Hot-reload complete: {connected_count} connected, {removed_count} removed."
+                        )),
+                    ),
+                ));
+            }
+        }
+    });
 }

@@ -187,7 +187,7 @@ pub use connection_detail::{
     ProviderUsage, QuotaWindowBucket, QuotaWindowKind, RateLimitSpec, UsageMetric,
 };
 pub use doom_guard_config::DoomGuardConfig;
-pub use dynamic::{DynamicCatalog, DynamicToolSink, DynamicToolSource};
+pub use dynamic::{DynamicCatalog, DynamicToolSink};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
     ConnectionPickerRow, ConnectionPickerSnapshot, ContextTokenSnapshot, ContextTokenSource,
@@ -210,7 +210,7 @@ pub use provider_state::{
     select_request_delivery, semantic_context_head, write_continuation_cursor,
 };
 pub use subagent::{
-    SUBAGENT_CODE, SUBAGENT_EXPLORE, SUBAGENT_MCP_SPECIALIST, SUBAGENT_TITLE, SubagentPreset,
+    SUBAGENT_CODE, SUBAGENT_EXPLORE, SUBAGENT_SKILL, SUBAGENT_TITLE, SubagentPreset,
     SubagentPresetPool, ToolPolicy,
 };
 pub mod monitor;

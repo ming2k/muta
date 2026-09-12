@@ -38,7 +38,9 @@ pub use discovery::{
 };
 pub use metadata::{Skill, SkillDependency, SkillPolicy, SkillScope};
 pub use muta_contracts::SkillsConfig;
-pub use render::{format_skill_list, resolve_mentions};
+pub use render::{
+    format_skill_injection, format_skill_list, list_skill_files, resolve_mentions,
+};
 pub use tools::{ListSkillsTool, UseSkillTool};
 
 use std::collections::{HashMap, HashSet};

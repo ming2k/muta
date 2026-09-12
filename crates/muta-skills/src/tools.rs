@@ -6,8 +6,6 @@ use muta_contracts::Tool;
 use serde_json::json;
 use std::sync::Arc;
 
-const MAX_LISTED_FILES: usize = 10;
-
 /// Load a skill into the conversation context.
 pub struct UseSkillTool {
     pub registry: Arc<SkillRegistry>,
@@ -39,9 +37,9 @@ impl Tool for UseSkillTool {
             serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
         let name = args["name"].as_str().ok_or("Missing 'name'")?;
 
-        // Snapshot only the metadata we need (name, root) under the read lock,
+        // Snapshot only the metadata we need under the read lock,
         // then release it before reading the body — keeps lock scope tight.
-        let (skill_name, skill_root, scope, quarantined) = {
+        let (scope, quarantined) = {
             let registry = self.registry.lock();
             let Some(skill) = registry.get(name) else {
                 return Err(format!(
@@ -49,12 +47,7 @@ impl Tool for UseSkillTool {
                     name
                 ));
             };
-            (
-                skill.name.clone(),
-                skill.root.clone(),
-                skill.scope,
-                skill.quarantined,
-            )
+            (skill.scope, skill.quarantined)
         };
 
         if quarantined {
@@ -81,18 +74,19 @@ impl Tool for UseSkillTool {
                 ));
             }
         }
-        let files = list_skill_files(&skill_root);
-
         // Body is loaded lazily (and cached) on first use of this skill.
         let content = self
             .registry
             .body_for(name)
             .ok_or_else(|| format!("Skill '{}' not found.", name))??;
 
-        Ok(format!(
-            "[Skill '{}' loaded]\n{}\n[/Skill]\n\nSkill files:\n{}",
-            skill_name, content, files
-        ))
+        let skill = self
+            .registry
+            .lock()
+            .get(name)
+            .ok_or_else(|| format!("Skill '{}' not found.", name))?;
+
+        Ok(super::render::format_skill_injection(&skill, &content))
     }
 }
 
@@ -122,34 +116,6 @@ impl Tool for ListSkillsTool {
     async fn call(&self, _arguments: &str) -> Result<String, String> {
         let registry = self.registry.lock();
         Ok(super::render::format_skill_list(&registry.list()))
-    }
-}
-
-fn list_skill_files(root: &std::path::Path) -> String {
-    let mut files: Vec<String> = Vec::new();
-    for entry in walkdir::WalkDir::new(root)
-        .max_depth(2)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
-        if path.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
-            continue;
-        }
-        if let Ok(rel) = path.strip_prefix(root) {
-            files.push(rel.to_string_lossy().to_string());
-        }
-        if files.len() >= MAX_LISTED_FILES {
-            break;
-        }
-    }
-    if files.is_empty() {
-        "(none)".to_string()
-    } else {
-        files.join("\n")
     }
 }
 

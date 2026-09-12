@@ -10,7 +10,6 @@
 //! — the single source of truth for the read-only / non-interactive /
 //! non-recursive policy. See ADR-0011.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -38,14 +37,14 @@ pub const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 /// `title` is a harness-internal role (session titling drives it directly
 /// through the cognitive pipeline) and must not become spawnable just because
 /// it lives in the same pool.
-pub const DISPATCH_ROLES: &[&str] = &["explore", "code", "mcp", "skill"];
+pub const DISPATCH_ROLES: &[&str] = &["explore", "code", "skill"];
 
 /// Canonical description of the default `spawn_agent` dispatch tool (ADR-0183).
 pub const SPAWN_AGENT_TOOL_DESCRIPTION: &str = "\
 Spawn an isolated child agent to perform a focused subtask in a separate \
 context window and return a consolidated summary. Set 'role' to 'explore' for read-only \
-research (default), 'code' for full implementation and testing, 'mcp' for specialized \
-tool integrations, or 'skill' for skill discovery, inspection, and domain guideline synthesis.";
+research (default), 'code' for full implementation and testing, or 'skill' for skill \
+discovery, inspection, and domain guideline synthesis.";
 
 /// Canonical description of the write-capable `delegate_code` dispatch tool.
 pub const DELEGATE_CODE_TOOL_DESCRIPTION: &str = "\
@@ -59,12 +58,6 @@ commands — but every write and command it attempts is presented to the user \
 for approval before it executes, just like a top-level call. Do not use it \
 for trivial edits you can make directly, and once it is running, leave the \
 scope to it (do not redo its work in parallel).";
-
-/// Canonical description of the MCP-specialist dispatch tool.
-pub const DELEGATE_MCP_TOOL_DESCRIPTION: &str = "\
-Delegate a specialized integration task (e.g. database operations, external API calls, \
-or third-party MCP tool interactions) to a dedicated child agent. The child agent runs in an isolated \
-sandbox with access to dynamic/MCP tools and returns a high-signal summary of the results.";
 
 /// Retry settings for a subagent, inherited from the session's provider retry configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,12 +190,6 @@ pub struct SubagentTool {
     parent_delegation: std::sync::Mutex<Option<muta_contracts::AgentRoleDelegation>>,
     /// Parent execution policy enforcing recursion limits and depth bounds (ADR-0183).
     parent_execution_policy: std::sync::Mutex<Option<muta_contracts::ExecutionPolicy>>,
-    /// Live source of MCP tools published to the parent's dynamic sink (ADR-0138).
-    /// `None` (tests, MCP-less sessions) means the mcp_specialist subagent sees no
-    /// MCP tools. Bound by bootstrap after the MCP runtime publishes its first
-    /// snapshot; consulted when the subagent spawns so the child always sees the
-    /// *current* toolset, not a stale bootstrap-time copy.
-    mcp_tool_source: std::sync::Mutex<Option<Arc<dyn muta_contracts::DynamicToolSource>>>,
     /// The session's workspace root, captured at bootstrap so the child's
     /// tools resolve relative paths against the session's project — not the
     /// daemon process's cwd (ADR-0096). `None` falls back to the process cwd
@@ -255,22 +242,6 @@ impl SubagentTool {
         )
     }
 
-    /// Build an MCP-specialist dispatch tool for running dynamic/MCP integrations in an isolated sandbox.
-    pub fn mcp_specialist(
-        provider: Arc<dyn muta_contracts::Provider>,
-        toolset: muta_contracts::ToolSet,
-        registry: Arc<SubagentRegistry>,
-    ) -> Self {
-        Self::named_with_registry(
-            provider,
-            toolset,
-            &muta_contracts::SUBAGENT_MCP_SPECIALIST,
-            "delegate_mcp",
-            DELEGATE_MCP_TOOL_DESCRIPTION,
-            registry,
-        )
-    }
-
     /// Build a dispatch tool under an explicit name and description. This is
     /// how a second, write-capable subagent dispatch tool is constructed: a
     /// profile like [`muta_contracts::SUBAGENT_CODE`] is paired with a distinct tool name
@@ -298,7 +269,6 @@ impl SubagentTool {
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             parent_delegation: std::sync::Mutex::new(None),
             parent_execution_policy: std::sync::Mutex::new(None),
-            mcp_tool_source: std::sync::Mutex::new(None),
             workspace_root: std::sync::Mutex::new(None),
             retry_config: std::sync::Mutex::new(SubagentRetryConfig::default()),
         }
@@ -329,7 +299,6 @@ impl SubagentTool {
             active_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
             parent_delegation: std::sync::Mutex::new(None),
             parent_execution_policy: std::sync::Mutex::new(None),
-            mcp_tool_source: std::sync::Mutex::new(None),
             workspace_root: std::sync::Mutex::new(None),
             retry_config: std::sync::Mutex::new(SubagentRetryConfig::default()),
         }
@@ -349,20 +318,6 @@ impl SubagentTool {
             .parent_execution_policy
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(policy);
-    }
-
-    /// Bind a live source of the parent's dynamic (MCP) tools, consulted when
-    /// an mcp_specialist subagent spawns (ADR-0138 §2, archived — superseded by
-    /// ADR-0144). The snapshot is read at
-    /// spawn — not at bind — so periodic MCP re-discovery (McpCatalog's 10-min
-    /// refresh, `/mcp` reconnects) reaches subsequent children without
-    /// re-binding. `None`-bound (the default) also leaves the mcp_specialist
-    /// subagent with no MCP tools.
-    pub fn bind_dynamic_tool_source(&self, source: Arc<dyn muta_contracts::DynamicToolSource>) {
-        *self
-            .mcp_tool_source
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(source);
     }
 
     /// Pin the session's workspace root so spawned subagents resolve relative
@@ -489,7 +444,7 @@ impl Tool for SubagentTool {
                 "role": {
                     "type": "string",
                     "enum": DISPATCH_ROLES,
-                    "description": "Optional sub-agent role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), 'mcp' (specialized tool integration), or 'skill' (skill discovery, inspection, and domain guideline synthesis). Defaults to 'explore'."
+                    "description": "Optional sub-agent role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), or 'skill' (skill discovery, inspection, and domain guideline synthesis). Defaults to 'explore'."
                 }
             },
             "required": ["description", "prompt"]
@@ -733,35 +688,7 @@ impl SubagentTool {
         let model = muta_contracts::resolve_model(&self.provider.model());
         let model_sel =
             muta_contracts::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
-        let mut sub_tools = profile.resolve_tools(&self.toolset, &model, &model_sel);
-
-        // Tool-source binding for the mcp_specialist child (ADR-0138 §2, archived;
-        // superseded by ADR-0144 — cited for the runner-sandboxing rationale this
-        // binding descends from, not as a current binding rule): the subagent
-        // receives the session's live dynamic (MCP) toolset on top of the static
-        // snapshot. Reading the source at spawn (not at bind) means McpCatalog's
-        // periodic re-discovery and `/mcp` reconnects reach later children
-        // without re-binding. The admission filter still applies: a recursive or
-        // control-flow dynamic tool would be silently dropped here, mirroring
-        // `resolve_tools`'s hard rules for static tools.
-        if profile.name == "mcp_specialist"
-            && let Some(source) = self
-                .mcp_tool_source
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .as_ref()
-                .cloned()
-        {
-            let dynamic = source.snapshot_tools();
-            if !dynamic.is_empty() {
-                let static_names: HashSet<String> =
-                    sub_tools.iter().map(|t| t.name().to_string()).collect();
-                sub_tools.extend(dynamic.into_iter().filter(|tool| {
-                    !static_names.contains(tool.name())
-                        && profile.tool_policy.admits_runtime(tool.as_ref())
-                }));
-            }
-        }
+        let sub_tools = profile.resolve_tools(&self.toolset, &model, &model_sel);
 
         // The subagent's identity *is* its preset's task prompt — that is the
         // role framing for this child (e.g. SUBAGENT_EXPLORE's research mission),
@@ -1720,108 +1647,6 @@ mod tests {
     /// by name (it is not in READ_ONLY_TOOLS).
     struct StubWriteTool;
 
-    /// A dynamic-source stub shaped like an MCP tool the master's sink
-    /// published — used to prove the mcp_specialist child receives live
-    /// dynamic tools (ADR-0138 §2) while other profiles do not.
-    struct DynamicMcpTool(&'static str);
-
-    #[async_trait::async_trait]
-    impl Tool for DynamicMcpTool {
-        fn name(&self) -> &str {
-            self.0
-        }
-        fn description(&self) -> &str {
-            "dynamic MCP test tool"
-        }
-        fn parameters(&self) -> serde_json::Value {
-            json!({"type": "object"})
-        }
-        async fn call(&self, _arguments: &str) -> Result<String, String> {
-            Ok("mcp".to_string())
-        }
-    }
-
-    /// A minimal [`muta_contracts::DynamicToolSource`] serving a fixed list —
-    /// stands in for the master's `DynamicToolRegistry` read port.
-    struct FixedSource(Vec<std::sync::Arc<dyn Tool>>);
-
-    impl muta_contracts::DynamicToolSource for FixedSource {
-        fn snapshot_tools(&self) -> Vec<std::sync::Arc<dyn Tool>> {
-            self.0.clone()
-        }
-    }
-
-    /// ADR-0138 §2: an mcp_specialist subagent spawned with a bound dynamic
-    /// source receives its MCP tools alongside the static capability set, and
-    /// the injection reads the source *at spawn* — a tool published after
-    /// binding still reaches a later child. Static-name collisions are
-    /// resolved first-wins (static wins), matching sink-side advertisement.
-    #[tokio::test]
-    async fn mcp_specialist_subagent_receives_live_dynamic_tools() {
-        // A provider that records every ModelRequest it serves, so the test can
-        // assert on the tool_specs the *child* actually received.
-        #[derive(Default)]
-        struct RecordingProvider {
-            specs: std::sync::Mutex<Vec<String>>,
-        }
-        #[async_trait::async_trait]
-        impl Provider for RecordingProvider {
-            async fn chat(
-                &self,
-                request: muta_contracts::ModelRequest,
-            ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError>
-            {
-                self.record(&request);
-                Ok(muta_contracts::ProviderCompletion::message(Message::new(
-                    Role::Assistant,
-                    "done",
-                )))
-            }
-            async fn stream_chat(
-                &self,
-                request: muta_contracts::ModelRequest,
-            ) -> Result<
-                BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
-                muta_contracts::ProviderError,
-            > {
-                self.record(&request);
-                Ok(Box::pin(stream::once(async { Ok("done".to_string()) })))
-            }
-        }
-        impl RecordingProvider {
-            fn record(&self, request: &muta_contracts::ModelRequest) {
-                self.specs
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .extend(request.tool_specs.iter().map(|s| s.name.clone()));
-            }
-        }
-
-        let provider = std::sync::Arc::new(RecordingProvider::default());
-        let live = std::sync::Arc::new(FixedSource(vec![
-            std::sync::Arc::new(DynamicMcpTool("mcp__github__create_issue")) as Arc<dyn Tool>,
-            // Collides with a static tool name: static must win.
-            std::sync::Arc::new(DynamicMcpTool("read_text")) as Arc<dyn Tool>,
-        ]));
-        let tool = SubagentTool::new(
-            provider.clone(),
-            muta_contracts::ToolSet::default(),
-            &muta_contracts::SUBAGENT_MCP_SPECIALIST,
-        );
-        tool.bind_dynamic_tool_source(live as Arc<dyn muta_contracts::DynamicToolSource>);
-
-        let _summary = tool
-            .call(r#"{"description":"mcp","prompt":"use the dynamic tools","role":"mcp"}"#)
-            .await
-            .expect("subagent dispatch succeeds");
-
-        let specs = provider.specs.lock().unwrap_or_else(|e| e.into_inner());
-        assert!(
-            specs.iter().any(|name| name == "mcp__github__create_issue"),
-            "dynamic MCP tool must reach the child's tool_specs, got: {specs:?}"
-        );
-    }
-
     #[async_trait::async_trait]
     impl Tool for StubWriteTool {
         fn name(&self) -> &str {
@@ -1975,11 +1800,6 @@ mod tests {
         assert_ne!(explore.name(), code.name());
         assert_eq!(explore.name(), "spawn_agent");
         assert!(!explore.matches_name("delegate_code"));
-
-        let mcp =
-            SubagentTool::mcp_specialist(provider, muta_contracts::ToolSet::default(), shared);
-        assert_eq!(mcp.name(), "delegate_mcp");
-        assert!(!mcp.matches_name("spawn_agent"));
     }
 
     #[tokio::test]

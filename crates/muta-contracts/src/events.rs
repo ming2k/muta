@@ -2089,7 +2089,7 @@ pub struct PermissionRequest {
     #[serde(default)]
     pub one_off: bool,
     /// Origin label identifying which subagent produced this request (ADR-0138).
-    /// `None` for top-level principal calls; e.g. `Some("subagent #a1b2 · mcp_specialist")`.
+    /// `None` for top-level principal calls; e.g. `Some("subagent #a1b2 · explore")`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
     /// Threat / hazard level classification of this tool invocation.

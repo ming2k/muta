@@ -951,18 +951,76 @@ fn unique_name(name: String, taken: &mut HashSet<String>) -> String {
     }
 }
 
+const MCP_MAX_OUTPUT_BYTES: usize = 16_384;
+const MCP_MAX_OUTPUT_LINES: usize = 200;
+const MCP_PREVIEW_HEAD_LINES: usize = 50;
+const MCP_PREVIEW_TAIL_LINES: usize = 20;
+
+pub(crate) fn compact_mcp_output(raw: &str) -> String {
+    let line_count = raw.lines().count();
+    if raw.len() <= MCP_MAX_OUTPUT_BYTES && line_count <= MCP_MAX_OUTPUT_LINES {
+        return raw.to_string();
+    }
+
+    // Spill full raw output to a temp file in $TMPDIR per [INV-MCP-05].
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!(
+        "muta-mcp-output-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let temp_path = temp_dir.join(file_name);
+    if let Err(err) = std::fs::write(&temp_path, raw) {
+        tracing::warn!(
+            error = %err,
+            path = %temp_path.display(),
+            "failed to spill oversized MCP output to temp file"
+        );
+    }
+
+    let lines: Vec<&str> = raw.lines().collect();
+    let head = lines
+        .iter()
+        .take(MCP_PREVIEW_HEAD_LINES)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail_start = lines.len().saturating_sub(MCP_PREVIEW_TAIL_LINES);
+    let tail = lines[tail_start..].join("\n");
+    let skipped = lines.len().saturating_sub(MCP_PREVIEW_HEAD_LINES + MCP_PREVIEW_TAIL_LINES);
+
+    format!(
+        "[MCP Output truncated: {line_count} lines, {} bytes. Exceeded 16KB/200-line safety boundary (ADR-0240 [INV-MCP-05])]\n\
+         [Full output saved to: {}]\n\n\
+         --- Output preview (head) ---\n\
+         {head}\n\
+         ... [truncated {skipped} lines] ...\n\
+         --- Output preview (tail) ---\n\
+         {tail}",
+        raw.len(),
+        temp_path.display()
+    )
+}
+
 fn render_tool_result(result: &Value) -> String {
-    if let Some(content) = result.get("content").and_then(Value::as_array) {
+    let raw = if let Some(content) = result.get("content").and_then(Value::as_array) {
         let rendered = content
             .iter()
             .filter_map(|item| item.get("text").and_then(Value::as_str))
             .collect::<Vec<_>>()
             .join("\n");
         if !rendered.is_empty() {
-            return rendered;
+            rendered
+        } else {
+            result.to_string()
         }
-    }
-    result.to_string()
+    } else {
+        result.to_string()
+    };
+    compact_mcp_output(&raw)
 }
 
 #[cfg(test)]
@@ -999,5 +1057,34 @@ mod tests {
             ]
         });
         assert_eq!(render_tool_result(&result), "first\nsecond");
+    }
+
+    #[test]
+    fn compact_mcp_output_preserves_small_outputs() {
+        let small = "hello world\nline 2";
+        assert_eq!(compact_mcp_output(small), small);
+    }
+
+    #[test]
+    fn compact_mcp_output_compacts_and_spills_large_byte_payloads() {
+        // Output exceeding 16KB
+        let large = "a".repeat(20_000);
+        let compacted = compact_mcp_output(&large);
+        assert!(compacted.contains("[MCP Output truncated:"));
+        assert!(compacted.contains("Exceeded 16KB/200-line safety boundary"));
+        assert!(compacted.contains("[Full output saved to:"));
+    }
+
+    #[test]
+    fn compact_mcp_output_compacts_and_spills_large_line_count() {
+        // Output exceeding 200 lines
+        let lines: Vec<String> = (1..=300).map(|i| format!("line {i}")).collect();
+        let large = lines.join("\n");
+        let compacted = compact_mcp_output(&large);
+        assert!(compacted.contains("[MCP Output truncated: 300 lines"));
+        assert!(compacted.contains("--- Output preview (head) ---"));
+        assert!(compacted.contains("line 1"));
+        assert!(compacted.contains("--- Output preview (tail) ---"));
+        assert!(compacted.contains("line 300"));
     }
 }

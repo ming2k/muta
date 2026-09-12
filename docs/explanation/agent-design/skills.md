@@ -95,15 +95,16 @@ There are two paths from identifying a skill to placing its body in context:
    **Composer Autocompletion**: The composer provides cursor-anchored, inline overlay autocompletion for `@skill:` / `@skills:` and `@` mentions anywhere within multiline input. Selecting a candidate commits the unambiguous `@skill:<name>` token.
 
    Each mentioned skill whose policy allows implicit invocation is loaded as a
-   **hidden user message** carrying the same `[Skill '<name>' loaded]` marker
-   the explicit path uses. Hidden means it steers the model but is not rendered
-   as part of the visible transcript. A plain name occurrence is deliberately
-   ignored because common words would otherwise pull large bodies into context
-   accidentally. Already implicitly loaded skills are not re-injected.
+   **hidden user message** carrying the same structured `<skill name="<name>">` envelope
+   (with system guidance, root path boundaries, and auxiliary file listings) the explicit
+   path uses. Hidden means it steers the model but is not rendered as part of the visible
+   transcript. A plain name occurrence is deliberately ignored because common words would
+   otherwise pull large bodies into context accidentally. Already implicitly loaded skills
+   (including legacy markers in prior session histories) are not re-injected.
 
 3. **Dynamic Discovery & Subagent Delegation.** The system prompt stays clean and free of static `<available_skills>` catalog bloat. Instead, when domain expertise is required, the principal agent can spawn a dedicated subagent with `role: "skill"` (`SUBAGENT_SKILL`) to dynamically discover, inspect, and extract instructions from project (`.muta/skills/`) and user (`$XDG_DATA_HOME/muta/skills/`) skill trees, returning synthesized guidelines directly into the execution flow. Global and local skill roots are natively admitted to the sandbox.
 
-Both paths emit the same marker, so persisted context remains auditable even
+Both paths emit the same structured envelope, so persisted context remains auditable even
 though one path is a tool result and the other is harness-authored user context.
 
 ## Policy and enabled state

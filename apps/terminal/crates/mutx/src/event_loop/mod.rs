@@ -104,7 +104,7 @@ pub(crate) fn tool_verb_for(name: &str) -> crate::phase::ToolVerb {
         "write_todos" | "update_todo" | "todo" | "todo_update" => {
             crate::phase::ToolVerb::UpdatingTasks
         }
-        "spawn_agent" | "delegate_code" | "delegate_mcp" => crate::phase::ToolVerb::Delegating,
+        "spawn_agent" | "delegate_code" => crate::phase::ToolVerb::Delegating,
         n if n.starts_with("mcp__") => crate::phase::ToolVerb::Mcp,
         _ => crate::phase::ToolVerb::Generic,
     }

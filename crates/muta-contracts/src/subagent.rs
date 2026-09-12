@@ -327,30 +327,6 @@ of turns, then answer.",
 };
 
 /// The MCP specialist subagent role for running external and dynamic MCP tools
-/// in an isolated sandbox (rationale: ADR-0138, archived — superseded by
-/// [ADR-0144](../../../docs/adr/0144-three-tier-agent-hierarchy-and-tool-pool.md)).
-///
-/// Scope note: `allowed_tools: None` admits the **full** parent toolset — every
-/// built-in write/execute tool included — not only the dynamic MCP tools the
-/// role's description names. Narrowing that grant to the dynamic set is an open
-/// question; this note records the current behaviour rather than endorsing it.
-pub const SUBAGENT_MCP_SPECIALIST: SubagentPreset = SubagentPreset {
-    name: "mcp_specialist",
-    system_prompt: "\
-You are a specialized integration subagent. Your mission is to execute tasks \
-using external and specialized MCP tools (such as database queries, GitHub operations, \
-or third-party API integrations) in an isolated sandbox. Focus on calling the necessary tools, \
-analyzing the raw outputs, and returning a concise, high-signal summary of the results \
-to the principal agent. Never output giant raw payloads if a clear summary answers the question.",
-    tool_policy: ToolPolicy {
-        allowed_tools: None, // Admits full dynamic/MCP toolset
-        allow_user_interaction: false,
-    },
-    variant_pins: &[],
-    unattended: true,
-    allow_model_stdin: false,
-};
-
 /// The skill discovery and domain expertise subagent role.
 ///
 /// Specialized in dynamically locating, inspecting, and synthesizing guidelines,
@@ -380,7 +356,6 @@ impl SubagentPreset {
     pub const EXPLORE: Self = SUBAGENT_EXPLORE;
     pub const CODE: Self = SUBAGENT_CODE;
     pub const TITLE: Self = SUBAGENT_TITLE;
-    pub const MCP_SPECIALIST: Self = SUBAGENT_MCP_SPECIALIST;
     pub const SKILL: Self = SUBAGENT_SKILL;
 }
 
@@ -394,17 +369,12 @@ impl SubagentPresetPool {
         &SUBAGENT_EXPLORE,
         &SUBAGENT_TITLE,
         &SUBAGENT_CODE,
-        &SUBAGENT_MCP_SPECIALIST,
         &SUBAGENT_SKILL,
     ];
 
     /// Find a subagent preset by name.
     pub fn find(name: &str) -> Option<&'static SubagentPreset> {
-        let normalized = match name {
-            "mcp" => "mcp_specialist",
-            other => other,
-        };
-        Self::ALL.iter().copied().find(|p| p.name == normalized)
+        Self::ALL.iter().copied().find(|p| p.name == name)
     }
 
     /// List all available preset names in the pool.
@@ -661,35 +631,8 @@ mod tests {
     }
 
     #[test]
-    fn mcp_specialist_profile_admits_dynamic_tools_and_excludes_recursion() {
-        use crate::SUBAGENT_MCP_SPECIALIST;
-        // Pins the compiled-in profile value (running unattended); constant by design.
-        #[allow(clippy::assertions_on_constants)]
-        let unattended = SUBAGENT_MCP_SPECIALIST.unattended;
-        assert!(unattended);
-        // Dynamic / external tools admitted
-        assert!(
-            SUBAGENT_MCP_SPECIALIST
-                .tool_policy
-                .admits(&make("mcp__postgres__query"))
-        );
-        assert!(
-            SUBAGENT_MCP_SPECIALIST
-                .tool_policy
-                .admits(&make("read_text"))
-        );
-        // Recursion and control-flow strictly forbidden
-        assert!(
-            !SUBAGENT_MCP_SPECIALIST
-                .tool_policy
-                .admits(&with_spawn(make("read_text")))
-        );
-        assert!(!SUBAGENT_MCP_SPECIALIST.tool_policy.admits(&make_control()));
-    }
-
-    #[test]
     fn subagent_preset_pool_catalog_and_filtering() {
-        assert_eq!(SubagentPresetPool::ALL.len(), 5);
+        assert_eq!(SubagentPresetPool::ALL.len(), 4);
         assert_eq!(
             SubagentPresetPool::find("explore").map(|p| p.name),
             Some("explore")
@@ -706,7 +649,7 @@ mod tests {
 
         let dev_delegation = crate::AgentRoleProfile::DEVELOPER;
         let dev_subagents = SubagentPresetPool::admitted_for_delegation(&dev_delegation);
-        assert_eq!(dev_subagents.len(), 5);
+        assert_eq!(dev_subagents.len(), 4);
 
         let phil_delegation = crate::AgentRoleProfile::PHILOSOPHIST;
         let phil_subagents = SubagentPresetPool::admitted_for_delegation(&phil_delegation);

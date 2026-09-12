@@ -73,15 +73,15 @@ vocabulary; the dispatch tools bind them by reference.
 |---------|----------|---------|-------------|------|
 | `EXPLORE` | `spawn_agent` tool | `Read` | none | Pure read tools (`read_text`, `find_files`, `list_dir`, `search_text`, …) |
 | `CODE` | `delegate_code` tool | `Write` | none | Read tools + `execute_command`, `edit_text`, `write_file`, `todo*` — a full coding surface; runs delegated, so the delegation *is* the authorization |
+| `SKILL` | `spawn_agent(role: "skill")` | `Read` | none | Read tools for discovering and synthesizing instructions from `SKILL.md` |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
-| `MCP_SPECIALIST` | `delegate_mcp` tool | `Read` | none | Dynamic MCP tools in an isolated sandbox |
 
 All are non-recursive (recursion is excluded absolutely, not per-profile
 — see [Tool admission](#tool-admission)). `EXPLORE` (the default `spawn_agent` tool),
-`CODE` (the `delegate_code` tool), and `MCP_SPECIALIST` (the `delegate_mcp` tool) are the
+`CODE` (the `delegate_code` tool), and `SKILL` are the
 profiles reachable from a model tool call today; `TITLE` is an internal
-role. (A prior internal role, `REVIEW` — the retired `/review`
-diagnostic — has been removed.) `CODE` opts into `allow_user_interaction: true` so an
+role. (MCP tools are exclusive to the Master Agent under ADR-0240; the retired `MCP_SPECIALIST`
+profile has been removed.) `CODE` opts into `allow_user_interaction: true` so an
 `ask_user` request surfaces to the parent through the full-duplex channel.
 Every built-in subagent runs `delegated: true` — including `CODE`: the
 principal's act of calling `delegate_code` is the authorization for the

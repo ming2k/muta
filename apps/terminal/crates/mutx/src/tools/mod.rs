@@ -218,7 +218,7 @@ pub fn presenter_for(name: &str) -> &'static dyn ToolPresenter {
         "read_url" => &web::WebReaderPresenter,
         "search_web" => &web::WebSearchPresenter,
         "write_todos" | "update_todo" | "todo" | "todo_update" => &meta::TodoPresenter,
-        "spawn_agent" | "delegate_code" | "delegate_mcp" => &meta::SubagentPresenter,
+        "spawn_agent" | "delegate_code" => &meta::SubagentPresenter,
         "use_skill" => &meta::UseSkillPresenter,
         _ => &fallback::FallbackPresenter,
     }

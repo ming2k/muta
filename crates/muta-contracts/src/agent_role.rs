@@ -365,7 +365,6 @@ pub const AGENT_ROLE_DEVELOPER: AgentRoleDelegation = AgentRoleDelegation {
         crate::subagent::SUBAGENT_EXPLORE.name,
         crate::subagent::SUBAGENT_TITLE.name,
         crate::subagent::SUBAGENT_CODE.name,
-        crate::subagent::SUBAGENT_MCP_SPECIALIST.name,
         crate::subagent::SUBAGENT_SKILL.name,
     ],
     tool_scope: ToolScope::All,

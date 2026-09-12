@@ -138,10 +138,20 @@ fn compose_frame(
         // can acknowledge recovery.
         "daemon link lost".to_string()
     } else {
-        display_status(
+        let base_status = display_status(
             app.loop_status,
             gate_phase.as_ref().or(viewed_chrome.phase.as_ref()),
-        )
+        );
+        // ADR-0240: Prioritize system lifecycle (e.g. MCP connecting progress) when round is idle.
+        if (base_status.is_empty() || base_status == "idle") && gate_phase.is_none() {
+            if let Some(mcp_progress) = mcp_connecting_status(app) {
+                mcp_progress
+            } else {
+                base_status
+            }
+        } else {
+            base_status
+        }
     };
     // Transport-setback clause: rides beside the status label (never in its
     // slot), counting down while a provider retry backs off.
@@ -1439,4 +1449,25 @@ fn compose_frame(
     if let (Some(rect), Some(overlay)) = (drawn_modal_rect, app.surfaces.active_overlay()) {
         ui.mount(UiKey::Overlay(overlay), rect);
     }
+}
+
+/// ADR-0240 [INV-MCP-04]: Extract in-flight MCP connection status during system bootstrapping.
+fn mcp_connecting_status(app: &App) -> Option<String> {
+    let snapshot = app.session_context.as_ref()?;
+    if snapshot.mcp.is_empty() {
+        return None;
+    }
+    let connecting: Vec<&str> = snapshot
+        .mcp
+        .iter()
+        .filter(|s| !s.connected && !s.disabled && s.failure.is_none())
+        .map(|s| s.name.as_str())
+        .collect();
+    if connecting.is_empty() {
+        return None;
+    }
+    let total = snapshot.mcp.iter().filter(|s| !s.disabled).count();
+    let connected = snapshot.mcp.iter().filter(|s| s.connected).count();
+    let names = connecting.join(", ");
+    Some(format!("connecting MCP ({connected}/{total}: {names})…"))
 }

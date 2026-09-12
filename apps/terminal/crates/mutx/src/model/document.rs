@@ -1659,7 +1659,7 @@ impl TranscriptMessage {
             MessageKind::ToolStep { name, .. }
                 if matches!(
                     name.as_str(),
-                    "spawn_agent" | "delegate_code" | "delegate_mcp"
+                    "spawn_agent" | "delegate_code"
                 )
         )
     }

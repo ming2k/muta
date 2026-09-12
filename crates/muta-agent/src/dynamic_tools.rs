@@ -84,16 +84,6 @@ impl DynamicToolSink for DynamicToolRegistry {
     }
 }
 
-impl muta_contracts::DynamicToolSource for DynamicToolRegistry {
-    fn snapshot_tools(&self) -> Vec<Arc<dyn Tool>> {
-        // `snapshot()` already deduplicates first-wins on cross-source name collision.
-        self.snapshot()
-            .into_iter()
-            .map(|entry| entry.tool)
-            .collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

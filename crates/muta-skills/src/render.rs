@@ -22,6 +22,70 @@ pub fn format_skill_list(skills: &[Skill]) -> String {
     lines.join("\n")
 }
 
+const MAX_LISTED_SKILL_FILES: usize = 10;
+
+/// Collect auxiliary files inside a skill's directory (excluding `SKILL.md`).
+pub fn list_skill_files(root: &std::path::Path) -> Vec<String> {
+    if !root.is_dir() {
+        return Vec::new();
+    }
+    let mut files: Vec<String> = Vec::new();
+    for entry in walkdir::WalkDir::new(root)
+        .max_depth(2)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.file_name().map(|n| n == "SKILL.md").unwrap_or(false) {
+            continue;
+        }
+        if let Ok(rel) = path.strip_prefix(root) {
+            files.push(rel.to_string_lossy().to_string());
+        }
+        if files.len() >= MAX_LISTED_SKILL_FILES {
+            break;
+        }
+    }
+    files
+}
+
+/// Format a skill injection into a structured XML envelope.
+///
+/// Wraps domain skill instructions in a semantic `<skill>` XML block with clear
+/// meta-prompting guidelines, scope, root directory, and auxiliary file listings.
+/// This guides the model to treat the content as authoritative standard operating
+/// procedures (SOP).
+pub fn format_skill_injection(skill: &Skill, content: &str) -> String {
+    let files = list_skill_files(&skill.root);
+    let files_desc = if files.is_empty() {
+        String::new()
+    } else {
+        format!("\nAuxiliary files (relative to root):\n{}", files.join("\n"))
+    };
+
+    format!(
+        "<skill name=\"{}\" scope=\"{}\">\n\
+         <system_guidance>\n\
+         The user activated domain skill \"{}\". Follow these standard operating procedures (SOP), \
+         constraints, and guidelines for all subsequent related tasks.\n\
+         Skill Root: {}{}\n\
+         </system_guidance>\n\
+         <instructions>\n\
+         {}\n\
+         </instructions>\n\
+         </skill>",
+        skill.name,
+        skill.scope,
+        skill.name,
+        skill.root.display(),
+        files_desc,
+        content
+    )
+}
+
 /// Resolve which skills a piece of text is referring to.
 ///
 /// Matches only explicit intent:
@@ -216,5 +280,17 @@ mod tests {
         let skills = vec![sample_skill("rust-expert"), sample_skill("pdf")];
         let mentions = resolve_mentions("use @skill:rust-expert and @skills:pdf here", &skills);
         assert_eq!(mentions.len(), 2);
+    }
+
+    #[test]
+    fn format_skill_injection_produces_xml_envelope_with_guidance() {
+        let skill = sample_skill("rust-expert");
+        let formatted = format_skill_injection(&skill, "# Guidelines\nUse Result.");
+        assert!(formatted.starts_with("<skill name=\"rust-expert\" scope=\"repo\">"));
+        assert!(formatted.contains("<system_guidance>"));
+        assert!(formatted.contains("The user activated domain skill \"rust-expert\"."));
+        assert!(formatted.contains("Skill Root: skills/rust-expert"));
+        assert!(formatted.contains("<instructions>\n# Guidelines\nUse Result.\n</instructions>"));
+        assert!(formatted.ends_with("</skill>"));
     }
 }
