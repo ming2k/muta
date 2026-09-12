@@ -138,18 +138,18 @@ impl BoundSession {
     }
 }
 
-/// A resolved session binding: an optional workspace plus the staffing persona.
+/// A resolved session binding: an optional workspace plus the staffing role.
 #[derive(Clone)]
 pub struct SessionBinding {
     pub workspace: Option<muta_contracts::WorkspaceBinding>,
-    pub persona: Option<String>,
+    pub role: Option<String>,
 }
 
 impl SessionBinding {
     pub fn workspace(root: PathBuf) -> Self {
         Self {
             workspace: Some(muta_contracts::WorkspaceBinding::new(root)),
-            persona: None,
+            role: None,
         }
     }
 
@@ -1338,30 +1338,34 @@ impl SessionRegistry {
         let mut identity = identity;
         let mut preset = preset;
         let mut workspace = binding.workspace;
-        let persona_selected = init_options.persona.clone();
-        let persona_id = persona_selected.clone().or(binding.persona);
-        if let Some(persona_id) = persona_id.as_deref() {
-            let personas = muta_persistence::personas::PersonasConfig::load();
-            if let Some(persona) = personas.get(persona_id) {
-                if persona_selected.is_some() {
-                    workspace = match persona.resolved_workspace() {
-                        muta_persistence::personas::PersonaWorkspace::None => None,
-                        muta_persistence::personas::PersonaWorkspace::Inherit => workspace,
-                        muta_persistence::personas::PersonaWorkspace::Fixed(root) => {
+        let role_selected = init_options.role.clone();
+        let role_id = role_selected.clone().or(binding.role);
+        if let Some(role_id) = role_id.as_deref() {
+            let ws_root = workspace.as_ref().map(|b| b.root.as_path());
+            let roles_cfg = muta_persistence::roles::RolesConfig::load_for_workspace(ws_root);
+            if let Some(role_entry) = roles_cfg.get(role_id) {
+                if role_selected.is_some() {
+                    workspace = match role_entry.resolved_workspace() {
+                        muta_persistence::roles::RoleWorkspace::None => None,
+                        muta_persistence::roles::RoleWorkspace::Inherit => workspace,
+                        muta_persistence::roles::RoleWorkspace::Fixed(root) => {
                             Some(muta_contracts::WorkspaceBinding::new(root))
                         }
                     };
                 }
-                let persona_identity = persona.identity();
+                let role_identity = role_entry.identity();
                 let mut role = muta_contracts::AgentRoleProfile::from_role(
-                    persona.preset_id(),
-                    &persona_identity,
+                    role_entry.preset_id(),
+                    &role_identity,
                 );
-                role.identity = persona_identity.clone();
-                identity = persona_identity;
+                role.identity = role_identity.clone();
+                if let Some(admit) = &role_entry.admit_mcp {
+                    role.admit_mcp = admit.clone();
+                }
+                identity = role_identity;
                 preset = role;
-            } else if let Some(builtin) = muta_contracts::MainAgentRole::parse(persona_id) {
-                if persona_selected.is_some() && builtin == muta_contracts::MainAgentRole::Philosophist {
+            } else if let Some(builtin) = muta_contracts::MainAgentRole::parse(role_id) {
+                if role_selected.is_some() && builtin == muta_contracts::MainAgentRole::Philosophist {
                     workspace = None;
                 }
                 let role = muta_contracts::AgentRoleProfile::from_role(builtin, &identity);
@@ -1370,18 +1374,18 @@ impl SessionRegistry {
             } else {
                 return Err(AssembleErr::AssembleFailed(Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("unknown persona or role '{persona_id}'"),
+                    format!("unknown role '{role_id}'"),
                 ))));
             }
         }
         let workspace_root = workspace.as_ref().map(|binding| binding.root.clone());
         // `--resume` (ADR-0226): pick the most recent matching session instead
-        // of a fresh one. With a persona, match by persona (+ workspace when the
-        // persona binds one); otherwise match the workspace (or unbound) set.
+        // of a fresh one. With a role, match by role (+ workspace when the
+        // role binds one); otherwise match the workspace (or unbound) set.
         let mut startup = startup;
         if init_options.resume && matches!(startup, crate::startup::SessionStart::Fresh) {
             let filter = muta_contracts::WorkspaceFilter::from_binding(workspace.as_ref());
-            if let Some(id) = lookup_latest_session(&filter, persona_id.as_deref()) {
+            if let Some(id) = lookup_latest_session(&filter, role_id.as_deref()) {
                 startup = crate::startup::SessionStart::Resume(id);
             }
         }
@@ -1400,7 +1404,7 @@ impl SessionRegistry {
             ui,
             startup,
             project_root: workspace_root.clone(),
-            persona: persona_id.clone(),
+            role: role_id.clone(),
             unattended: init_options.unattended,
             confined: init_options.confined,
             human_channel: Some(Arc::clone(&human_channel)),
@@ -1768,24 +1772,24 @@ async fn overview_of(session: &SessionStore, active: bool) -> SessionOverview {
 /// independent of the caller's workspace (ADR-0219/0220).
 fn lookup_latest_session(
     filter: &muta_contracts::WorkspaceFilter,
-    persona: Option<&str>,
+    role: Option<&str>,
 ) -> Option<String> {
     muta_persistence::db::get_persistence_handle()
         .reader()
         .ok()?
-        .latest_session(filter, persona)
+        .latest_session(filter, role)
         .ok()
         .flatten()
 }
 
 fn lookup_session_workspace(id: &str) -> Option<SessionBinding> {
-    let (workspace, persona) = muta_persistence::db::get_persistence_handle()
+    let (workspace, role) = muta_persistence::db::get_persistence_handle()
         .reader()
         .ok()?
         .lookup_session_workspace(id)
         .ok()
         .flatten()?;
-    Some(SessionBinding { workspace, persona })
+    Some(SessionBinding { workspace, role })
 }
 
 #[cfg(test)]

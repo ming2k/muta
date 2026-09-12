@@ -20,7 +20,7 @@ pub async fn run_headless(
     project_override: Option<PathBuf>,
     unattended: bool,
     confined: bool,
-    persona: Option<String>,
+    role: Option<String>,
     resume: bool,
     remote: Option<String>,
     token: Option<String>,
@@ -72,7 +72,7 @@ pub async fn run_headless(
         });
     }
     let init_options = muta_contracts::SessionInitOptions::new(unattended, confined)
-        .with_persona(persona)
+        .with_role(role)
         .with_resume(resume);
     let action = AttachAction::New(if init_options.is_default() {
         None

@@ -41,6 +41,29 @@ connection.
 Filtered tools are never adapted, so the model never sees them. The same
 fields exist in project-local `.muta/mcp.json` server entries.
 
+## Role-level capability subscription (ADR-0242)
+
+Beyond server-level `allow_tools` and `deny_tools`, user roles declared in
+`~/.config/muta/roles.toml` control which configured MCP servers are admitted
+into that role's toolset via `admit_mcp`:
+
+```toml
+[roles.philosophist]
+name = "Philosophist"
+preset = "philosophist"
+workspace = "none"
+admit_mcp = ["obsidian", "phil*"]
+
+[roles.developer]
+name = "Developer"
+preset = "developer"
+workspace = "inherit"
+admit_mcp = ["*"]
+```
+
+Tools from servers not matching `admit_mcp` are filtered in memory at turn start
+and never presented in the model context.
+
 ## `mcp__<server>__<tool>`
 
 Parameters come from the MCP server's `inputSchema`, falling back to

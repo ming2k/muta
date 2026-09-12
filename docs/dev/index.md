@@ -23,4 +23,4 @@
 ## Policy
 
 - [ADR-0014: Unified XDG persistence architecture](../adr/0014-xdg-persistence-architecture.md) — new persistent locations must be added as methods on `Dirs`, classified by what the file *is*; no inline `dirs::home_dir().join(...)` for muta-owned storage
-- [ADR-0121: Instance isolation for development and testing](../adr/0121-instance-isolation-for-development-and-testing.md) — daemon runtime paths derive from `Dirs::instance_dir()` only; auto-spawned daemons inherit the environment (sandbox inheritance); local runs beside an installed daemon use `--home` / `MUTA_HOME`, never a bare `target/debug/muta` against the host instance
+- [ADR-0121: Instance isolation for development and testing](../adr/0121-instance-isolation-for-development-and-testing.md) — daemon runtime paths derive from `Dirs::instance_dir()` only; auto-spawned daemons inherit the environment (sandbox inheritance); local runs beside an installed daemon use `MUTA_HOME`, never a bare `target/debug/muta` against the host instance

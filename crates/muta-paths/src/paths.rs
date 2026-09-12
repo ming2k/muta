@@ -117,9 +117,14 @@ impl Dirs {
         self.config_dir.join("config.toml")
     }
 
-    /// User-authored persistent personas (`$XDG_CONFIG_HOME/muta/personas.toml`,
-    /// ADR-0220). A user-global registry of named conversation identities, kept
-    /// beside `config.toml` as user-edited config (never program state).
+    /// User-authored persistent roles (`$XDG_CONFIG_HOME/muta/roles.toml`).
+    /// A user-global registry of named agent roles, kept beside `config.toml`
+    /// as user-edited config (never program state).
+    pub fn roles_file(&self) -> PathBuf {
+        self.config_dir.join("roles.toml")
+    }
+
+    /// Legacy alias for [`Self::roles_file`] (`personas.toml`).
     pub fn personas_file(&self) -> PathBuf {
         self.config_dir.join("personas.toml")
     }

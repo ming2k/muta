@@ -159,3 +159,95 @@ impl WorkspaceSecuritySnapshot {
         }
     }
 }
+
+/// Specification of an external capability unit subject to attestation (ADR-0243).
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
+)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum AssetSpec {
+    /// Physical OS child process (e.g. Stdio MCP server, lifecycle hooks).
+    Process {
+        command: Vec<String>,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        env: std::collections::BTreeMap<String, String>,
+    },
+    /// Remote network service endpoint (e.g. Streamable HTTP/SSE MCP server).
+    RemoteEndpoint {
+        url: String,
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        headers: std::collections::BTreeMap<String, String>,
+    },
+}
+
+impl AssetSpec {
+    /// Compute the canonical SHA-256 cryptographic fingerprint of this specification.
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        match self {
+            Self::Process { command, env } => {
+                hasher.update(b"process\0");
+                for arg in command {
+                    hasher.update(arg.as_bytes());
+                    hasher.update(b"\0");
+                }
+                for (k, v) in env {
+                    hasher.update(k.as_bytes());
+                    hasher.update(b"=");
+                    hasher.update(v.as_bytes());
+                    hasher.update(b"\0");
+                }
+            }
+            Self::RemoteEndpoint { url, headers } => {
+                hasher.update(b"endpoint\0");
+                hasher.update(url.as_bytes());
+                hasher.update(b"\0");
+                for (k, v) in headers {
+                    hasher.update(k.as_bytes());
+                    hasher.update(b":");
+                    hasher.update(v.as_bytes());
+                    hasher.update(b"\0");
+                }
+            }
+        }
+        format!("{:x}", hasher.finalize())
+    }
+
+    /// User-friendly one-line summary of this asset.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Process { command, .. } => command.join(" "),
+            Self::RemoteEndpoint { url, .. } => url.clone(),
+        }
+    }
+}
+
+/// Attestation status for an asset in the universal ledger (ADR-0243).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum AttestationStatus {
+    /// Asset is quarantined and blocked from physical execution until user attestation.
+    #[default]
+    Quarantined,
+    /// Exact asset fingerprint has been attested and trusted by the user.
+    Trusted,
+    /// Asset is temporarily allowed for the active session lifetime only.
+    SessionEphemeral,
+}
+
+impl AttestationStatus {
+    pub fn is_trusted(self) -> bool {
+        matches!(self, Self::Trusted | Self::SessionEphemeral)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Quarantined => "quarantined",
+            Self::Trusted => "trusted",
+            Self::SessionEphemeral => "session_ephemeral",
+        }
+    }
+}

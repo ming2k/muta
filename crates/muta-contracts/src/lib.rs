@@ -157,7 +157,10 @@ pub use execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
     ShellIsolation, ToolMiddleware,
 };
-pub use security::{TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState};
+pub use hazard::{HazardLevel, HazardTier, ProcessKillSpec, ToolPermissionSubmission};
+pub use security::{
+    AssetSpec, AttestationStatus, TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState,
+};
 
 pub mod workspace;
 pub use workspace::{WorkspaceBinding, WorkspaceFilter};

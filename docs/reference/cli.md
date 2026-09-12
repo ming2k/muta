@@ -64,6 +64,8 @@ mutx [OPTIONS] <COMMAND>
 | `--token <token>` | `mutx` | Supply the bearer token required by `--remote` |
 | `-p`, `--prompt`, `--print <text>` | `mutx` | Run `<text>` as a headless one-shot |
 | `-i`, `--interactive` | `mutx` | Force the TUI even when a `-p` prompt is given |
+| `--role <id>` | `mutx` | Staff the new session with a role (`developer`, `philosophist`, or user role in `roles.toml`; legacy alias: `--persona`) |
+| `--resume` | `mutx` | Resume the most recent matching session instead of starting fresh |
 | `--unattended` | `mutx` | Run in unattended execution mode (without confirmations or questions) |
 | `--no-confinement` | `mutx` | Run with workspace filesystem confinement disabled (allow host-wide file access) |
 | `-j`, `--json` | Both | Emit machine-readable output where supported |

@@ -237,6 +237,7 @@ impl Agent {
     pub fn apply_profile(&self, profile: &muta_contracts::AgentRoleProfile) {
         self.set_identity(profile.identity.clone());
         self.set_tools(profile.tools.clone());
+        self.set_admit_mcp(profile.admit_mcp.clone());
         self.set_hard_stop_turns(profile.config.hard_stop_turns);
         self.set_doom_guard_config(profile.config.nudge);
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
@@ -273,24 +274,28 @@ impl Agent {
 
     /// Switch the live agent into a named role.
     ///
-    /// Resolves against user-configured roles in `personas.toml` first, then falls back
+    /// Resolves against user-configured roles in `roles.toml` first, then falls back
     /// to built-in presets (`developer`, `philosophist`).
     pub fn apply_role(&self, target: &str) -> Option<SwitchedRole> {
         let trimmed = target.trim();
-        let personas_config = muta_persistence::personas::PersonasConfig::load();
-        if let Some(user_persona) = personas_config.get(trimmed) {
-            let preset_id = user_persona.preset_id();
-            let identity = user_persona.identity();
+        let roles_config =
+            muta_persistence::roles::RolesConfig::load_for_workspace(self.workspace_root().as_deref());
+        if let Some(user_role) = roles_config.get(trimmed) {
+            let preset_id = user_role.preset_id();
+            let identity = user_role.identity();
             let mut profile = muta_contracts::AgentRoleProfile::from_role(preset_id, &identity);
             profile.identity = identity;
-            profile.unattended = user_persona.unattended;
+            profile.unattended = user_role.unattended;
+            if let Some(admit) = &user_role.admit_mcp {
+                profile.admit_mcp = admit.clone();
+            }
             self.equip_preset_extensions(&mut profile, preset_id);
             self.apply_profile(&profile);
             *self.extensions.write().unwrap_or_else(|e| e.into_inner()) = profile.extensions;
             return Some(SwitchedRole {
                 id: trimmed.to_string(),
-                name: user_persona.name.clone(),
-                description: user_persona
+                name: user_role.name.clone(),
+                description: user_role
                     .mission
                     .clone()
                     .unwrap_or_else(|| preset_id.description().to_string()),
@@ -810,12 +815,12 @@ mod tests {
             crate::AgentIdentity::new("test", "test agent"),
         );
 
-        // Applying developer persona equips code intelligence.
+        // Applying developer role equips code intelligence.
         assert!(agent.apply_role("developer").is_some());
         assert_eq!(agent.extensions().len(), 1);
         assert_eq!(agent.extensions()[0].id(), "code_intelligence");
 
-        // Applying philosophist persona drops code intelligence (0 overhead).
+        // Applying philosophist role drops code intelligence (0 overhead).
         assert!(agent.apply_role("philosophist").is_some());
         assert_eq!(agent.extensions().len(), 0);
 

@@ -37,12 +37,14 @@ pub use muta_paths::paths;
 
 pub mod instances;
 pub mod model_providers;
-pub mod personas;
 pub mod provider_usage;
+pub mod roles;
 pub mod route_settings;
 pub mod session;
 pub mod usage_stats;
 mod web_migration;
 pub mod workspace_security;
+pub mod asset_attestation;
 
+pub use asset_attestation::AssetAttestationLedger;
 pub use session::{CommitTurn, SessionStore};

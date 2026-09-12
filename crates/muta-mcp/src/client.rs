@@ -40,6 +40,21 @@ pub fn set_trust_verifier(verifier: McpTrustVerifier) {
 pub fn is_sandbox_trusted(root: &Path) -> bool {
     TRUST_VERIFIER.get().map(|v| v(root)).unwrap_or(true)
 }
+
+/// Pluggable universal asset attestation verifier (ADR-0243).
+pub type McpAttestationVerifier =
+    Arc<dyn Fn(&muta_contracts::security::AssetSpec) -> bool + Send + Sync>;
+
+static ATTESTATION_VERIFIER: OnceLock<McpAttestationVerifier> = OnceLock::new();
+
+/// Configure the universal attestation verifier used across all MCP scopes (ADR-0243).
+pub fn set_attestation_verifier(verifier: McpAttestationVerifier) {
+    let _ = ATTESTATION_VERIFIER.set(verifier);
+}
+
+pub fn is_asset_attested(spec: &muta_contracts::security::AssetSpec) -> bool {
+    ATTESTATION_VERIFIER.get().map(|v| v(spec)).unwrap_or(true)
+}
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
@@ -601,6 +616,37 @@ impl McpServer {
     /// Connect (or reconnect) and return the live client. If a client is
     /// already held, it is reused; otherwise a fresh connection is established.
     async fn ensure_connected(&self) -> Result<Arc<McpClient>, String> {
+        let spec = if let Some(url) = &self.config.url {
+            muta_contracts::security::AssetSpec::RemoteEndpoint {
+                url: url.clone(),
+                headers: self
+                    .config
+                    .environment
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            }
+        } else {
+            muta_contracts::security::AssetSpec::Process {
+                command: self.config.command.clone(),
+                env: self
+                    .config
+                    .environment
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            }
+        };
+
+        if !is_asset_attested(&spec) {
+            *self.client.lock().await = None;
+            return Err(format!(
+                "MCP server '{}' is quarantined: external executable [{}] has not been attested in AssetAttestationLedger",
+                self.server_name,
+                spec.summary()
+            ));
+        }
+
         if let Some(root) = &self.config.sandbox_root
             && !is_sandbox_trusted(root)
         {

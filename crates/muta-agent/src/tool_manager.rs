@@ -74,6 +74,8 @@ pub(crate) struct ToolManager {
     disabled: Arc<Mutex<HashSet<String>>>,
     /// In-memory hook-scoped disable mask (per RestorePoint).
     scoped_disabled: Arc<Mutex<crate::agent::ScopedToolDisable>>,
+    /// Role-level admitted MCP patterns (ADR-0242).
+    admit_mcp: Arc<RwLock<Vec<String>>>,
 }
 
 impl ToolManager {
@@ -85,13 +87,19 @@ impl ToolManager {
         dynamic: Arc<DynamicToolRegistry>,
         disabled: Arc<Mutex<HashSet<String>>>,
         scoped_disabled: Arc<Mutex<crate::agent::ScopedToolDisable>>,
+        admit_mcp: Arc<RwLock<Vec<String>>>,
     ) -> Self {
         Self {
             resolved,
             dynamic,
             disabled,
             scoped_disabled,
+            admit_mcp,
         }
+    }
+
+    pub(crate) fn set_admit_mcp(&self, patterns: Vec<String>) {
+        *self.admit_mcp.write().unwrap_or_else(|e| e.into_inner()) = patterns;
     }
 
     /// Every installed tool, classified — the schema and dispatch authority.
@@ -120,9 +128,15 @@ impl ToolManager {
             }
         }
 
-        // 2. mcp (dynamic snapshot).
+        // 2. mcp (dynamic snapshot, filtered by role admission patterns, ADR-0242).
+        let admit_patterns = self.admit_mcp.read().unwrap_or_else(|e| e.into_inner()).clone();
         for entry in self.dynamic.snapshot() {
-            if seen.insert(entry.tool.name().to_string()) {
+            let name = entry.tool.name();
+            let server = name
+                .strip_prefix("mcp__")
+                .and_then(|s| s.split("__").next())
+                .unwrap_or("");
+            if is_mcp_admitted(&admit_patterns, server) && seen.insert(name.to_string()) {
                 out.push(SourcedTool {
                     source: ToolSource::Mcp,
                     tool: entry.tool,
@@ -177,6 +191,21 @@ impl ToolManager {
             .unwrap_or_else(|e| e.into_inner())
             .contains(name)
     }
+}
+
+fn is_mcp_admitted(patterns: &[String], server: &str) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+    patterns.iter().any(|pat| {
+        if pat == "*" {
+            true
+        } else if let Some(prefix) = pat.strip_suffix('*') {
+            server.starts_with(prefix)
+        } else {
+            pat == server
+        }
+    })
 }
 
 #[cfg(test)]
@@ -243,7 +272,8 @@ mod tests {
         dynamic.replace("mcp:test", dynamic_tools);
         let disabled = Arc::new(Mutex::new(disabled.iter().map(|s| s.to_string()).collect()));
         let scoped = Arc::new(Mutex::new(crate::agent::ScopedToolDisable::default()));
-        ToolManager::new(resolved, dynamic, disabled, scoped)
+        let admit_mcp = Arc::new(RwLock::new(vec!["*".to_string()]));
+        ToolManager::new(resolved, dynamic, disabled, scoped, admit_mcp)
     }
 
     #[test]
@@ -334,5 +364,24 @@ mod tests {
         assert!(m.find("inactive_builtin").is_none());
         assert!(m.find("mcp__srv__active").is_some());
         assert!(m.find("mcp__srv__inactive").is_none());
+    }
+
+    #[test]
+    fn role_filters_mcp_tools_by_admission_patterns() {
+        let m = manager(
+            vec![],
+            vec![
+                StubTool::new("mcp__obsidian__search"),
+                StubTool::new("mcp__philpapers__query"),
+                StubTool::new("mcp__postgres__select"),
+            ],
+            vec![],
+        );
+        assert_eq!(m.installed().len(), 3);
+
+        // Filter to philosophist pattern: only obsidian and philpapers
+        m.set_admit_mcp(vec!["obsidian".to_string(), "phil*".to_string()]);
+        let names: Vec<String> = m.installed().iter().map(|s| s.tool.name().to_string()).collect();
+        assert_eq!(names, vec!["mcp__obsidian__search", "mcp__philpapers__query"]);
     }
 }

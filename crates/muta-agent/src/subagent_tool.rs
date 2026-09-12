@@ -694,7 +694,7 @@ impl SubagentTool {
         // role framing for this child (e.g. SUBAGENT_EXPLORE's research mission),
         // while posture (no human interaction, ephemeral scratchpad, depth cap)
         // is enforced by the execution policy below, not by prose.
-        let identity = crate::AgentIdentity::from_persona(profile.system_prompt);
+        let identity = crate::AgentIdentity::from_directive(profile.system_prompt);
         let mut subagent = Agent::new(self.provider.clone(), sub_tools, identity);
         subagent.set_kind(muta_contracts::AgentKind::Subagent);
 

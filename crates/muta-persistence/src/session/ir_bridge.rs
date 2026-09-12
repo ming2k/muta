@@ -160,7 +160,7 @@ pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
 
     let policy = SessionPolicy {
         rules: RuleSet {
-            system_persona: data.persona.clone(),
+            system_persona: data.role.clone(),
             workspace_root,
             project_rules: Vec::new(),
         },
@@ -256,7 +256,7 @@ mod tests {
     fn test_session_data_to_ir_and_apply_back() {
         let mut data = SessionData {
             id: "session-bridge-test".into(),
-            persona: Some("Rust Senior Architect".into()),
+            role: Some("Rust Senior Architect".into()),
             unattended: true,
             round_counter: 5,
             tree: SessionTree::default(),

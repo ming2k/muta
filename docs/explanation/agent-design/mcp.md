@@ -197,6 +197,14 @@ ADR-0138 is retired: the Master Agent calls MCP tools directly with native
 function schemas, and large payloads (>16KB or >200 lines) are automatically
 compacted to temporary spill files (`[INV-MCP-05]`) to prevent transcript bloat.
 
+### Role Capability Subscription & Zero-Latency Projection (ADR-0242)
+
+Under ADR-0242, MCP capabilities are decoupled between physical server registration and role capability subscription:
+1. **Environment Server Registry**: Servers are declared in user-global config (`~/.config/muta/config.toml`) or project files (`.muta/mcp.json`). The daemon host maintains a persistent connection pool for all enabled and trusted servers across turns.
+2. **Role Capability Subscription**: Roles (in `roles.toml` or built-in presets) declare which servers they admit via `admit_mcp` (e.g. `["obsidian", "phil*"]` for `philosophist`, `["*"]` for `developer`).
+3. **Zero-Latency In-Memory Projection**: Dynamic MCP tools (`mcp__<server>__<tool>`) are filtered in memory at turn start against the active role's admission patterns. Switching roles via `/role` updates the active toolset in sub-millisecond time without terminating or re-spawning underlying OS processes (`[INV-MCP-06]`).
+4. **Workspace-Free Parity**: Workspace-free agents (such as `philosophist`) natively access user-global MCP tools without requiring synthetic repository bindings (`[INV-MCP-05]`).
+
 ## Permission broker
 
 MCP write tools pass through the broker like any `Write` tool. Every call is

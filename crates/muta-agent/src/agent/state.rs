@@ -127,6 +127,7 @@ impl Agent {
         let dynamic_tools = Arc::new(crate::dynamic_tools::DynamicToolRegistry::default());
         let disabled_tools = Arc::new(std::sync::Mutex::new(HashSet::new()));
         let scoped_disabled_tools = Arc::new(std::sync::Mutex::new(ScopedToolDisable::default()));
+        let admit_mcp = Arc::new(std::sync::RwLock::new(vec!["*".to_string()]));
         // The unified ToolManager view owns the single authority for
         // classification, per-turn schema, and dispatch lookup. It shares the
         // storage Arcs with the agent so both reach the same live state. See
@@ -136,6 +137,7 @@ impl Agent {
             Arc::clone(&dynamic_tools),
             Arc::clone(&disabled_tools),
             Arc::clone(&scoped_disabled_tools),
+            Arc::clone(&admit_mcp),
         );
 
         let pool = Arc::new(std::sync::RwLock::new(muta_contracts::ToolPool::new(

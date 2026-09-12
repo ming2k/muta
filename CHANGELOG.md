@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Universal Asset Attestation & Zero-Trust Hazard Mesh (ADR-0243):** Decoupled asset trust from directory-bound workspace roots into a universal `AssetAttestationLedger` (SQLite migration 18).
+- **Cryptographic Fingerprint Verification:** All external OS child processes (stdio MCP) and remote HTTP endpoints are modeled as `AssetSpec` with SHA-256 fingerprint verification, eliminating the workspace-free code-execution blindspot (`[INV-TRUST-02]`).
+- **Cascading Workspace Role Overrides:** Allowed workspace `.muta/config.toml` `[roles.<name>]` to cleanly override or extend global `roles.toml` capability subscriptions (`[INV-TRUST-06]`).
+- **Four-Tier Runtime Hazard Model:** Formalized `HazardTier` (Tier 0 Query, Tier 1 Mutation, Tier 2 Egress, Tier 3 Shell) to defend against indirect prompt injection and confused deputy data exfiltration.
+- **Orthogonal MCP Architecture (ADR-0242):** Decoupled host-level physical MCP server connection pooling from role-level capability filtering. Rejected Cartesian Workspace-Role and Session-level configuration anti-patterns.
+- **Role MCP Capability Subscription:** Added `admit_mcp` pattern subscriptions to `CustomRole` (`roles.toml`) and `AgentRoleProfile`. MCP dynamic tools are now filtered in memory per turn ($O(1)$ projection), enabling workspace-free roles (such as `philosophist`) to consume external tools with zero cold-start switching latency.
+- **Thorough Persona Deprecation Cleanup:** Completed the purge of legacy `persona` residue across `muta-paths`, `muta-persistence`, `muta-agent`, `muta-runtime`, and `mutx`. Introduced canonical `roles.toml` and `--role` CLI flag while retaining seamless backward-compatible fallbacks.
+
 ## [0.48.0] - 2026-09-12
 
 ### Added

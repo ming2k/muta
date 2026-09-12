@@ -205,4 +205,25 @@ impl DbReader {
     pub fn list_kv_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
         self.engine.list_kv_keys_with_prefix(prefix)
     }
+
+    // -- universal asset attestation (ADR-0243) -----------------------------
+
+    /// Query the attestation status of an asset by its cryptographic fingerprint.
+    pub fn query_asset_attestation_status(
+        &self,
+        fingerprint: &str,
+    ) -> Result<muta_contracts::security::AttestationStatus> {
+        let mut stmt = self
+            .engine
+            .conn
+            .prepare("SELECT status FROM asset_attestations WHERE fingerprint = ?1")?;
+        let status_str: Option<String> = stmt.query_row([fingerprint], |r| r.get(0)).optional()?;
+        Ok(match status_str.as_deref() {
+            Some("trusted") => muta_contracts::security::AttestationStatus::Trusted,
+            Some("session_ephemeral") => {
+                muta_contracts::security::AttestationStatus::SessionEphemeral
+            }
+            _ => muta_contracts::security::AttestationStatus::Quarantined,
+        })
+    }
 }

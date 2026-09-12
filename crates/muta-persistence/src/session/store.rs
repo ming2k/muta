@@ -68,7 +68,7 @@ impl SessionStore {
     /// persona recorded on a fresh session, if any.
     pub fn for_workspace(
         workspace: Option<muta_contracts::WorkspaceBinding>,
-        persona: Option<String>,
+        role: Option<String>,
     ) -> Self {
         let dirs = paths::get();
         let sessions_dir = match &workspace {
@@ -83,7 +83,7 @@ impl SessionStore {
             let _ = std::fs::create_dir_all(parent);
         }
         let blob_store = BlobStore::new(dirs.blobs_dir());
-        Self::pin_fresh(workspace, persona, sessions_dir, db_path, blob_store)
+        Self::pin_fresh(workspace, role, sessions_dir, db_path, blob_store)
     }
 
     /// Open a `SessionStore` pinned to an explicit snapshot `path`.
@@ -117,7 +117,7 @@ impl SessionStore {
         let defer_persist = !path.exists() && data.is_user_facing_empty();
         Self {
             workspace: std::sync::RwLock::new(workspace),
-            persona: None,
+            role: None,
             sessions_dir,
             db_path,
             blob_store,
@@ -133,7 +133,7 @@ impl SessionStore {
     /// leaves no empty-file litter behind.
     fn pin_fresh(
         workspace: Option<muta_contracts::WorkspaceBinding>,
-        persona: Option<String>,
+        role: Option<String>,
         sessions_dir: PathBuf,
         db_path: PathBuf,
         blob_store: BlobStore,
@@ -143,7 +143,7 @@ impl SessionStore {
         let data = SessionData {
             id,
             workspace: workspace.clone(),
-            persona: persona.clone(),
+            role: role.clone(),
             ..Default::default()
         };
         let writer = if db_path == paths::get().db_file() {
@@ -153,7 +153,7 @@ impl SessionStore {
         };
         Self {
             workspace: std::sync::RwLock::new(workspace),
-            persona,
+            role,
             sessions_dir,
             db_path,
             blob_store,
@@ -174,9 +174,9 @@ impl SessionStore {
         muta_contracts::WorkspaceFilter::from_binding(self.workspace.read().unwrap().as_ref())
     }
 
-    /// The staffing persona recorded on fresh sessions, if any.
-    pub fn persona(&self) -> Option<&str> {
-        self.persona.as_deref()
+    /// The staffing role recorded on fresh sessions, if any.
+    pub fn role(&self) -> Option<&str> {
+        self.role.as_deref()
     }
 
     /// The workspace root, when one is bound. `None` for the unbound set.
@@ -221,7 +221,7 @@ impl SessionStore {
     /// Start a brand-new session and repoint this store at it.
     pub async fn reset(&self) -> Result<String, String> {
         let workspace = self.workspace.read().unwrap().clone();
-        let persona = self.persona.clone();
+        let role = self.role.clone();
         let mut state = self.state.lock().await;
         let sessions_dir = self.sessions_dir.clone();
         let id = uuid::Uuid::new_v4().to_string();
@@ -229,7 +229,7 @@ impl SessionStore {
         let data = SessionData {
             id: id.clone(),
             workspace,
-            persona,
+            role,
             ..Default::default()
         };
         state.path = path;
@@ -266,7 +266,7 @@ impl SessionStore {
             return Ok(());
         }
         let workspace = self.workspace.read().unwrap().clone();
-        let persona = self.persona.clone();
+        let role = self.role.clone();
         let blob_store = self.blob_store.clone();
         let writer = self.writer.clone();
         let load_path = path.clone();
@@ -278,7 +278,7 @@ impl SessionStore {
                 &resolved_id,
                 &blob_store,
                 workspace.as_ref(),
-                persona.as_deref(),
+                role.as_deref(),
                 Some(&load_path),
             )
         })

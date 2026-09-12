@@ -1251,14 +1251,14 @@ fn latest_session_filters_by_workspace_and_persona() {
     let engine = DatabaseEngine::open_in_memory().unwrap();
 
     let mut unbound = crate::session::SessionData {
-        persona: Some("philosopher".into()),
+        role: Some("philosopher".into()),
         ..Default::default()
     };
     unbound.workspace = None;
     engine.save_session_full(&unbound).unwrap();
 
     let mut bound = crate::session::SessionData {
-        persona: Some("philosopher".into()),
+        role: Some("philosopher".into()),
         ..Default::default()
     };
     bound.workspace = Some(muta_contracts::WorkspaceBinding::new("/repo/x"));

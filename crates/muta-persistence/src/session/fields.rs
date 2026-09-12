@@ -253,14 +253,14 @@ impl SessionStore {
         Ok(())
     }
 
-    pub async fn active_persona(&self) -> Option<String> {
-        self.state.lock().await.data.persona.clone()
+    pub async fn active_role(&self) -> Option<String> {
+        self.state.lock().await.data.role.clone()
     }
 
-    pub async fn set_persona(&self, persona: Option<String>) -> Result<(), String> {
+    pub async fn set_role(&self, role: Option<String>) -> Result<(), String> {
         let (path, data, should_persist) = {
             let mut state = self.state.lock().await;
-            state.data.persona = persona;
+            state.data.role = role;
             state.data.updated_at = unix_timestamp();
             let empty_unpersisted = Self::should_skip_persist(&state);
             if !empty_unpersisted {
@@ -385,16 +385,16 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn active_persona_and_set_persona_roundtrip() {
+    async fn active_role_and_set_role_roundtrip() {
         let dir = tempdir().unwrap();
         let store = SessionStore::for_path(dir.path().join("session.json"));
-        assert_eq!(store.active_persona().await, None);
+        assert_eq!(store.active_role().await, None);
 
-        store.set_persona(Some("philosophist".to_string())).await.unwrap();
-        assert_eq!(store.active_persona().await, Some("philosophist".to_string()));
+        store.set_role(Some("philosophist".to_string())).await.unwrap();
+        assert_eq!(store.active_role().await, Some("philosophist".to_string()));
 
-        store.set_persona(None).await.unwrap();
-        assert_eq!(store.active_persona().await, None);
+        store.set_role(None).await.unwrap();
+        assert_eq!(store.active_role().await, None);
 
         // Test dynamic set_workspace
         assert!(store.workspace().is_some());

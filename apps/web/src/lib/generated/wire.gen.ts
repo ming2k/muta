@@ -1178,7 +1178,7 @@ elevation: boolean,
 one_off: boolean, 
 /**
  * Origin label identifying which subagent produced this request (ADR-0138).
- * `None` for top-level principal calls; e.g. `Some("subagent #a1b2 · mcp_specialist")`.
+ * `None` for top-level principal calls; e.g. `Some("subagent #a1b2 · explore")`.
  */
 origin?: string | null, 
 /**
@@ -1969,14 +1969,13 @@ unattended: boolean,
  */
 confined: boolean, 
 /**
- * Persona id to staff this session with (ADR-0220). `None` = the default
+ * Role id to staff this session with. `None` = the default
  * workspace-scoped coding principal.
  */
-persona?: string | null, 
+role?: string | null, 
 /**
- * Resume the most recent matching session instead of creating a new one
- * (ADR-0226). With `persona`, matches by persona (and workspace when the
- * persona binds one).
+ * Resume the most recent matching session instead of creating a new one.
+ * With `role`, matches by role (and workspace when the role binds one).
  */
 resume?: boolean, };
 

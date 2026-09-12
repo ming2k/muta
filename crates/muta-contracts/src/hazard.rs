@@ -43,6 +43,34 @@ impl HazardLevel {
     }
 }
 
+/// Four-tier runtime hazard taxonomy for tool invocation and prompt-injection defense (ADR-0243).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum HazardTier {
+    /// Tier 0: Pure Local Query / Read-Only (silent execution with audit logging).
+    Tier0Query,
+    /// Tier 1: Local Workspace Mutation (sandboxed within workspace; commit journal undo).
+    Tier1Mutation,
+    /// Tier 2: Outbound Egress & Data Exfiltration (interactive consent sheet; blocks confused deputy).
+    Tier2Egress,
+    /// Tier 3: Shell & Arbitrary OS Execution (highest guard; strict approval gates).
+    Tier3Shell,
+}
+
+impl From<HazardLevel> for HazardTier {
+    fn from(level: HazardLevel) -> Self {
+        match level {
+            HazardLevel::Safe => Self::Tier0Query,
+            HazardLevel::FileModification => Self::Tier1Mutation,
+            HazardLevel::NetworkOrExternal => Self::Tier2Egress,
+            HazardLevel::CommandExecution | HazardLevel::ProcessLifecycle => Self::Tier3Shell,
+        }
+    }
+}
+
 /// Linux process termination / intercept specification submitted by command execution tools.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]

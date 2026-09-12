@@ -145,13 +145,12 @@ pub struct SessionInitOptions {
     /// Whether workspace filesystem confinement is enforced (default true).
     #[serde(default = "default_confined")]
     pub confined: bool,
-    /// Persona id to staff this session with (ADR-0220). `None` = the default
+    /// Role id to staff this session with. `None` = the default
     /// workspace-scoped coding principal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub persona: Option<String>,
-    /// Resume the most recent matching session instead of creating a new one
-    /// (ADR-0226). With `persona`, matches by persona (and workspace when the
-    /// persona binds one).
+    #[serde(default, alias = "persona", skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Resume the most recent matching session instead of creating a new one.
+    /// With `role`, matches by role (and workspace when the role binds one).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub resume: bool,
 }
@@ -165,7 +164,7 @@ impl Default for SessionInitOptions {
         Self {
             unattended: false,
             confined: true,
-            persona: None,
+            role: None,
             resume: false,
         }
     }
@@ -176,13 +175,13 @@ impl SessionInitOptions {
         Self {
             unattended,
             confined,
-            persona: None,
+            role: None,
             resume: false,
         }
     }
 
-    pub fn with_persona(mut self, persona: Option<String>) -> Self {
-        self.persona = persona;
+    pub fn with_role(mut self, role: Option<String>) -> Self {
+        self.role = role;
         self
     }
 
@@ -192,7 +191,7 @@ impl SessionInitOptions {
     }
 
     pub fn is_default(&self) -> bool {
-        !self.unattended && self.confined && self.persona.is_none() && !self.resume
+        !self.unattended && self.confined && self.role.is_none() && !self.resume
     }
 }
 

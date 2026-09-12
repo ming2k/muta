@@ -218,13 +218,15 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             let target = parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty());
             match target {
                 None => {
-                    let personas_config = muta_persistence::personas::PersonasConfig::load();
+                    let roles_config = muta_persistence::roles::RolesConfig::load_for_workspace(
+                        session.workspace_root().as_deref(),
+                    );
                     let mut lines = Vec::new();
 
                     let current = session
-                        .active_persona()
+                        .active_role()
                         .await
-                        .or_else(|| session.persona().map(str::to_string))
+                        .or_else(|| session.role().map(str::to_string))
                         .unwrap_or_else(|| "developer".to_string());
                     let ws_str = session
                         .workspace_root()
@@ -238,12 +240,17 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         lines.push(format!("    • `{}` — {}", preset.as_str(), preset.description()));
                     }
 
-                    if !personas_config.is_empty() {
+                    if !roles_config.is_empty() {
                         lines.push(String::new());
-                        lines.push("  User personas (~/.config/muta/personas.toml):".to_string());
-                        for (id, p) in &personas_config.personas {
+                        lines.push("  User roles (~/.config/muta/roles.toml):".to_string());
+                        for (id, p) in &roles_config.roles {
                             let desc = p.mission.as_deref().unwrap_or(p.name.as_str());
-                            lines.push(format!("    • `{id}` (preset: `{}`) — {desc}", p.preset));
+                            let mcp_info = if let Some(admit) = &p.admit_mcp {
+                                format!(" [mcp: {}]", admit.join(", "))
+                            } else {
+                                String::new()
+                            };
+                            lines.push(format!("    • `{id}` (preset: `{}`){mcp_info} — {desc}", p.preset));
                         }
                     }
 
@@ -260,16 +267,18 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     .await;
                 }
                 Some(role_id) => {
-                    let personas_config = muta_persistence::personas::PersonasConfig::load();
-                    let user_persona = personas_config.get(role_id);
+                    let roles_config = muta_persistence::roles::RolesConfig::load_for_workspace(
+                        session.workspace_root().as_deref(),
+                    );
+                    let user_role = roles_config.get(role_id);
                     let builtin = muta_contracts::MainAgentRole::parse(role_id);
 
-                    if user_persona.is_none() && builtin.is_none() {
+                    if user_role.is_none() && builtin.is_none() {
                         let mut available: Vec<String> = muta_contracts::MainAgentRole::ALL
                             .iter()
                             .map(|p| format!("`{}`", p.as_str()))
                             .collect();
-                        for id in personas_config.ids() {
+                        for id in roles_config.ids() {
                             available.push(format!("`{id}`"));
                         }
                         record_error(
@@ -370,7 +379,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     match agent.apply_role(role_id) {
                         Some(switched) => {
                             let _ = session.set_unattended(agent.unattended()).await;
-                            let _ = session.set_persona(Some(switched.id.clone())).await;
+                            let _ = session.set_role(Some(switched.id.clone())).await;
                             let _ = resp_tx.send(round_response(
                                 &session.id().await,
                                 RoundEvent::UnattendedChanged(agent.unattended()),

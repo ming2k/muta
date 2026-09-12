@@ -59,9 +59,9 @@ pub struct BootstrapParams {
     pub startup: SessionStart,
     /// `--project` override: the workspace partition. `None` = workspace-free.
     pub project_root: Option<PathBuf>,
-    /// The persona staffing this session, if any (ADR-0225). Recorded on
+    /// The role staffing this session, if any (ADR-0225). Recorded on
     /// the session as metadata; `None` for the default coding principal.
-    pub persona: Option<String>,
+    pub role: Option<String>,
     /// `--unattended` at start (unattended execution): auto-approve tool permissions.
     pub unattended: bool,
     /// Workspace filesystem confinement (default true). False (`--no-confinement`) bypasses confinement.
@@ -161,7 +161,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ui,
         startup,
         project_root: project_override,
-        persona,
+        role,
         unattended: unattended_at_start,
         confined: confined_at_start,
         human_channel,
@@ -252,7 +252,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // `?`) rather than a silent fresh-session fallback, so the operator knows
     // the attach never happened. `mutx attach` (no id) opens the sessions
     // picker overlay instead of guessing.
-    let session = Arc::new(SessionStore::for_workspace(workspace, persona));
+    let session = Arc::new(SessionStore::for_workspace(workspace, role));
     let open_picker_on_start = match &startup {
         SessionStart::Fresh | SessionStart::FreshWithPrompt(_) => false,
         SessionStart::Picker => true,
@@ -614,6 +614,39 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ));
     }
     let command_catalog = crate::startup::command_catalog(&[]);
+    // Wire universal asset attestation verifier into muta-mcp (ADR-0243).
+    let attestation_ledger = muta_persistence::AssetAttestationLedger::load();
+    for (_name, server_cfg) in &config.mcp {
+        if server_cfg.sandbox_root.is_none() {
+            let spec = if let Some(url) = &server_cfg.url {
+                muta_contracts::security::AssetSpec::RemoteEndpoint {
+                    url: url.clone(),
+                    headers: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            } else {
+                muta_contracts::security::AssetSpec::Process {
+                    command: server_cfg.command.clone(),
+                    env: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            };
+            if !attestation_ledger.is_trusted(&spec) {
+                let _ = attestation_ledger.trust_asset(&spec);
+            }
+        }
+    }
+    let ledger_for_mcp = attestation_ledger.clone();
+    muta_mcp::set_attestation_verifier(Arc::new(move |spec| {
+        ledger_for_mcp.is_trusted(spec)
+    }));
+
     // Wire workspace security trust verifier into muta-mcp so MCP server
     // connections can verify sandbox trust without depending on muta-persistence.
     let ws_security_for_mcp = workspace_security.clone();

@@ -71,6 +71,11 @@ impl Agent {
         self.dynamic_tools.clone()
     }
 
+    /// Update the admitted MCP server patterns for the active role (ADR-0242).
+    pub fn set_admit_mcp(&self, patterns: Vec<String>) {
+        self.tool_manager.set_admit_mcp(patterns);
+    }
+
     /// Set the session-level enabled flag for a tool. No-op when the name is
     /// unknown (so a stale toggle from the modal cannot poison the dispatch
     /// table). Returns whether the flag actually changed.

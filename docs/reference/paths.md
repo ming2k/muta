@@ -38,6 +38,7 @@ User-edited configuration. Lossy; back it up.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `config.toml` | User-edited configuration — **daemon & core behavior only** (`default_connection` / `default_model`, `[compaction]`, `[permissions]`, `[workspace]`, `[bash_policy]`, `[tool_variants]`, `[[hooks]]`, `[skills]`, `[web]`, `[mcp.<server>]`, `[daemon]`, `[master]`, ...). Model connections live in `connections.toml`; secrets live in `credentials.toml` | Yes |
+| `roles.toml` | User-authored custom roles and capability scopes (`[roles.<id>]`, `admit_mcp` patterns, workspace policies; ADR-0242). Legacy `personas.toml` supported as fallback | Yes (user-authored) |
 | `credentials.toml` | Token-auth secrets, split out of `config.toml` (written `rw-------`): model credentials under `[connections]` by connection name, web credentials under `[web.search]` / `[web.reader]` by provider id. OAuth logins do not live here — see the note below. | Yes |
 | `model_providers.toml` | Provider-level model scope, keyed by **model provider id**: `[model_providers.<id>]` with `models.include` / `models.exclude` / `models.overrides`. Applies to every connection pointing at that provider (ADR-0199, ADR-0201). Renamed from `presets.toml` | Yes (user-authored) |
 

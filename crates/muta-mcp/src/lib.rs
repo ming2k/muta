@@ -20,7 +20,8 @@ mod runtime;
 
 pub use catalog::McpCatalog;
 pub use client::{
-    McpLoadResult, McpServer, McpTrustVerifier, connect_server, load_mcp_tools, reconnect_server,
-    refresh_mcp_tools, set_trust_verifier,
+    McpAttestationVerifier, McpLoadResult, McpServer, McpTrustVerifier, connect_server,
+    load_mcp_tools, reconnect_server, refresh_mcp_tools, set_attestation_verifier,
+    set_trust_verifier,
 };
 pub use runtime::{McpRuntime, ReconfigureReport};

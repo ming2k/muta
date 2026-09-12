@@ -55,8 +55,8 @@ pub struct CliArgs {
     pub project: Option<PathBuf>,
     /// `--unattended`: run unattended without interactive human confirmations.
     pub unattended: bool,
-    /// `--persona <id>`: staff the new session with a persistent persona (ADR-0220).
-    pub persona: Option<String>,
+    /// `--role <id>`: staff the new session with a role (`developer`, `philosophist`, or user role).
+    pub role: Option<String>,
     /// `--resume`: resume the most recent matching session instead of a new one.
     pub resume: bool,
     /// `--no-confinement`: run with workspace filesystem confinement disabled.
@@ -156,7 +156,7 @@ fn flag_value<'a, I: Iterator<Item = &'a String>>(
 pub fn parse(args: &[String]) -> Result<CliArgs, String> {
     let mut project = None;
     let mut unattended = false;
-    let mut persona = None;
+    let mut role = None;
     let mut resume = false;
     let mut no_confinement = false;
     let mut interactive = false;
@@ -187,7 +187,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 ));
             }
             "--unattended" => unattended = true,
-            "--persona" => persona = Some(flag_value("--persona", inline, &mut iter)?),
+            "--role" | "--persona" => role = Some(flag_value(name, inline, &mut iter)?),
             "--resume" => resume = true,
             "--no-confinement" => no_confinement = true,
             "--interactive" | "-i" => interactive = true,
@@ -222,7 +222,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
         mode,
         project: project.clone(),
         unattended,
-        persona: persona.clone(),
+        role: role.clone(),
         resume,
         no_confinement,
         interactive,

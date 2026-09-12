@@ -35,6 +35,8 @@ pub struct AgentRoleProfile {
     pub unattended: bool,
     /// Atomic extensions equipped by this role.
     pub extensions: Vec<std::sync::Arc<dyn crate::Extension>>,
+    /// MCP server subscription patterns (e.g. `["*"]` or `["obsidian", "phil*"]`).
+    pub admit_mcp: Vec<String>,
 }
 
 impl AgentRoleProfile {
@@ -47,7 +49,14 @@ impl AgentRoleProfile {
             config: AgentRuntimeConfig::default(),
             unattended: false,
             extensions: Vec::new(),
+            admit_mcp: vec!["*".to_string()],
         }
+    }
+
+    /// Set the admitted MCP server patterns for this role.
+    pub fn with_mcp_admission(mut self, patterns: Vec<String>) -> Self {
+        self.admit_mcp = patterns;
+        self
     }
 
     /// Attach an atomic extension to this role.
@@ -416,7 +425,7 @@ pub const AGENT_ROLE_PHILOSOPHIST: AgentRoleDelegation = AgentRoleDelegation {
 };
 
 fn role_directive(text: &str) -> AgentIdentity {
-    AgentIdentity::from_persona(text)
+    AgentIdentity::from_directive(text)
 }
 
 #[cfg(test)]

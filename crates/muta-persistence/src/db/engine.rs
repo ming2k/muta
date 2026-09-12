@@ -288,7 +288,7 @@ impl DatabaseEngine {
             // generation column existed) also forces the full rewrite.
             let full = force_full || stored_generation.as_deref() != Some(data.generation.as_str());
 
-            let persona = data.persona.clone();
+            let persona = data.role.clone();
             let workspace_root = data
                 .workspace
                 .as_ref()
@@ -902,7 +902,7 @@ impl DatabaseEngine {
             title,
             created_at: created_at_s.max(0) as u64,
             updated_at: updated_at_s.max(0) as u64,
-            persona,
+            role: persona,
             workspace: workspace_root.map(|root| muta_contracts::WorkspaceBinding {
                 root: PathBuf::from(root),
                 additional_roots: serde_json::from_str(&additional_roots).unwrap_or_else(|error| {

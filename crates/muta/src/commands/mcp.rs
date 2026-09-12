@@ -28,19 +28,38 @@ pub fn run(action: McpAction) -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .into());
             }
-            config.mcp.insert(
-                name.clone(),
-                McpServerConfig {
-                    url,
-                    command,
-                    environment: environment.into_iter().collect(),
-                    enabled: !disabled,
-                    read_only,
-                    allow_tools,
-                    deny_tools,
-                    sandbox_root: None,
-                },
-            );
+            let server_cfg = McpServerConfig {
+                url,
+                command,
+                environment: environment.into_iter().collect(),
+                enabled: !disabled,
+                read_only,
+                allow_tools,
+                deny_tools,
+                sandbox_root: None,
+            };
+            // Interactive CLI registration implicitly attests human intent (ADR-0243).
+            let spec = if let Some(url) = &server_cfg.url {
+                muta_contracts::security::AssetSpec::RemoteEndpoint {
+                    url: url.clone(),
+                    headers: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            } else {
+                muta_contracts::security::AssetSpec::Process {
+                    command: server_cfg.command.clone(),
+                    env: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            };
+            let _ = muta_persistence::AssetAttestationLedger::load().trust_asset(&spec);
+            config.mcp.insert(name.clone(), server_cfg);
             config.save()?;
             println!(
                 "Added [mcp.{name}] to {}",

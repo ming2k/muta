@@ -42,10 +42,10 @@ pub struct AgentIdentity {
     /// What this agent is for, e.g. `"a meticulous research assistant"`. Empty
     /// means "no mission framing".
     pub mission: String,
-    /// Optional full-text identity override. When non-empty, `preamble`
+    /// Optional full-text identity directive override. When non-empty, `preamble`
     /// returns this verbatim (used by subagents whose identity *is* their
     /// role's full task prompt). None/empty → compose from name + mission.
-    pub persona: Option<String>,
+    pub directive: Option<String>,
 }
 
 impl AgentIdentity {
@@ -54,7 +54,7 @@ impl AgentIdentity {
         Self {
             name: name.into(),
             mission: mission.into(),
-            persona: None,
+            directive: None,
         }
     }
 
@@ -66,30 +66,30 @@ impl AgentIdentity {
         Self {
             name: String::new(),
             mission: mission.into(),
-            persona: None,
+            directive: None,
         }
     }
 
-    /// Build an identity whose preamble is a full persona string, ignoring
-    /// name/mission composition. Used by subagents and focused roles: their
+    /// Build an identity whose preamble is a full role directive / prompt string,
+    /// ignoring name/mission composition. Used by subagents and focused roles: their
     /// identity is the role's complete task prompt or directive.
-    pub fn from_persona(persona: impl Into<String>) -> Self {
+    pub fn from_directive(directive: impl Into<String>) -> Self {
         Self {
             name: String::new(),
             mission: String::new(),
-            persona: Some(persona.into()),
+            directive: Some(directive.into()),
         }
     }
 
-    /// Render the opening system-prompt sentence. A `persona` override returns
+    /// Render the opening system-prompt sentence. A `directive` override returns
     /// it verbatim; otherwise `"You are {name}, {mission}."` when both are set,
     /// `"You are {name}."` / `"You are {mission}."` when one is set, and the
     /// empty string when neither is (tests / identity-less agents).
     pub fn preamble(&self) -> String {
-        if let Some(persona) = &self.persona
-            && !persona.is_empty()
+        if let Some(directive) = &self.directive
+            && !directive.is_empty()
         {
-            return persona.clone();
+            return directive.clone();
         }
         match (self.name.is_empty(), self.mission.is_empty()) {
             (true, true) => String::new(),
@@ -126,9 +126,9 @@ mod tests {
     }
 
     #[test]
-    fn persona_override_is_returned_verbatim() {
+    fn directive_override_is_returned_verbatim() {
         assert_eq!(
-            AgentIdentity::from_persona("Role: code reviewer. Report findings; never apply.")
+            AgentIdentity::from_directive("Role: code reviewer. Report findings; never apply.")
                 .preamble(),
             "Role: code reviewer. Report findings; never apply."
         );

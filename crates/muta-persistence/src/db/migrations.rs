@@ -5,14 +5,14 @@
 use super::*;
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 17;
+pub const CURRENT_DB_VERSION: u32 = 18;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 pub const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "d92ec5dce03b9af80a80319d109f0916d21f6238a70b492d749f32c953d9f995";
+    "e58e01efd46582c0cfd82dc434b2b5b4b69c102504fb1dd8ea4482c4eef7ca10";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -447,6 +447,12 @@ pub const MIGRATIONS: &[Migration] = &[
         // `sessions_v2`, `session_policies`, `causal_nodes` schema and create
         // `session_list_view` read projection.
         version: 17,
+        sql: "",
+    },
+    Migration {
+        // Universal Asset Attestation Ledger (ADR-0243): initialize
+        // `asset_attestations` table for process and endpoint trust.
+        version: 18,
         sql: "",
     },
 ];
@@ -1053,6 +1059,25 @@ pub fn insert_legacy_usage_record_tx(
     Ok(())
 }
 
+/// Universal Asset Attestation Schema (ADR-0243), applied by migration 18:
+/// Initializes the `asset_attestations` table for process and endpoint trust.
+pub fn apply_asset_attestation_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    tx.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS asset_attestations (
+            fingerprint TEXT PRIMARY KEY,
+            asset_type TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at_s INTEGER NOT NULL,
+            updated_at_s INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_asset_attestations_status ON asset_attestations(status);
+        "#,
+    )?;
+    Ok(())
+}
+
 pub fn insert_usage_record_tx(conn: &Connection, session_id: &str, record: &muta_contracts::RequestUsageRecord) -> Result<()> {
     if record.key.session_id != session_id {
         return Err(rusqlite::Error::InvalidParameterName("usage belongs to another session".into()));
@@ -1292,6 +1317,9 @@ pub fn apply_migrations(conn: &mut Connection, observed_version: u32) -> Result<
                 }
                 if migration.version == 17 {
                     apply_session_ir_clean_break_schema(&tx)?;
+                }
+                if migration.version == 18 {
+                    apply_asset_attestation_schema(&tx)?;
                 }
             }
         }

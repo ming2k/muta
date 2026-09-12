@@ -61,26 +61,32 @@ cargo insta review
 
 ---
 
-## 3. Sandboxed Execution & Dev Isolation
+## 3. Sandboxed Execution & Test Isolation
 
-To ensure tests and local runs never collide with a running host daemon or touch `~/.config/muta`, use `--home` / `MUTA_HOME` (see [ADR-0121](../adr/0121-instance-isolation-for-development-and-testing.md) and [Persistence](../explanation/persistence.md)):
+All automated test suites isolate filesystem and daemon footprints via `MUTA_HOME` (see [ADR-0121](../adr/0121-instance-isolation-for-development-and-testing.md), [ADR-0168](../adr/0168-complete-sqlite-unification-and-legacy-persistence-purge.md), and [Persistence](../explanation/persistence.md)).
 
-### Isolated Test Execution
-```bash
-# Run full suite in isolated sandbox
-export MUTA_HOME=$(mktemp -d /tmp/muta-test.XXXXXX)
-cargo nextest run --workspace
-rm -rf "$MUTA_HOME"
-```
+> **Scope Note**: This section covers **inner-loop automated test execution**. For interactive TUI preview, cold-start user journeys, and manual acceptance scenario matrices, consult [Acceptance Criteria & User Journeys](acceptance.md).
 
-### Isolated Local Dev Execution
-```bash
-# Run isolated TUI or daemon without touching user data
-cargo run -p mutx -- --home /tmp/dev-muta
+### Automated Suite Isolation (`cargo nextest run`)
 
-# Run daemon on a distinct port
-MUTA_HOME=/tmp/dev-muta MUTA_PORT=9801 cargo run -p muta -- start
-```
+Automated tests will not contaminate host state (`~/.config/muta` or running host daemons):
+
+- **Unit Tests**: Module-level tests operate purely on in-memory data structures and parsers.
+- **TUI Snapshot Tests**: `cargo nextest run -p mutx -E 'test(snapshot_tests)'` renders against an in-memory test backend (`ratatui::backend::TestBackend`) without daemon IPC or filesystem writes.
+- **Integration Tests**: Crates exercising the daemon lifecycle (e.g. `muta-runtime`) isolate their process by setting `MUTA_HOME` to a fresh temporary directory before initializing paths.
+- **Workspace-wide Verification**: When running the full suite manually, you can explicitly export a clean sandbox root:
+  ```bash
+  export MUTA_HOME=$(mktemp -d /tmp/muta-test.XXXXXX)
+  cargo nextest run --workspace
+  rm -rf "$MUTA_HOME"
+  ```
+
+### Cross-Reference: Local Preview & Standalone Daemon Isolation
+
+When running binaries directly during development rather than via the test runner:
+- **`mutx` TUI Preview**: Debug builds (`cargo run -p mutx`) automatically bootstrap an isolated sandbox under `<target_dir>/muta-dev` via `ensure_dev_environment()`, ensuring zero interference with the host system.
+- **`muta` Daemon**: Does **not** auto-sandbox. Direct execution without `MUTA_HOME` will collide with host paths. Always export `MUTA_HOME` and `MUTA_PORT` when running standalone daemons.
+- Complete procedures, launch commands, and verification criteria are defined in [Acceptance](acceptance.md).
 
 ---
 

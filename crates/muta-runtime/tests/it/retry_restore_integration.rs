@@ -32,7 +32,7 @@ fn params(project_root: std::path::PathBuf, startup: SessionStart) -> BootstrapP
         ui: Arc::new(HeadlessProbe),
         startup,
         project_root: Some(project_root),
-        persona: None,
+        role: None,
         unattended: false,
         confined: true,
         teardown_token: None,
@@ -126,7 +126,7 @@ async fn workspace_free_scope_assembles_without_a_workspace() {
         ui: Arc::new(HeadlessProbe),
         startup: SessionStart::Fresh,
         project_root: None,
-        persona: Some("english-practice".to_string()),
+        role: Some("english-practice".to_string()),
         unattended: false,
         confined: true,
         teardown_token: None,
@@ -137,9 +137,9 @@ async fn workspace_free_scope_assembles_without_a_workspace() {
     .expect("workspace-free assemble succeeds");
 
     assert_eq!(
-        boot.session.persona(),
+        boot.session.role(),
         Some("english-practice"),
-        "the staffing persona is recorded as metadata"
+        "the staffing role is recorded as metadata"
     );
     assert!(
         boot.session.workspace().is_none(),

@@ -618,8 +618,8 @@ pub fn command_catalog(custom: &[(String, String)]) -> muta_contracts::CommandCa
                     })
                     .collect();
                 if spec.name == "/role" {
-                    let user_personas = muta_persistence::personas::PersonasConfig::load();
-                    for (id, p) in user_personas.personas {
+                    let user_roles = muta_persistence::roles::RolesConfig::load();
+                    for (id, p) in user_roles.roles {
                         if !subs.iter().any(|s| s.name == id) {
                             let desc = p.mission.as_deref().unwrap_or(p.name.as_str());
                             subs.push(muta_contracts::CommandSubcommandSpec {

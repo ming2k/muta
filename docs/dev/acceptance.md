@@ -14,7 +14,10 @@ It answers: **Can an authentic user build, launch, configure, and complete core 
   - Standard Unix terminal (xterm-256color or truecolor supported).
   - Configured model provider credentials (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or custom provider config).
 - **Host Isolation Invariant**:
-  When executing acceptance verification on a development machine where a host `muta` daemon or real user data (`~/.config/muta`) may exist, **always isolate the run via `MUTA_HOME`**. Every command in this guide explicitly carries `MUTA_HOME` to guarantee 100% authentic user workflows without contending for host lockfiles/ports or polluting host state.
+  When executing acceptance verification or UI preview on a development machine where a host `muta` daemon or real user data (`~/.config/muta`) may exist, isolation guarantees differ by binary:
+  - **Interactive TUI Preview (`mutx`)**: Debug builds (`cargo run -p mutx`) automatically bootstrap a localized sandbox under `<target_dir>/muta-dev` via `ensure_dev_environment()`, repointing `MUTA_HOME` and binding sibling `target/debug/muta` via `MUTA_BIN`. Interactive runs and dev preview controls (e.g. `MUTX_DEV_TOAST`) are safe by default and will not pollute the host system.
+  - **Standalone Daemon Verification (`muta`)**: The core daemon does not inject an automatic debug sandbox. Directly invoking `cargo run -p muta` without `MUTA_HOME` resolves host XDG paths and the default port `9800`, colliding with any running host daemon. Acceptance runs for `muta` must explicitly define `MUTA_HOME` and `MUTA_PORT`.
+  - Every acceptance journey in this guide explicitly sets `MUTA_HOME` and `MUTA_PORT` to guarantee 100% reproducible cold-start verification without contending for host lockfiles/ports or polluting host state.
 
 ---
 
@@ -145,7 +148,19 @@ MUTA_HOME="$MUTA_HOME" cargo run -p muta -- --help
 
 ---
 
-## 4. Final Acceptance Checklist & Cleanup
+## 4. Acceptance Scenario Matrix
+
+| Scenario ID | Category | Initial Condition | Action / Trigger | Expected Observable Outcome |
+| :--- | :--- | :--- | :--- | :--- |
+| `SCEN-ISO-01` | Isolation / Preview | Host muta installed and running; unset `MUTA_HOME` | `cargo run -p mutx` | Auto-bootstraps `<target>/muta-dev`; does not touch host `~/.config/muta` or host daemon socket. |
+| `SCEN-ISO-02` | Isolation / Daemon | Host muta running on port 9800 | `MUTA_HOME=/tmp/dev MUTA_PORT=9801 cargo run -p muta -- start` | Binds port 9801 and `/tmp/dev/muta/instance/daemon.sock`; zero port/lock contention with host daemon. |
+| `SCEN-ISO-03` | Edge Case | Direct invocation of daemon without isolation | `cargo run -p muta -- start` (without `MUTA_HOME`) | Connects to host XDG path; fails gracefully if host lock held (`daemon lock already held`). |
+| `SCEN-TUI-01` | Happy Path | Isolated sandbox active | Launch `mutx`, send prompt, approve tool | Clean TUI rendering, streamed output, transcript saved under `$MUTA_HOME`. |
+| `SCEN-CLI-01` | Happy Path | Isolated sandbox active | Execute `muta prompt "..."` headless | Headless prompt runs to completion, streams to stdout, exits code 0. |
+
+---
+
+## 5. Final Acceptance Checklist & Cleanup
 
 - [ ] All 4 core journeys execute from cold start without manual state hacking or backdoor flags.
 - [ ] Every execution explicitly carries `MUTA_HOME` to guarantee host isolation.

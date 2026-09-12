@@ -651,7 +651,7 @@ impl SessionStore {
         let side_path = self.sessions_dir.join(format!("{side_id}.json"));
         let db_path = self.db_path.clone();
         let workspace = self.workspace.read().unwrap().clone();
-        let persona = self.persona.clone();
+        let role = self.role.clone();
         let blob_store = BlobStore::new(self.blob_store.root().to_path_buf());
         let reader = self.writer.reader().map_err(|e| e.to_string())?;
         let data = if let Some(data) = reader
@@ -666,7 +666,7 @@ impl SessionStore {
                 side_id,
                 &blob_store,
                 workspace.as_ref(),
-                persona.as_deref(),
+                role.as_deref(),
                 Some(&side_path),
             )
         } else {
@@ -674,7 +674,7 @@ impl SessionStore {
         };
         Ok(SessionStore {
             workspace: std::sync::RwLock::new(workspace),
-            persona,
+            role,
             sessions_dir: self.sessions_dir.clone(),
             db_path,
             blob_store,
@@ -787,7 +787,7 @@ fn admit_subagent_children(state: &mut SessionData, candidates: &[Message]) -> V
             parent_id: Some(state.id.clone()),
             fork_kind: muta_contracts::SessionForkKind::Subagent,
             workspace: state.workspace.clone(),
-            persona: state.persona.clone(),
+            role: state.role.clone(),
             ..Default::default()
         };
         subagent.transcript = rebuild_transcript_from_messages(children);

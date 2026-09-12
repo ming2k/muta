@@ -106,7 +106,8 @@ pub struct SessionData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) last_projection: Option<ContextProjectionCheckpoint>,
     pub(crate) workspace: Option<muta_contracts::WorkspaceBinding>,
-    pub(crate) persona: Option<String>,
+    #[serde(default, alias = "persona", skip_serializing_if = "Option::is_none")]
+    pub(crate) role: Option<String>,
     /// Schema version of this session. Migrations are no longer applied —
     /// ADR-0186 is a clean break and legacy snapshots load as empty.
     pub(crate) schema_version: u32,
@@ -189,7 +190,7 @@ impl SessionData {
             transcript: muta_contracts::Transcript::default(),
             last_projection: self.last_projection.clone(),
             workspace: self.workspace.clone(),
-            persona: self.persona.clone(),
+            role: self.role.clone(),
             schema_version: self.schema_version,
             checksum: self.checksum,
             title: self.title.clone(),
@@ -256,7 +257,7 @@ impl Default for SessionData {
             transcript: muta_contracts::Transcript::new(),
             last_projection: None,
             workspace: default_workspace(),
-            persona: None,
+            role: None,
             schema_version: CURRENT_SCHEMA_VERSION,
             checksum: None,
             title: None,
@@ -378,7 +379,7 @@ impl<'a> From<&'a SessionData> for SessionRowChecksumView<'a> {
             generation: &data.generation,
             id: &data.id,
             parent_id: data.parent_id.as_deref(),
-            persona: data.persona.as_deref(),
+            persona: data.role.as_deref(),
             workspace: data.workspace.as_ref(),
             provider_selection: data.provider_selection.as_ref(),
             retry_pending: data.retry_pending.as_ref(),
@@ -527,7 +528,7 @@ impl SessionState {
 
 pub struct SessionStore {
     workspace: std::sync::RwLock<Option<muta_contracts::WorkspaceBinding>>,
-    persona: Option<String>,
+    role: Option<String>,
     /// Directory holding every session file for this project (or, for
     /// [`SessionStore::for_path`], the parent of the pinned snapshot). All
     /// `reset` / `fork` / `open` targets live here, so the store never writes
@@ -616,7 +617,7 @@ fn load_or_seed(
     SessionData {
         id,
         workspace: workspace.cloned(),
-        persona: persona.map(str::to_string),
+        role: persona.map(str::to_string),
         ..Default::default()
     }
 }
