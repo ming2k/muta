@@ -426,11 +426,13 @@ async fn process_one_event(
     }
 
     if let Event::Key(_) | Event::Paste(_) = event {
-        if app.copy_toast_until.is_some() {
-            app.copy_toast_until = None;
-        }
-        if app.notice_toast_until.is_some() {
-            app.notice_toast_until = None;
+        if !app.dev_toast_pinned {
+            if app.copy_toast_until.is_some() {
+                app.copy_toast_until = None;
+            }
+            if app.notice_toast_until.is_some() {
+                app.notice_toast_until = None;
+            }
         }
     }
 

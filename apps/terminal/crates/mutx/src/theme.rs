@@ -792,6 +792,14 @@ impl Theme {
     pub fn panel(&self) -> Color {
         self.panel_bg
     }
+    /// Floating overlay / notification toast surface (lighter than scene head `theme.raised()`).
+    pub fn toast_bg(&self) -> Color {
+        match self.element_bg {
+            Color::Rgb(..) => mix(self.element_bg, Color::Rgb(255, 255, 255), 0.08),
+            Color::Reset => Color::Reset,
+            other => other,
+        }
+    }
     /// Live input-box surface while the box owns the keyboard.
     pub fn input_surface(&self) -> Color {
         self.input_bg_active
@@ -1078,7 +1086,7 @@ impl Theme {
                 selected: self.selected_bg,
             },
             overlay: OverlayTokens {
-                toast_bg: self.panel_bg,
+                toast_bg: self.element_bg,
                 shadow: Color::Black,
             },
         }

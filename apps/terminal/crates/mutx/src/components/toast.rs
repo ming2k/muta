@@ -12,15 +12,22 @@
 //! Diagnostic errors, missing workspace assets, and initialization failures MUST route to
 //! `NoticeSurface::Inline` (in the transcript timeline) rather than `Toast`.
 //!
-//! ### Layout Invariants:
-//! - **Compact Zero-Padding**: No leading or trailing empty rows. Screen height in TUI is scarce;
-//!   every row displays content (`height = rendered_lines.len()`).
-//! - **Symmetric Horizontal Inset**: Every line has uniform 1-space leading and trailing breathing space.
-//! - **Shrink-to-Fit Width**: Width tightly bounds the longest wrapped line, clamped between
+//! ### Modern Functional Minimalist Layout (Borderless Elevated Pill):
+//! - **Clear Underlay**: Wipes underlying terminal cells (`frame.render_widget(Clear, area)`)
+//!   to guarantee zero text bleed from background transcript content.
+//! - **Elevated Floating Surface**: Renders on `theme.toast_bg()` which is distinctly lighter
+//!   than the scene head background (`theme.raised()`), giving clear borderless pill elevation.
+//! - **Borderless Clean Canvas**: Eliminates box lines and side decorations for visual consistency
+//!   with the chromatic design language.
+//! - **Structured Leading Gutter**:
+//!   `[2 spaces][icon][2 spaces]` for row 1; secondary rows indent by `icon_w + 4` spaces to align
+//!   directly under the text column without jagged margins.
+//! - **Shrink-to-Fit Bounds**: Width tightly hugs wrapped lines, clamped between
 //!   [`MIN_TOAST_WIDTH`] and [`MAX_TOAST_WIDTH`].
 
 use mutx_engine::{
-    Block as RtBlock, Borders, Color, Frame, Modifier, Paragraph, Rect, Span, {Line, Style},
+    Block as RtBlock, Clear, Color, Frame, Modifier, Paragraph, Rect, Span,
+    {Line, Style},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -28,24 +35,49 @@ use crate::text_layout::wrap_text;
 
 use super::super::Theme;
 
-pub(crate) const MIN_TOAST_WIDTH: u16 = 16;
+pub(crate) const MIN_TOAST_WIDTH: u16 = 18;
 pub(crate) const MAX_TOAST_WIDTH: u16 = 60;
 pub(crate) const MAX_TOAST_ROWS: usize = 6;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToastKind {
     CopyOk,
     CopyFailed,
     Armed,
-    Custom(Color),
+    Info,
+    Warning,
+    Error,
 }
 
 impl ToastKind {
-    fn color(&self, theme: &Theme) -> Color {
+    pub(crate) fn color(&self, theme: &Theme) -> Color {
         match *self {
             ToastKind::CopyOk => theme.ok(),
-            ToastKind::CopyFailed => theme.err(),
-            ToastKind::Armed => theme.warn(),
-            ToastKind::Custom(color) => color,
+            ToastKind::CopyFailed | ToastKind::Error => theme.err(),
+            ToastKind::Armed | ToastKind::Warning => theme.warn(),
+            ToastKind::Info => theme.info(),
+        }
+    }
+
+    pub(crate) fn glyph(&self, theme: &Theme) -> &'static str {
+        let is_ascii = theme.glyphs.border_v == "|";
+        match *self {
+            ToastKind::CopyOk => theme.glyphs.check,
+            ToastKind::CopyFailed | ToastKind::Error => theme.glyphs.cross,
+            ToastKind::Armed | ToastKind::Warning => {
+                if is_ascii {
+                    "[!]"
+                } else {
+                    "▲"
+                }
+            }
+            ToastKind::Info => {
+                if is_ascii {
+                    "[i]"
+                } else {
+                    "ℹ"
+                }
+            }
         }
     }
 }
@@ -62,16 +94,15 @@ impl<'a> ToastBubble<'a> {
     }
 
     pub(crate) fn render_at_width(self, frame: &mut Frame, theme: &Theme, width: u16) {
-        let color = self.kind.color(theme);
-        draw_toast(frame, theme, self.message, color, width);
+        draw_toast_bubble(frame, theme, self.message, self.kind, width);
     }
 }
 
-pub(crate) fn draw_toast(
+pub(crate) fn draw_toast_bubble(
     frame: &mut Frame,
     theme: &Theme,
     message: &str,
-    color: Color,
+    kind: ToastKind,
     width: u16,
 ) {
     let clean = message.trim();
@@ -79,15 +110,20 @@ pub(crate) fn draw_toast(
         return;
     }
 
-    // Usable width on the terminal: reserve at least 2 columns on the right
-    // margin and 2 columns on the left margin.
+    let color = kind.color(theme);
+    let icon = kind.glyph(theme);
+    let icon_w = icon.width();
+
+    // Horizontal padding budget:
+    // Leading pad (2 spaces) + icon (icon_w) + icon gap (2 spaces) + trailing pad (2 spaces)
+    let chrome_w = icon_w + 6;
+
+    // Usable width on the terminal: reserve at least 2 columns margin on left & right.
     let max_toast_w = (width.saturating_sub(4) as usize)
         .min(MAX_TOAST_WIDTH as usize)
         .max(MIN_TOAST_WIDTH as usize);
 
-    // Text budget per row: subtract 2 columns for borders (┃ on left, ┃ on right)
-    // and 2 columns for horizontal padding (1 space left, 1 space right).
-    let text_budget = max_toast_w.saturating_sub(4).max(1);
+    let text_budget = max_toast_w.saturating_sub(chrome_w).max(1);
 
     let logical_lines: Vec<&str> = clean.lines().collect();
     let is_multiline = logical_lines
@@ -105,8 +141,8 @@ pub(crate) fn draw_toast(
             continue;
         }
 
-        // Title (first non-empty logical line) is rendered bold in foreground color.
-        // Detail / subsequent lines use muted text for clear visual hierarchy.
+        // Title (first non-empty logical line) is bold foreground.
+        // Detail / subsequent lines use muted text for functional visual hierarchy.
         let style = if idx == 0 || !is_multiline {
             Style::default().fg(theme.fg()).add_modifier(Modifier::BOLD)
         } else {
@@ -131,14 +167,12 @@ pub(crate) fn draw_toast(
     }
 
     if truncated && let Some((last_text, _)) = rendered_lines.last_mut() {
-        if last_text.width() < text_budget {
-            last_text.push('…');
-        } else {
-            while last_text.width() + 1 > text_budget && !last_text.is_empty() {
-                last_text.pop();
-            }
-            last_text.push('…');
+        let ell = theme.glyphs.ellipsis;
+        let ell_w = ell.width();
+        while last_text.width() + ell_w > text_budget && !last_text.is_empty() {
+            last_text.pop();
         }
+        last_text.push_str(ell);
     }
 
     let max_content_w = rendered_lines
@@ -147,26 +181,62 @@ pub(crate) fn draw_toast(
         .max()
         .unwrap_or(0);
 
-    // Dynamic width: content width + 2 border columns + 2 padding columns,
-    // clamped between MIN_TOAST_WIDTH and max_toast_w.
-    let toast_width = (max_content_w as u16 + 4).clamp(MIN_TOAST_WIDTH, max_toast_w as u16);
+    // Toast width: content width + leading gutter + trailing pad
+    let toast_width = ((max_content_w + chrome_w) as u16).clamp(MIN_TOAST_WIDTH, max_toast_w as u16);
     let x = width.saturating_sub(toast_width).saturating_sub(2).max(1);
-    let toast_height = rendered_lines.len() as u16;
+
+    // Borderless pill height matches the content line count directly (compact zero border chrome)
+    let toast_height = (rendered_lines.len() as u16).min(frame.area().height);
     let area = Rect::new(x, 1, toast_width, toast_height);
 
-    let block = RtBlock::default()
-        .borders(Borders::LEFT | Borders::RIGHT)
-        .border_type(mutx_engine::BorderType::Thick)
-        .border_style(Style::default().fg(color))
-        .style(Style::default().bg(theme.panel()));
+    // 1. Clear underlying cells to prevent background transcript bleed-through
+    frame.render_widget(Clear, area);
 
+    // 2. Elevated container styling (lighter surface than scene head `theme.raised()`)
+    let bg = theme.toast_bg();
+    let is_structured = theme.elevation == mutx_engine::ElevationArchetype::Structured;
+    let base_style = if is_structured {
+        Style::default().add_modifier(Modifier::REVERSE)
+    } else {
+        Style::default().bg(bg)
+    };
+
+    let block = RtBlock::default().style(base_style);
+
+    // 3. Render content lines with strict 4-column leading gutter
+    let apply_base = |s: Style| -> Style {
+        let mut res = s.bg(base_style.bg);
+        if is_structured {
+            res = res.add_modifier(Modifier::REVERSE);
+        }
+        res
+    };
+
+    let indent_spaces = " ".repeat(icon_w + 4);
     let lines: Vec<Line> = rendered_lines
         .into_iter()
-        .map(|(text, style)| Line::from(vec![Span::raw(" "), Span::styled(text, style)]))
+        .enumerate()
+        .map(|(idx, (text, style))| {
+            if idx == 0 {
+                Line::from(vec![
+                    Span::styled("  ", apply_base(Style::default())),
+                    Span::styled(icon, apply_base(Style::default().fg(color))),
+                    Span::styled("  ", apply_base(Style::default())),
+                    Span::styled(text, apply_base(style)),
+                    Span::styled("  ", apply_base(Style::default())),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(indent_spaces.clone(), apply_base(Style::default())),
+                    Span::styled(text, apply_base(style)),
+                    Span::styled("  ", apply_base(Style::default())),
+                ])
+            }
+        })
         .collect();
 
-    let para = Paragraph::new(lines);
-    frame.render_widget(para.block(block), area);
+    let para = Paragraph::new(lines).block(block);
+    frame.render_widget(para, area);
 }
 
 #[cfg(test)]
@@ -185,26 +255,29 @@ mod tests {
         let theme = Theme::default();
         let mut terminal = TestTerminal::new(80, 10);
         terminal.draw(|f| {
-            draw_toast(f, &theme, "copied to clipboard", theme.ok(), 80);
+            draw_toast_bubble(f, &theme, "copied to clipboard", ToastKind::CopyOk, 80);
         });
 
-        // y=0: outside toast (no border)
+        // y=0: outside toast
         let row_0 = grid_row(&terminal, 0);
-        assert!(!row_0.contains('┃'), "row 0 should not contain border");
+        assert!(!row_0.contains("copied to clipboard"), "row 0 should be outside toast");
 
-        // y=1: single content row, compact zero-padding
+        // y=1: single compact content row (borderless floating pill)
         let row_1 = grid_row(&terminal, 1);
-        assert!(row_1.contains('┃'), "row 1 should contain border: {row_1}");
         assert!(
-            row_1.contains(" copied to clipboard "),
-            "row 1 has content with symmetric 1-space padding: {row_1}"
+            !row_1.contains('┃') && !row_1.contains('╭') && !row_1.contains('─'),
+            "row 1 should have no border decoration: {row_1}"
+        );
+        assert!(
+            row_1.contains("  ✓  copied to clipboard"),
+            "row 1 has icon and text: {row_1}"
         );
 
-        // y=2: outside toast (zero trailing blank row!)
+        // y=2: outside toast (compact 1-row height)
         let row_2 = grid_row(&terminal, 2);
         assert!(
-            !row_2.contains('┃'),
-            "row 2 should not contain border: {row_2}"
+            !row_2.contains("copied to clipboard"),
+            "row 2 should be outside toast: {row_2}"
         );
     }
 
@@ -215,35 +288,38 @@ mod tests {
         let msg =
             "Some additional workspace roots could not be loaded\nSkipped roots: `../opencode`";
         terminal.draw(|f| {
-            draw_toast(f, &theme, msg, theme.warn(), 80);
+            draw_toast_bubble(f, &theme, msg, ToastKind::Armed, 80);
         });
 
         // y=0: empty
         let row_0 = grid_row(&terminal, 0);
-        assert!(!row_0.contains('┃'), "row 0 must not be a stray blank row");
+        assert!(!row_0.contains("roots"), "row 0 must not be toast");
 
-        // y=1: Title line with 1-space leading pad (no blank row on top!)
+        // y=1: Title line with warning icon and leading pad
         let row_1 = grid_row(&terminal, 1);
-        assert!(row_1.contains('┃'), "row 1 should have border: {row_1}");
         assert!(
-            row_1.contains(" Some additional workspace roots could not be loaded "),
-            "row 1 must have symmetric padding: {row_1}"
+            !row_1.contains('┃') && !row_1.contains('╭'),
+            "row 1 should be borderless: {row_1}"
+        );
+        assert!(
+            row_1.contains("  ▲  Some additional workspace roots could not be loaded"),
+            "row 1 must have icon and title: {row_1}"
         );
 
-        // y=2: Detail line with matching 1-space leading pad (not glued to border!)
+        // y=2: Detail line aligned past the icon gutter (5 spaces)
         let row_2 = grid_row(&terminal, 2);
-        assert!(row_2.contains('┃'), "row 2 should have border: {row_2}");
         assert!(
-            row_2.contains(" Skipped roots: `../opencode`"),
-            "row 2 must have leading space padding: {row_2}"
+            !row_2.contains('┃') && !row_2.contains('╰'),
+            "row 2 should be borderless: {row_2}"
+        );
+        assert!(
+            row_2.contains("     Skipped roots: `../opencode`"),
+            "row 2 must align under title text (indented 5 spaces): {row_2}"
         );
 
-        // y=3: outside toast (no trailing blank row!)
+        // y=3: outside toast
         let row_3 = grid_row(&terminal, 3);
-        assert!(
-            !row_3.contains('┃'),
-            "row 3 should not contain border: {row_3}"
-        );
+        assert!(!row_3.contains("roots"), "row 3 should not contain toast: {row_3}");
     }
 
     #[test]
@@ -252,19 +328,61 @@ mod tests {
         let mut terminal = TestTerminal::new(80, 10);
         let long_msg = "This is a very long notification message that definitely exceeds the text budget and must wrap cleanly across multiple lines without overflowing or getting cut off abruptly.";
         terminal.draw(|f| {
-            draw_toast(f, &theme, long_msg, theme.info(), 80);
+            draw_toast_bubble(f, &theme, long_msg, ToastKind::Info, 80);
         });
 
-        // Content rows start immediately at y=1 (compact)
         let row_1 = grid_row(&terminal, 1);
+        assert!(row_1.contains("  ℹ  This is a very long"), "row 1 starts with info glyph: {row_1}");
+
         let row_2 = grid_row(&terminal, 2);
-        assert!(row_1.contains('┃'), "row 1 should have border");
-        assert!(row_2.contains('┃'), "row 2 should have border");
-        // Each wrapped line must have the 1-space indent
-        assert!(
-            row_1.contains(" This is a very long"),
-            "row 1 starts with space: {row_1}"
-        );
-        assert!(row_2.contains('┃'), "row 2 enclosed in border: {row_2}");
+        assert!(row_2.starts_with(' ') || row_2.contains("     "), "row 2 indented: {row_2}");
+    }
+
+    #[test]
+    fn ascii_toast_renders_ascii_glyphs() {
+        let mut theme = Theme::default();
+        theme.glyphs = mutx_engine::ASCII_GLYPHS;
+        let mut terminal = TestTerminal::new(80, 10);
+        terminal.draw(|f| {
+            draw_toast_bubble(f, &theme, "copied to clipboard", ToastKind::CopyOk, 80);
+        });
+
+        let row_1 = grid_row(&terminal, 1);
+        assert!(!row_1.contains('|') && !row_1.contains('+'), "row 1 should be borderless in ASCII too: {row_1}");
+        assert!(row_1.contains("[OK]"), "row 1 should contain ASCII check [OK]: {row_1}");
+        assert!(row_1.contains("copied to clipboard"), "row 1 has text: {row_1}");
+    }
+
+    #[test]
+    fn preview_toast_styles() {
+        let theme = Theme::default();
+        let cases = [
+            ("1. Success / Copied", "copied to clipboard", ToastKind::CopyOk),
+            ("2. Failure / Error", "clipboard is empty", ToastKind::CopyFailed),
+            ("3. Armed Confirmation", "Esc again interrupts", ToastKind::Armed),
+            ("4. Command Ack / Info", "/delegate on: sub-agent routing active", ToastKind::Info),
+            (
+                "5. Multiline Notice",
+                "Workspace roots could not be loaded\nSkipped: `../opencode`",
+                ToastKind::Warning,
+            ),
+        ];
+
+        println!("\n=== Modern Functional Minimalist Borderless Toast Preview ===");
+        for (label, msg, kind) in cases {
+            let mut term = TestTerminal::new(70, 5);
+            term.draw(|f| {
+                draw_toast_bubble(f, &theme, msg, kind, 70);
+            });
+            println!("\n--- {label} ---");
+            for y in 1..=3 {
+                let row = grid_row(&term, y);
+                let trimmed = row.trim();
+                if !trimmed.is_empty() {
+                    println!("{row}");
+                }
+            }
+        }
+        println!("=============================================================\n");
     }
 }

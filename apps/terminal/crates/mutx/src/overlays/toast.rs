@@ -1,6 +1,6 @@
 //! Transient notice bubbles: copy result and armed-action toasts.
 
-use mutx_engine::{Color, Frame};
+use mutx_engine::Frame;
 
 use crate::components::toast::{ToastBubble, ToastKind};
 use crate::model::document::NoticeSeverity;
@@ -37,23 +37,14 @@ pub fn draw_notice_toast(
     severity: NoticeSeverity,
     theme: &Theme,
 ) {
-    let color = match severity {
-        NoticeSeverity::Error => theme.err(),
-        NoticeSeverity::Warning => theme.warn(),
-        NoticeSeverity::Info => theme.info(),
+    let kind = match severity {
+        NoticeSeverity::Error => ToastKind::Error,
+        NoticeSeverity::Warning => ToastKind::Warning,
+        NoticeSeverity::Info => ToastKind::Info,
     };
     ToastBubble {
         message,
-        kind: ToastKind::Custom(color),
+        kind,
     }
     .render(frame, theme);
-}
-
-#[allow(dead_code)]
-pub fn toast(frame: &mut Frame, theme: &Theme, message: &str, color: Color, width: u16) {
-    ToastBubble {
-        message,
-        kind: ToastKind::Custom(color),
-    }
-    .render_at_width(frame, theme, width);
 }

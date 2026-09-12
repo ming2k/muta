@@ -278,6 +278,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         notice_toast_until: None,
         notice_toast_message: String::new(),
         notice_toast_severity: NoticeSeverity::Info,
+        dev_toast_pinned: false,
         ctrl_c_armed_until: None,
         esc_armed_until: None,
         spinner_epoch: std::time::Instant::now(),
@@ -461,6 +462,41 @@ fn console_host_rows(app: &mut App) {
 async fn console_dispatch(app: &mut App, line: &str, create_when_bare: bool) {
     let runtime = crate::event_loop::UiRuntime::minimal_for_test();
     crate::event_loop::host_test_shims::dispatch(app, &runtime, line, create_when_bare).await;
+}
+
+#[test]
+fn test_dev_toast_env_parsing() {
+    // Safety: single-threaded test environment manipulation for env verification
+    unsafe {
+        std::env::remove_var("MUTX_DEV_TOAST");
+        std::env::remove_var("MUTX_TOAST");
+    }
+    let res = crate::init_dev_toast();
+    assert!(res.0.is_none());
+    assert!(res.3.is_none());
+
+    unsafe { std::env::set_var("MUTX_DEV_TOAST", "ok:copied to clipboard"); }
+    let res = crate::init_dev_toast();
+    assert!(res.0.is_some());
+    assert_eq!(res.1, "copied to clipboard");
+    assert!(!res.2);
+    assert!(res.6);
+
+    unsafe { std::env::set_var("MUTX_DEV_TOAST", "err:paste dropped"); }
+    let res = crate::init_dev_toast();
+    assert!(res.0.is_some());
+    assert_eq!(res.1, "paste dropped");
+    assert!(res.2);
+
+    unsafe { std::env::set_var("MUTX_DEV_TOAST", "warn:Esc again interrupts"); }
+    let res = crate::init_dev_toast();
+    assert!(res.3.is_some());
+    assert_eq!(res.4, "Esc again interrupts");
+    assert_eq!(res.5, crate::model::document::NoticeSeverity::Warning);
+
+    unsafe {
+        std::env::remove_var("MUTX_DEV_TOAST");
+    }
 }
 
 mod completion;

@@ -1007,6 +1007,8 @@ pub struct App {
     pub notice_toast_until: Option<std::time::Instant>,
     pub notice_toast_message: String,
     pub notice_toast_severity: NoticeSeverity,
+    /// When set (e.g. via `MUTX_DEV_TOAST`), keeps the toast pinned during keypresses for visual dev inspection.
+    pub dev_toast_pinned: bool,
     /// Deadline until which a second Ctrl+C quits. Wall-clock based (like
     /// the copy/notice toasts) so the quit window is a real duration —
     /// previously this was a per-tick counter, which stretched the intended

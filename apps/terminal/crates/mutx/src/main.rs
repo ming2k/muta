@@ -9,6 +9,7 @@ use cli::{CliArgs, Mode};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ensure_dev_environment();
     let _tracing_guard = muta_client::init_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -16,6 +17,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = runtime.block_on(run());
     runtime.shutdown_background();
     result
+}
+
+fn ensure_dev_environment() {
+    let is_debug_build = cfg!(debug_assertions);
+    let dev_opt_out = std::env::var("MUTX_NO_DEV").map(|v| v != "0").unwrap_or(false);
+    let dev_mode = (is_debug_build && !dev_opt_out)
+        || std::env::var("MUTX_DEV").map(|v| v != "0").unwrap_or(false)
+        || std::env::var("MUTA_DEV").map(|v| v != "0").unwrap_or(false)
+        || std::env::var("MUTX_DEV_TOAST").is_ok()
+        || std::env::var("MUTX_TOAST").is_ok();
+
+    if !dev_mode {
+        return;
+    }
+
+    // 1. Isolate home so it never conflicts with host installed muta
+    if std::env::var_os("MUTA_HOME").is_none() {
+        let dev_home = if let Ok(current) = std::env::current_exe() {
+            if let Some(target) = current.parent().and_then(|p| p.parent()) {
+                target.join("muta-dev")
+            } else {
+                std::env::temp_dir().join("muta-dev")
+            }
+        } else {
+            std::env::temp_dir().join("muta-dev")
+        };
+
+        let _ = std::fs::create_dir_all(&dev_home);
+        unsafe {
+            std::env::set_var("MUTA_HOME", &dev_home);
+        }
+        let _ = muta_paths::paths::set_default(muta_paths::paths::Dirs::system());
+    }
+
+    // 2. Point MUTA_BIN to local source-built muta, building it if not yet present
+    if std::env::var_os("MUTA_BIN").is_none() {
+        if let Ok(current) = std::env::current_exe() {
+            let sibling = current.with_file_name(format!("muta{}", std::env::consts::EXE_SUFFIX));
+            if !sibling.is_file() {
+                eprintln!("[mutx-dev] Local muta binary not found at {}. Compiling via cargo...", sibling.display());
+                let status = std::process::Command::new("cargo")
+                    .args(["build", "-p", "muta"])
+                    .status();
+                if let Ok(status) = status && !status.success() {
+                    eprintln!("[mutx-dev] Warning: Failed to build local muta from source.");
+                }
+            }
+            if sibling.is_file() {
+                unsafe {
+                    std::env::set_var("MUTA_BIN", &sibling);
+                }
+            }
+        }
+    }
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
