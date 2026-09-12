@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.47.4] - 2026-09-12
+
+### Added
+
+- **Toast redesign and elevated pill layout.** Modernized notification toasts into borderless elevated floating pills with clear underlay wiping to eliminate background bleed, dedicated theme surface background, structured icon gutters, and multiline wrapping alignment.
+- **Terminal development sandbox and preview tooling.** Added isolated local dev environment bootstrapping and environment controls (`MUTX_DEV_TOAST`, `MUTX_DEV`) for rapid visual inspection of UI notification states.
+
 ## [0.47.3] - 2026-09-11
 
 ### Changed
@@ -7214,7 +7221,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.3...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.47.4...HEAD
+[0.47.4]: https://github.com/ming2k/muta/compare/v0.47.3...v0.47.4
 [0.47.3]: https://github.com/ming2k/muta/compare/v0.47.2...v0.47.3
 [0.47.2]: https://github.com/ming2k/muta/compare/v0.47.1...v0.47.2
 [0.47.1]: https://github.com/ming2k/muta/compare/v0.47.0...v0.47.1
