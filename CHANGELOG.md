@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.2] - 2026-09-14
+
+### Added
+
+- **Trajectory Loop Guard & Cognitive Arbitration (ADR-0247):** Unified Turn-internal token streaming and Turn-external tool execution loop guards into a formal `TrajectoryLoopGuard` with an escalating backoff ladder and fail-open L2 cognitive arbitration.
+- **Symmetric Role Architecture & Pure Allowlist (ADR-0246):** Unified built-in and user roles in `roles.toml`, eliminated legacy aliases, enforced strict kebab-case identifiers, introduced pure-allowlist tool and MCP capability resolution with prefix wildcards, and integrated hermetic session role snapshots (ADR-0245).
+
 ## [0.48.1] - 2026-09-12
 
 ### Added
@@ -7271,7 +7278,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.2...HEAD
+[0.48.2]: https://github.com/ming2k/muta/compare/v0.48.1...v0.48.2
 [0.48.1]: https://github.com/ming2k/muta/compare/v0.48.0...v0.48.1
 [0.48.0]: https://github.com/ming2k/muta/compare/v0.47.7...v0.48.0
 [0.47.7]: https://github.com/ming2k/muta/compare/v0.47.6...v0.47.7
