@@ -2,8 +2,8 @@
 //!
 //! Provides the core decision vocabulary — the [`GuardAction`] a guard returns
 //! (continue, inject steering message, block signatures, abort), and
-//! [`RoundGuardState`] — the per-round carrier holding the pre-dispatch doom
-//! guard ([`crate::doom_guard::DoomLoopGuard`]) and the per-round block mask
+//! [`RoundGuardState`] — the per-round carrier holding the pre-dispatch trajectory
+//! loop guard ([`crate::trajectory_guard::TrajectoryLoopGuard`]) and the per-round block mask
 //! enforced by the tool dispatch layer.
 
 use std::collections::HashSet;
@@ -121,16 +121,16 @@ impl GuardAction {
     }
 }
 
-/// Per-round state carrying the pre-dispatch doom-loop guard and the per-round
+/// Per-round state carrying the pre-dispatch trajectory loop guard (ADR-0247) and the per-round
 /// block mask the dispatch layer consults. Lives in `RoundState`; one per round,
 /// dropped when the round ends, so block state never leaks across rounds.
 #[derive(Default)]
 pub struct RoundGuardState {
-    /// The pre-dispatch doom-loop guard. Consulted by [`Self::check_doom_ahead`]
-    /// before any tool runs. `None` when nudging is disabled (the agent does not
-    /// attach one).
-    doom: Option<crate::doom_guard::DoomLoopGuard>,
-    /// Tool-call signatures hard-blocked by the doom guard this round
+    /// The pre-dispatch trajectory loop guard. Consulted by [`Self::check_trajectory_ahead`]
+    /// or [`Self::check_trajectory_candidate`] before any tool runs. `None` when nudging
+    /// is disabled (the agent does not attach one).
+    trajectory: Option<crate::trajectory_guard::TrajectoryLoopGuard>,
+    /// Tool-call signatures hard-blocked by the trajectory guard this round
     /// ([`GuardAction::Block`]). The dispatch layer consults
     /// [`Self::is_blocked`] before executing a call and short-circuits any
     /// match. Per-round: cleared when the round ends (the `RoundState` owning it is
@@ -141,47 +141,84 @@ pub struct RoundGuardState {
 }
 
 impl RoundGuardState {
-    /// Build empty guard state. Attach the doom guard via [`Self::with_doom`].
+    /// Build empty guard state. Attach the trajectory guard via [`Self::with_trajectory`].
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Attach the pre-dispatch doom-loop guard. Consumed by
-    /// [`Self::check_doom_ahead`]. Builder-style companion to [`Self::new`],
-    /// used by `Agent::guards_default`; tests that do not exercise the doom
-    /// guard can omit it.
-    pub fn with_doom(mut self, doom: crate::doom_guard::DoomLoopGuard) -> Self {
-        self.doom = Some(doom);
+    /// Attach the pre-dispatch trajectory loop guard (ADR-0247).
+    pub fn with_trajectory(mut self, guard: crate::trajectory_guard::TrajectoryLoopGuard) -> Self {
+        self.trajectory = Some(guard);
         self
     }
 
+    /// Check if any tool call about to execute trips the current threshold tier in cognitive mode.
+    /// Returns `Some(TrajectoryLoopReviewInput)` if an L2 Steward consultation is warranted.
+    pub fn check_trajectory_candidate(
+        &self,
+        calls: &[(&str, &str)],
+        preceding_context: String,
+    ) -> Option<muta_contracts::TrajectoryLoopReviewInput> {
+        let guard = self.trajectory.as_ref()?;
+        let signatures: Vec<String> = calls
+            .iter()
+            .filter(|(name, _)| crate::trajectory_guard::covers(name))
+            .map(|(name, args)| crate::trajectory_guard::trajectory_signature(name, args))
+            .collect();
+        if signatures.is_empty() {
+            return None;
+        }
+        let (signature, threshold_tier, recent_signatures) = guard.check_candidate(&signatures)?;
+        Some(muta_contracts::TrajectoryLoopReviewInput {
+            signature,
+            threshold_tier,
+            recent_signatures,
+            preceding_context,
+        })
+    }
+
+    /// Acquit a candidate signature upon cognitive review and advance the backoff ladder (4 -> 8 -> 12).
+    /// Records all calls from the turn into the sliding window.
+    pub fn acquit_and_backoff(&mut self, signature: &str, calls: &[(&str, &str)]) {
+        if let Some(guard) = self.trajectory.as_mut() {
+            let signatures: Vec<String> = calls
+                .iter()
+                .filter(|(name, _)| crate::trajectory_guard::covers(name))
+                .map(|(name, args)| crate::trajectory_guard::trajectory_signature(name, args))
+                .collect();
+            guard.push_all(&signatures);
+            guard.acquit_and_backoff(signature);
+        }
+    }
+
+    /// Surgically block a signature confirmed as a loop by cognitive review or deterministic check.
+    pub fn block_trajectory(&mut self, signature: &str) -> GuardAction {
+        self.blocked_signatures.insert(signature.to_string());
+        self.trajectory
+            .as_ref()
+            .map(|g| g.block_action(&[signature.to_string()]))
+            .unwrap_or(GuardAction::Continue)
+    }
+
     /// Pre-dispatch check: given the `(name, args)` pairs of the calls about
-    /// to execute this turn, ask the doom guard whether any is a repeat of a
+    /// to execute this turn, ask the trajectory guard whether any is a repeat of a
     /// call already issued this round. Returns the guard's [`GuardAction`]
     /// (`Block` to intercept, `Continue` to proceed) and, on `Block`, records
     /// the repeated signatures in the per-round mask so [`Self::is_blocked`]
     /// short-circuits them at dispatch time too.
-    ///
-    /// This runs *before* the tools execute — the decisive difference from the
-    /// removed post-hoc read-loop guard, which fired after the repeat had
-    /// already run. `calls` is the full turn (all tools the model asked for);
-    /// the doom guard keys only on its watched set, so unwatched tools are
-    /// transparent and never enter the window or trip a block.
-    pub fn check_doom_ahead(&mut self, calls: &[(&str, &str)]) -> GuardAction {
-        let Some(doom) = self.doom.as_mut() else {
+    pub fn check_trajectory_ahead(&mut self, calls: &[(&str, &str)]) -> GuardAction {
+        let Some(guard) = self.trajectory.as_mut() else {
             return GuardAction::Continue;
         };
-        // Only watched tools have meaningful signatures; unwatched tools are
-        // transparent to the doom guard.
         let signatures: Vec<String> = calls
             .iter()
-            .filter(|(name, _)| crate::doom_guard::covers(name))
-            .map(|(name, args)| crate::doom_guard::doom_signature(name, args))
+            .filter(|(name, _)| crate::trajectory_guard::covers(name))
+            .map(|(name, args)| crate::trajectory_guard::trajectory_signature(name, args))
             .collect();
         if signatures.is_empty() {
             return GuardAction::Continue;
         }
-        let action = doom.check_ahead(&signatures);
+        let action = guard.check_ahead(&signatures);
         if let GuardAction::Block { ref signatures, .. } = action {
             for sig in signatures {
                 self.blocked_signatures.insert(sig.clone());
@@ -191,14 +228,14 @@ impl RoundGuardState {
     }
 
     /// Whether a single call (name + raw args) is hard-blocked this round by the
-    /// doom guard's signature mask. Unwatched tools never have a doom signature,
+    /// trajectory guard's signature mask. Unwatched tools never have a signature,
     /// so they are always admitted.
     pub fn is_blocked(&self, name: &str, args: &str) -> bool {
-        if self.blocked_signatures.is_empty() || !crate::doom_guard::covers(name) {
+        if self.blocked_signatures.is_empty() || !crate::trajectory_guard::covers(name) {
             return false;
         }
-        let doom = crate::doom_guard::doom_signature(name, args);
-        self.blocked_signatures.contains(&doom)
+        let sig = crate::trajectory_guard::trajectory_signature(name, args);
+        self.blocked_signatures.contains(&sig)
     }
 
     /// A compact, log-friendly summary of what is currently blocked. Returns

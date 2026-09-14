@@ -259,15 +259,9 @@ pub struct Agent {
     /// `set_hard_stop_turns`. This is the sole execution cap; session review
     /// is on-demand (`/review`) and never aborts a round.
     hard_stop_turns: Arc<std::sync::Mutex<usize>>,
-    /// Advanced pre-dispatch doom-loop guard configuration. Default
-    /// **enabled** (`window: 16`, `threshold: 3` — ADR-0113 §5 flipped it
-    /// on, ADR-0148 relaxed the trip point); seeded from
-    /// `[master.doom_guard]` in `config.toml` and forced to
-    /// [`muta_contracts::DoomGuardConfig::disabled`] for subagents and the review
-    /// diagnostic. Held behind an `Arc<RwLock>` because master-profile
-    /// overlays can replace the configuration atomically; the per-round guard
-    /// reads it when `RoundState` is constructed.
-    doom_guard_config: Arc<std::sync::RwLock<muta_contracts::DoomGuardConfig>>,
+    /// Advanced pre-dispatch trajectory loop guard configuration (ADR-0247).
+    /// Seeded from `[agent.trajectory_guard]` in `config.toml`.
+    trajectory_guard_config: Arc<std::sync::RwLock<muta_contracts::TrajectoryGuardConfig>>,
     /// Unified interaction controller governing human posture, stdin policy,
     /// and autonomous fallback behaviors.
     pub(crate) interaction: Arc<crate::interaction::InteractionController>,
@@ -512,10 +506,10 @@ impl RoundState {
     /// even when disabled (it just never fires). It lives and dies with this
     /// `RoundState`, so loop state never crosses user rounds.
     fn guards_default(
-        config: muta_contracts::DoomGuardConfig,
+        config: muta_contracts::TrajectoryGuardConfig,
     ) -> crate::guard::RoundGuardState {
         crate::guard::RoundGuardState::new()
-            .with_doom(crate::doom_guard::DoomLoopGuard::new(config))
+            .with_trajectory(crate::trajectory_guard::TrajectoryLoopGuard::new(config))
     }
 
     pub(crate) fn remember_completed_tool(&mut self, call: &ToolCall) {

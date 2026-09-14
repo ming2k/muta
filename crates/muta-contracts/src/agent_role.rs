@@ -14,7 +14,7 @@ pub struct AgentRuntimeConfig {
     /// Opt-in hard-stop budget: abort a round after this many ReAct turns.
     pub hard_stop_turns: usize,
     /// Doom-loop guard config. Default disabled.
-    pub nudge: crate::DoomGuardConfig,
+    pub trajectory_guard: crate::TrajectoryGuardConfig,
     /// Whether the model may supply stdin bytes for an `execute_command` call. Default false.
     pub allow_model_stdin: bool,
     /// Whether an interactive `execute_command` call skips the inline input panel. Default false.
@@ -535,7 +535,7 @@ mod tests {
         assert_eq!(p.config.hard_stop_turns, 0);
         assert!(!p.config.allow_model_stdin);
         assert!(!p.config.skip_interactive_input);
-        assert_eq!(p.config.nudge, crate::DoomGuardConfig::default());
+        assert_eq!(p.config.trajectory_guard, crate::TrajectoryGuardConfig::default());
     }
 
     #[test]

@@ -797,7 +797,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent.set_human_posture(muta_contracts::human_request::HumanChannelPosture::Interactive);
     }
     agent.set_hard_stop_turns(config.agent.hard_stop_turns);
-    agent.set_doom_guard_config(config.agent.doom_guard);
+    agent.set_trajectory_guard_config(config.agent.trajectory_guard);
     agent.set_allow_model_stdin(config.agent.allow_model_stdin);
     agent.set_skip_interactive_input(config.agent.skip_interactive_input);
     agent.set_autonomous_fallback_policy(config.agent.ask_user_fallback);

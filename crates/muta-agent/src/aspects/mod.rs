@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use muta_contracts::{
     AspectVerdict, ExecutionTier, PreFlightRouteInput, PreFlightRouteOutput, StreamLoopReviewInput,
-    StreamLoopVerdict,
+    StreamLoopVerdict, TrajectoryLoopReviewInput, TrajectoryLoopVerdict,
 };
 
 use crate::cognitive::{CognitivePipeline, HarnessTaskPipeline};
@@ -74,14 +74,22 @@ impl AspectEngine {
         self.harness_tasks.review_stream_loop(input).await
     }
 
+    /// Confirm or clear an L1 trajectory loop candidate (ADR-0247).
+    pub async fn review_trajectory_loop(
+        &self,
+        input: TrajectoryLoopReviewInput,
+    ) -> TrajectoryLoopVerdict {
+        self.harness_tasks.review_trajectory_loop(input).await
+    }
+
     // Phase 4: Tool Gating
 
-    /// Evaluate tool invocation safety against repeated-call ruts and doom thresholds.
+    /// Evaluate tool invocation safety against repeated-call ruts and trajectory thresholds.
     pub fn evaluate_tool_gating(
         &self,
         tool_name: &str,
         is_repeated_rut: bool,
-        is_doom_blocked: bool,
+        is_trajectory_blocked: bool,
     ) -> AspectVerdict<()> {
         if is_repeated_rut {
             return AspectVerdict::Abort {
@@ -93,13 +101,13 @@ impl AspectEngine {
             };
         }
 
-        if is_doom_blocked {
+        if is_trajectory_blocked {
             return AspectVerdict::Abort {
                 reason: format!(
-                    "Tool '{}' blocked by DoomGuard: destructive mutation signature detected.",
+                    "Tool '{}' blocked by TrajectoryLoopGuard: repeating invocation trajectory detected.",
                     tool_name
                 ),
-                error_code: "TOOL_DOOM_MUTATION",
+                error_code: "TOOL_TRAJECTORY_LOOP",
             };
         }
 

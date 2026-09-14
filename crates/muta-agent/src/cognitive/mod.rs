@@ -17,7 +17,8 @@ use muta_contracts::{
     EnvironmentReminderOutput, EnvironmentSensorInput, EnvironmentSensorTask, ExecutionTier,
     Message, ModelRequest, PreFlightRouteInput, PreFlightRouteOutput, PreFlightRouterTask,
     Provider, Role, SessionTitleInput, SessionTitleTask, StreamLoopReviewInput,
-    StreamLoopReviewerTask, StreamLoopVerdict,
+    StreamLoopReviewerTask, StreamLoopVerdict, TrajectoryLoopReviewInput,
+    TrajectoryLoopReviewerTask, TrajectoryLoopVerdict,
 };
 
 /// Errors that can occur during a harness task consultation (ADR-0211).
@@ -136,6 +137,23 @@ impl HarnessTaskPipeline {
     pub async fn review_stream_loop(&self, input: StreamLoopReviewInput) -> StreamLoopVerdict {
         self.consult_with_fallback(StreamLoopReviewerTask, input, StreamLoopVerdict::No)
             .await
+    }
+
+    /// Confirm or clear an L1 trajectory loop candidate (ADR-0247).
+    ///
+    /// Any timeout, provider failure, or malformed answer is fail-open `No`:
+    /// an infrastructure judgment authorizes a block only with an explicit valid `Yes`.
+    /// On `No` (or fail-open), the caller advances the backoff ladder.
+    pub async fn review_trajectory_loop(
+        &self,
+        input: TrajectoryLoopReviewInput,
+    ) -> TrajectoryLoopVerdict {
+        self.consult_with_fallback(
+            TrajectoryLoopReviewerTask,
+            input,
+            TrajectoryLoopVerdict::No,
+        )
+        .await
     }
 
     /// Distill an excerpt into a concise session title.

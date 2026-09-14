@@ -769,7 +769,7 @@ impl SubagentTool {
         // read-loop guard's nudge (ADR-0034) so a short-lived, parent-supervised
         // subagent is never steered by it. The parent and `abort` remain its
         // backstops.
-        subagent.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
+        subagent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig::disabled());
         // Full-duplex (ADR-0029): install the child's steering inbox and lodge
         // its handle in the registry keyed by the parent tool-call id. Now any
         // permission / `ask_user` request the child surfaces travels *up* via

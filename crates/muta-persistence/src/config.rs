@@ -9,8 +9,8 @@
 use crate::fsutil;
 use crate::paths;
 use muta_contracts::{
-    CompactionPolicy, DoomGuardConfig, HookEventKind, McpServerConfig, RemoteModelMetadata,
-    SecretString, SkillsConfig, VariantSelection, WebConfig, WebProviderAxis,
+    CompactionPolicy, HookEventKind, McpServerConfig, RemoteModelMetadata,
+    SecretString, SkillsConfig, TrajectoryGuardConfig, VariantSelection, WebConfig, WebProviderAxis,
 };
 
 /// Re-export so server/TUI can use the config-layer path without depending on
@@ -45,8 +45,7 @@ pub const THINKING_KEY: &str = "thinking";
 /// same-signature re-run is tolerated before a block (ADR-0148). Opt out
 /// here, or restore the strict first-repeat block with `threshold = 2`.
 /// See [`DoomGuardConfig`]. The historical `nudge` key spelling still
-/// loads; saves write `doom_guard`.
-/// # [agent.doom_guard]
+/// # [agent.trajectory_guard]
 /// # enabled = false
 /// # threshold = 2
 /// ```
@@ -94,20 +93,14 @@ pub struct AgentConfig {
     /// mistake the recommendation for a human decision.
     #[serde(default)]
     pub ask_user_fallback: muta_contracts::human_request::AutonomousFallbackPolicy,
-    /// Doom-loop guard configuration (`muta_agent::doom_guard`). Default
-    /// **enabled** (`window: 16`, `threshold: 3` — ADR-0113 §5 flipped it
-    /// on, ADR-0148 relaxed the trip point) — opt out via
-    /// `[agent.doom_guard] enabled = false`, or restore the strict
-    /// first-repeat block with `threshold = 2`. See [`DoomGuardConfig`]
-    /// for the per-field semantics.
-    #[serde(default, alias = "nudge")]
-    pub doom_guard: DoomGuardConfig,
+    /// Trajectory-guard configuration (`muta_agent::trajectory_guard`, ADR-0247).
+    /// Default **enabled** (`window: 16`, `threshold: 4`, `cognitive_review: true`).
+    #[serde(default)]
+    pub trajectory_guard: TrajectoryGuardConfig,
 }
 
-// `DoomGuardConfig` is defined in `muta_contracts::doom_guard_config` and re-exported
-// above via `use muta_contracts::DoomGuardConfig`. It is the `[agent.doom_guard]`
-// TOML table and the wire type for `AgentRequest::UpdateDoomGuardConfig`. See
-// `muta_contracts::DoomGuardConfig` for the per-field semantics and defaults.
+// `TrajectoryGuardConfig` is defined in `muta_contracts::trajectory_guard_config`
+// and re-exported above. It is the `[agent.trajectory_guard]` TOML table.
 
 /// Declarative permission configuration — the `[permissions]` table. Lets users
 /// pre-declare "always allow" rules in `config.toml` so default policies are
@@ -793,8 +786,8 @@ pub struct Config {
     /// retries. Clamped to `[1, 60]` at the call site.
     #[serde(alias = "provider_retry_max_attempts")]
     pub connection_retry_max_attempts: usize,
-    /// Base delay (ms) for the bounded exponential backoff between retries:
-    /// `base_ms * 2^(attempt-1)`, capped by `connection_retry_max_ms`.
+    /// Base delay (ms) for the bounded stepped backoff between retries:
+    /// `1s -> 2s -> 5s -> 10s -> 10s ...` (scaled by `base_ms`), capped by `connection_retry_max_ms`.
     #[serde(alias = "provider_retry_base_ms")]
     pub connection_retry_base_ms: u64,
     /// Hard cap (ms) on a single backoff delay, including the exponential growth.
@@ -1639,28 +1632,16 @@ mod tests {
     }
 
     #[test]
-    fn doom_guard_table_writes_canonical_key_and_accepts_legacy_nudge_alias() {
-        // Unlike the ADR-0120 ignore-and-drop policy, the guard's rename is
-        // aliased, not ignored: the default is ON, so an explicit
-        // `enabled = false` under the old `nudge` key must survive — dropping
-        // it would silently flip the user's opt-out back to blocking.
-        let legacy: Config =
-            toml::from_str("[agent.nudge]\nenabled = false\nwindow = 24\n").unwrap();
+    fn trajectory_guard_table_writes_canonical_key() {
         let canonical: Config =
-            toml::from_str("[agent.doom_guard]\nenabled = false\nwindow = 24\n").unwrap();
-        assert_eq!(legacy.agent.doom_guard, canonical.agent.doom_guard);
-        assert!(!canonical.agent.doom_guard.enabled);
-        assert_eq!(canonical.agent.doom_guard.window, 24);
+            toml::from_str("[agent.trajectory_guard]\nenabled = false\nwindow = 24\n").unwrap();
+        assert!(!canonical.agent.trajectory_guard.enabled);
+        assert_eq!(canonical.agent.trajectory_guard.window, 24);
 
-        // Save always writes the canonical key; the alias is load-only.
         let serialized = toml::to_string(&canonical).unwrap();
         assert!(
-            serialized.contains("[agent.doom_guard]"),
+            serialized.contains("[agent.trajectory_guard]"),
             "got: {serialized}"
-        );
-        assert!(
-            !serialized.contains("nudge"),
-            "legacy key must not be re-emitted: {serialized}"
         );
     }
 

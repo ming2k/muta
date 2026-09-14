@@ -124,14 +124,17 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                 "agent.skip_interactive_input" | "master.skip_interactive_input" => {
                     println!("{}", config.agent.skip_interactive_input)
                 }
-                "agent.doom_guard.enabled" | "master.doom_guard.enabled" => {
-                    println!("{}", config.agent.doom_guard.enabled)
+                "agent.trajectory_guard.enabled" => {
+                    println!("{}", config.agent.trajectory_guard.enabled)
                 }
-                "agent.doom_guard.window" | "master.doom_guard.window" => {
-                    println!("{}", config.agent.doom_guard.window)
+                "agent.trajectory_guard.window" => {
+                    println!("{}", config.agent.trajectory_guard.window)
                 }
-                "agent.doom_guard.threshold" | "master.doom_guard.threshold" => {
-                    println!("{}", config.agent.doom_guard.threshold)
+                "agent.trajectory_guard.threshold" => {
+                    println!("{}", config.agent.trajectory_guard.threshold)
+                }
+                "agent.trajectory_guard.cognitive_review" => {
+                    println!("{}", config.agent.trajectory_guard.cognitive_review)
                 }
                 "daemon.shutdown_grace_secs" => println!("{}", config.daemon.shutdown_grace_secs),
                 "daemon.idle_exit_minutes" => println!("{}", config.daemon.idle_exit_minutes),
@@ -231,20 +234,25 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                         .parse()
                         .map_err(|_| "invalid boolean for agent.skip_interactive_input")?;
                 }
-                "agent.doom_guard.enabled" | "master.doom_guard.enabled" => {
-                    config.agent.doom_guard.enabled = value
+                "agent.trajectory_guard.enabled" => {
+                    config.agent.trajectory_guard.enabled = value
                         .parse()
-                        .map_err(|_| "invalid boolean for agent.doom_guard.enabled")?;
+                        .map_err(|_| "invalid boolean for agent.trajectory_guard.enabled")?;
                 }
-                "agent.doom_guard.window" | "master.doom_guard.window" => {
-                    config.agent.doom_guard.window = value
+                "agent.trajectory_guard.window" => {
+                    config.agent.trajectory_guard.window = value
                         .parse()
-                        .map_err(|_| "invalid integer for agent.doom_guard.window")?;
+                        .map_err(|_| "invalid integer for agent.trajectory_guard.window")?;
                 }
-                "agent.doom_guard.threshold" | "master.doom_guard.threshold" => {
-                    config.agent.doom_guard.threshold = value
+                "agent.trajectory_guard.threshold" => {
+                    config.agent.trajectory_guard.threshold = value
                         .parse()
-                        .map_err(|_| "invalid integer for agent.doom_guard.threshold")?;
+                        .map_err(|_| "invalid integer for agent.trajectory_guard.threshold")?;
+                }
+                "agent.trajectory_guard.cognitive_review" => {
+                    config.agent.trajectory_guard.cognitive_review = value
+                        .parse()
+                        .map_err(|_| "invalid boolean for agent.trajectory_guard.cognitive_review")?;
                 }
                 "daemon.shutdown_grace_secs" => {
                     config.daemon.shutdown_grace_secs = value

@@ -150,7 +150,7 @@ impl Agent {
     /// [`muta_contracts::AgentRoleProfile`] declares in one call.
     ///
     /// Sets: the capability scope ([`Self::set_tools`]) and the runtime
-    /// execution knobs (`hard_stop` / doom guard / model-stdin /
+    /// execution knobs (`hard_stop` / trajectory guard / model-stdin /
     /// attended flag). The preset's [`muta_contracts::AgentIdentity`] is **not**
     /// re-applied here — identity is immutable past construction (it feeds the
     /// system-prompt preamble), so the embedding supplies it to `Agent::new` /
@@ -241,7 +241,7 @@ impl Agent {
         self.set_tools(profile.tools.clone());
         self.set_admit_mcp(profile.admit_mcp.clone());
         self.set_hard_stop_turns(profile.config.hard_stop_turns);
-        self.set_doom_guard_config(profile.config.nudge);
+        self.set_trajectory_guard_config(profile.config.trajectory_guard);
         self.set_allow_model_stdin(profile.config.allow_model_stdin);
         self.set_skip_interactive_input(profile.config.skip_interactive_input);
         self.set_unattended(profile.unattended);

@@ -1323,9 +1323,9 @@ async fn reasoning_only_response_is_accepted_not_treated_as_empty() {
         Vec::new(),
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(muta_contracts::DoomGuardConfig {
+    agent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig {
         enabled: true,
-        ..muta_contracts::DoomGuardConfig::default()
+        ..muta_contracts::TrajectoryGuardConfig::default()
     });
 
     let mut messages = vec![Message::new(Role::User, "go")];
@@ -2200,7 +2200,7 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
         vec![Arc::new(tool)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
+    agent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig::disabled());
 
     let (_events, outcome) = run_golden_round(&agent, "go", PermissionDecision::Reject).await;
 
@@ -2210,17 +2210,11 @@ async fn golden_repeated_identical_tool_calls_run_without_hard_abort() {
     let _ = outcome.unwrap();
 }
 
-/// End-to-end: the doom guard intercepts a repeating command before it
-/// executes. Unlike the read-loop guard (read-only, post-hoc), the doom guard
-/// covers all watched tools and trips when a same-signature call reaches the
-/// configured threshold (default 3, ADR-0148): the first re-run executes, and
-/// the *third* identical `execute_command` call never reaches the tool body —
-/// the model sees a `[loop guard]` refusal instead of a fresh result. This is
-/// the integration proof that the guard fires pre-dispatch (the decisive
-/// fix): the blocked repeat's side effect and output never enter context.
+/// End-to-end: the trajectory guard intercepts a repeating command before it
+/// executes. The blocked repeat's side effect and output never enter context.
 #[tokio::test]
-async fn doom_guard_blocks_repeating_command_before_execution() {
-    // Tool name is `execute_command` so it lands in the doom guard's watched set; the
+async fn trajectory_guard_blocks_repeating_command_before_execution() {
+    // Tool name is `execute_command` so it lands in the trajectory guard's watched set; the
     // command locator makes identical calls share a signature.
     let command = RecordingTool::read("execute_command", "COMMAND-OUT");
     let calls = command.calls_handle();
@@ -2235,9 +2229,11 @@ async fn doom_guard_blocks_repeating_command_before_execution() {
         vec![Arc::new(command)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(muta_contracts::DoomGuardConfig {
+    agent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig {
         enabled: true,
-        ..muta_contracts::DoomGuardConfig::default()
+        threshold: 3,
+        cognitive_review: false,
+        ..muta_contracts::TrajectoryGuardConfig::default()
     });
     agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
         tool: "execute_command".to_string(),
@@ -2308,9 +2304,11 @@ async fn doom_block_is_surgical_across_files() {
         vec![Arc::new(reader), Arc::new(lister)],
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(muta_contracts::DoomGuardConfig {
+    agent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig {
         enabled: true,
-        ..muta_contracts::DoomGuardConfig::default()
+        threshold: 3,
+        cognitive_review: false,
+        ..muta_contracts::TrajectoryGuardConfig::default()
     });
 
     let mut messages = vec![Message::new(Role::User, "go")];
@@ -2340,13 +2338,9 @@ async fn doom_block_is_surgical_across_files() {
     );
 }
 
-/// The doom guard is gated by `set_nudge_config`: disabled (the default), a
-/// repeating call is neither blocked nor injected — subagents and the review
-/// diagnostic rely on this. The test is explicit about the disabled state
-/// rather than relying on the default so the assertion stays meaningful if the
-/// default ever flips.
+/// The trajectory guard is disabled: a repeating call is neither blocked nor injected.
 #[tokio::test]
-async fn doom_guard_suppressed_when_disabled() {
+async fn trajectory_guard_suppressed_when_disabled() {
     let cmd = || turn(&[("c", "execute_command", r#"{"command":"make test"}"#)]);
     let agent = Arc::new(Agent::new(
         Arc::new(ScriptedProvider::new(vec![
@@ -2361,7 +2355,7 @@ async fn doom_guard_suppressed_when_disabled() {
         ))],
         crate::AgentIdentity::default(),
     ));
-    agent.set_doom_guard_config(muta_contracts::DoomGuardConfig::disabled());
+    agent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig::disabled());
     agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
         tool: "execute_command".to_string(),
         scope: "make test".to_string(),
@@ -2384,6 +2378,139 @@ async fn doom_guard_suppressed_when_disabled() {
             .iter()
             .any(|m| m.role == Role::Tool && m.content.contains("[loop guard]")),
         "disabled guard must not block"
+    );
+}
+
+/// ADR-0247: Trajectory Loop Guard with Cognitive Arbitration confirms loop and blocks surgically.
+#[tokio::test]
+async fn trajectory_guard_cognitive_arbitration_confirms_loop_and_blocks_surgically() {
+    let command = RecordingTool::read("execute_command", "COMMAND-OUT");
+    let calls = command.calls_handle();
+    let cmd = || turn(&[("c", "execute_command", r#"{"command":"cargo test"}"#)]);
+    let agent = Arc::new(Agent::new(
+        Arc::new(
+            ScriptedProvider::new(vec![
+                cmd(), // 1st
+                cmd(), // 2nd
+                cmd(), // 3rd
+                cmd(), // 4th: trips Tier 1 (threshold 4) -> Steward confirms loop ("yes") -> blocked
+                text_turn("done"),
+            ])
+            .with_cognitive_replies(&["yes"]),
+        ),
+        vec![Arc::new(command)],
+        crate::AgentIdentity::default(),
+    ));
+    agent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig::cognitive());
+    agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
+        tool: "execute_command".to_string(),
+        scope: "cargo test".to_string(),
+    }]);
+
+    let mut messages = vec![Message::new(Role::User, "run tests")];
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+    assert_eq!(outcome.unwrap().message.content, "done");
+
+    // First 3 calls execute; the 4th is confirmed as a loop and blocked pre-dispatch.
+    let executed = calls.lock().unwrap().len();
+    assert_eq!(
+        executed, 3,
+        "first 3 calls must execute; 4th must be blocked upon cognitive confirmation"
+    );
+
+    let blocked: Vec<&Message> = messages
+        .iter()
+        .filter(|m| m.role == Role::Tool && m.content.contains("[loop guard]"))
+        .collect();
+    assert!(!blocked.is_empty(), "blocked call must receive loop guard notice");
+}
+
+/// ADR-0247: Trajectory Loop Guard with Cognitive Arbitration acquits and escalates ladder.
+#[tokio::test]
+async fn trajectory_guard_cognitive_arbitration_acquits_and_escalates_ladder() {
+    let command = RecordingTool::read("execute_command", "COMMAND-OUT");
+    let calls = command.calls_handle();
+    let cmd = || turn(&[("c", "execute_command", r#"{"command":"cargo test"}"#)]);
+    let agent = Arc::new(Agent::new(
+        Arc::new(
+            ScriptedProvider::new(vec![
+                cmd(), // 1st
+                cmd(), // 2nd
+                cmd(), // 3rd
+                cmd(), // 4th: trips Tier 1 (threshold 4) -> Steward acquits ("no") -> executes!
+                text_turn("done"),
+            ])
+            .with_cognitive_replies(&["no"]),
+        ),
+        vec![Arc::new(command)],
+        crate::AgentIdentity::default(),
+    ));
+    agent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig::cognitive());
+    agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
+        tool: "execute_command".to_string(),
+        scope: "cargo test".to_string(),
+    }]);
+
+    let mut messages = vec![Message::new(Role::User, "run tests")];
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+    assert_eq!(outcome.unwrap().message.content, "done");
+
+    // All 4 calls execute because cognitive arbiter acquitted the 4th call, escalating the ladder to tier 2 (8).
+    let executed = calls.lock().unwrap().len();
+    assert_eq!(
+        executed, 4,
+        "all 4 calls must execute because cognitive arbiter acquitted repetition"
+    );
+
+    let blocked: Vec<&Message> = messages
+        .iter()
+        .filter(|m| m.role == Role::Tool && m.content.contains("[loop guard]"))
+        .collect();
+    assert!(blocked.is_empty(), "no call should be blocked when acquitted");
+}
+
+/// ADR-0247: Trajectory Loop Guard fails open on provider error [INV-LOOP-02] and escalates ladder.
+#[tokio::test]
+async fn trajectory_guard_fail_open_on_provider_error_and_escalates() {
+    let command = RecordingTool::read("execute_command", "COMMAND-OUT");
+    let calls = command.calls_handle();
+    let cmd = || turn(&[("c", "execute_command", r#"{"command":"cargo test"}"#)]);
+    let agent = Arc::new(Agent::new(
+        Arc::new(
+            // ScriptedProvider has NO cognitive replies configured -> provider chat will error.
+            // By [INV-LOOP-02], it must fail open, not deadlock, and escalate the ladder.
+            ScriptedProvider::new(vec![
+                cmd(), // 1st
+                cmd(), // 2nd
+                cmd(), // 3rd
+                cmd(), // 4th: trips Tier 1 (4) -> Steward consult errors -> fails open -> executes!
+                text_turn("done"),
+            ]),
+        ),
+        vec![Arc::new(command)],
+        crate::AgentIdentity::default(),
+    ));
+    agent.set_trajectory_guard_config(muta_contracts::TrajectoryGuardConfig::cognitive());
+    agent.seed_permissions_from_config(&[muta_persistence::config::PermissionRuleConfig {
+        tool: "execute_command".to_string(),
+        scope: "cargo test".to_string(),
+    }]);
+
+    let mut messages = vec![Message::new(Role::User, "run tests")];
+    let outcome = agent
+        .run_streaming_with_events(&mut messages, &CancellationToken::new(), |_| {})
+        .await;
+    assert_eq!(outcome.unwrap().message.content, "done");
+
+    // The 4th call executes safely due to fail-open.
+    let executed = calls.lock().unwrap().len();
+    assert_eq!(
+        executed, 4,
+        "all 4 calls must execute because cognitive error fails open"
     );
 }
 

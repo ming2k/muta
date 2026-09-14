@@ -51,9 +51,9 @@ pub(crate) struct PreparedDispatch {
 /// Per-turn signals computed by preflight and consumed by finalize.
 #[derive(Debug, Default)]
 pub(crate) struct TurnSignals {
-    /// The hidden `LoopReviewNudge` to inject after the batch, if the doom
+    /// The hidden `LoopReviewNudge` to inject after the batch, if the trajectory
     /// guard blocked anything this turn.
-    pub(crate) doom_nudge: Option<String>,
+    pub(crate) trajectory_nudge: Option<String>,
 }
 
 /// Forward one live event from a scheduled task to the dispatch callback,
@@ -87,15 +87,16 @@ fn forward_scheduled_event<F>(
 
 impl Agent {
     /// **Stage 1 — preflight** (per turn). Classifies the turn, scans for
-    /// checkpoint replays, runs the pre-dispatch doom-guard check, generates
+    /// checkpoint replays, runs the pre-dispatch trajectory-guard check, generates
     /// the dispatch ids, emits every `ToolCall` event up front, and resolves
     /// the short-circuits (replay / guard-blocked) by emitting their terminal
     /// `ToolResult(duration_ms = 0)` and filling their slots. Returns the
     /// prepared batch; the calls listed in [`PreparedDispatch::exec_indices`]
     /// still need execution.
-    pub(crate) fn dispatch_preflight<F>(
+    pub(crate) async fn dispatch_preflight<F>(
         &self,
         tool_calls: &[ToolCall],
+        messages: &[Message],
         state: &mut RoundState,
         on_event: &mut F,
     ) -> PreparedDispatch
@@ -119,7 +120,7 @@ impl Agent {
         // A provider retry may produce the same tool request again even
         // though its terminal result is already in the checkpointed
         // history. Treat exact matches as idempotency replays regardless
-        // of the optional doom-loop setting.
+        // of the optional trajectory-loop setting.
         let checkpoint_replays: Vec<bool> = tool_calls
             .iter()
             .map(|call| state.is_checkpoint_replay(call))
@@ -140,30 +141,53 @@ impl Agent {
             ));
         }
 
-        // Pre-dispatch doom-loop check (the decisive intervention). Before
-        // any tool runs this turn, ask the doom guard whether any call is a
-        // repeat of one already issued this round. A repeat is blocked here
-        // and now — the tool never executes, so its result never enters
-        // context. Unlike the post-hoc read-loop guard, this covers all
-        // watched tools (run_command/read_url/edit_text/...), not just reads, and trips
-        // when a same-signature call reaches `threshold` occurrences
-        // (default 3: one re-run tolerated, ADR-0148). `Block` records the
-        // repeated signatures into the per-round mask, so the per-call
-        // `is_blocked` filter below short-circuits them without re-running
-        // the guard. We surface the guard's message as a notice + a hidden
-        // user message so the model learns the call is refused.
-        let doom_calls: Vec<(&str, &str)> = tool_calls
+        // Pre-dispatch trajectory-loop check (ADR-0247). Before
+        // any tool runs this turn, evaluate trajectory against repeating ruts.
+        let trajectory_calls: Vec<(&str, &str)> = tool_calls
             .iter()
             .zip(&checkpoint_replays)
             .filter(|(_, replayed)| !**replayed)
             .map(|(call, _)| (call.name.as_str(), call.arguments.as_str()))
             .collect();
-        let doom_action = state.guards.check_doom_ahead(&doom_calls);
-        let doom_nudge: Option<String> = match &doom_action {
+        let preceding_context = {
+            let mut ctx = String::new();
+            for m in messages.iter().rev().take(6) {
+                if !m.content.is_empty() {
+                    ctx.push_str(&format!("{:?}: {}\n", m.role, m.content.chars().take(500).collect::<String>()));
+                }
+            }
+            ctx
+        };
+        let trajectory_action = if let Some(input) = state.guards.check_trajectory_candidate(&trajectory_calls, preceding_context) {
+            tracing::info!(
+                signature = %input.signature,
+                tier = input.threshold_tier,
+                "L1 trajectory detector flagged repetition candidate; invoking Steward cognitive arbiter (ADR-0247)"
+            );
+            let verdict = self.cognitive().review_trajectory_loop(input.clone()).await;
+            if verdict.is_loop() {
+                tracing::warn!(
+                    signature = %input.signature,
+                    "Cognitive arbiter confirmed trajectory loop; applying surgical block"
+                );
+                state.guards.block_trajectory(&input.signature)
+            } else {
+                tracing::info!(
+                    signature = %input.signature,
+                    tier = input.threshold_tier,
+                    "Cognitive arbiter acquitted candidate; escalating backoff ladder (ADR-0247)"
+                );
+                state.guards.acquit_and_backoff(&input.signature, &trajectory_calls);
+                crate::guard::GuardAction::Continue
+            }
+        } else {
+            state.guards.check_trajectory_ahead(&trajectory_calls)
+        };
+        let trajectory_nudge: Option<String> = match &trajectory_action {
             crate::guard::GuardAction::Block { message, .. } => {
                 tracing::warn!(
                     blocked = ?state.guards.blocked_summary(),
-                    "doom guard blocked a repeating tool call before execution"
+                    "trajectory guard blocked a repeating tool call before execution"
                 );
                 on_event(AgentEvent::Notice(
                     AgentNotice::new(
@@ -199,11 +223,8 @@ impl Agent {
                 arguments: call.arguments.clone(),
             });
         }
-        // Signature-level loop guard (ADR-0036): a call whose canonical
-        // signature is in the per-round block mask — set either by the
-        // read-loop guard (a repeat that escalated past a nudge) or by the
-        // doom guard above (a watched tool that hit the repeat threshold) — is
-        // short-circuited here, before execution. The model gets an
+        // Signature-level trajectory guard (ADR-0247): a call whose canonical
+        // signature is in the per-round block mask is short-circuited here, before execution. The model gets an
         // explanatory error instead of the content/side-effect, so it is
         // physically unable to re-enter the loop. Blocked calls are split
         // out so the rest run concurrently exactly as before. Each blocked
@@ -294,7 +315,9 @@ impl Agent {
             checkpoint_replays,
             exec_indices,
             results,
-            signals: TurnSignals { doom_nudge },
+            signals: TurnSignals {
+                trajectory_nudge,
+            },
         }
     }
 
@@ -486,7 +509,7 @@ impl Agent {
     /// **Stage 4 — finalize** (per call, input order). Fold the recovered
     /// results back into the input-ordered batch, record every result
     /// (token accounting, todos, transcript messages), run post-tool hooks
-    /// for non-replay calls, and inject the doom nudge captured by
+    /// for non-replay calls, and inject the trajectory nudge captured by
     /// preflight. On interruption only the drained results are recorded and
     /// the round ends with `Err(HarnessError::Interrupted)` — no hooks, no
     /// nudge, no `remember_completed_tool`, matching the historical contract.
@@ -575,12 +598,12 @@ impl Agent {
         // If the user denied permission for any call, stop the round here
         // instead of feeding the (possibly partial) results back to the
         // model and asking it to continue.
-        // If the doom guard blocked any repeats this round, deliver its
+        // If the trajectory guard blocked any repeats this round, deliver its
         // consolidated message as a hidden user note alongside the blocked
         // tool results, so the model learns *why* its call was refused and
         // what to do instead. Non-terminating: the turn continues with the
         // (now masked) signatures hard-blocked for subsequent turns in this round.
-        if let Some(message) = prepared.signals.doom_nudge {
+        if let Some(message) = prepared.signals.trajectory_nudge {
             messages.push(crate::conversation_context::hidden_user(
                 InjectionKind::LoopReviewNudge,
                 message,

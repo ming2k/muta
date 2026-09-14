@@ -1838,11 +1838,14 @@ pub fn retry_delay_ms(
     base_ms: u64,
     max_ms: u64,
 ) -> u64 {
-    let exponent = attempt.saturating_sub(1).min(20) as u32;
-    let exp_backoff = base_ms.saturating_mul(2u64.saturating_pow(exponent));
+    // Stepped backoff schedule: 1s, 2s, 5s, 10s, 10s, then continuously 10s (scaled by base_ms).
+    const STEP_MULTIPLIERS: [u64; 4] = [1, 2, 5, 10];
+    let step_idx = attempt.saturating_sub(1);
+    let multiplier = STEP_MULTIPLIERS[step_idx.min(STEP_MULTIPLIERS.len() - 1)];
+    let stepped_backoff = base_ms.saturating_mul(multiplier);
     match retry_after_ms {
         Some(ms) => ms.max(base_ms).min(max_ms.max(1)),
-        None => exp_backoff.min(max_ms.max(1)),
+        None => stepped_backoff.min(max_ms.max(1)),
     }
 }
 

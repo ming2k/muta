@@ -210,7 +210,7 @@ impl Agent {
         StreamingRoundState {
             turn_context: Arc::default(),
             state: RoundState {
-                guards: RoundState::guards_default(self.doom_guard_config()),
+                guards: RoundState::guards_default(self.trajectory_guard_config()),
                 ..RoundState::default()
             },
             turn_index: 0,
@@ -253,7 +253,7 @@ impl Agent {
         StreamingRoundState {
             turn_context: Arc::default(),
             state: RoundState {
-                guards: RoundState::guards_default(self.doom_guard_config()),
+                guards: RoundState::guards_default(self.trajectory_guard_config()),
                 ..RoundState::default()
             },
             turn_index: point.turns_committed,
@@ -1156,7 +1156,7 @@ impl Agent {
             //      inside `execute_tool` (never serialised across the batch);
             //   3. schedule — concurrent execution through the ToolScheduler;
             //   4. finalize — input-ordered recording, post-tool hooks, nudge.
-            let prepared = self.dispatch_preflight(tool_calls, state, on_event);
+            let prepared = self.dispatch_preflight(tool_calls, messages, state, on_event).await;
             let outcome = if prepared.exec_indices.is_empty() {
                 None
             } else {
@@ -1215,21 +1215,21 @@ impl Agent {
                     .with_surface(NoticeSurface::Toast),
                 ));
             }
-            // Pre-dispatch doom check, mirroring the native path: catch a repeat
+            // Pre-dispatch trajectory check, mirroring the native path: catch a repeat
             // *before* the text-fallback tool runs.
-            let doom_action = if checkpoint_replay {
+            let trajectory_action = if checkpoint_replay {
                 crate::guard::GuardAction::Continue
             } else {
                 state
                     .guards
-                    .check_doom_ahead(&[(call.name.as_str(), call.arguments.as_str())])
+                    .check_trajectory_ahead(&[(call.name.as_str(), call.arguments.as_str())])
             };
-            let doom_message: Option<String> = match &doom_action {
+            let trajectory_message: Option<String> = match &trajectory_action {
                 crate::guard::GuardAction::Block { message, .. } => {
                     tracing::warn!(
                         tool = %call.name,
                         args = %call.arguments,
-                        "text-fallback call blocked by doom guard before execution"
+                        "text-fallback call blocked by trajectory guard before execution"
                     );
                     Some(message.clone())
                 }
@@ -1363,7 +1363,7 @@ impl Agent {
                 self.run_post_tool_hooks(&call, &result, duration_ms, messages)
                     .await;
             }
-            if let Some(message) = doom_message {
+            if let Some(message) = trajectory_message {
                 messages.push(crate::conversation_context::hidden_user(
                     InjectionKind::LoopReviewNudge,
                     message,

@@ -980,11 +980,19 @@ async fn turn_exhaustion_message_explains_retry_budget() {
 }
 
 #[test]
-fn retry_delay_honors_headers_and_exponential_bounds() {
+fn retry_delay_honors_headers_and_stepped_bounds() {
+    // Stepped backoff: 1s -> 2s -> 5s -> 10s -> 10s -> continuously 10s
     assert_eq!(retry_delay_ms(1, None, 1_000, 30_000), 1_000);
-    assert_eq!(retry_delay_ms(3, None, 1_000, 30_000), 4_000);
+    assert_eq!(retry_delay_ms(2, None, 1_000, 30_000), 2_000);
+    assert_eq!(retry_delay_ms(3, None, 1_000, 30_000), 5_000);
+    assert_eq!(retry_delay_ms(4, None, 1_000, 30_000), 10_000);
+    assert_eq!(retry_delay_ms(5, None, 1_000, 30_000), 10_000);
+    assert_eq!(retry_delay_ms(10, None, 1_000, 30_000), 10_000);
+    // Server retry-after header takes priority (bounded by base and max)
     assert_eq!(retry_delay_ms(2, Some(45_000), 1_000, 30_000), 30_000);
     assert_eq!(retry_delay_ms(1, Some(0), 1_000, 30_000), 1_000);
+    // Capped by max_ms
+    assert_eq!(retry_delay_ms(3, None, 1_000, 3_000), 3_000);
 }
 
 #[test]

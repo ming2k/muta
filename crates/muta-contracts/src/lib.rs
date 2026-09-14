@@ -123,7 +123,8 @@ pub use cognitive::{
     EnvironmentSensorTask, ExecutionTier, HarnessTask, HarnessTaskModelPreference,
     PreFlightRouteInput, PreFlightRouteOutput, PreFlightRouterTask, SessionDigest,
     SessionTitleInput, SessionTitleTask, StreamLoopChannel, StreamLoopReviewInput,
-    StreamLoopReviewerTask, StreamLoopVerdict,
+    StreamLoopReviewerTask, StreamLoopVerdict, TrajectoryLoopReviewInput,
+    TrajectoryLoopReviewerTask, TrajectoryLoopVerdict,
 };
 pub use execution_policy::{ContextLifecycle, ExecutionPolicy, PolicyViolation};
 pub use mesh::{MeshAddress, MeshEnvelope, MeshMessage, MeshRoute, mesh_ids};
@@ -148,7 +149,7 @@ pub use usage_stats::{
     UsageDayTotals, UsageModelRow, UsageModelTotals, UsageStatRecord, UsageStatsReport,
     aggregate_usage_records, day_key_from_epoch_ms,
 };
-pub mod doom_guard_config;
+pub mod trajectory_guard_config;
 pub mod execution;
 pub mod secret;
 pub mod security;
@@ -198,7 +199,7 @@ pub use connection_detail::{
     BalanceQuota, ConnectionDetail, ConnectionUsageState, PeriodicQuota, ProviderQuotaData,
     ProviderUsage, QuotaWindowBucket, QuotaWindowKind, RateLimitSpec, UsageMetric,
 };
-pub use doom_guard_config::DoomGuardConfig;
+pub use trajectory_guard_config::TrajectoryGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,

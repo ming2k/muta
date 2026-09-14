@@ -1,7 +1,7 @@
 //! Configuration, budget, and hook-fire methods on [`Agent`].
 //!
 //! Everything an embedder sets up before the first round: tool variant
-//! selection, context budgets, the doom guard, bash policy, hook registries,
+//! selection, context budgets, the trajectory guard, bash policy, hook registries,
 //! todo lists, and the identity/preset accessors.
 
 use super::*;
@@ -175,8 +175,8 @@ impl Agent {
             context_projection_gate: Arc::new(std::sync::Mutex::new(None)),
             images_suppressed: Arc::new(std::sync::RwLock::new(None)),
             hard_stop_turns: Arc::new(std::sync::Mutex::new(0)),
-            doom_guard_config: Arc::new(std::sync::RwLock::new(
-                muta_contracts::DoomGuardConfig::default(),
+            trajectory_guard_config: Arc::new(std::sync::RwLock::new(
+                muta_contracts::TrajectoryGuardConfig::default(),
             )),
             interaction: Arc::new(crate::interaction::InteractionController::default()),
             human_broker: crate::human_broker::HumanRequestBroker::new(),
@@ -595,33 +595,33 @@ impl Agent {
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Replace the live doom-guard configuration atomically. The next round
+    /// Replace the live trajectory-guard configuration atomically. The next round
     /// reconstructs its per-round guard from the new settings; the current
     /// round, if any, keeps its already-built guard state.
     ///
-    /// Wired from `[agent.doom_guard]` in `config.toml` at startup and forced to
-    /// [`muta_contracts::DoomGuardConfig::disabled`] on subagents and the review
+    /// Wired from `[agent.trajectory_guard]` in `config.toml` at startup and forced to
+    /// [`muta_contracts::TrajectoryGuardConfig::disabled`] on subagents and the review
     /// diagnostic so they run unobstructed regardless of user settings.
-    pub fn set_doom_guard_config(&self, config: muta_contracts::DoomGuardConfig) {
+    pub fn set_trajectory_guard_config(&self, config: muta_contracts::TrajectoryGuardConfig) {
         *self
-            .doom_guard_config
+            .trajectory_guard_config
             .write()
             .unwrap_or_else(|e| e.into_inner()) = config;
     }
 
-    /// Snapshot of the live doom-guard configuration. The turn boundary reads
-    /// `enabled` to gate the pre-dispatch doom check.
-    pub fn doom_guard_config(&self) -> muta_contracts::DoomGuardConfig {
+    /// Snapshot of the live trajectory-guard configuration. The turn boundary reads
+    /// `enabled` to gate the pre-dispatch trajectory check.
+    pub fn trajectory_guard_config(&self) -> muta_contracts::TrajectoryGuardConfig {
         *self
-            .doom_guard_config
+            .trajectory_guard_config
             .read()
             .unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Whether the doom guard is currently armed (allowed to block). Convenience
-    /// wrapper over [`Self::doom_guard_config`] for the turn-boundary fast path.
-    pub fn doom_guard_enabled(&self) -> bool {
-        self.doom_guard_config().enabled
+    /// Whether the trajectory guard is currently armed (allowed to block). Convenience
+    /// wrapper over [`Self::trajectory_guard_config`] for the turn-boundary fast path.
+    pub fn trajectory_guard_enabled(&self) -> bool {
+        self.trajectory_guard_config().enabled
     }
 
     /// Enable or disable the model-supplied-stdin path for `bash` (L3.5 α).

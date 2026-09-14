@@ -117,7 +117,7 @@ pub mod catalog;
 pub mod compaction;
 pub mod context_projection;
 mod conversation_context;
-pub mod doom_guard;
+pub mod trajectory_guard;
 pub mod dynamic;
 mod dynamic_tools;
 pub mod hooks;
