@@ -369,11 +369,13 @@ mod role_command_tests {
     }
 
     #[test]
-    fn builtin_roles_are_developer_and_philosophist() {
-        assert_eq!(MainAgentRole::ALL.len(), 2);
+    fn builtin_roles_include_developer_philosophist_and_ops() {
+        assert_eq!(MainAgentRole::ALL.len(), 3);
         assert_eq!(MainAgentRole::ALL[0], MainAgentRole::Developer);
         assert_eq!(MainAgentRole::ALL[1], MainAgentRole::Philosophist);
+        assert_eq!(MainAgentRole::ALL[2], MainAgentRole::Ops);
         assert_eq!(MainAgentRole::ALL[0].as_str(), "developer");
         assert_eq!(MainAgentRole::ALL[1].as_str(), "philosophist");
+        assert_eq!(MainAgentRole::ALL[2].as_str(), "ops");
     }
 }

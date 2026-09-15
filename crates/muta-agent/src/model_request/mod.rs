@@ -68,6 +68,25 @@ impl ModelRequestAssembler {
         muta_contracts::ModelRequest::with_instructions_and_tools(instructions, messages, tools)
             .with_temporary_context(temporary_context)
     }
+
+    /// Compile a [`muta_contracts::ModelRequest`] directly from a canonical [`muta_contracts::SessionIR`]
+    /// via the 4-pass compiler pipeline (ADR-0241/ADR-0249, INV-EXEC-02).
+    pub fn compile_from_ir(
+        &self,
+        ir: &muta_contracts::SessionIR,
+        temporary_context: Vec<Message>,
+        tools: &[Arc<dyn Tool>],
+        dialect: Option<String>,
+    ) -> Result<muta_contracts::CompilationArtifact, muta_contracts::CompilerError> {
+        let tool_specs = tools.iter().map(|t| muta_contracts::ToolSpec::from_tool(t.as_ref())).collect();
+        let options = muta_contracts::CompilerOptions {
+            tool_specs,
+            temporary_context,
+            ephemeral_instruction: None,
+            target_dialect: dialect,
+        };
+        muta_contracts::compile_session_request(ir, options)
+    }
 }
 
 #[cfg(test)]
@@ -119,5 +138,25 @@ mod tests {
             request.instructions, again.instructions,
             "system prompt instructions must be byte-stable across assemblies"
         );
+    }
+
+    #[test]
+    fn compile_from_ir_executes_compiler_passes() {
+        let tool: Arc<dyn Tool> = Arc::new(TestTool);
+        let assembler = ModelRequestAssembler::new(SystemPromptRegistry::new());
+        let policy = muta_contracts::SessionPolicy::default();
+        let mut ir = muta_contracts::SessionIR::new("test-session", policy, 1000);
+        ir.append_message("node-1", 1001, Message::new(Role::User, "compile this"));
+
+        let artifact = assembler
+            .compile_from_ir(&ir, vec![], &[tool], Some("anthropic".into()))
+            .expect("SessionIR compilation must succeed");
+
+        assert_eq!(artifact.request.messages.len(), 1);
+        assert_eq!(artifact.request.messages[0].content, "compile this");
+        assert_eq!(artifact.request.tool_specs.len(), 1);
+        assert_eq!(artifact.request.tool_specs[0].name, "inspect");
+        assert!(!artifact.cache_boundary.prefix_fingerprint.is_empty());
+        assert_eq!(artifact.stats.nodes_traversed, 1);
     }
 }

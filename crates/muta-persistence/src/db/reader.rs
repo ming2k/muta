@@ -26,6 +26,11 @@ impl DbReader {
             .map(|receipt| receipt.map(|(operation_id, _hash, revision)| (operation_id, revision)))
     }
 
+    /// Load the canonical [`muta_contracts::SessionIR`] for a session if it exists (ADR-0241/ADR-0249).
+    pub fn load_session_ir(&self, session_id: &str) -> Result<Option<muta_contracts::SessionIR>> {
+        crate::db::session_ir::load_session_ir(&self.engine.conn, session_id)
+    }
+
     pub(crate) fn usage_days(&self, limit: usize) -> Result<Vec<String>> {
         let mut stmt = self.engine.conn.prepare("SELECT DISTINCT day FROM usage_records ORDER BY day DESC LIMIT ?1")?;
         stmt.query_map([limit as i64], |r| r.get(0))?.collect()

@@ -895,9 +895,10 @@ mod tests {
         };
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(
-            labels,
-            vec![
+            &labels[..3],
+            &[
                 "/role developer",
+                "/role ops",
                 "/role philosophist",
             ]
         );

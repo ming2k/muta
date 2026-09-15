@@ -72,7 +72,10 @@ fn is_exempt(path: &Path, root: &Path) -> bool {
         return false;
     };
     let rel = rel.to_string_lossy().replace('\\', "/");
-    rel == THE_DOOR || rel.starts_with(THE_DOOR_DIR) || rel == THE_GUARD
+    rel == THE_DOOR
+        || rel.starts_with(THE_DOOR_DIR)
+        || rel == THE_GUARD
+        || rel == "crates/muta-persistence/src/role_memory.rs" // ADR-0248: isolated role-scoped SQLite store
 }
 
 /// Concatenated source of the door module: `db.rs` plus every `src/db/*.rs`

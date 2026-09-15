@@ -270,14 +270,15 @@ impl Agent {
                     .extensions
                     .push(Arc::new(crate::extension::CodeIntelligenceExtension::new()));
             }
-            muta_contracts::MainAgentRole::Philosophist => {}
+            muta_contracts::MainAgentRole::Philosophist
+            | muta_contracts::MainAgentRole::Ops => {}
         }
     }
 
     /// Switch the live agent into a named role.
     ///
     /// Resolves against user-configured roles in `roles.toml` first, then falls back
-    /// to built-in presets (`developer`, `philosophist`).
+    /// to built-in presets (`developer`, `philosophist`, `ops`).
     pub fn apply_role(&self, target: &str) -> Option<SwitchedRole> {
         let trimmed = target.trim();
         let roles_config = muta_persistence::roles::RolesConfig::load_for_workspace(
@@ -850,6 +851,12 @@ mod tests {
         assert!(switched.description.contains("philosophical"));
         assert_eq!(agent.extensions().len(), 0);
         assert_eq!(agent.active_role().as_deref(), Some("philosophist"));
+
+        // Applying ops role resolves and drops code intelligence overhead
+        let switched_ops = agent.apply_role("ops").expect("ops role resolves");
+        assert_eq!(switched_ops.id, "ops");
+        assert_eq!(agent.active_role().as_deref(), Some("ops"));
+        assert_eq!(agent.extensions().len(), 0);
 
         // Unknown role returns None
         assert!(agent.apply_role("non-existent-role").is_none());

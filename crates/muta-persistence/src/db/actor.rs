@@ -108,6 +108,12 @@ impl PersistenceCommand {
                     let _ = ack.send(res);
                 }
             }
+            Self::SaveSessionDelta { delta, ack } => {
+                let res = guarded(|| {
+                    crate::db::session_ir::save_session_delta(&engine.conn, &delta)
+                });
+                let _ = ack.send(res);
+            }
             #[cfg(test)]
             Self::Die { ack } => {
                 let _ = ack.send(());
@@ -139,6 +145,9 @@ impl PersistenceCommand {
         match self {
             Self::ProjectUsage { ack } => { let _ = ack.send(Err(error)); }
             Self::SaveSession { ack, .. } => {
+                let _ = ack.send(Err(error));
+            }
+            Self::SaveSessionDelta { ack, .. } => {
                 let _ = ack.send(Err(error));
             }
             Self::UpsertSession { ack, .. }

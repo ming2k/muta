@@ -420,13 +420,24 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
                 confinement,
             )
         }
-        None => (
-            Arc::new(muta_agent::execution::InMemoryExecutionEnvironment::new(
-                std::path::PathBuf::new(),
-            )),
-            muta_contracts::SharedAdditionalRoots::empty(),
-            muta_contracts::SharedConfinement::new(true),
-        ),
+        None => {
+            // Workspace-free sessions (such as ops or custom unconfined roles) operate
+            // against the host environment using current_dir as the baseline directory.
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let env = Arc::new(
+                muta_agent::execution::WorkspaceExecutionEnvironment::with_additional_roots(
+                    cwd,
+                    additional_roots.clone(),
+                ),
+            );
+            let additional = env.shared_additional_roots();
+            let confinement = env.shared_confinement();
+            (
+                env as Arc<dyn muta_contracts::ExecutionEnvironment>,
+                additional,
+                confinement,
+            )
+        }
     };
     let background_jobs = crate::background_jobs::BackgroundJobManager::new();
     let session_job_service = crate::background_jobs::SessionJobService::new(

@@ -405,6 +405,45 @@ impl Agent {
             )
     }
 
+    /// Compile a [`muta_contracts::ModelRequest`] directly from a canonical [`muta_contracts::SessionIR`]
+    /// via the multi-pass compiler pipeline (ADR-0241/ADR-0249, INV-EXEC-02).
+    pub fn model_request_from_ir(
+        &self,
+        ir: &muta_contracts::SessionIR,
+    ) -> Result<muta_contracts::CompilationArtifact, muta_contracts::CompilerError> {
+        let mut temporary_context: Vec<Message> = Vec::new();
+        let ws_root = self.workspace_root();
+        let hook_ctx =
+            muta_contracts::extension::HookContext::temporary_context(ws_root.as_deref());
+        for extension in self.extensions() {
+            if let muta_contracts::extension::HookOutcome::TemporaryContext(projection) =
+                extension.run(
+                    muta_contracts::HookPhase::ProjectTemporaryContext,
+                    &hook_ctx,
+                )
+            {
+                if !projection.is_empty() {
+                    temporary_context.push(crate::conversation_context::hidden_user(
+                        muta_contracts::InjectionKind::SystemReminder,
+                        bound_temporary_context(projection),
+                    ));
+                }
+            }
+        }
+
+        let tools = self.visible_tools();
+        let dialect = Some(self.provider.provider_id().to_string());
+        self.model_request_assembler
+            .compile_from_ir(ir, temporary_context, &tools, dialect)
+            .map(|mut artifact| {
+                artifact.request = artifact.request.with_route_state(
+                    &self.provider.route_fingerprint(),
+                    self.provider.continuation_mode(),
+                );
+                artifact
+            })
+    }
+
     /// Project inline images away when this route cannot be given them
     /// (ADR-0230). Two independent reasons qualify, and both are *projection*
     /// facts rather than history edits:

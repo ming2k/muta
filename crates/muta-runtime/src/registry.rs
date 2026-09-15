@@ -1392,8 +1392,7 @@ impl SessionRegistry {
                 identity = role_identity;
                 preset = role;
             } else if let Some(builtin) = muta_contracts::MainAgentRole::parse(role_id) {
-                if role_selected.is_some() && builtin == muta_contracts::MainAgentRole::Philosophist
-                {
+                if role_selected.is_some() && !builtin.requires_workspace() {
                     workspace = None;
                 }
                 let role = muta_contracts::AgentRoleProfile::from_role(builtin, &identity);
@@ -1407,6 +1406,17 @@ impl SessionRegistry {
             }
         }
         let workspace_root = workspace.as_ref().map(|binding| binding.root.clone());
+        let effective_confined = if let Some(builtin) =
+            role_id.as_deref().and_then(muta_contracts::MainAgentRole::parse)
+        {
+            if !builtin.requires_workspace() {
+                builtin.default_confined() && init_options.confined
+            } else {
+                init_options.confined
+            }
+        } else {
+            init_options.confined
+        };
         // The session's lifetime token (ADR-0125): shared by the driver
         // select below and the background `/schedule` scheduler inside the
         // assemble, so one cancel stops the harness *and* its tick loop.
@@ -1424,7 +1434,7 @@ impl SessionRegistry {
             project_root: workspace_root.clone(),
             role: role_id.clone(),
             unattended: init_options.unattended,
-            confined: init_options.confined,
+            confined: effective_confined,
             human_channel: Some(Arc::clone(&human_channel)),
             teardown_token: Some(cancel.clone()),
             shared_config: Some(self.shared_config.clone()),

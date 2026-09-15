@@ -48,7 +48,7 @@ impl muta_runtime::UiBridge for DaemonUiBridge {
     }
 }
 
-// Built-in roles (`developer`, `philosophist`) and the `/role` switching mechanism
+// Built-in roles (`developer`, `philosophist`, `ops`) and the `/role` switching mechanism
 // are declared in `muta-contracts` as shared vocabulary (`MainAgentRole`,
 // `AgentRoleProfile::from_role`) and applied via `Agent::apply_role`,
 // so this binary does not need its own role registry — both frontends share one.

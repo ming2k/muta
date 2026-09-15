@@ -55,7 +55,7 @@ pub struct CliArgs {
     pub project: Option<PathBuf>,
     /// `--unattended`: run unattended without interactive human confirmations.
     pub unattended: bool,
-    /// `--role <id>`: staff the new session with a role (`developer`, `philosophist`, or user role).
+    /// `--role <id>`: staff the new session with a role (`developer`, `philosophist`, `ops`, or user role).
     pub role: Option<String>,
     /// `--resume`: resume the most recent matching session instead of a new one.
     pub resume: bool,
@@ -405,7 +405,7 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("  -i, --interactive      force interactive TUI mode\n");
             out.push_str("  -j, --json             emit structured JSON where supported\n");
             out.push_str(
-                "      --role <id>        staff the new session with a role (developer, philosophist, or custom)\n",
+                "      --role <id>        staff the new session with a role (developer, philosophist, ops, or custom)\n",
             );
             out.push_str(
                 "      --resume           resume the most recent matching session instead of a new one\n",
@@ -596,6 +596,10 @@ mod tests {
     fn role_and_resume_flags_parse_cleanly() {
         let parsed = parse(&["--role", "philosophist"]).unwrap();
         assert_eq!(parsed.role.as_deref(), Some("philosophist"));
+        assert!(!parsed.resume);
+
+        let parsed = parse(&["--role", "ops"]).unwrap();
+        assert_eq!(parsed.role.as_deref(), Some("ops"));
         assert!(!parsed.resume);
 
         let parsed = parse(&["--role=developer", "--resume"]).unwrap();

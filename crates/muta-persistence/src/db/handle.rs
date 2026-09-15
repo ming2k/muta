@@ -551,6 +551,37 @@ impl PersistenceHandle {
         )
     }
 
+    /// Save an incremental [`muta_contracts::SessionDelta`] asynchronously (ADR-0241/ADR-0249, INV-SESSION-05).
+    pub async fn save_session_delta(
+        &self,
+        delta: muta_contracts::SessionDelta,
+    ) -> Result<(), PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
+            .send(PersistenceCommand::SaveSessionDelta {
+                delta: Box::new(delta),
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| PersistenceError::WriterDown)?;
+        ack_rx.await.map_err(|_| PersistenceError::WriterDown)?
+    }
+
+    /// Synchronous [`Self::save_session_delta`] for blocking callers.
+    pub fn save_session_delta_blocking(
+        &self,
+        delta: muta_contracts::SessionDelta,
+    ) -> Result<(), PersistenceError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.run_blocking(
+            PersistenceCommand::SaveSessionDelta {
+                delta: Box::new(delta),
+                ack: ack_tx,
+            },
+            ack_rx,
+        )
+    }
+
     /// The one blocking bridge for every synchronous verb (ADR-0196).
     ///
     /// On a **multi-thread runtime** `block_in_place` is preferred: it parks

@@ -10,6 +10,10 @@ use muta_contracts::{
 };
 
 /// Convert a [`SessionData`] into a canonical [`SessionIR`].
+#[deprecated(
+    since = "0.48.3",
+    note = "Transitional bridge; native SessionIR persistence is canonical (ADR-0241/ADR-0249)"
+)]
 pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
     let mut history = CausalGraph::new();
 
@@ -188,6 +192,10 @@ pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
 }
 
 /// Apply updates from a [`SessionIR`] back into [`SessionData`].
+#[deprecated(
+    since = "0.48.3",
+    note = "Transitional bridge; native SessionIR persistence is canonical (ADR-0241/ADR-0249)"
+)]
 pub fn apply_ir_to_session_data(ir: &SessionIR, data: &mut SessionData) {
     data.updated_at = ir.updated_at_s;
     data.round_counter = ir.state.round_counter;
@@ -253,6 +261,7 @@ mod tests {
     use muta_contracts::SessionTree;
 
     #[test]
+    #[allow(deprecated)]
     fn test_session_data_to_ir_and_apply_back() {
         let mut data = SessionData {
             id: "session-bridge-test".into(),

@@ -734,16 +734,31 @@ impl SessionStore {
         Ok(messages)
     }
 
-    /// Project the current session state into canonical [`muta_contracts::SessionIR`] (ADR-0241).
+    /// Project the current session state into canonical [`muta_contracts::SessionIR`] (ADR-0241/ADR-0249).
     pub async fn session_ir(&self) -> muta_contracts::SessionIR {
+        let session_id = self.id().await;
+        if let Ok(reader) = self.writer.reader() {
+            if let Ok(Some(ir)) = reader.load_session_ir(&session_id) {
+                return ir;
+            }
+        }
         let state = self.state.lock().await;
+        #[allow(deprecated)]
         super::ir_bridge::session_data_to_ir(&state.data)
     }
 
-    /// Commit mutations from a [`muta_contracts::SessionIR`] back into the session store.
+    /// Commit mutations from a [`muta_contracts::SessionIR`] back into the session store (ADR-0241/ADR-0249).
     pub async fn commit_session_ir(&self, ir: &muta_contracts::SessionIR) -> Result<(), String> {
+        // 1. Direct O(Δ) persistence to sessions_v2 and causal_nodes tables (INV-SESSION-05)
+        let delta = ir.drain_delta(0);
+        if let Err(e) = self.writer.save_session_delta(delta).await {
+            tracing::warn!(error = %e, "failed to persist SessionDelta directly to sessions_v2 / causal_nodes");
+        }
+
+        // 2. Transitional synchronization with legacy SessionData until full retirement
         let data = {
             let mut state = self.state.lock().await;
+            #[allow(deprecated)]
             super::ir_bridge::apply_ir_to_session_data(ir, &mut state.data);
             state.data.generation = uuid::Uuid::new_v4().to_string();
             state.invalidate_projection_cache();
@@ -752,6 +767,14 @@ impl SessionStore {
         };
         persist_to(&self.writer, &data, &self.blob_store)?;
         Ok(())
+    }
+
+    /// Commit an incremental [`muta_contracts::SessionDelta`] directly into SQLite (ADR-0241/ADR-0249, INV-SESSION-05).
+    pub async fn commit_session_delta(
+        &self,
+        delta: muta_contracts::SessionDelta,
+    ) -> Result<(), crate::db::PersistenceError> {
+        self.writer.save_session_delta(delta).await
     }
 
     /// Compile a model request directly from the session's in-memory IR

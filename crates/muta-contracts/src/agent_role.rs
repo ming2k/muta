@@ -111,6 +111,38 @@ impl AgentRoleProfile {
         ]))
     }
 
+    /// Preset for ops role (workspace-free system administration, infrastructure maintenance, and remote operations).
+    pub fn ops() -> Self {
+        let identity = role_directive(
+            "Role: ops. You are an expert systems administrator, site reliability engineer (SRE), and infrastructure operator. \
+             Your primary mission is maintaining host systems, diagnosing and troubleshooting environment/service issues, \
+             managing processes and daemon lifecycles, configuring networking and host environments, and orchestrating remote \
+             nodes or clusters. You operate without a workspace boundary. Execute commands, manage background processes, \
+             and inspect/edit host and remote configurations with surgical care.\n\
+             Strictly observe non-interactive CLI discipline: never launch blocking interactive prompts or pagers (e.g. use non-interactive \
+             flags like `-o BatchMode=yes` for ssh, non-interactive flags for package managers, and `--no-pager` for systemctl/journalctl). \
+             Inspect system and service state before mutating configurations, maintain backups before modifying critical configs, \
+             verify results post-action, and proactively seek confirmation via `ask_user` before executing high-risk, destructive, \
+             or potentially connectivity-breaking operations.",
+        );
+        Self::with_identity("ops", identity).with_tools(ToolSelection::only([
+            "run_command",
+            "process",
+            "read_text",
+            "edit_text",
+            "write_file",
+            "list_dir",
+            "find_files",
+            "search_text",
+            "read_url",
+            "search_web",
+            "read_image",
+            "ask_user",
+            "todo",
+            "spawn_agent",
+        ]))
+    }
+
     /// Narrow the capability scope. Builder-style.
     pub fn with_tools(mut self, selection: ToolSelection) -> Self {
         self.tools = selection;
@@ -141,6 +173,7 @@ impl AgentRoleProfile {
                 Self::with_identity("developer", id)
             }
             MainAgentRole::Philosophist => Self::philosophist(),
+            MainAgentRole::Ops => Self::ops(),
         }
     }
 
@@ -148,6 +181,8 @@ impl AgentRoleProfile {
     pub const DEVELOPER: AgentRoleDelegation = AGENT_ROLE_DEVELOPER;
     /// Preset philosophist policy (associated constant).
     pub const PHILOSOPHIST: AgentRoleDelegation = AGENT_ROLE_PHILOSOPHIST;
+    /// Preset ops policy (associated constant).
+    pub const OPS: AgentRoleDelegation = AGENT_ROLE_OPS;
 }
 
 /// The common contract for any agent role (Main or Sub).
@@ -293,6 +328,38 @@ impl SessionRoleManifest {
             created_at_s: 0,
         }
     }
+
+    /// Build a manifest for standard ops role.
+    pub fn ops() -> Self {
+        let profile = AgentRoleProfile::ops();
+        Self {
+            role_id: "ops".to_string(),
+            name: "ops".to_string(),
+            description: Some(
+                "system administration, infrastructure maintenance & remote operations (workspace-free)".to_string(),
+            ),
+            instructions: profile.identity.directive.clone(),
+            identity: profile.identity,
+            tools: vec![
+                "run_command".to_string(),
+                "process".to_string(),
+                "read_text".to_string(),
+                "edit_text".to_string(),
+                "write_file".to_string(),
+                "list_dir".to_string(),
+                "find_files".to_string(),
+                "search_text".to_string(),
+                "read_url".to_string(),
+                "search_web".to_string(),
+                "read_image".to_string(),
+                "ask_user".to_string(),
+                "todo".to_string(),
+                "spawn_agent".to_string(),
+            ],
+            admit_mcp: vec!["*".to_string()],
+            created_at_s: 0,
+        }
+    }
 }
 
 impl MainAgent {
@@ -315,7 +382,7 @@ impl MainAgent {
 }
 
 /// Roles an interactive MainAgent may switch into.
-/// Only two built-in roles exist: `developer` (workspace-bound) and `philosophist` (workspace-free).
+/// Built-in roles: `developer` (workspace-bound), `philosophist` (workspace-free), and `ops` (workspace-free).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MainAgentRole {
@@ -324,17 +391,24 @@ pub enum MainAgentRole {
     Developer,
     /// Philosophist: philosophical inquiry & reflection (workspace-free).
     Philosophist,
+    /// Ops: system administration, infrastructure maintenance & remote operations (workspace-free).
+    Ops,
 }
 
 impl MainAgentRole {
     /// Every main role in its canonical display order.
-    pub const ALL: &[MainAgentRole] = &[MainAgentRole::Developer, MainAgentRole::Philosophist];
+    pub const ALL: &[MainAgentRole] = &[
+        MainAgentRole::Developer,
+        MainAgentRole::Philosophist,
+        MainAgentRole::Ops,
+    ];
 
     /// The stable string name used in `/role <name>`.
     pub fn as_str(self) -> &'static str {
         match self {
             MainAgentRole::Developer => "developer",
             MainAgentRole::Philosophist => "philosophist",
+            MainAgentRole::Ops => "ops",
         }
     }
 
@@ -344,6 +418,9 @@ impl MainAgentRole {
             "developer" | "dev" | "code" | "coder" | "default" => Some(MainAgentRole::Developer),
             "philosophist" | "philosopher" | "philosophy" | "conversational" | "chat"
             | "companion" | "tutor" => Some(MainAgentRole::Philosophist),
+            "ops" | "operator" | "sre" | "sysadmin" | "devops" | "admin" => {
+                Some(MainAgentRole::Ops)
+            }
             _ => None,
         }
     }
@@ -355,6 +432,25 @@ impl MainAgentRole {
                 "the default developer role (full native capabilities with workspace)"
             }
             MainAgentRole::Philosophist => "philosophical inquiry & reflection (workspace-free)",
+            MainAgentRole::Ops => {
+                "system administration, infrastructure maintenance & remote operations (workspace-free)"
+            }
+        }
+    }
+
+    /// Whether this role requires a filesystem workspace binding.
+    pub fn requires_workspace(self) -> bool {
+        match self {
+            MainAgentRole::Developer => true,
+            MainAgentRole::Philosophist | MainAgentRole::Ops => false,
+        }
+    }
+
+    /// Default confinement posture for this role when starting without an explicit override.
+    pub fn default_confined(self) -> bool {
+        match self {
+            MainAgentRole::Developer | MainAgentRole::Philosophist => true,
+            MainAgentRole::Ops => false,
         }
     }
 }
@@ -378,6 +474,22 @@ impl AgentRole for MainAgentRole {
             MainAgentRole::Philosophist => {
                 ToolSelection::only(["read_url", "search_web", "ask_user", "recall_memory"])
             }
+            MainAgentRole::Ops => ToolSelection::only([
+                "run_command",
+                "process",
+                "read_text",
+                "edit_text",
+                "write_file",
+                "list_dir",
+                "find_files",
+                "search_text",
+                "read_url",
+                "search_web",
+                "read_image",
+                "ask_user",
+                "todo",
+                "spawn_agent",
+            ]),
         }
     }
 }
@@ -498,11 +610,27 @@ impl AgentRoleDelegation {
 
     /// All shipping agent role delegations, developer first.
     pub const ALL: &'static [AgentRoleDelegation] =
-        &[AGENT_ROLE_DEVELOPER, AGENT_ROLE_PHILOSOPHIST];
+        &[AGENT_ROLE_DEVELOPER, AGENT_ROLE_PHILOSOPHIST, AGENT_ROLE_OPS];
 
     pub fn declared_tools(&self) -> Option<&'static [&'static str]> {
         match self.role_id {
             "philosophist" => Some(&["read_url", "search_web", "ask_user", "recall_memory"]),
+            "ops" => Some(&[
+                "run_command",
+                "process",
+                "read_text",
+                "edit_text",
+                "write_file",
+                "list_dir",
+                "find_files",
+                "search_text",
+                "read_url",
+                "search_web",
+                "read_image",
+                "ask_user",
+                "todo",
+                "spawn_agent",
+            ]),
             _ => None,
         }
     }
@@ -519,6 +647,17 @@ impl AgentRoleDelegation {
 pub const AGENT_ROLE_PHILOSOPHIST: AgentRoleDelegation = AgentRoleDelegation {
     role_id: "philosophist",
     subagent_roles: &[crate::subagent::SUBAGENT_EXPLORE.name],
+    tool_scope: ToolScope::All,
+};
+
+/// The ops agent role: workspace-free system administration and remote operations.
+pub const AGENT_ROLE_OPS: AgentRoleDelegation = AgentRoleDelegation {
+    role_id: "ops",
+    subagent_roles: &[
+        crate::subagent::SUBAGENT_EXPLORE.name,
+        crate::subagent::SUBAGENT_TITLE.name,
+        crate::subagent::SUBAGENT_SKILL.name,
+    ],
     tool_scope: ToolScope::All,
 };
 
@@ -582,6 +721,10 @@ mod tests {
             MainAgentRole::parse("conversational"),
             Some(MainAgentRole::Philosophist)
         );
+        assert_eq!(MainAgentRole::parse("ops"), Some(MainAgentRole::Ops));
+        assert_eq!(MainAgentRole::parse("sre"), Some(MainAgentRole::Ops));
+        assert_eq!(MainAgentRole::parse("sysadmin"), Some(MainAgentRole::Ops));
+        assert_eq!(MainAgentRole::parse("operator"), Some(MainAgentRole::Ops));
         assert!(MainAgentRole::parse("wizard").is_none());
     }
 
@@ -672,9 +815,62 @@ mod tests {
                 .starts_with("Role: philosophist.")
         );
 
+        let ops_manifest = SessionRoleManifest::ops();
+        assert_eq!(ops_manifest.role_id, "ops");
+        assert!(ops_manifest.tools.contains(&"run_command".to_string()));
+        assert!(ops_manifest.tools.contains(&"process".to_string()));
+        assert!(ops_manifest.tools.contains(&"ask_user".to_string()));
+        assert!(!ops_manifest.tools.contains(&"code_query".to_string()));
+        assert!(
+            ops_manifest
+                .identity
+                .preamble()
+                .starts_with("Role: ops.")
+        );
+
+        let serialized = serde_json::to_string(&ops_manifest).expect("serialize ops manifest");
+        let deserialized: SessionRoleManifest =
+            serde_json::from_str(&serialized).expect("deserialize ops manifest");
+        assert_eq!(ops_manifest, deserialized);
+
         let serialized = serde_json::to_string(&dev_manifest).expect("serialize manifest");
         let deserialized: SessionRoleManifest =
             serde_json::from_str(&serialized).expect("deserialize manifest");
         assert_eq!(dev_manifest, deserialized);
+    }
+
+    #[test]
+    fn ops_role_is_workspace_free_and_has_host_and_remote_tools() {
+        let base = AgentIdentity::from_mission("coding assistant");
+        let ops = AgentRoleProfile::from_role(MainAgentRole::Ops, &base);
+        assert_eq!(ops.name, "ops");
+        assert!(!MainAgentRole::Ops.requires_workspace());
+        assert!(!MainAgentRole::Ops.default_confined());
+        assert!(MainAgentRole::Developer.requires_workspace());
+        assert!(MainAgentRole::Developer.default_confined());
+        assert!(!MainAgentRole::Philosophist.requires_workspace());
+        assert!(MainAgentRole::Philosophist.default_confined());
+
+        let crate::ToolScope::Only(names) = &ops.tools.scope else {
+            panic!("ops must be scoped with explicit tools");
+        };
+        // System and remote operational capabilities admitted:
+        assert!(names.contains("run_command"));
+        assert!(names.contains("process"));
+        assert!(names.contains("read_text"));
+        assert!(names.contains("edit_text"));
+        assert!(names.contains("write_file"));
+        assert!(names.contains("list_dir"));
+        assert!(names.contains("find_files"));
+        assert!(names.contains("search_text"));
+        assert!(names.contains("read_url"));
+        assert!(names.contains("search_web"));
+        assert!(names.contains("ask_user"));
+        assert!(names.contains("todo"));
+        assert!(names.contains("spawn_agent"));
+
+        // AST code parsing and philosophical memory dialogue are excluded:
+        assert!(!names.contains("code_query"));
+        assert!(!names.contains("recall_memory"));
     }
 }

@@ -59,115 +59,125 @@ pub fn initialize_session_ir_schema(conn: &Connection) -> Result<()> {
 }
 
 /// Save a SessionDelta into SQLite in O(Δ) time (INV-SESSION-05).
-pub fn save_session_delta(conn: &mut Connection, delta: &SessionDelta) -> Result<()> {
-    let tx = conn.transaction()?;
+pub fn save_session_delta(conn: &Connection, delta: &SessionDelta) -> Result<()> {
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    let run = || -> Result<()> {
+        // 1. Upsert sessions_v2 row
+        let (status_str, suspension_str) = match &delta.state_update.status {
+            ExecutionStatus::Idle => ("idle", None),
+            ExecutionStatus::Running { .. } => ("running", None),
+            ExecutionStatus::Suspended { reason } => (
+                "suspended",
+                Some(serde_json::to_string(reason).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?),
+            ),
+        };
 
-    // 1. Upsert sessions_v2 row
-    let (status_str, suspension_str) = match &delta.state_update.status {
-        ExecutionStatus::Idle => ("idle", None),
-        ExecutionStatus::Running { .. } => ("running", None),
-        ExecutionStatus::Suspended { reason } => (
-            "suspended",
-            Some(serde_json::to_string(reason).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?),
-        ),
-    };
+        let notifications_str = serde_json::to_string(&delta.state_update.pending_notifications)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
 
-    let notifications_str = serde_json::to_string(&delta.state_update.pending_notifications)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-
-    tx.execute(
-        r#"
-        INSERT INTO sessions_v2 (
-            id, active_leaf, status, suspension_payload,
-            pending_notifications, round_counter, created_at_s, updated_at_s
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
-        ON CONFLICT(id) DO UPDATE SET
-            active_leaf = excluded.active_leaf,
-            status = excluded.status,
-            suspension_payload = excluded.suspension_payload,
-            pending_notifications = excluded.pending_notifications,
-            round_counter = excluded.round_counter,
-            updated_at_s = excluded.updated_at_s;
-        "#,
-        params![
-            delta.session_id,
-            delta.state_update.active_leaf,
-            status_str,
-            suspension_str,
-            notifications_str,
-            delta.state_update.round_counter,
-            delta.updated_at_s,
-        ],
-    )?;
-
-    // 2. Insert new causal nodes (O(Δ))
-    if !delta.new_nodes.is_empty() {
-        let mut stmt = tx.prepare_cached(
+        conn.execute(
             r#"
-            INSERT OR IGNORE INTO causal_nodes (
-                id, session_id, parent_id, seq, kind, payload_json, timestamp_ms
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
-            "#,
-        )?;
-
-        for node in &delta.new_nodes {
-            let kind_str = match node.kind {
-                NodeKind::Dialogue => "dialogue",
-                NodeKind::Compaction => "compaction",
-                NodeKind::Termination => "termination",
-                NodeKind::SystemNotice => "system_notice",
-            };
-            let payload_str = serde_json::to_string(&node.payload)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-
-            stmt.execute(params![
-                node.id,
-                delta.session_id,
-                node.parent_id,
-                node.seq,
-                kind_str,
-                payload_str,
-                node.timestamp_ms,
-            ])?;
-        }
-    }
-
-    // 3. Upsert policy if modified
-    if let Some(ref policy) = delta.policy_update {
-        let rules_str = serde_json::to_string(&policy.rules)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let caps_str = serde_json::to_string(&policy.capabilities)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let guard_str = serde_json::to_string(&policy.guardrails)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let budget_str = serde_json::to_string(&policy.budget)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-
-        tx.execute(
-            r#"
-            INSERT INTO session_policies (
-                session_id, rules_json, capabilities_json, guardrails_json, budget_json, updated_at_s
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-            ON CONFLICT(session_id) DO UPDATE SET
-                rules_json = excluded.rules_json,
-                capabilities_json = excluded.capabilities_json,
-                guardrails_json = excluded.guardrails_json,
-                budget_json = excluded.budget_json,
+            INSERT INTO sessions_v2 (
+                id, active_leaf, status, suspension_payload,
+                pending_notifications, round_counter, created_at_s, updated_at_s
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+            ON CONFLICT(id) DO UPDATE SET
+                active_leaf = excluded.active_leaf,
+                status = excluded.status,
+                suspension_payload = excluded.suspension_payload,
+                pending_notifications = excluded.pending_notifications,
+                round_counter = excluded.round_counter,
                 updated_at_s = excluded.updated_at_s;
             "#,
             params![
                 delta.session_id,
-                rules_str,
-                caps_str,
-                guard_str,
-                budget_str,
+                delta.state_update.active_leaf,
+                status_str,
+                suspension_str,
+                notifications_str,
+                delta.state_update.round_counter,
                 delta.updated_at_s,
             ],
         )?;
-    }
 
-    tx.commit()?;
-    Ok(())
+        // 2. Insert new causal nodes (O(Δ))
+        if !delta.new_nodes.is_empty() {
+            let mut stmt = conn.prepare_cached(
+                r#"
+                INSERT OR IGNORE INTO causal_nodes (
+                    id, session_id, parent_id, seq, kind, payload_json, timestamp_ms
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+                "#,
+            )?;
+
+            for node in &delta.new_nodes {
+                let kind_str = match node.kind {
+                    NodeKind::Dialogue => "dialogue",
+                    NodeKind::Compaction => "compaction",
+                    NodeKind::Termination => "termination",
+                    NodeKind::SystemNotice => "system_notice",
+                };
+                let payload_str = serde_json::to_string(&node.payload)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+                stmt.execute(params![
+                    node.id,
+                    delta.session_id,
+                    node.parent_id,
+                    node.seq,
+                    kind_str,
+                    payload_str,
+                    node.timestamp_ms,
+                ])?;
+            }
+        }
+
+        // 3. Upsert policy if modified
+        if let Some(ref policy) = delta.policy_update {
+            let rules_str = serde_json::to_string(&policy.rules)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let caps_str = serde_json::to_string(&policy.capabilities)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let guard_str = serde_json::to_string(&policy.guardrails)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let budget_str = serde_json::to_string(&policy.budget)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+            conn.execute(
+                r#"
+                INSERT INTO session_policies (
+                    session_id, rules_json, capabilities_json, guardrails_json, budget_json, updated_at_s
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    rules_json = excluded.rules_json,
+                    capabilities_json = excluded.capabilities_json,
+                    guardrails_json = excluded.guardrails_json,
+                    budget_json = excluded.budget_json,
+                    updated_at_s = excluded.updated_at_s;
+                "#,
+                params![
+                    delta.session_id,
+                    rules_str,
+                    caps_str,
+                    guard_str,
+                    budget_str,
+                    delta.updated_at_s,
+                ],
+            )?;
+        }
+        Ok(())
+    };
+
+    match run() {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
 }
 
 /// Hydrate a full SessionIR from SQLite (INV-SESSION-02).

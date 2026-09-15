@@ -277,20 +277,23 @@ define_builtin_commands! {
         summary: "Switch agent role (identity, capability, and workspace)",
         usage: [
             "/role",
+            "/role ops",
             "/role philosophist",
             "/role developer <workspace>",
         ],
         examples: [
             ("/role developer /path/to/project", "Switch to developer role with workspace"),
+            ("/role ops", "Switch to ops role (workspace-free, systems & remote operations)"),
             ("/role philosophist", "Switch to philosophist role (workspace-free)"),
         ],
         intent_keywords: [
-            "role", "preset", "mode", "identity", "developer", "philosophist",
+            "role", "preset", "mode", "identity", "developer", "philosophist", "ops",
             "switch", "switch-role",
         ],
         category: Agent,
         subcommands: [
             ("developer", "the default developer role (full native capabilities with workspace)"),
+            ("ops", "system administration, infrastructure maintenance & remote operations (workspace-free)"),
             ("philosophist", "philosophical inquiry & reflection (workspace-free)"),
         ],
     },

@@ -212,9 +212,14 @@ pub(crate) async fn start_fresh_session_with_role(
                     RoundEvent::UnattendedChanged(fresh_posture),
                 ));
             }
-            if !shared_confinement.is_confined() {
-                shared_confinement.set_confined(true);
-                let _ = resp_tx.send(round_response(&id, RoundEvent::ConfinementChanged(true)));
+            let default_confined = if let Some(builtin) = muta_contracts::MainAgentRole::parse(role_id) {
+                builtin.default_confined()
+            } else {
+                true
+            };
+            if shared_confinement.is_confined() != default_confined {
+                shared_confinement.set_confined(default_confined);
+                let _ = resp_tx.send(round_response(&id, RoundEvent::ConfinementChanged(default_confined)));
             }
             agent.restore_round_count(session.round_counter().await);
             crate::handlers_provider::reapply_session_selection(

@@ -908,3 +908,51 @@ async fn test_session_store_ir_and_compile_request() {
     assert_eq!(compiled.request.tool_specs[0].name, "run_command");
     assert!(!compiled.cache_boundary.prefix_fingerprint.is_empty());
 }
+
+#[tokio::test]
+async fn test_session_store_direct_delta_and_ir_hydration() {
+    let store = store("session_ir_delta_test").await;
+    let session_id = store.id().await;
+
+    // 1. Create a native SessionIR and append a dialogue node
+    let policy = muta_contracts::SessionPolicy::default();
+    let mut ir = muta_contracts::SessionIR::new(&session_id, policy, 1000);
+    let node_id = "test-node-1";
+    ir.append_message(
+        node_id,
+        1001,
+        muta_contracts::Message::new(muta_contracts::Role::User, "Hello SessionIR native"),
+    );
+
+    // 2. Commit SessionIR directly
+    store.commit_session_ir(&ir).await.unwrap();
+
+    // 3. Hydrate via DbReader directly from sessions_v2 / causal_nodes
+    let reader = store.writer.reader().unwrap();
+    let loaded = reader.load_session_ir(&session_id).unwrap();
+    assert!(loaded.is_some(), "SessionIR must be loaded from SQLite");
+    let loaded_ir = loaded.unwrap();
+    assert_eq!(loaded_ir.session_id, session_id);
+    assert_eq!(loaded_ir.history.nodes.len(), 1);
+    assert_eq!(loaded_ir.state.active_leaf, Some(node_id.to_string()));
+
+    // 4. Test Durable Suspension Delta (ADR-0249, INV-EXEC-03)
+    let mut suspended_ir = loaded_ir.clone();
+    suspended_ir.state.status = muta_contracts::ExecutionStatus::Suspended {
+        reason: muta_contracts::SuspensionReason::NeedsInput {
+            prompt: "Please select target environment".into(),
+        },
+    };
+    let delta = suspended_ir.drain_delta(1);
+    store.commit_session_delta(delta).await.unwrap();
+
+    // 5. Verify suspension state hydrated from DB
+    let fresh_reader = store.writer.reader().unwrap();
+    let reloaded = fresh_reader.load_session_ir(&session_id).unwrap().unwrap();
+    assert!(matches!(
+        reloaded.state.status,
+        muta_contracts::ExecutionStatus::Suspended {
+            reason: muta_contracts::SuspensionReason::NeedsInput { .. }
+        }
+    ));
+}

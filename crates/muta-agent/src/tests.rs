@@ -508,6 +508,20 @@ fn apply_preset_switches_identity_into_the_system_prompt() {
         !prompt.starts_with("You are a coding assistant."),
         "the old identity preamble must be replaced, not appended; got: {prompt}"
     );
+
+    let ops = muta_contracts::AgentRoleProfile::from_role(
+        muta_contracts::MainAgentRole::Ops,
+        &crate::AgentIdentity::default(),
+    );
+    agent.apply_preset(&ops);
+
+    let mut ops_messages: Vec<Message> = Vec::new();
+    agent.prepare_request_messages_debug(&mut ops_messages);
+    let ops_prompt = &ops_messages[0].content;
+    assert!(
+        ops_prompt.starts_with("Role: ops."),
+        "switched prompt should open with the ops role directive; got: {ops_prompt}"
+    );
 }
 
 #[test]
@@ -3869,4 +3883,30 @@ async fn cognitive_clears_legitimate_repeated_reverse_engineering_data() {
         requests.is_empty(),
         "legitimate repeated data must resolve locally without an L2 review"
     );
+}
+
+#[tokio::test]
+async fn agent_compiles_request_directly_from_session_ir() {
+    let provider: Arc<dyn Provider> = Arc::new(TestProvider);
+    let agent = Agent::new(provider, Vec::new(), crate::AgentIdentity::default());
+
+    let policy = muta_contracts::SessionPolicy::default();
+    let mut ir = muta_contracts::SessionIR::new("test-session-agent", policy, 1000);
+    ir.append_message(
+        "n1",
+        1001,
+        Message::new(Role::User, "Hello from native SessionIR to Agent"),
+    );
+
+    let artifact = agent
+        .model_request_from_ir(&ir)
+        .expect("Agent must compile model request from SessionIR without error");
+
+    assert_eq!(artifact.request.messages.len(), 1);
+    assert_eq!(
+        artifact.request.messages[0].content,
+        "Hello from native SessionIR to Agent"
+    );
+    assert_eq!(artifact.stats.nodes_traversed, 1);
+    assert!(!artifact.cache_boundary.prefix_fingerprint.is_empty());
 }

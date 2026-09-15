@@ -838,6 +838,11 @@ pub(crate) enum PersistenceCommand {
         target_path: PathBuf,
         ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
+    /// Persist an incremental Session IR delta directly into SQLite (ADR-0241/ADR-0249, INV-SESSION-05).
+    SaveSessionDelta {
+        delta: Box<muta_contracts::SessionDelta>,
+        ack: oneshot::Sender<Result<(), PersistenceError>>,
+    },
     /// Test-only: the writer acks and then exits its loop, simulating actor
     /// death so the supervisor's respawn path is exercisable (ADR-0196 D6).
     #[cfg(test)]

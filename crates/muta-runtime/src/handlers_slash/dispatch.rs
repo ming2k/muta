@@ -268,7 +268,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
 
                     lines.push(String::new());
                     lines.push(
-                        "Usage: `/role philosophist` or `/role developer <workspace>`".to_string(),
+                        "Usage: `/role ops`, `/role philosophist`, or `/role developer <workspace>`".to_string(),
                     );
 
                     record_command(
@@ -381,7 +381,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             }
                         };
                         Some(muta_contracts::WorkspaceBinding::new(target_path))
-                    } else if builtin == Some(muta_contracts::MainAgentRole::Philosophist) {
+                    } else if builtin.map(|b| !b.requires_workspace()).unwrap_or(false) {
                         None
                     } else if let Some(user_role) = user_role {
                         match user_role.resolved_workspace() {
