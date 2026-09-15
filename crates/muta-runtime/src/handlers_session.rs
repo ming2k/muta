@@ -441,13 +441,15 @@ mod tests {
     #[tokio::test]
     async fn rename_replies_with_a_fresh_sessions_overview() {
         let (_dir, store) = store_with_prompt().await;
-        let id = store.id().await;
+        let old_id = store.id().await;
         let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+        // Reset to a new session so `old_id` becomes an alternative switch candidate (ADR-0250)
+        let _ = store.reset().await;
 
         rename(
             &store,
             &resp_tx,
-            id[..8].to_string(),
+            old_id[..8].to_string(),
             Some("new title".to_string()),
         )
         .await;
@@ -455,11 +457,8 @@ mod tests {
         let Some(AgentResponse::SessionsOverview(items)) = resp_rx.recv().await else {
             panic!("expected a sessions-overview push after a rename");
         };
-        let row = items.iter().find(|item| item.id == id).unwrap();
+        let row = items.iter().find(|item| item.id == old_id).unwrap();
         assert_eq!(row.overview, "new title");
-        let (title, manual) = store.title().await;
-        assert_eq!(title.as_deref(), Some("new title"));
-        assert!(manual);
     }
 
     #[tokio::test]
@@ -478,6 +477,8 @@ mod tests {
     #[tokio::test]
     async fn overview_query_returns_data_without_a_navigation_signal() {
         let (_dir, store) = store_with_prompt().await;
+        // Reset so the persisted session becomes an alternative switch candidate (ADR-0250)
+        let _ = store.reset().await;
         let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
 
         overview(&store, &resp_tx).await;
@@ -530,12 +531,9 @@ mod tests {
         let Some(AgentResponse::SessionsOverview(items)) = resp_rx.recv().await else {
             panic!("expected SessionsOverview response after delete");
         };
-        // The newly reset active session must be present in the overview snapshot.
-        let active_row = items
-            .iter()
-            .find(|item| item.active)
-            .expect("active session must be present");
-        assert_eq!(active_row.id, new_id);
+        // The newly reset active session must be strictly self-excluded (ADR-0250).
+        assert!(!items.iter().any(|item| item.id == new_id));
+        assert!(!items.iter().any(|item| item.id == initial_id));
     }
 
     #[tokio::test]
@@ -556,16 +554,14 @@ mod tests {
             panic!("expected SessionsOverview response after delete");
         };
         assert!(!items.iter().any(|item| item.id == initial_id));
-        let active_row = items
-            .iter()
-            .find(|item| item.active)
-            .expect("active session must be present");
-        assert_eq!(active_row.id, new_id);
+        // The newly reset active session is self-excluded from candidates (ADR-0250).
+        assert!(!items.iter().any(|item| item.id == new_id));
     }
 
     #[tokio::test]
     async fn delete_already_absent_session_is_idempotent() {
         let (_dir, store) = store_with_prompt().await;
+        let _ = store.reset().await;
         let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
         let fake_uuid = uuid::Uuid::new_v4().to_string();
 

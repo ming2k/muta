@@ -141,6 +141,139 @@ pub(crate) async fn start_fresh_session(env: &mut SlashEnv<'_>, name: &str, args
     }
 }
 
+pub(crate) async fn switch_or_start_session_with_role(
+    env: &mut SlashEnv<'_>,
+    role_id: &str,
+    target_workspace: Option<muta_contracts::WorkspaceBinding>,
+    force_new: bool,
+    name: &str,
+    args: &str,
+) {
+    let partition = muta_contracts::SessionPartition::from_binding(
+        target_workspace.as_ref(),
+        Some(role_id),
+    );
+    let latest_existing_id = if !force_new {
+        muta_persistence::db::get_persistence_handle()
+            .reader()
+            .ok()
+            .and_then(|r| r.latest_session_in_partition(&partition).ok().flatten())
+    } else {
+        None
+    };
+
+    let active_id = env.session.id().await;
+    if let Some(target_id) = latest_existing_id.filter(|id| id != &active_id) {
+        // Resume existing session for this role
+        let (
+            side,
+            session,
+            config,
+            agent,
+            lifecycle,
+            resp_tx,
+            provider_for_task,
+            shared_confinement,
+            workspace_security,
+        ) = (
+            env.side,
+            env.session,
+            env.config,
+            env.agent,
+            env.lifecycle,
+            env.resp_tx,
+            env.provider_for_task,
+            env.shared_confinement,
+            env.workspace_security,
+        );
+        let provider_usage = &mut *env.provider_usage;
+        supersede_for_session_switch(lifecycle, agent, resp_tx).await;
+        teardown_sides_for_session_switch(side, resp_tx).await;
+        agent.clear_todos();
+
+        if let Some(switched) = agent.apply_role(role_id) {
+            agent.set_project_root(target_workspace.as_ref().map(|w| w.root.clone()));
+            if let Some(ws) = &target_workspace {
+                let sec_snapshot = workspace_security.snapshot(&ws.root);
+                agent.set_workspace_security(sec_snapshot);
+            } else {
+                agent.set_workspace_security(muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free"));
+            }
+
+            match session.open(&target_id).await {
+                Ok(()) => {
+                    restore_session_runtime(
+                        session,
+                        agent,
+                        resp_tx,
+                        muta_contracts::SessionSource::Resume,
+                    )
+                    .await;
+                    let transcript = session.full_transcript().await;
+                    let _ = resp_tx.send(AgentResponse::ConversationReplaced {
+                        session_id: session.id().await,
+                        messages: transcript,
+                        commands: session.commands().await,
+                        round_interrupts: session.round_interrupts().await,
+                        retry_resolutions: session.retry_resolutions().await,
+                    });
+                    crate::handlers_provider::reapply_session_selection(
+                        config,
+                        agent,
+                        provider_for_task,
+                        session,
+                        resp_tx,
+                        provider_usage,
+                    )
+                    .await;
+                    let _ = resp_tx.send(round_response(
+                        &session.id().await,
+                        RoundEvent::HarnessState(muta_contracts::HarnessSnapshot {
+                            loop_status: muta_contracts::LoopStatus::Idle,
+                            round_counter: session.round_counter().await,
+                            unattended: session.unattended().await,
+                            confined: shared_confinement.is_confined(),
+                            workspace_security: agent.workspace_security(),
+                            retry_pending: false,
+                            role: Some(role_id.to_string()),
+                            workspace: target_workspace
+                                .as_ref()
+                                .map(|w| w.root.to_string_lossy().to_string()),
+                        }),
+                    ));
+                    record_command(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        CommandResult::Text(format!(
+                            "Resumed session {} with role `{}` (`{}`). Use `/role {role_id} --new` to start a fresh dialogue.",
+                            crate::session_view::short_session_id(&target_id),
+                            switched.name,
+                            switched.id,
+                        )),
+                    )
+                    .await;
+                    return;
+                }
+                Err(e) => {
+                    record_error(
+                        session,
+                        resp_tx,
+                        name,
+                        args,
+                        format!("Could not open session {target_id}: {e}"),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+    }
+
+    start_fresh_session_with_role(env, role_id, target_workspace, name, args).await;
+}
+
 pub(crate) async fn start_fresh_session_with_role(
     env: &mut SlashEnv<'_>,
     role_id: &str,

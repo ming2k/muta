@@ -181,6 +181,14 @@ impl SessionStore {
         muta_contracts::WorkspaceFilter::from_binding(self.workspace.read().unwrap().as_ref())
     }
 
+    /// Canonical domain partition for this session (ADR-0250).
+    pub fn partition(&self) -> muta_contracts::SessionPartition {
+        muta_contracts::SessionPartition::from_binding(
+            self.workspace.read().unwrap().as_ref(),
+            self.role.read().unwrap().as_deref(),
+        )
+    }
+
     /// The staffing role recorded on fresh sessions, if any.
     pub fn role(&self) -> Option<String> {
         self.role.read().unwrap().clone()
@@ -429,11 +437,11 @@ impl SessionStore {
     pub async fn list(&self) -> Result<Vec<SessionSummary>, String> {
         let active_id = self.state.lock().await.data.id.clone();
         let writer = self.writer.clone();
-        let filter = self.workspace_filter();
+        let partition = self.partition();
         tokio::task::spawn_blocking(move || {
             let reader = writer.reader().map_err(|e| e.to_string())?;
             reader
-                .list_session_summaries(Some(&filter), &active_id)
+                .list_switch_candidates(&partition, &active_id)
                 .map_err(|e| e.to_string())
         })
         .await

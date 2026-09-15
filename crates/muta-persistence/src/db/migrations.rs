@@ -5,7 +5,7 @@
 use super::*;
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 19;
+pub const CURRENT_DB_VERSION: u32 = 20;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
@@ -459,6 +459,12 @@ pub const MIGRATIONS: &[Migration] = &[
         // Session Role Manifest Snapshotting (ADR-0245):
         // add immutable role_manifest column to sessions table.
         version: 19,
+        sql: "",
+    },
+    Migration {
+        // Role-Anchored Session Isolation Index (ADR-0250):
+        // add covering index for workspace-free role session queries.
+        version: 20,
         sql: "",
     },
 ];
@@ -1095,6 +1101,16 @@ pub fn apply_role_manifest_schema(tx: &rusqlite::Transaction) -> Result<()> {
     Ok(())
 }
 
+/// Adds covering index on `sessions(persona, updated_at_s DESC)` for workspace-free role partitions (ADR-0250).
+pub fn apply_role_anchored_session_partition_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_role_partition \
+         ON sessions(persona, updated_at_s DESC) \
+         WHERE workspace_root IS NULL AND fork_kind <> 'subagent';",
+    )?;
+    Ok(())
+}
+
 pub fn insert_usage_record_tx(conn: &Connection, session_id: &str, record: &muta_contracts::RequestUsageRecord) -> Result<()> {
     if record.key.session_id != session_id {
         return Err(rusqlite::Error::InvalidParameterName("usage belongs to another session".into()));
@@ -1340,6 +1356,9 @@ pub fn apply_migrations(conn: &mut Connection, observed_version: u32) -> Result<
                 }
                 if migration.version == 19 {
                     apply_role_manifest_schema(&tx)?;
+                }
+                if migration.version == 20 {
+                    apply_role_anchored_session_partition_schema(&tx)?;
                 }
             }
         }

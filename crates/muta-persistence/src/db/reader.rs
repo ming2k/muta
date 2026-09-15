@@ -88,6 +88,23 @@ impl DbReader {
         self.engine.list_sessions(filter)
     }
 
+    /// Candidate sessions for switching, strictly excluding the active session (ADR-0250).
+    pub fn list_switch_candidates(
+        &self,
+        partition: &muta_contracts::SessionPartition,
+        active_id: &str,
+    ) -> Result<Vec<crate::session::SessionSummary>> {
+        self.engine.list_switch_candidates(partition, active_id)
+    }
+
+    /// The most recently updated session id in `partition` (ADR-0250 `--resume`).
+    pub fn latest_session_in_partition(
+        &self,
+        partition: &muta_contracts::SessionPartition,
+    ) -> Result<Option<String>> {
+        self.engine.latest_session_in_partition(partition)
+    }
+
     /// Picker-facing summaries for a derived grouping, newest first.
     pub fn list_session_summaries(
         &self,

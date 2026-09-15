@@ -160,7 +160,7 @@ pub fn draw_sessions_modal(
             ]
         } else {
             vec![Line::from(vec![Span::styled(
-                "No previous sessions in this project.",
+                "No other sessions found.",
                 Style::default().fg(theme.muted()),
             )])]
         };
@@ -205,11 +205,7 @@ pub fn draw_sessions_modal(
         let s: ChoiceStyle = choice_style(ChoiceTone::Filled, is_selected, theme);
         // Show only the last-active time in the row meta (creation time is in
         // the info sub-view). Compact relative form keeps the column narrow.
-        let meta = if session.active {
-            format!("active {}", relative_time_at(session.updated_at, now))
-        } else {
-            relative_time_at(session.updated_at, now)
-        };
+        let meta = relative_time_at(session.updated_at, now);
         let meta_w = meta.width();
         // Guarantee a fixed gutter between the two columns by giving the
         // overview a width budget of `body_width - meta_w - gutter`, then
@@ -410,7 +406,7 @@ mod tests {
             .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(output.contains("No previous sessions in this project."));
+        assert!(output.contains("No other sessions found."));
         assert!(!output.contains("Loading sessions…"));
     }
 }

@@ -1343,13 +1343,15 @@ impl SessionRegistry {
         let role_selected = init_options.role.clone();
         let role_id = role_selected.clone().or(binding.role);
 
-        // `--resume` (ADR-0226): pick the most recent matching session instead
-        // of a fresh one. With a role, match by role (+ workspace when the
-        // role binds one); otherwise match the workspace (or unbound) set.
+        // `--resume` (ADR-0250): pick the most recent matching session instead
+        // of a fresh one, partitioned truthfully by Workspace or Role.
         let mut startup = startup;
         if init_options.resume && matches!(startup, crate::startup::SessionStart::Fresh) {
-            let filter = muta_contracts::WorkspaceFilter::from_binding(workspace.as_ref());
-            if let Some(id) = lookup_latest_session(&filter, role_id.as_deref()) {
+            let partition = muta_contracts::SessionPartition::from_binding(
+                workspace.as_ref(),
+                role_id.as_deref(),
+            );
+            if let Some(id) = lookup_latest_session_in_partition(&partition) {
                 startup = crate::startup::SessionStart::Resume(id);
             }
         }
@@ -1796,20 +1798,19 @@ async fn overview_of(session: &SessionStore, active: bool) -> SessionOverview {
         digest,
     }
 }
-/// Resolve a session's durable binding (scope + workspace) by exact id,
-/// independent of the caller's workspace (ADR-0219/0220).
-fn lookup_latest_session(
-    filter: &muta_contracts::WorkspaceFilter,
-    role: Option<&str>,
+fn lookup_latest_session_in_partition(
+    partition: &muta_contracts::SessionPartition,
 ) -> Option<String> {
     muta_persistence::db::get_persistence_handle()
         .reader()
         .ok()?
-        .latest_session(filter, role)
+        .latest_session_in_partition(partition)
         .ok()
         .flatten()
 }
 
+/// Resolve a session's durable binding (scope + workspace) by exact id,
+/// independent of the caller's workspace (ADR-0219/0220).
 fn lookup_session_workspace(id: &str) -> Option<SessionBinding> {
     let (workspace, role) = muta_persistence::db::get_persistence_handle()
         .reader()

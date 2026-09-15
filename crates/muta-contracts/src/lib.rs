@@ -164,7 +164,7 @@ pub use security::{
 };
 
 pub mod workspace;
-pub use workspace::{WorkspaceBinding, WorkspaceFilter};
+pub use workspace::{SessionPartition, WorkspaceBinding, WorkspaceFilter};
 
 pub mod session_title;
 

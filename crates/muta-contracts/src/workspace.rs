@@ -37,6 +37,48 @@ impl WorkspaceBinding {
     }
 }
 
+/// Canonical session domain partition (ADR-0250).
+/// A session is symmetrically anchored either to a physical workspace directory
+/// or to an autonomous cognitive role.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionPartition {
+    /// Filesystem-anchored project history (e.g. developer role in a repo)
+    Workspace(PathBuf),
+    /// Role-anchored autonomous cognitive thread (e.g. philosophist)
+    Role(String),
+}
+
+impl SessionPartition {
+    /// Derive the partition truthfully from optional workspace path and role id.
+    pub fn from_parts(workspace: Option<&Path>, role: Option<&str>) -> Self {
+        match (workspace, role) {
+            (Some(ws), _) => Self::Workspace(ws.to_path_buf()),
+            (None, Some(r)) => Self::Role(r.to_string()),
+            (None, None) => Self::Role("developer".to_string()),
+        }
+    }
+
+    /// Derive truthfully from optional `WorkspaceBinding` and role id.
+    pub fn from_binding(binding: Option<&WorkspaceBinding>, role: Option<&str>) -> Self {
+        Self::from_parts(binding.map(|b| b.root.as_path()), role)
+    }
+
+    pub fn workspace_path(&self) -> Option<&Path> {
+        match self {
+            Self::Workspace(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn role_id(&self) -> Option<&str> {
+        match self {
+            Self::Role(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
 /// History query filter over the workspace partition. Not a domain entity: it
 /// is the shape of a `WHERE` clause for listing/resuming/searching sessions.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]

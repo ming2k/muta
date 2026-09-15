@@ -1294,6 +1294,67 @@ fn latest_session_filters_by_workspace_and_persona() {
     );
 }
 
+#[test]
+fn role_anchored_partition_and_switch_candidates_exclude_active() {
+    use muta_contracts::SessionPartition;
+    let engine = DatabaseEngine::open_in_memory().unwrap();
+
+    let make_session = |id: &str, role: &str, ws: Option<&str>, time: u64| {
+        let mut data = crate::session::SessionData {
+            id: id.into(),
+            role: Some(role.into()),
+            workspace: ws.map(muta_contracts::WorkspaceBinding::new),
+            created_at: time,
+            updated_at: time,
+            ..Default::default()
+        };
+        let msg = muta_contracts::Message::new(muta_contracts::Role::User, format!("hello from {id}"));
+        data.transcript.push(muta_contracts::TranscriptEntry::from_message(0, &msg));
+        data
+    };
+
+    // Two philosophist sessions (workspace-free)
+    let p1 = make_session("phil-1", "philosophist", None, 100);
+    let p2 = make_session("phil-2", "philosophist", None, 200);
+    // Another role (e.g. translator) with workspace-free
+    let t1 = make_session("trans-1", "translator", None, 300);
+    // Developer session bound to /repo/a
+    let d1 = make_session("dev-1", "developer", Some("/repo/a"), 400);
+
+    engine.save_session_full(&p1).unwrap();
+    engine.save_session_full(&p2).unwrap();
+    engine.save_session_full(&t1).unwrap();
+    engine.save_session_full(&d1).unwrap();
+
+    let phil_partition = SessionPartition::Role("philosophist".into());
+    // Active is phil-2: candidates must return phil-1 ONLY, excluding phil-2, trans-1, and dev-1
+    let candidates = engine.list_switch_candidates(&phil_partition, "phil-2").unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, "phil-1");
+
+    // Active is phil-1: candidates must return phil-2 ONLY
+    let candidates = engine.list_switch_candidates(&phil_partition, "phil-1").unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, "phil-2");
+
+    // Active is unknown: candidates return both phil-2 and phil-1
+    let candidates = engine.list_switch_candidates(&phil_partition, "none").unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0].id, "phil-2");
+    assert_eq!(candidates[1].id, "phil-1");
+
+    // latest_session_in_partition for philosophist
+    assert_eq!(
+        engine.latest_session_in_partition(&phil_partition).unwrap(),
+        Some("phil-2".into())
+    );
+
+    // Workspace partition
+    let ws_partition = SessionPartition::Workspace("/repo/a".into());
+    let candidates = engine.list_switch_candidates(&ws_partition, "dev-1").unwrap();
+    assert!(candidates.is_empty()); // Excluded itself, no other candidates
+}
+
 #[tokio::test]
 async fn create_backup_and_with_reader_roundtrip() {
     let tmp = tempfile::tempdir().expect("tempdir");

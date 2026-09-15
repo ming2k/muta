@@ -9,7 +9,7 @@ use super::record::{
 use super::security_ops::{TrustRoute, reload_trusted_assets, trust_route};
 use super::session_ops::{
     fork_current_session, restore_session_runtime, start_fresh_session,
-    start_fresh_session_with_role, supersede_for_session_switch, teardown_sides_for_session_switch,
+    switch_or_start_session_with_role, supersede_for_session_switch, teardown_sides_for_session_switch,
 };
 use super::session_route::{
     SessionRoute, parse_confinement_arg, parse_unattended_arg, session_route,
@@ -395,7 +395,8 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         None
                     };
 
-                    start_fresh_session_with_role(&mut env, role_id, target_workspace, name, args)
+                    let force_new = parts.iter().any(|&p| p == "--new" || p == "-n");
+                    switch_or_start_session_with_role(&mut env, role_id, target_workspace, force_new, name, args)
                         .await;
                 }
             }
