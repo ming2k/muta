@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.3] - 2026-09-15
+
+### Added
+
+- **Session IR Native Execution Runtime & Durable Suspension Architecture (ADR-0249):**
+  - Established native Session IR compilation pipeline (`muta_contracts::compile_session_request` & `Agent::model_request_from_ir`), lowering immutable CausalGraph branches into provider payloads with prefix KV-cache boundary analysis (`[INV-EXEC-02]`).
+  - Added native $O(\Delta)$ incremental persistence verbs (`PersistenceCommand::SaveSessionDelta`, `PersistenceHandle::save_session_delta`) targeting `sessions_v2` and `causal_nodes` SQLite tables.
+  - Implemented `DbReader::load_session_ir` for zero-lock, direct SessionIR hydration from storage.
+  - Implemented durable `ExecutionStatus::Suspended` lifecycle, allowing daemon tasks to suspend on user input or permission challenges without holding in-memory channels (`[INV-EXEC-03]`).
+  - Formally deprecated transitional `ir_bridge.rs` as legacy burden in preparation for total retirement.
+
 ## [0.48.2] - 2026-09-14
 
 ### Added
@@ -7278,7 +7289,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.2...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.3...HEAD
+[0.48.3]: https://github.com/ming2k/muta/compare/v0.48.2...v0.48.3
 [0.48.2]: https://github.com/ming2k/muta/compare/v0.48.1...v0.48.2
 [0.48.1]: https://github.com/ming2k/muta/compare/v0.48.0...v0.48.1
 [0.48.0]: https://github.com/ming2k/muta/compare/v0.47.7...v0.48.0
