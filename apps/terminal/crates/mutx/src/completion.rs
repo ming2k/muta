@@ -125,12 +125,13 @@ fn char_to_byte(input: &str, char_index: usize) -> Option<usize> {
     }
 }
 
-pub fn completion_anchor_x(
+pub fn completion_anchor(
     input: &str,
     byte_cursor: usize,
     input_rect: mutx_engine::Rect,
+    input_scroll: usize,
     kind: CompletionKind,
-) -> u16 {
+) -> mutx_engine::Rect {
     let text_width = composer_text_width(input_rect.width as usize);
     let trigger_byte = match kind {
         CompletionKind::Path => mention_range_at(input, byte_cursor)
@@ -138,8 +139,30 @@ pub fn completion_anchor_x(
             .unwrap_or(0),
         _ => 0,
     };
-    let (_, col) = composer_wrapped_pos(input, text_width, trigger_byte);
-    input_rect.x + COMPOSER_PROMPT_PREFIX_COLS as u16 + col.min(text_width) as u16
+    let (row, col) = composer_wrapped_pos(input, text_width, trigger_byte);
+    let x = input_rect.x + COMPOSER_PROMPT_PREFIX_COLS as u16 + col.min(text_width) as u16;
+
+    let visible_rows = (input_rect.height as usize)
+        .saturating_sub(crate::design::COMPOSER_VERTICAL_CHROME_ROWS as usize)
+        .max(1);
+
+    let anchor_y = if row <= input_scroll {
+        input_rect.y
+    } else {
+        let visible_row = (row - input_scroll).min(visible_rows.saturating_sub(1));
+        input_rect.y + crate::design::COMPOSER_TEXT_ROW_OFFSET + visible_row as u16
+    };
+
+    mutx_engine::Rect::new(x, anchor_y, 1, 1)
+}
+
+pub fn completion_anchor_x(
+    input: &str,
+    byte_cursor: usize,
+    input_rect: mutx_engine::Rect,
+    kind: CompletionKind,
+) -> u16 {
+    completion_anchor(input, byte_cursor, input_rect, 0, kind).x
 }
 
 pub fn resolved_slash_command_len(

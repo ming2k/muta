@@ -1,6 +1,7 @@
 //! Input completion engine tests: trigger detection, kind classification, mention ranges, slash-command completion, accept/delete/range editing.
 
 use super::*;
+use crate::model::layout::LayoutMap;
 
 // `@path` completion tests
 
@@ -62,6 +63,114 @@ fn completion_anchor_keeps_column_when_token_stays_on_one_row() {
     assert_eq!(
         x,
         rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16 + 10
+    );
+}
+
+#[test]
+fn completion_anchor_vertical_tracks_multiline_cursor_row() {
+    // Multiline composer: 5 rows of text.
+    // The trigger `@skill:skill-creator` sits on row 4.
+    let rect = mutx_engine::Rect::new(0, 10, 80, 8);
+    let input = "line 0\nline 1\nline 2\nline 3\n或者按照 @skill:skill-creator";
+    let anchor = completion_anchor(input, input.len(), rect, 0, CompletionKind::Path);
+    // Anchor Y must be at text row 4 (rect.y + COMPOSER_TEXT_ROW_OFFSET + 4 = 10 + 1 + 4 = 15).
+    assert_eq!(
+        anchor.y,
+        rect.y + crate::design::COMPOSER_TEXT_ROW_OFFSET + 4
+    );
+    // Anchor X must align with the `@` token.
+    let trigger_col = mutx_engine::text::cursor_column("或者按照 ", "或者按照 ".len());
+    assert_eq!(
+        anchor.x,
+        rect.x + crate::design::COMPOSER_PROMPT_PREFIX_COLS as u16 + trigger_col as u16
+    );
+}
+
+#[test]
+fn completion_anchor_vertical_stays_at_composer_top_for_row_zero() {
+    let rect = mutx_engine::Rect::new(0, 10, 80, 4);
+    let input = "hello @skill";
+    let anchor = completion_anchor(input, input.len(), rect, 0, CompletionKind::Path);
+    assert_eq!(anchor.y, rect.y);
+}
+
+#[test]
+fn completion_anchor_vertical_accounts_for_scroll() {
+    let rect = mutx_engine::Rect::new(0, 10, 80, 5); // visible text lines = 5 - 3 = 2
+    let input = "row 0\nrow 1\nrow 2\nrow 3 @trigger";
+    // With scroll offset 2, row 3 is visible at visible row 1 (3 - 2 = 1).
+    let anchor = completion_anchor(input, input.len(), rect, 2, CompletionKind::Path);
+    assert_eq!(
+        anchor.y,
+        rect.y + crate::design::COMPOSER_TEXT_ROW_OFFSET + 1
+    );
+}
+
+#[test]
+fn completion_menu_renders_immediately_above_multiline_anchor() {
+    let theme = Theme::default();
+    let completions = vec![crate::completion::Completion::whole_input(
+        "@skill:skill-creator",
+        "Skill Creator",
+        20,
+    )];
+    let mut terminal = mutx_engine::TestTerminal::new(80, 20);
+    let anchor = mutx_engine::Rect::new(10, 15, 1, 1);
+    terminal.draw(|f| {
+        let mut layout_map = LayoutMap::new();
+        crate::chrome::draw_completion_menu(
+            f,
+            &mut layout_map,
+            None,
+            &completions,
+            Some(0),
+            anchor,
+            &theme,
+        );
+    });
+    let buf = terminal.buffer();
+    // Menu height is 1, so it must render at row anchor.y - 1 = 14.
+    assert_eq!(
+        buf.get(10, 14).map(|c| c.bg),
+        Some(theme.brand()),
+        "popup must render at row 14, immediately above anchor row 15"
+    );
+    // Row 9 (where the old composer top would have placed it) must NOT have the popup.
+    assert_ne!(
+        buf.get(10, 9).map(|c| c.bg),
+        Some(theme.brand()),
+        "popup must not be placed at old composer top"
+    );
+}
+
+#[test]
+fn completion_menu_flips_below_when_space_above_is_insufficient() {
+    let theme = Theme::default();
+    let completions = vec![
+        crate::completion::Completion::whole_input("/one", "One", 4),
+        crate::completion::Completion::whole_input("/two", "Two", 4),
+    ];
+    let mut terminal = mutx_engine::TestTerminal::new(80, 10);
+    // Anchor at row 1: space above is 1, but menu_height is 2.
+    // Space below is (10 - 2) = 8 >= 2, so it flips below to anchor.bottom() = 2.
+    let anchor = mutx_engine::Rect::new(2, 1, 1, 1);
+    terminal.draw(|f| {
+        let mut layout_map = LayoutMap::new();
+        crate::chrome::draw_completion_menu(
+            f,
+            &mut layout_map,
+            None,
+            &completions,
+            Some(0),
+            anchor,
+            &theme,
+        );
+    });
+    let buf = terminal.buffer();
+    assert_eq!(
+        buf.get(2, 2).map(|c| c.bg),
+        Some(theme.brand()),
+        "popup must flip below to row 2 when space above is insufficient"
     );
 }
 

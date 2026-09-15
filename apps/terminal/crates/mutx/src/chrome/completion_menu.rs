@@ -7,8 +7,7 @@ use crate::model::layout::LayoutMap;
 use crate::primitives::{ElevationContainer, contrast_fg, viewport_rect};
 use crate::render::Theme;
 
-/// Draw a completion menu anchored above the input box.
-#[allow(clippy::too_many_arguments)] // mirrors the chrome render contract; the layout map is reserved for hit-testing
+/// Draw a completion menu anchored relative to the trigger target rect.
 pub fn draw_completion_menu(
     frame: &mut Frame,
     _layout_map: &mut LayoutMap,
@@ -16,7 +15,6 @@ pub fn draw_completion_menu(
     completions: &[crate::completion::Completion],
     selected_idx: Option<usize>,
     anchor: Rect,
-    anchor_x: u16,
     theme: &Theme,
 ) {
     if completions.is_empty() {
@@ -59,11 +57,17 @@ pub fn draw_completion_menu(
         .min(max_menu_width)
         .min(viewport.width as usize)) as u16;
 
-    let mut y = anchor.y.saturating_sub(menu_height);
-    if y == 0 && anchor.y < menu_height {
-        y = 0;
-    }
-    let x = anchor_x
+    let space_above = anchor.y.saturating_sub(viewport.y);
+    let space_below = viewport.bottom().saturating_sub(anchor.bottom());
+    let place_below = space_above < menu_height && space_below > space_above;
+
+    let y = if place_below {
+        anchor.bottom().min(viewport.bottom().saturating_sub(menu_height))
+    } else {
+        anchor.y.saturating_sub(menu_height).max(viewport.y)
+    };
+    let x = anchor
+        .x
         .min(viewport.right().saturating_sub(menu_width))
         .max(viewport.x);
 
@@ -260,14 +264,17 @@ pub fn draw_completion_menu(
                 }
             }
 
-            let max_flyout_h = (viewport.height as usize)
-                .saturating_sub(anchor.y as usize)
-                .clamp(12, 16) as u16;
+            let max_flyout_h = if place_below {
+                (space_below as usize).clamp(12, 16) as u16
+            } else {
+                (space_above as usize).clamp(12, 16) as u16
+            };
             let doc_height = (insp_lines.len() as u16).max(menu_height).min(max_flyout_h);
-            let mut doc_y = anchor.y.saturating_sub(doc_height);
-            if doc_y == 0 && anchor.y < doc_height {
-                doc_y = 0;
-            }
+            let doc_y = if place_below {
+                menu_area.y.min(viewport.bottom().saturating_sub(doc_height))
+            } else {
+                menu_area.bottom().saturating_sub(doc_height).max(viewport.y)
+            };
 
             let doc_area = Rect::new(doc_x, doc_y, doc_width, doc_height);
             frame.render_widget(Clear, doc_area);

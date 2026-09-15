@@ -1,7 +1,7 @@
 //! The per-frame draw routine for the TUI event loop, extracted from
 //! `run_app_loop`'s `if needs_draw` stage (it was a ~1000-line closure).
 
-use crate::completion::{CompletionKind, completion_anchor_x, resolved_slash_command_len};
+use crate::completion::{CompletionKind, completion_anchor, resolved_slash_command_len};
 use crate::composer::{ComposerProps, ComposerText};
 use crate::model::document::TranscriptMessage;
 use crate::model::layout::LayoutMap;
@@ -829,15 +829,15 @@ fn compose_frame(
             c.replace_start == 0 && c.replace_end == app.input.len() && c.label == app.input
         });
         if !completions.is_empty() && !exact_match {
-            // Hang the popup's leading edge off the trigger token
-            // it completes — column 0 of the composer text area
-            // for a `/command`, the `@`'s column for a path
-            // mention — so the menu aligns with what was typed
-            // even after the line wraps.
-            let anchor_x = completion_anchor_x(
+            // Anchor the popup relative to the active trigger token
+            // (e.g. the `@` in a mention or `/` command) in both X and Y,
+            // tracking the cursor's wrapped row and scroll offset so the menu
+            // hovers immediately above the line being typed.
+            let anchor = completion_anchor(
                 &app.input,
                 app.byte_cursor(),
                 input_rect,
+                app.input_scroll,
                 app.completion_kind(),
             );
             render::draw_completion_menu(
@@ -846,8 +846,7 @@ fn compose_frame(
                 Some(&mut ui),
                 &completions,
                 app.suggestion_index,
-                input_rect,
-                anchor_x,
+                anchor,
                 &app.theme,
             );
         }

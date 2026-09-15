@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::app::{App, CaretOwner, QueuedDispatch, QueuedDispatchState, RecallQueued};
 use crate::completion::CompletionKind;
-use crate::completion::{completion_anchor_x, mention_range_at, resolved_slash_command_len};
+use crate::completion::{completion_anchor, completion_anchor_x, mention_range_at, resolved_slash_command_len};
 use crate::config;
 use crate::event_loop::{display_status, focused_messages_mut};
 use crate::model::layout::InteractiveTarget;

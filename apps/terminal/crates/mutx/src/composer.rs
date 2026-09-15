@@ -230,9 +230,10 @@ pub fn composer_wrapped_pos(input: &str, text_width: usize, byte: usize) -> (usi
     // A byte exactly at a wrapped-line boundary (the end of one row and the
     // start of the continuation) resolves to column 0 of the continuation —
     // the position the trigger glyph itself occupies. Otherwise the byte
-    // lands on the first row whose end covers it.
+    // lands on the first row whose end covers it (or flush at the end of the last row).
     for (row, wl) in wrapped.iter().enumerate() {
-        if byte >= wl.start_byte && byte < wl.end_byte {
+        let is_last = row + 1 == wrapped.len();
+        if byte >= wl.start_byte && (byte < wl.end_byte || (is_last && byte <= wl.end_byte)) {
             let local = byte.saturating_sub(wl.start_byte).min(wl.text.len());
             return (row, cursor_column(&wl.text, local));
         }

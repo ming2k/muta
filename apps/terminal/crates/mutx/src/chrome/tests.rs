@@ -712,13 +712,12 @@ fn paint_completion_menu(
             None,
             &completions,
             selected,
-            Rect::new(0, 10, 80, 2), // input box occupies rows 10..12
-            input_anchor_x,
+            Rect::new(input_anchor_x, 10, 1, 1),
             &theme,
         );
     });
     // The two rows directly above the input box are the popup.
-    (terminal, Rect::new(0, 8, 80, 2))
+    (terminal, Rect::new(input_anchor_x, 8, 80, 2))
 }
 
 #[test]
@@ -817,8 +816,7 @@ fn completion_menu_caps_width_and_stays_anchored() {
             None,
             &completions,
             None,
-            Rect::new(0, 10, 80, 2),
-            2,
+            Rect::new(2, 10, 1, 1),
             &theme,
         );
     });
@@ -896,8 +894,7 @@ fn completion_menu_marks_alias_rows_with_canonical_target() {
             None,
             &completions,
             None,
-            Rect::new(0, 10, 80, 2),
-            2,
+            Rect::new(2, 10, 1, 1),
             &theme,
         );
     });
@@ -960,8 +957,7 @@ fn completion_menu_hover_doc_flyout_only_appears_when_entry_is_selected() {
             None,
             &completions,
             None,
-            Rect::new(0, 10, 80, 2),
-            2,
+            Rect::new(2, 10, 1, 1),
             &theme,
         );
     });
@@ -984,8 +980,7 @@ fn completion_menu_hover_doc_flyout_only_appears_when_entry_is_selected() {
             None,
             &completions,
             Some(0),
-            Rect::new(0, 10, 80, 2),
-            2,
+            Rect::new(2, 10, 1, 1),
             &theme,
         );
     });
@@ -1028,8 +1023,7 @@ fn completion_menu_hover_doc_flyout_shows_alias_to_target_header() {
             None,
             &completions,
             Some(0),
-            Rect::new(0, 10, 80, 2),
-            2,
+            Rect::new(2, 10, 1, 1),
             &theme,
         );
     });

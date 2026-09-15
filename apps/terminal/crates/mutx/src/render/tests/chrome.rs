@@ -102,8 +102,7 @@ fn redesigned_components_render_without_panicking() {
                         },
                     ],
                     Some(0),
-                    Rect::new(0, 20, 80, 3),
-                    2,
+                    Rect::new(2, 20, 1, 1),
                     &theme,
                 );
                 draw_copy_toast(f, "copied to clipboard", false, &theme);
