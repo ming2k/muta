@@ -1366,7 +1366,7 @@ impl SessionRegistry {
         if let Some(manifest) = manifest {
             let role_identity = manifest.identity;
             let mut role =
-                muta_contracts::AgentRoleProfile::with_identity("session", role_identity.clone());
+                muta_contracts::AgentRoleProfile::with_identity(manifest.role_id.clone(), role_identity.clone());
             role.tools = muta_contracts::ToolSelection::from_allowlist(&manifest.tools);
             role.admit_mcp = manifest.admit_mcp.clone();
             identity = role_identity;
@@ -1386,7 +1386,7 @@ impl SessionRegistry {
                 }
                 let role_identity = role_entry.identity();
                 let mut role =
-                    muta_contracts::AgentRoleProfile::with_identity("role", role_identity.clone());
+                    muta_contracts::AgentRoleProfile::with_identity(role_id.to_string(), role_identity.clone());
                 role.tools = muta_contracts::ToolSelection::from_allowlist(&role_entry.tools);
                 role.admit_mcp = role_entry.admit_mcp.clone();
                 identity = role_identity;

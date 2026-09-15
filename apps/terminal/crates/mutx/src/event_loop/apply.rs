@@ -64,7 +64,7 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             }
             if let Some(ws) = snapshot.workspace {
                 app.current_workspace = crate::chrome::tilde_home(std::path::Path::new(&ws));
-            } else if app.current_role.as_deref() == Some("philosophist") {
+            } else if app.current_role.is_some() {
                 app.current_workspace.clear();
             }
             // PreAttach unmount (ADR-0175): when the snapshot transitions to

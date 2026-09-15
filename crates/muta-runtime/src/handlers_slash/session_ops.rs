@@ -283,7 +283,7 @@ pub(crate) async fn restore_session_runtime(
     if let Some(manifest) = session.role_manifest().await {
         let role_identity = manifest.identity.clone();
         let mut role =
-            muta_contracts::AgentRoleProfile::with_identity("session", role_identity.clone());
+            muta_contracts::AgentRoleProfile::with_identity(manifest.role_id.clone(), role_identity.clone());
         role.tools = muta_contracts::ToolSelection::from_allowlist(&manifest.tools);
         role.admit_mcp = manifest.admit_mcp.clone();
         if session.workspace_root().is_some() {

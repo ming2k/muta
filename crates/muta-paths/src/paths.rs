@@ -202,6 +202,11 @@ impl Dirs {
         self.data_dir.join("muta.db")
     }
 
+    /// Role dialogue memory database file (for role-scoped RAG and memory decay).
+    pub fn role_memory_db(&self) -> PathBuf {
+        self.data_dir.join("role_memory.db")
+    }
+
     /// Content-addressed blob store root. Large payloads are stored under
     /// `<root>/<2-char-prefix>/<hash>`.
     pub fn blobs_dir(&self) -> PathBuf {

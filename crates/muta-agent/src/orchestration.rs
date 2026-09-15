@@ -1089,8 +1089,13 @@ pub async fn execute_round(
         .unwrap_or_else(|| agent.round_count());
 
     let admitted_session_id = session.id().await;
-    let prompt_for_titler = if !input.hidden && resumed_point.is_none() {
+    let prompt_for_memory = if !input.hidden {
         Some(input.prompt.clone())
+    } else {
+        None
+    };
+    let prompt_for_titler = if !input.hidden && resumed_point.is_none() {
+        prompt_for_memory.clone()
     } else {
         None
     };
@@ -1649,7 +1654,21 @@ pub async fn execute_round(
 
     let visible = outcome.message.content.trim().to_string();
     if !visible.is_empty() && !streamed_text.load(Ordering::SeqCst) {
-        let _ = tx.send(round_response(&session_id, RoundEvent::Text(visible)));
+        let _ = tx.send(round_response(&session_id, RoundEvent::Text(visible.clone())));
+    }
+
+    // Record dialogue into role-scoped cognitive memory (pure user <-> role turns)
+    if let (Some(prompt), Some(role)) = (prompt_for_memory, agent.active_role()) {
+        if !prompt.trim().is_empty() && !visible.is_empty() {
+            if let Ok(store) = muta_persistence::get_role_memory_store() {
+                let _ = store.record_dialogue(
+                    &role,
+                    Some(&session_id),
+                    &prompt,
+                    &visible,
+                );
+            }
+        }
     }
 
     // ADR-0236 D5 / invariant #5: publish the authoritative completion as soon

@@ -45,6 +45,8 @@ pub mod usage_stats;
 mod web_migration;
 pub mod workspace_security;
 pub mod asset_attestation;
+pub mod role_memory;
 
 pub use asset_attestation::AssetAttestationLedger;
+pub use role_memory::{RecalledMemory, RoleMemoryEntry, RoleMemoryStore, get_role_memory_store};
 pub use session::{CommitTurn, SessionStore};

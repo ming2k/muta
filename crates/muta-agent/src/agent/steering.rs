@@ -286,7 +286,7 @@ impl Agent {
         if let Some(user_role) = roles_config.get(trimmed) {
             let identity = user_role.identity();
             let mut profile =
-                muta_contracts::AgentRoleProfile::with_identity("role", identity.clone());
+                muta_contracts::AgentRoleProfile::with_identity(trimmed.to_string(), identity.clone());
             profile.tools = muta_contracts::ToolSelection::from_allowlist(&user_role.tools);
             profile.admit_mcp = user_role.admit_mcp.clone();
             if user_role.resolved_workspace().requires_binding() {
@@ -849,8 +849,41 @@ mod tests {
         assert_eq!(switched.name, "philosophist");
         assert!(switched.description.contains("philosophical"));
         assert_eq!(agent.extensions().len(), 0);
+        assert_eq!(agent.active_role().as_deref(), Some("philosophist"));
 
         // Unknown role returns None
         assert!(agent.apply_role("non-existent-role").is_none());
+    }
+
+    #[tokio::test]
+    async fn apply_role_custom_role_preserves_role_id_in_active_role() {
+        let temp = tempfile::tempdir().unwrap();
+        let dot_muta = temp.path().join(".muta");
+        std::fs::create_dir_all(&dot_muta).unwrap();
+        std::fs::write(
+            dot_muta.join("roles.toml"),
+            r#"
+[roles.sec-auditor]
+name = "Security Auditor"
+description = "Audits security"
+workspace = "inherit"
+tools = ["ask_user"]
+"#,
+        )
+        .unwrap();
+
+        let provider = Arc::new(NoProvider);
+        let agent = Agent::new(
+            provider,
+            Vec::new(),
+            crate::AgentIdentity::new("test", "test agent"),
+        );
+        agent.set_project_root(Some(temp.path().to_path_buf()));
+
+        let switched = agent.apply_role("sec-auditor").expect("custom role resolves");
+        assert_eq!(switched.id, "sec-auditor");
+        assert_eq!(switched.name, "Security Auditor");
+        // Crucial invariant: active_role must be "sec-auditor", never hardcoded "role"
+        assert_eq!(agent.active_role().as_deref(), Some("sec-auditor"));
     }
 }

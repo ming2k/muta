@@ -856,6 +856,20 @@ mod tests {
     }
 
     #[test]
+    fn session_header_shows_custom_user_role_badge() {
+        let head = SessionHead {
+            session_id: "sess-01a2b3c4",
+            workspace: "~/projects/xx",
+            role: Some("security-auditor"),
+            unattended: false,
+            confined: true,
+            switching_target: None,
+        };
+        let row = rendered_row(80, ViewHeader::Session(&head));
+        assert!(row.starts_with("   SESSION b3c4 [SECURITY-AUDITOR] ~/projects/xx"));
+    }
+
+    #[test]
     fn session_header_shows_switching_target_loading() {
         let head = SessionHead {
             session_id: "sess-01a2b3c4",

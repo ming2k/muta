@@ -4,6 +4,8 @@
 //! - [`MainAgent`]: interactive top-level agent staffed with a [`MainAgentRole`].
 //! - [`SubAgent`]: autonomous delegated agent staffed with a [`SubAgentRole`].
 
+use std::borrow::Cow;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{AgentIdentity, ToolScope, ToolSelection};
@@ -26,7 +28,7 @@ pub struct AgentRuntimeConfig {
 #[derive(Debug, Clone)]
 pub struct AgentRoleProfile {
     /// The role's name, e.g. `"developer"`.
-    pub name: &'static str,
+    pub name: Cow<'static, str>,
     /// Who this principal is and what it is for.
     pub identity: AgentIdentity,
     /// The tools this role admits from the pool.
@@ -43,9 +45,9 @@ pub struct AgentRoleProfile {
 
 impl AgentRoleProfile {
     /// Build a role from an identity with full default scope and attended behaviour.
-    pub fn with_identity(name: &'static str, identity: AgentIdentity) -> Self {
+    pub fn with_identity(name: impl Into<Cow<'static, str>>, identity: AgentIdentity) -> Self {
         Self {
-            name,
+            name: name.into(),
             identity,
             tools: ToolSelection::unrestricted(),
             config: AgentRuntimeConfig::default(),
@@ -97,12 +99,15 @@ impl AgentRoleProfile {
     pub fn philosophist() -> Self {
         let identity = role_directive(
             "Role: philosophist. Engage in deep philosophical inquiry, examine principles, \
-             question assumptions, and explore ideas with clarity and nuance. Do not modify files or run commands.",
+             question assumptions, and explore ideas with clarity and nuance. Do not modify files or run commands. \
+             You can perceive our historical dialogue using `recall_memory` to recall past discussions, philosophical \
+             positions, or shared reflections when relevant.",
         );
         Self::with_identity("philosophist", identity).with_tools(ToolSelection::only([
             "read_url",
             "search_web",
             "ask_user",
+            "recall_memory",
         ]))
     }
 
@@ -282,6 +287,7 @@ impl SessionRoleManifest {
                 "read_url".to_string(),
                 "search_web".to_string(),
                 "ask_user".to_string(),
+                "recall_memory".to_string(),
             ],
             admit_mcp: Vec::new(),
             created_at_s: 0,
@@ -370,7 +376,7 @@ impl AgentRole for MainAgentRole {
         match self {
             MainAgentRole::Developer => ToolSelection::unrestricted(),
             MainAgentRole::Philosophist => {
-                ToolSelection::only(["read_url", "search_web", "ask_user"])
+                ToolSelection::only(["read_url", "search_web", "ask_user", "recall_memory"])
             }
         }
     }
@@ -496,7 +502,7 @@ impl AgentRoleDelegation {
 
     pub fn declared_tools(&self) -> Option<&'static [&'static str]> {
         match self.role_id {
-            "philosophist" => Some(&["read_url", "search_web", "ask_user"]),
+            "philosophist" => Some(&["read_url", "search_web", "ask_user", "recall_memory"]),
             _ => None,
         }
     }
@@ -623,6 +629,7 @@ mod tests {
         assert!(names.contains("read_url"));
         assert!(names.contains("search_web"));
         assert!(names.contains("ask_user"));
+        assert!(names.contains("recall_memory"));
     }
 
     #[test]
@@ -656,7 +663,7 @@ mod tests {
         assert_eq!(phil_manifest.role_id, "philosophist");
         assert_eq!(
             phil_manifest.tools,
-            vec!["read_url", "search_web", "ask_user"]
+            vec!["read_url", "search_web", "ask_user", "recall_memory"]
         );
         assert!(
             phil_manifest
