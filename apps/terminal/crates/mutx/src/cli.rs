@@ -187,7 +187,7 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 ));
             }
             "--unattended" => unattended = true,
-            "--role" => role = Some(flag_value(name, inline, &mut iter)?),
+            "--role" | "-r" => role = Some(flag_value("-r/--role", inline, &mut iter)?),
             "--resume" => resume = true,
             "--no-confinement" => no_confinement = true,
             "--interactive" | "-i" => interactive = true,
@@ -405,7 +405,7 @@ pub fn help_text(topic: Option<&str>) -> Option<String> {
             out.push_str("  -i, --interactive      force interactive TUI mode\n");
             out.push_str("  -j, --json             emit structured JSON where supported\n");
             out.push_str(
-                "      --role <id>        staff the new session with a role (developer, philosophist, ops, or custom)\n",
+                "  -r, --role <id>        staff the new session with a role (developer, philosophist, ops, or custom)\n",
             );
             out.push_str(
                 "      --resume           resume the most recent matching session instead of a new one\n",
@@ -469,7 +469,7 @@ pub fn completion_script(shell: Shell) -> String {
              \x20   local cur\n\
              \x20   cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
              \x20   if [[ $COMP_CWORD -eq 1 ]]; then\n\
-             \x20       COMPREPLY=($(compgen -W \"{commands} --project --remote --token --prompt -p --interactive -i --json -j --role --resume --unattended --no-confinement --help --version\" -- \"$cur\"))\n\
+             \x20       COMPREPLY=($(compgen -W \"{commands} --project --remote --token --prompt -p --interactive -i --json -j --role -r --resume --unattended --no-confinement --help --version\" -- \"$cur\"))\n\
              \x20   fi\n\
              }}\n\
              complete -F _mutx mutx\n"
@@ -600,6 +600,10 @@ mod tests {
 
         let parsed = parse(&["--role", "ops"]).unwrap();
         assert_eq!(parsed.role.as_deref(), Some("ops"));
+        assert!(!parsed.resume);
+
+        let parsed = parse(&["-r", "philosophist"]).unwrap();
+        assert_eq!(parsed.role.as_deref(), Some("philosophist"));
         assert!(!parsed.resume);
 
         let parsed = parse(&["--role=developer", "--resume"]).unwrap();

@@ -97,6 +97,15 @@ impl DbReader {
         self.engine.list_switch_candidates(partition, active_id)
     }
 
+    /// List session summaries for a domain partition, with active session tagged (ADR-0250).
+    pub fn list_session_summaries_in_partition(
+        &self,
+        partition: &muta_contracts::SessionPartition,
+        active_id: &str,
+    ) -> Result<Vec<crate::session::SessionSummary>> {
+        self.engine.list_session_summaries_in_partition(partition, active_id)
+    }
+
     /// The most recently updated session id in `partition` (ADR-0250 `--resume`).
     pub fn latest_session_in_partition(
         &self,

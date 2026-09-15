@@ -531,8 +531,12 @@ mod tests {
         let Some(AgentResponse::SessionsOverview(items)) = resp_rx.recv().await else {
             panic!("expected SessionsOverview response after delete");
         };
-        // The newly reset active session must be strictly self-excluded (ADR-0250).
-        assert!(!items.iter().any(|item| item.id == new_id));
+        // The newly reset active session must be present and tagged active for the monitor tracker.
+        let active_row = items
+            .iter()
+            .find(|item| item.active)
+            .expect("active session must be present");
+        assert_eq!(active_row.id, new_id);
         assert!(!items.iter().any(|item| item.id == initial_id));
     }
 
@@ -554,8 +558,11 @@ mod tests {
             panic!("expected SessionsOverview response after delete");
         };
         assert!(!items.iter().any(|item| item.id == initial_id));
-        // The newly reset active session is self-excluded from candidates (ADR-0250).
-        assert!(!items.iter().any(|item| item.id == new_id));
+        let active_row = items
+            .iter()
+            .find(|item| item.active)
+            .expect("active session must be present");
+        assert_eq!(active_row.id, new_id);
     }
 
     #[tokio::test]

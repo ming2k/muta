@@ -369,7 +369,7 @@ async fn run_attached(
                 Some(init_options.clone())
             }),
             // `mutx attach` with no id opens the TUI picker (ADR-0116).
-            None if pick_pending => client::AttachAction::Picker,
+            None if pick_pending => client::AttachAction::Picker(Some(init_options.clone())),
             // Auto-bind a lone session (the daemon decides; several mean
             // the picker, which the Pick fallback below turns interactive).
             None => client::AttachAction::Attach(None),
@@ -418,7 +418,11 @@ async fn run_attached(
             // filter, detail pane, and Enter-to-open — not a printed
             // stderr list that makes the user copy an id by hand.
             client::Handshake::Pick(_) => {
-                let handshake = client::connect(&info, client::AttachAction::Picker).await?;
+                let handshake = client::connect(
+                    &info,
+                    client::AttachAction::Picker(Some(init_options.clone())),
+                )
+                .await?;
                 match handshake {
                     client::Handshake::Attached {
                         req_tx,

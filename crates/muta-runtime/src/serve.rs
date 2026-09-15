@@ -990,7 +990,7 @@ async fn handle_wire_stream(
         AttachAction::Control(request) => {
             return run_control(wire_sink, registry, gate, listeners, request).await;
         }
-        AttachAction::New(_) | AttachAction::Attach(_) | AttachAction::Picker => {}
+        AttachAction::New(_) | AttachAction::Attach(_) | AttachAction::Picker(_) => {}
     }
     // The caller's project scopes creation / lazy resume (ADR-0096). Attach
     // clients declare their working directory in the Select frame's optional
@@ -1708,11 +1708,11 @@ mod tests {
         // a clear deserialize error instead of a mid-handshake protocol
         // fault.
         assert_eq!(
-            serde_json::to_string(&AttachAction::Picker).unwrap(),
+            serde_json::to_string(&AttachAction::Picker(None)).unwrap(),
             "\"picker\""
         );
         let back: AttachAction = serde_json::from_str("\"picker\"").unwrap();
-        assert_eq!(back, AttachAction::Picker);
+        assert_eq!(back, AttachAction::Picker(None));
     }
 
     fn handshake_req(headers: &[(&str, &str)]) -> Request {

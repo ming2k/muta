@@ -201,7 +201,7 @@ impl SessionInitOptions {
 pub enum AttachAction {
     New(Option<SessionInitOptions>),
     Attach(Option<String>),
-    Picker,
+    Picker(Option<SessionInitOptions>),
     Control(ControlRequest),
     Monitor(crate::MonitorAction),
 }
@@ -225,7 +225,13 @@ impl Serialize for AttachAction {
                 map.serialize_entry("attach", id)?;
                 map.end()
             }
-            Self::Picker => serializer.serialize_str("picker"),
+            Self::Picker(None) => serializer.serialize_str("picker"),
+            Self::Picker(Some(opts)) => {
+                use serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("picker", opts)?;
+                map.end()
+            }
             Self::Control(req) => {
                 use serde::ser::SerializeMap;
                 let mut map = serializer.serialize_map(Some(1))?;
@@ -252,7 +258,7 @@ impl<'de> Deserialize<'de> for AttachAction {
         enum RawAttachAction {
             New(Option<SessionInitOptions>),
             Attach(Option<String>),
-            Picker,
+            Picker(Option<SessionInitOptions>),
             Control(ControlRequest),
             Monitor(crate::MonitorAction),
         }
@@ -267,13 +273,13 @@ impl<'de> Deserialize<'de> for AttachAction {
         match WireHelper::deserialize(deserializer)? {
             WireHelper::Str(s) => match s.as_str() {
                 "new" => Ok(AttachAction::New(None)),
-                "picker" => Ok(AttachAction::Picker),
+                "picker" => Ok(AttachAction::Picker(None)),
                 other => Err(serde::de::Error::unknown_variant(other, &["new", "picker"])),
             },
             WireHelper::Structured(raw) => Ok(match raw {
                 RawAttachAction::New(opts) => AttachAction::New(opts),
                 RawAttachAction::Attach(id) => AttachAction::Attach(id),
-                RawAttachAction::Picker => AttachAction::Picker,
+                RawAttachAction::Picker(opts) => AttachAction::Picker(opts),
                 RawAttachAction::Control(c) => AttachAction::Control(c),
                 RawAttachAction::Monitor(m) => AttachAction::Monitor(m),
             }),
@@ -354,10 +360,16 @@ mod tests {
         let back: AttachAction = serde_json::from_str(&ser).unwrap();
         assert_eq!(back, attach);
 
-        let picker = AttachAction::Picker;
+        let picker = AttachAction::Picker(None);
         let ser = serde_json::to_string(&picker).unwrap();
         assert_eq!(ser, "\"picker\"");
         let back: AttachAction = serde_json::from_str(&ser).unwrap();
         assert_eq!(back, picker);
+
+        let picker_opts = AttachAction::Picker(Some(SessionInitOptions::new(true, false)));
+        let ser_opts = serde_json::to_string(&picker_opts).unwrap();
+        assert_eq!(ser_opts, r#"{"picker":{"unattended":true,"confined":false}}"#);
+        let back_opts: AttachAction = serde_json::from_str(&ser_opts).unwrap();
+        assert_eq!(back_opts, picker_opts);
     }
 }

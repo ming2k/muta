@@ -623,11 +623,29 @@ impl SessionRegistry {
             // job is to host the client's picker modal. The bootstrap skips
             // restore and hooks for it; `/sessions <id>` switches to the
             // real session through the ordinary re-attach path.
-            AttachAction::Picker => self
-                .assemble_hosted(
+            AttachAction::Picker(init_options) => {
+                let opts = init_options.unwrap_or_default();
+                let role_id = opts.role.clone();
+                let ws = if role_id.as_deref() == Some("philosophist") {
+                    None
+                } else if let Some(r_id) = role_id.as_deref() {
+                    let roles_cfg = muta_persistence::roles::RolesConfig::load_for_workspace(Some(caller_project));
+                    if let Some(role_entry) = roles_cfg.get(r_id) {
+                        match role_entry.resolved_workspace() {
+                            muta_persistence::roles::RoleWorkspace::None => None,
+                            muta_persistence::roles::RoleWorkspace::Inherit => Some(muta_contracts::WorkspaceBinding::new(caller_project.to_path_buf())),
+                            muta_persistence::roles::RoleWorkspace::Fixed(root) => Some(muta_contracts::WorkspaceBinding::new(root)),
+                        }
+                    } else {
+                        Some(muta_contracts::WorkspaceBinding::new(caller_project.to_path_buf()))
+                    }
+                } else {
+                    Some(muta_contracts::WorkspaceBinding::new(caller_project.to_path_buf()))
+                };
+                self.assemble_hosted(
                     crate::startup::SessionStart::Picker,
-                    SessionBinding::workspace(caller_project.to_path_buf()),
-                    muta_contracts::SessionInitOptions::default(),
+                    SessionBinding { workspace: ws, role: role_id },
+                    opts,
                 )
                 .await
                 .map(ResolveOutcome::Welcome)
@@ -638,7 +656,8 @@ impl SessionRegistry {
                     AssembleErr::AssembleFailed(e) => {
                         ResolveOutcome::Error(format!("could not open the session picker: {e}"))
                     }
-                }),
+                })
+            }
             // Monitor handshakes are intercepted by the WS layer
             // (`serve::handle_connection`) and never reach `resolve`.
             AttachAction::Monitor(_) => {

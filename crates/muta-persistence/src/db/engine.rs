@@ -1127,6 +1127,45 @@ impl DatabaseEngine {
         Ok(summaries)
     }
 
+    /// List session summaries for a domain partition, with active session tagged (ADR-0250).
+    pub(crate) fn list_session_summaries_in_partition(
+        &self,
+        partition: &muta_contracts::SessionPartition,
+        active_id: &str,
+    ) -> Result<Vec<crate::session::SessionSummary>> {
+        const COLS: &str = "id, parent_id, fork_kind, title, created_at_s, updated_at_s, \
+                            msg_count, last_user_prompt, digest";
+        let mut summaries = Vec::new();
+        match partition {
+            muta_contracts::SessionPartition::Workspace(path) => {
+                let sql = format!(
+                    "SELECT {COLS} FROM sessions \
+                     WHERE workspace_root = ?1 AND fork_kind <> 'subagent' \
+                     ORDER BY updated_at_s DESC;"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![path.to_string_lossy()], map_summary_row)?;
+                for item in rows {
+                    push_summary(&mut summaries, item?, active_id);
+                }
+            }
+            muta_contracts::SessionPartition::Role(role_id) => {
+                let sql = format!(
+                    "SELECT {COLS} FROM sessions \
+                     WHERE workspace_root IS NULL AND persona = ?1 AND fork_kind <> 'subagent' \
+                     ORDER BY updated_at_s DESC;"
+                );
+                let mut stmt = self.conn.prepare(&sql)?;
+                let rows = stmt.query_map(params![role_id], map_summary_row)?;
+                for item in rows {
+                    push_summary(&mut summaries, item?, active_id);
+                }
+            }
+        }
+        summaries.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
+        Ok(summaries)
+    }
+
     pub(crate) fn list_session_summaries(
         &self,
         filter: Option<&muta_contracts::WorkspaceFilter>,

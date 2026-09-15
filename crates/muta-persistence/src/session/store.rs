@@ -441,7 +441,7 @@ impl SessionStore {
         tokio::task::spawn_blocking(move || {
             let reader = writer.reader().map_err(|e| e.to_string())?;
             reader
-                .list_switch_candidates(&partition, &active_id)
+                .list_session_summaries_in_partition(&partition, &active_id)
                 .map_err(|e| e.to_string())
         })
         .await

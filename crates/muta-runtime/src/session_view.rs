@@ -147,7 +147,7 @@ pub fn derive_capabilities(capabilities: &muta_contracts::ModelCapabilities) -> 
 /// store, corrupt index) degrade to an empty list rather than surfacing an
 /// error: the picker is non-modal and a missing list is recoverable.
 pub async fn build_sessions_overview(session: &SessionStore) -> Vec<SessionOverview> {
-    match session.list().await {
+    let mut overview: Vec<SessionOverview> = match session.list().await {
         Ok(items) => items
             .into_iter()
             .map(|item| SessionOverview {
@@ -156,12 +156,30 @@ pub async fn build_sessions_overview(session: &SessionStore) -> Vec<SessionOverv
                 created_at: item.created_at,
                 updated_at: item.updated_at,
                 message_count: item.message_count,
-                active: false,
+                active: item.active,
                 parent_id: item.parent_id,
                 fork_kind: item.fork_kind,
                 digest: item.digest,
             })
             .collect(),
         Err(_) => Vec::new(),
+    };
+
+    if !overview.iter().any(|item| item.active) {
+        let summary = session.active_summary().await;
+        overview.push(SessionOverview {
+            id: summary.id,
+            overview: summary.overview,
+            created_at: summary.created_at,
+            updated_at: summary.updated_at,
+            message_count: summary.message_count,
+            active: true,
+            parent_id: summary.parent_id,
+            fork_kind: summary.fork_kind,
+            digest: summary.digest,
+        });
+        overview.sort_by_key(|item| std::cmp::Reverse(item.updated_at));
     }
+
+    overview
 }

@@ -346,7 +346,10 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             app.models_refreshing = false;
             true
         }
-        AppMutation::SessionsOverview(sessions) => {
+        AppMutation::SessionsOverview(mut sessions) => {
+            // Self-exclusion (ADR-0250): remove the active session from the switch candidates list
+            // so the cursor immediately targets the most recently active alternative session (MRU top).
+            sessions.retain(|s| !s.active);
             app.modal_index = app.modal_index.min(sessions.len().saturating_sub(1));
             app.sessions_overview = sessions;
             app.sessions_loading = false;
