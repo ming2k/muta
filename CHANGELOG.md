@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.48.4] - 2026-10-04
+
+### Added
+
+- **Role-Anchored Session Isolation & Self-Excluding Switcher (ADR-0250):**
+  - Established symmetric `SessionPartition` (`Workspace` vs `Role`) in `muta-contracts`, elevating autonomous cognitive roles (such as `philosophist`) to first-class session partitions alongside physical workspaces.
+  - Added dedicated SQLite covering index `idx_sessions_role_partition` (migration 20) for microsecond, cross-role-isolated historical queries.
+  - Implemented `list_switch_candidates` and `latest_session_in_partition` in `muta-persistence`.
+  - Refactored slash command `/role <id>` to resume ongoing discourse threads by default, with `--new` (`-n`) for explicit fresh branches.
+  - Upgraded `AttachAction::Picker` with backwards-compatible `Option<SessionInitOptions>` to bind role-scoped picker carrier sessions.
+  - Supported `-r` as standard POSIX short flag for `--role` across `mutx` CLI, help docs, and shell completions.
+  - Applied strict self-exclusion in `mutx` event loop (`sessions.retain(!active)`), delivering instantaneous two-stroke MRU toggle (`[Open Sessions] + [Enter]`) with zero active-session clutter.
+
 ## [0.48.3] - 2026-09-15
 
 ### Added
@@ -7289,7 +7302,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.3...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.4...HEAD
+[0.48.4]: https://github.com/ming2k/muta/compare/v0.48.3...v0.48.4
 [0.48.3]: https://github.com/ming2k/muta/compare/v0.48.2...v0.48.3
 [0.48.2]: https://github.com/ming2k/muta/compare/v0.48.1...v0.48.2
 [0.48.1]: https://github.com/ming2k/muta/compare/v0.48.0...v0.48.1
