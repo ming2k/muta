@@ -5,14 +5,14 @@
 use super::*;
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 20;
+pub const CURRENT_DB_VERSION: u32 = 21;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 pub const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "a407b5acd04fdb5fc6a231bf94d483e39d0db6d8b1dbf1b6c577263ad03ca23c";
+    "7fff2a21d1e28d6fb3c999d6dd5e481958f7504894ed45ee927234fb2c7384a2";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -465,6 +465,12 @@ pub const MIGRATIONS: &[Migration] = &[
         // Role-Anchored Session Isolation Index (ADR-0250):
         // add covering index for workspace-free role session queries.
         version: 20,
+        sql: "",
+    },
+    Migration {
+        // Causal Nodes Composite Primary Key (session_id, id):
+        // allows forked branches and asides to inherit and persist ancestral nodes without conflict.
+        version: 21,
         sql: "",
     },
 ];
@@ -1111,6 +1117,58 @@ pub fn apply_role_anchored_session_partition_schema(tx: &rusqlite::Transaction) 
     Ok(())
 }
 
+/// Upgrades `causal_nodes` table primary key to composite `(session_id, id)`.
+pub fn apply_causal_nodes_composite_pk_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    if !table_exists(tx, "causal_nodes")? {
+        return Ok(());
+    }
+    tx.execute_batch(
+        r#"
+        DROP VIEW IF EXISTS session_list_view;
+
+        CREATE TABLE IF NOT EXISTS causal_nodes_v2 (
+            id                    TEXT NOT NULL,
+            session_id            TEXT NOT NULL REFERENCES sessions_v2(id) ON DELETE CASCADE,
+            parent_id             TEXT,
+            seq                   INTEGER NOT NULL,
+            kind                  TEXT NOT NULL CHECK (kind IN ('dialogue','compaction','termination','system_notice')),
+            payload_json          TEXT NOT NULL,
+            timestamp_ms          INTEGER NOT NULL,
+            PRIMARY KEY (session_id, id),
+            UNIQUE(session_id, seq)
+        );
+
+        INSERT OR IGNORE INTO causal_nodes_v2 (id, session_id, parent_id, seq, kind, payload_json, timestamp_ms)
+        SELECT id, session_id, parent_id, seq, kind, payload_json, timestamp_ms FROM causal_nodes;
+
+        DROP TABLE causal_nodes;
+        ALTER TABLE causal_nodes_v2 RENAME TO causal_nodes;
+
+        CREATE INDEX IF NOT EXISTS idx_causal_nodes_session_seq ON causal_nodes(session_id, seq ASC);
+        CREATE INDEX IF NOT EXISTS idx_causal_nodes_parent ON causal_nodes(session_id, parent_id);
+
+        CREATE VIEW IF NOT EXISTS session_list_view AS
+        SELECT
+            s.id,
+            s.parent_session_id AS parent_id,
+            'trunk' AS fork_kind,
+            NULL AS title,
+            s.created_at_s,
+            s.updated_at_s,
+            (SELECT json_extract(rules_json, '$.workspace_root') FROM session_policies p WHERE p.session_id = s.id) AS workspace_root,
+            (SELECT json_extract(rules_json, '$.system_persona') FROM session_policies p WHERE p.session_id = s.id) AS persona,
+            COALESCE((SELECT COUNT(*) FROM causal_nodes c WHERE c.session_id = s.id AND c.kind = 'dialogue'), 0) AS msg_count,
+            (SELECT json_extract(c.payload_json, '$.message.content')
+             FROM causal_nodes c
+             WHERE c.session_id = s.id AND json_extract(c.payload_json, '$.message.role') = 'user'
+             ORDER BY c.seq DESC LIMIT 1) AS last_user_prompt,
+            NULL AS digest
+        FROM sessions_v2 s;
+        "#,
+    )?;
+    Ok(())
+}
+
 pub fn insert_usage_record_tx(conn: &Connection, session_id: &str, record: &muta_contracts::RequestUsageRecord) -> Result<()> {
     if record.key.session_id != session_id {
         return Err(rusqlite::Error::InvalidParameterName("usage belongs to another session".into()));
@@ -1359,6 +1417,9 @@ pub fn apply_migrations(conn: &mut Connection, observed_version: u32) -> Result<
                 }
                 if migration.version == 20 {
                     apply_role_anchored_session_partition_schema(&tx)?;
+                }
+                if migration.version == 21 {
+                    apply_causal_nodes_composite_pk_schema(&tx)?;
                 }
             }
         }

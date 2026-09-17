@@ -97,15 +97,15 @@ pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
             let timestamp_ms = entry.created_at_ms;
 
             let (kind, payload) = match &entry.payload {
-                muta_contracts::EntryPayload::Message(_msg) => (
-                    NodeKind::Dialogue,
-                    NodePayload::Message {
-                        message: muta_contracts::Message::new(
+                muta_contracts::EntryPayload::Message(_) => {
+                    let message = entry.to_message().unwrap_or_else(|| {
+                        muta_contracts::Message::new(
                             entry.role.unwrap_or(muta_contracts::message::Role::User),
                             entry.content.clone().unwrap_or_default(),
-                        ),
-                    },
-                ),
+                        )
+                    });
+                    (NodeKind::Dialogue, NodePayload::Message { message })
+                }
                 muta_contracts::EntryPayload::State(_) => (
                     NodeKind::SystemNotice,
                     NodePayload::SystemNotice {
@@ -149,8 +149,24 @@ pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
         }
     });
 
+    let mut timelines = std::collections::HashMap::new();
+    timelines.insert(
+        "main".to_string(),
+        muta_contracts::TimelineCursor {
+            id: "main".to_string(),
+            name: "Mainline".to_string(),
+            kind: muta_contracts::TimelineKind::Main,
+            head_node: active_leaf.clone(),
+            forked_from_node: None,
+            created_at_s: data.created_at,
+            updated_at_s: data.updated_at,
+        },
+    );
+
     let state = SessionState {
         active_leaf,
+        active_timeline: "main".to_string(),
+        timelines,
         status,
         pending_notifications: Vec::new(),
         round_counter: data.round_counter,

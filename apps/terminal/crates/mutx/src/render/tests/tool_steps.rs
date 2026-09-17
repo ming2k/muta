@@ -640,6 +640,7 @@ fn subagent_view_omits_row2_entirely() {
         interruptible: true,
         parent_note: "",
         breadcrumbs: None,
+        back_key: None,
     };
     assert!(!hints.has_content());
     let terminal = render_full_view(80, 24, &[], Some(hints));

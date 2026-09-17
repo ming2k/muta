@@ -496,6 +496,11 @@ async fn fork_to_side_keeps_active_pointer() {
     assert_eq!(store.model_window().await.len(), 1);
     let side = store.open_side(&side_id).await.unwrap();
     assert_eq!(side.model_window().await.len(), 1);
+
+    let parent_ir = store.session_ir().await;
+    let side_ir = side.session_ir().await;
+    assert_eq!(side_ir.history.nodes.len(), parent_ir.history.nodes.len());
+    assert_eq!(side_ir.parent_session_id, Some(store.id().await));
 }
 
 // ---------------------------------------------------------------

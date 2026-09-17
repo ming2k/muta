@@ -281,6 +281,20 @@ impl SideSession {
 /// (ADR-0103 §6), or a placeholder for a not-yet-used aside. Async because
 /// the store read is a locked clone.
 pub async fn aside_title(side: &SideSession, max: usize) -> String {
+    let (title, has_title) = side.store.title().await;
+    if has_title {
+        if let Some(t) = title {
+            let t = t.trim();
+            if !t.is_empty() {
+                if t.chars().count() > max {
+                    let cut: String = t.chars().take(max.saturating_sub(1)).collect();
+                    return format!("{cut}…");
+                } else {
+                    return t.to_string();
+                }
+            }
+        }
+    }
     let window = side.store.model_window().await;
     let prompt = window
         .iter()

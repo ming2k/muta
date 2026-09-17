@@ -68,6 +68,8 @@ pub(crate) struct ViewHints<'a> {
     pub parent_note: &'a str,
     /// Optional view stack breadcrumbs.
     pub breadcrumbs: Option<&'a str>,
+    /// Dynamically resolved back key (ADR-0238 INV-1 / INV-3) from the key registry and overrides.
+    pub back_key: Option<crate::keymap::Key>,
 }
 
 impl ViewHints<'_> {
@@ -382,8 +384,9 @@ pub(crate) fn draw_view_header_hints(
 
     if let Some(crumbs) = hints.breadcrumbs {
         let left = Span::styled(format!("   {crumbs}"), Style::default().fg(theme.fg()));
+        let key = hints.back_key.unwrap_or(crate::keymap::Key::ESC);
         let affordance =
-            crate::components::keycap::KeyAffordance::from_key(crate::keymap::Key::ESC, "back");
+            crate::components::keycap::KeyAffordance::from_key(key, "back");
         let [key_span, label_span] = affordance.render_spans(theme, bg);
         let right_pad = Span::styled("   ", fill);
 
@@ -435,10 +438,10 @@ pub(crate) fn draw_view_header_hints(
             }
             pairs
         }
-        ViewKind::Settings => vec![crate::components::keycap::KeyAffordance::from_key(
-            crate::keymap::Key::ESC,
-            "back",
-        )],
+        ViewKind::Settings => {
+            let key = hints.back_key.unwrap_or(crate::keymap::Key::ESC);
+            vec![crate::components::keycap::KeyAffordance::from_key(key, "back")]
+        }
         // Unreachable — a crumb-less aside/subagent page is a caller bug,
         // asserted above. Rendering nothing keeps a malformed hint set from
         // painting a legend that no surface honours (ADR-0205: chrome never
@@ -634,6 +637,7 @@ mod tests {
             interruptible: true,
             parent_note: "main running",
             breadcrumbs: Some("Main › Aside"),
+            back_key: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -658,6 +662,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn aside_page_legend_respects_remapped_back_key() {
+        let theme = Theme::default();
+        let hints = ViewHints {
+            kind: ViewKind::Btw,
+            asides: None,
+            interruptible: true,
+            parent_note: "main running",
+            breadcrumbs: Some("Main › Aside"),
+            back_key: Some(crate::keymap::Key::CTRL_C),
+        };
+        let mut terminal = mutx_engine::TestTerminal::new(80, 1);
+        terminal.draw(|frame| {
+            draw_view_header_hints(frame, frame.area(), &hints, &theme);
+        });
+        let row: String = terminal
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(row.starts_with("   Main › Aside"), "crumb leads: {row}");
+        assert!(row.contains("Ctrl-c"), "remapped chord: {row}");
+        assert!(row.contains("back"), "back action: {row}");
+    }
+
     /// The crumb-less aside/subagent hint set is a caller bug, not a page with
     /// a legend to invent: it renders nothing (and trips the debug assertion in
     /// debug builds).
@@ -670,6 +700,7 @@ mod tests {
             interruptible: true,
             parent_note: "main running",
             breadcrumbs: None,
+            back_key: None,
         };
         assert!(!hints.has_content(), "no crumb, no row");
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
@@ -700,6 +731,7 @@ mod tests {
             interruptible: true,
             parent_note: "",
             breadcrumbs: None,
+            back_key: None,
         };
         assert!(!hints.has_content(), "no asides → no row at all");
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
@@ -727,6 +759,7 @@ mod tests {
             interruptible: false,
             parent_note: "",
             breadcrumbs: None,
+            back_key: None,
         };
         assert!(!mk(ViewKind::Session, false).has_content());
         assert!(mk(ViewKind::Session, true).has_content());
@@ -745,6 +778,7 @@ mod tests {
             interruptible: false,
             parent_note: "",
             breadcrumbs: Some("Main › Aside"),
+            back_key: None,
         };
         assert!(crumbs(ViewKind::Btw).has_content());
         assert!(crumbs(ViewKind::Subagent).has_content());
@@ -763,6 +797,7 @@ mod tests {
             interruptible: false,
             parent_note: "",
             breadcrumbs: None,
+            back_key: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -788,6 +823,7 @@ mod tests {
             interruptible: false,
             parent_note: "",
             breadcrumbs: Some("Main › Subagent[explore]"),
+            back_key: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {

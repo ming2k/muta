@@ -26,5 +26,5 @@ pub use delta::{SessionDelta, StateUpdate};
 pub use types::{
     BudgetPolicy, CapabilityPolicy, CausalGraph, CausalNode, ExecutionStatus, GuardrailPolicy,
     NodeId, NodeKind, NodePayload, RuleSet, SessionIR, SessionPolicy, SessionState,
-    SuspensionReason, SystemNoticePayload, TerminationReason,
+    SuspensionReason, SystemNoticePayload, TerminationReason, TimelineCursor, TimelineKind,
 };

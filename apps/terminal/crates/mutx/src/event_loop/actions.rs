@@ -1159,10 +1159,15 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             }
         }
         input::InputAction::OpenSelectedSession => {
-            if let Some(session) = app.sessions_overview.get(
+            let rows = crate::overlays::session::project_session_rows(
+                &app.sessions_overview,
+                Some(&app.sessions_expanded),
+            );
+            if let Some(item) = rows.get(
                 app.modal_index
-                    .min(app.sessions_overview.len().saturating_sub(1)),
+                    .min(rows.len().saturating_sub(1)),
             ) {
+                let session = item.session();
                 let id = session.id.clone();
                 let short_id = crate::session::short_session_id(&id);
                 app.dismiss_active_dialog();
@@ -1277,15 +1282,21 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             host::dispatch_console_command(app, runtime, &text, create_new).await;
         }
         input::InputAction::DeleteSelectedSession => {
-            let idx = app
-                .modal_index
-                .min(app.sessions_overview.len().saturating_sub(1));
-            if idx < app.sessions_overview.len() {
-                let deleted = app.sessions_overview.remove(idx);
-                app.modal_index = app
-                    .modal_index
-                    .min(app.sessions_overview.len().saturating_sub(1));
-                app.send_intent(AgentRequest::DeleteSession { id: deleted.id });
+            let rows = crate::overlays::session::project_session_rows(
+                &app.sessions_overview,
+                Some(&app.sessions_expanded),
+            );
+            let idx = app.modal_index.min(rows.len().saturating_sub(1));
+            if let Some(item) = rows.get(idx) {
+                let id = item.session().id.clone();
+                app.sessions_overview.retain(|s| s.id != id);
+                app.sessions_expanded.remove(&id);
+                let new_rows = crate::overlays::session::project_session_rows(
+                    &app.sessions_overview,
+                    Some(&app.sessions_expanded),
+                );
+                app.modal_index = app.modal_index.min(new_rows.len().saturating_sub(1));
+                app.send_intent(AgentRequest::DeleteSession { id });
             }
         }
         input::InputAction::CreateNewSession => {
@@ -1299,16 +1310,45 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // timestamps) on demand — the picker rows only carry a
             // truncated preview. While the round-trip is in flight the
             // body shows a loading state.
-            if let Some(session) = app.sessions_overview.get(
+            let rows = crate::overlays::session::project_session_rows(
+                &app.sessions_overview,
+                Some(&app.sessions_expanded),
+            );
+            if let Some(item) = rows.get(
                 app.modal_index
-                    .min(app.sessions_overview.len().saturating_sub(1)),
+                    .min(rows.len().saturating_sub(1)),
             ) {
+                let session = item.session();
                 app.session_info_detail = true;
                 app.session_detail = None;
                 app.session_info_scroll = 0;
                 app.send_intent(AgentRequest::QuerySessionDetail {
                     id: session.id.clone(),
                 });
+            }
+        }
+        input::InputAction::ToggleSessionTimelineExpand => {
+            let rows = crate::overlays::session::project_session_rows(
+                &app.sessions_overview,
+                Some(&app.sessions_expanded),
+            );
+            let idx = app.modal_index.min(rows.len().saturating_sub(1));
+            if let Some(item) = rows.get(idx) {
+                match item {
+                    crate::overlays::session::SessionPickerItem::Trunk {
+                        session,
+                        child_count,
+                        ..
+                    } if *child_count > 0 => {
+                        let id = session.id.clone();
+                        if app.sessions_expanded.contains(&id) {
+                            app.sessions_expanded.remove(&id);
+                        } else {
+                            app.sessions_expanded.insert(id);
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
         input::InputAction::OpenConnectionDetail => {

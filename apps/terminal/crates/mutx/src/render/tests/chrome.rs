@@ -255,6 +255,7 @@ fn redesigned_components_render_without_panicking() {
             f,
             crate::overlays::session::SessionsModalProps {
                 sessions: &sessions_list,
+                expanded_sessions: None,
                 selected: 0,
                 scroll: &mut scroll,
                 follow: false,
@@ -864,6 +865,7 @@ fn main_view_without_asides_renders_a_single_row_head_band() {
             interruptible: true,
             parent_note: "",
             breadcrumbs: None,
+            back_key: None,
         }),
     );
     assert!(grid_row(&terminal, 0).contains("SESSION"));
@@ -892,6 +894,7 @@ fn main_view_with_asides_shows_the_legend_row() {
             interruptible: true,
             parent_note: "",
             breadcrumbs: None,
+            back_key: None,
         }),
     );
     let row1 = grid_row(&terminal, 1);

@@ -325,6 +325,9 @@ pub(crate) fn resolve_modal_key(
                     OverlaySurface::Sheet(SheetKind::OAuthPending) => {
                         InputAction::CycleOauthSelection
                     }
+                    OverlaySurface::Dialog(DialogKind::Sessions) => {
+                        InputAction::ToggleSessionTimelineExpand
+                    }
                     _ => return None,
                 }
             } else if scene == SceneKind::Dashboard {

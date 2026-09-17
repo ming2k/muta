@@ -47,6 +47,7 @@ fn absolute_time(ts: u64) -> String {
 /// Properties for rendering the Sessions modal.
 pub struct SessionsModalProps<'a> {
     pub sessions: &'a [muta_contracts::SessionOverview],
+    pub expanded_sessions: Option<&'a std::collections::HashSet<String>>,
     pub selected: usize,
     pub scroll: &'a mut usize,
     pub follow: bool,
@@ -56,6 +57,85 @@ pub struct SessionsModalProps<'a> {
     pub session_detail: Option<&'a muta_contracts::SessionDetail>,
     pub session_info_scroll: &'a mut usize,
     pub sessions_loading: bool,
+}
+
+/// A projected row item in the sessions picker modal (ADR-0251).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionPickerItem<'a> {
+    Trunk {
+        session: &'a muta_contracts::SessionOverview,
+        child_count: usize,
+        expanded: bool,
+    },
+    Branch {
+        session: &'a muta_contracts::SessionOverview,
+        is_last: bool,
+    },
+}
+
+impl<'a> SessionPickerItem<'a> {
+    pub fn session(&self) -> &'a muta_contracts::SessionOverview {
+        match self {
+            Self::Trunk { session, .. } => session,
+            Self::Branch { session, .. } => session,
+        }
+    }
+}
+
+/// Project session overviews into a hierarchical trunk-first list with expandable timeline branches (ADR-0251).
+pub fn project_session_rows<'a>(
+    sessions: &'a [muta_contracts::SessionOverview],
+    expanded_set: Option<&std::collections::HashSet<String>>,
+) -> Vec<SessionPickerItem<'a>> {
+    use muta_contracts::SessionForkKind;
+
+    let mut trunks: Vec<&'a muta_contracts::SessionOverview> = Vec::new();
+    let mut children_by_parent: std::collections::HashMap<&str, Vec<&'a muta_contracts::SessionOverview>> =
+        std::collections::HashMap::new();
+
+    let all_ids: std::collections::HashSet<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+
+    for s in sessions {
+        let is_branch = s.fork_kind == SessionForkKind::Aside
+            || (s.parent_id.is_some() && s.fork_kind != SessionForkKind::Trunk);
+        if is_branch {
+            if let Some(ref pid) = s.parent_id {
+                if all_ids.contains(pid.as_str()) {
+                    children_by_parent.entry(pid.as_str()).or_default().push(s);
+                    continue;
+                }
+            }
+        }
+        trunks.push(s);
+    }
+
+    let mut rows = Vec::new();
+    for trunk in trunks {
+        let children = children_by_parent.get(trunk.id.as_str());
+        let child_count = children.as_ref().map(|c| c.len()).unwrap_or(0);
+        let is_expanded = child_count > 0
+            && expanded_set.map(|set| set.contains(&trunk.id)).unwrap_or(false);
+
+        rows.push(SessionPickerItem::Trunk {
+            session: trunk,
+            child_count,
+            expanded: is_expanded,
+        });
+
+        if is_expanded {
+            if let Some(child_list) = children {
+                for (idx, child) in child_list.iter().enumerate() {
+                    let is_last = idx + 1 == child_list.len();
+                    rows.push(SessionPickerItem::Branch {
+                        session: child,
+                        is_last,
+                    });
+                }
+            }
+        }
+    }
+
+    rows
 }
 
 /// Draw the Sessions picker modal.
@@ -68,6 +148,7 @@ pub fn draw_sessions_modal(
 ) -> mutx_engine::Rect {
     let SessionsModalProps {
         sessions,
+        expanded_sessions,
         selected,
         scroll,
         follow,
@@ -84,9 +165,10 @@ pub fn draw_sessions_modal(
     // Destructive delete: custom band 70 so it outlives plain secondaries
     // (it is a one-key destructive action the user must be able to find).
     let close_label = if startup_picker { "quit" } else { "close" };
-    let list_footer_hints: [FooterHint; 3] = [
+    let list_footer_hints: [FooterHint; 4] = [
         FooterHint::navigation(keyvocab::ARROWS_UD, "navigate"),
         FooterHint::key_primary(crate::keymap::Key::ENTER, "open"),
+        FooterHint::secondary("Tab", "expand"),
         FooterHint::key_always(crate::keymap::Key::ESC, close_label),
     ];
     let list_extra: [FooterHintWithBand; 3] = [
@@ -148,7 +230,9 @@ pub fn draw_sessions_modal(
 
     let body_width = f.body.width as usize;
 
-    if sessions.is_empty() {
+    let projected = project_session_rows(sessions, expanded_sessions);
+
+    if projected.is_empty() {
         let body = if sessions_loading {
             let spin = theme.glyphs.spinner_frame(spinner_phase);
             vec![
@@ -171,58 +255,93 @@ pub fn draw_sessions_modal(
         return area;
     }
 
-    // Windowed render: only build the rows that will actually be painted. With
-    // hundreds of sessions the old code built a `Line` (several allocations +
-    // a `SystemTime::now()` syscall each) for *every* row on every drawn frame,
-    // even though only `body.height` (~20–40) rows are visible. Resolving the
-    // scroll up front (against the true total length) lets us slice the visible
-    // window and build just those rows, while the scrollbar still reflects the
-    // full list via the resolved `max_scroll`.
+    // Windowed render: only build the rows that will actually be painted.
     let visible = f.body.height as usize;
     let follow_idx = if follow { Some(selected) } else { None };
     let (start, max_scroll) = resolve_scroll(
         scroll,
         visible,
-        sessions.len(),
+        projected.len(),
         follow_idx,
         SCROLL_EDGE_MARGIN,
     );
-    // Hoist the wall-clock read out of the per-row loop: it is identical for
-    // every row in a frame, so one `SystemTime::now()` replaces one-per-row
-    // (≈600 syscalls/frame on a large project).
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    let end = (start + visible).min(sessions.len());
+    let end = (start + visible).min(projected.len());
     let mut body: Vec<Line> = Vec::with_capacity(end - start);
     for i in start..end {
-        let Some(session) = sessions.get(i) else {
+        let Some(item) = projected.get(i) else {
             break;
         };
+        let session = item.session();
         let is_selected = i == selected;
         let s: ChoiceStyle = choice_style(ChoiceTone::Filled, is_selected, theme);
-        // Show only the last-active time in the row meta (creation time is in
-        // the info sub-view). Compact relative form keeps the column narrow.
         let meta = relative_time_at(session.updated_at, now);
         let meta_w = meta.width();
-        // Guarantee a fixed gutter between the two columns by giving the
-        // overview a width budget of `body_width - meta_w - gutter`, then
-        // truncating it with an ellipsis when it overflows. That way a long
-        // overview never crowds the meta column, and the gutter is constant
-        // row-to-row instead of whatever slack is left over.
         const COL_GUTTER: usize = 2;
-        let col1_budget = body_width.saturating_sub(meta_w + COL_GUTTER);
-        let overview = truncate_ellipsis(&one_line(&session.overview), col1_budget);
-        let left_w = overview.width();
-        let pad = body_width.saturating_sub(left_w + meta_w);
-        let spans = vec![
-            Span::styled(overview, Style::default().bg(s.bg).fg(s.fg)),
-            Span::styled(" ".repeat(pad), Style::default().bg(s.bg)),
-            Span::styled(meta, Style::default().bg(s.bg).fg(s.dim)),
-        ];
-        body.push(Line::from(spans));
+
+        match item {
+            SessionPickerItem::Trunk {
+                child_count,
+                expanded,
+                ..
+            } => {
+                let badge = if *child_count > 0 {
+                    if *expanded {
+                        format!(" [▼ ⑂ {}]", child_count)
+                    } else {
+                        format!(" [⑂ {}]", child_count)
+                    }
+                } else {
+                    String::new()
+                };
+                let badge_w = badge.width();
+                let col1_budget = body_width.saturating_sub(meta_w + badge_w + COL_GUTTER);
+                let overview = truncate_ellipsis(&one_line(&session.overview), col1_budget);
+                let left_w = overview.width() + badge_w;
+                let pad = body_width.saturating_sub(left_w + meta_w);
+                let badge_style = if is_selected {
+                    Style::default().bg(s.bg).fg(theme.primary)
+                } else {
+                    Style::default().bg(s.bg).fg(theme.brand())
+                };
+                let spans = vec![
+                    Span::styled(overview, Style::default().bg(s.bg).fg(s.fg)),
+                    Span::styled(badge, badge_style),
+                    Span::styled(" ".repeat(pad), Style::default().bg(s.bg)),
+                    Span::styled(meta, Style::default().bg(s.bg).fg(s.dim)),
+                ];
+                body.push(Line::from(spans));
+            }
+            SessionPickerItem::Branch { is_last, .. } => {
+                let prefix = if *is_last { "  └─ ⑂ " } else { "  ├─ ⑂ " };
+                let prefix_w = prefix.width();
+                let col1_budget = body_width.saturating_sub(meta_w + prefix_w + COL_GUTTER);
+                let overview = truncate_ellipsis(&one_line(&session.overview), col1_budget);
+                let left_w = prefix_w + overview.width();
+                let pad = body_width.saturating_sub(left_w + meta_w);
+                let branch_prefix_style = if is_selected {
+                    Style::default().bg(s.bg).fg(theme.primary)
+                } else {
+                    Style::default().bg(s.bg).fg(theme.dim())
+                };
+                let branch_text_style = if is_selected {
+                    Style::default().bg(s.bg).fg(s.fg)
+                } else {
+                    Style::default().bg(s.bg).fg(theme.muted())
+                };
+                let spans = vec![
+                    Span::styled(prefix, branch_prefix_style),
+                    Span::styled(overview, branch_text_style),
+                    Span::styled(" ".repeat(pad), Style::default().bg(s.bg)),
+                    Span::styled(meta, Style::default().bg(s.bg).fg(s.dim)),
+                ];
+                body.push(Line::from(spans));
+            }
+        }
     }
 
     // The window is already the visible slice, so render it at scroll 0 and
@@ -336,6 +455,7 @@ mod tests {
                 frame,
                 SessionsModalProps {
                     sessions: &[],
+                    expanded_sessions: None,
                     selected: 0,
                     scroll: &mut scroll,
                     follow: false,
@@ -383,6 +503,7 @@ mod tests {
                 frame,
                 SessionsModalProps {
                     sessions: &[],
+                    expanded_sessions: None,
                     selected: 0,
                     scroll: &mut scroll,
                     follow: false,
@@ -408,5 +529,191 @@ mod tests {
             .join("\n");
         assert!(output.contains("No other sessions found."));
         assert!(!output.contains("Loading sessions…"));
+    }
+
+    #[test]
+    fn project_session_rows_groups_by_trunk_and_asides() {
+        use muta_contracts::{SessionForkKind, SessionOverview};
+        let s1 = SessionOverview {
+            id: "s1".into(),
+            overview: "Trunk 1".into(),
+            created_at: 100,
+            updated_at: 100,
+            message_count: 5,
+            active: false,
+            parent_id: None,
+            fork_kind: SessionForkKind::Trunk,
+            digest: None,
+        };
+        let s2 = SessionOverview {
+            id: "s2".into(),
+            overview: "Aside 1".into(),
+            created_at: 110,
+            updated_at: 110,
+            message_count: 2,
+            active: false,
+            parent_id: Some("s1".into()),
+            fork_kind: SessionForkKind::Aside,
+            digest: None,
+        };
+        let s3 = SessionOverview {
+            id: "s3".into(),
+            overview: "Trunk 2".into(),
+            created_at: 120,
+            updated_at: 120,
+            message_count: 10,
+            active: false,
+            parent_id: None,
+            fork_kind: SessionForkKind::Trunk,
+            digest: None,
+        };
+        let sessions = vec![s1, s2, s3];
+
+        // 1. Collapsed state
+        let collapsed = project_session_rows(&sessions, None);
+        assert_eq!(collapsed.len(), 2, "only 2 trunk rows when collapsed");
+        match &collapsed[0] {
+            SessionPickerItem::Trunk {
+                session,
+                child_count,
+                expanded,
+            } => {
+                assert_eq!(session.id, "s1");
+                assert_eq!(*child_count, 1);
+                assert!(!*expanded);
+            }
+            _ => panic!("expected trunk"),
+        }
+
+        // 2. Expanded state
+        let mut expanded_set = std::collections::HashSet::new();
+        expanded_set.insert("s1".to_string());
+        let expanded = project_session_rows(&sessions, Some(&expanded_set));
+        assert_eq!(expanded.len(), 3, "2 trunks + 1 expanded branch");
+        match &expanded[0] {
+            SessionPickerItem::Trunk {
+                session,
+                child_count,
+                expanded,
+            } => {
+                assert_eq!(session.id, "s1");
+                assert_eq!(*child_count, 1);
+                assert!(*expanded);
+            }
+            _ => panic!("expected trunk"),
+        }
+        match &expanded[1] {
+            SessionPickerItem::Branch { session, is_last } => {
+                assert_eq!(session.id, "s2");
+                assert!(*is_last);
+            }
+            _ => panic!("expected branch"),
+        }
+    }
+
+    #[test]
+    fn sessions_modal_renders_trunk_badges_and_expanded_branches() {
+        use muta_contracts::{SessionForkKind, SessionOverview};
+        let theme = Theme::default();
+        let selection = crate::model::selection::SelectionState::None;
+        let mut layout_map = crate::model::layout::LayoutMap::default();
+        let mut scroll = 0;
+        let mut info_scroll = 0;
+
+        let s1 = SessionOverview {
+            id: "s1".into(),
+            overview: "Auth Refactor".into(),
+            created_at: 100,
+            updated_at: 100,
+            message_count: 5,
+            active: false,
+            parent_id: None,
+            fork_kind: SessionForkKind::Trunk,
+            digest: None,
+        };
+        let s2 = SessionOverview {
+            id: "s2".into(),
+            overview: "Regex Aside".into(),
+            created_at: 110,
+            updated_at: 110,
+            message_count: 2,
+            active: false,
+            parent_id: Some("s1".into()),
+            fork_kind: SessionForkKind::Aside,
+            digest: None,
+        };
+        let sessions = vec![s1, s2];
+
+        // 1. Collapsed test
+        let mut term = TestTerminal::new(80, 24);
+        term.draw(|frame| {
+            draw_sessions_modal(
+                frame,
+                SessionsModalProps {
+                    sessions: &sessions,
+                    expanded_sessions: None,
+                    selected: 0,
+                    scroll: &mut scroll,
+                    follow: false,
+                    startup_picker: false,
+                    spinner_phase: 0,
+                    session_info_detail: false,
+                    session_detail: None,
+                    session_info_scroll: &mut info_scroll,
+                    sessions_loading: false,
+                },
+                &theme,
+                &selection,
+                &mut layout_map,
+            );
+        });
+
+        let output_collapsed: String = term
+            .buffer()
+            .rows()
+            .iter()
+            .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(output_collapsed.contains("Auth Refactor"));
+        assert!(output_collapsed.contains("[⑂ 1]"));
+        assert!(!output_collapsed.contains("Regex Aside"));
+
+        // 2. Expanded test
+        let mut expanded_set = std::collections::HashSet::new();
+        expanded_set.insert("s1".to_string());
+        let mut term_exp = TestTerminal::new(80, 24);
+        term_exp.draw(|frame| {
+            draw_sessions_modal(
+                frame,
+                SessionsModalProps {
+                    sessions: &sessions,
+                    expanded_sessions: Some(&expanded_set),
+                    selected: 0,
+                    scroll: &mut scroll,
+                    follow: false,
+                    startup_picker: false,
+                    spinner_phase: 0,
+                    session_info_detail: false,
+                    session_detail: None,
+                    session_info_scroll: &mut info_scroll,
+                    sessions_loading: false,
+                },
+                &theme,
+                &selection,
+                &mut layout_map,
+            );
+        });
+
+        let output_expanded: String = term_exp
+            .buffer()
+            .rows()
+            .iter()
+            .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(output_expanded.contains("Auth Refactor"));
+        assert!(output_expanded.contains("[▼ ⑂ 1]"));
+        assert!(output_expanded.contains("└─ ⑂ Regex Aside"));
     }
 }

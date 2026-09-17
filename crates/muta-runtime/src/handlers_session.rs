@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::{RwLock as AsyncRwLock, mpsc};
 
 use crate::session_view::{build_session_context, build_sessions_overview};
-use crate::side::{SideRegistry, SideSession};
+use crate::side::SideRegistry;
 
 /// `AgentRequest::DeleteSession` — delete by id (or short-id prefix) and push
 /// a fresh sessions-overview snapshot, or surface the storage error.
@@ -291,23 +291,8 @@ pub async fn detach_side_view(
     side: &Arc<AsyncRwLock<SideRegistry>>,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
 ) {
-    let detached_id = side.write().await.detach();
-    if let Some(id) = detached_id.as_deref() {
-        let pristine = side
-            .read()
-            .await
-            .get(id)
-            .is_some_and(SideSession::is_pristine);
-        if pristine {
-            // Discard: cancel nothing (there is no round by definition),
-            // drop the registry entry, delete the forked files.
-            if let Some(s) = side.write().await.remove(id) {
-                s.agent.reject_pending_permissions();
-                let _ = s.store.delete(&s.id).await;
-            }
-            crate::side::publish_btw_list(side, resp_tx).await;
-        }
-    }
+    let _detached_id = side.write().await.detach();
+    crate::side::publish_btw_list(side, resp_tx).await;
     let _ = resp_tx.send(AgentResponse::SideViewClosed);
 }
 

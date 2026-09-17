@@ -741,6 +741,16 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             // the aside view — `SideViewOpened` carries the aside's full
             // transcript (inherited parent context included, ADR-0103 §6)
             // and lands before the first aside round starts streaming.
+            let side_for_titler = Arc::clone(side);
+            let resp_tx_for_titler = (*resp_tx).clone();
+            side_session.agent.set_title_established(std::sync::Arc::new(move |_title| {
+                let side_registry = Arc::clone(&side_for_titler);
+                let resp_tx = resp_tx_for_titler.clone();
+                Box::pin(async move {
+                    publish_btw_list(&side_registry, &resp_tx).await;
+                }) as futures::future::BoxFuture<'static, ()>
+            }));
+
             side.write().await.open(side_session);
             crate::handlers_session::emit_side_view_opened(side, session, resp_tx, &side_id).await;
             publish_btw_list(side, resp_tx).await;

@@ -507,7 +507,11 @@ pub(crate) fn handle_modal_up(app: &mut App, viewed_session_id: &str) {
                 app.history_modal_follow = true;
             }
             DialogKind::Sessions => {
-                let count = app.sessions_overview.len();
+                let count = crate::overlays::session::project_session_rows(
+                    &app.sessions_overview,
+                    Some(&app.sessions_expanded),
+                )
+                .len();
                 app.modal_index = if count == 0 {
                     0
                 } else if app.modal_index == 0 {
@@ -673,7 +677,12 @@ pub(crate) fn handle_modal_down(app: &mut App, viewed_session_id: &str) {
                 app.history_modal_follow = true;
             }
             DialogKind::Sessions => {
-                let count = app.sessions_overview.len().max(1);
+                let count = crate::overlays::session::project_session_rows(
+                    &app.sessions_overview,
+                    Some(&app.sessions_expanded),
+                )
+                .len()
+                .max(1);
                 app.modal_index = (app.modal_index + 1) % count;
                 app.session_modal_follow = true;
             }

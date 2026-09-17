@@ -216,6 +216,8 @@ pub enum InputAction {
     SessionActivate,
     /// Open the currently-selected session in the sessions picker.
     OpenSelectedSession,
+    /// Toggle expand/fold of child timeline branches (asides/forks) in the sessions picker (ADR-0251).
+    ToggleSessionTimelineExpand,
     /// `/host` panel Enter: switch the TUI to drive the selected daemon
     /// session (ADR-0096). Handled by exiting to re-attach.
     HostSwitchSelected,

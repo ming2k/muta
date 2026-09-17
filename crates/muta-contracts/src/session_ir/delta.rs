@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 pub struct SessionDelta {
     /// Identifier of the target session.
     pub session_id: String,
+    /// Parent session identifier if this session was forked or spawned as a subagent.
+    #[serde(default)]
+    pub parent_session_id: Option<String>,
     /// Watermark sequence number before this delta.
     pub previous_watermark_seq: u64,
     /// Highest sequence number contained in this delta.
@@ -55,6 +58,7 @@ impl SessionIR {
 
         SessionDelta {
             session_id: self.session_id.clone(),
+            parent_session_id: self.parent_session_id.clone(),
             previous_watermark_seq: watermark_seq,
             new_watermark_seq: new_watermark,
             new_nodes,
@@ -64,7 +68,7 @@ impl SessionIR {
                 round_counter: self.state.round_counter,
                 pending_notifications: self.state.pending_notifications.clone(),
             },
-            policy_update: None,
+            policy_update: (watermark_seq == 0).then(|| self.policy.clone()),
             updated_at_s: self.updated_at_s,
         }
     }
@@ -79,7 +83,11 @@ impl SessionIR {
             self.history.insert_node(node);
         }
 
-        self.state.active_leaf = delta.state_update.active_leaf;
+        self.state.active_leaf = delta.state_update.active_leaf.clone();
+        if let Some(timeline) = self.state.timelines.get_mut(&self.state.active_timeline) {
+            timeline.head_node = delta.state_update.active_leaf;
+            timeline.updated_at_s = delta.updated_at_s;
+        }
         self.state.status = delta.state_update.status;
         self.state.round_counter = delta.state_update.round_counter;
         self.state.pending_notifications = delta.state_update.pending_notifications;

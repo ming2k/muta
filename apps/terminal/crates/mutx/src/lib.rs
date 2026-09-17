@@ -2043,6 +2043,7 @@ pub async fn run_tui(
         question_scroll: 0,
         question_modal_follow: true,
         sessions_overview: Vec::new(),
+        sessions_expanded: std::collections::HashSet::new(),
         sessions_loading: false,
         switching_session: None,
         host_sessions: Vec::new(),

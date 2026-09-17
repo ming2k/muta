@@ -174,7 +174,7 @@ pub use session_ir::{
     CausalNode, CompilationArtifact, CompilationStats, CompilerError, CompilerOptions,
     ExecutionStatus, GuardrailPolicy, NodeId, NodeKind, NodePayload, RuleSet, SessionDelta,
     SessionIR, SessionPolicy, SessionState, StateUpdate, SuspensionReason, SystemNoticePayload,
-    TerminationReason,
+    TerminationReason, TimelineCursor, TimelineKind,
 };
 
 pub mod session_tree;

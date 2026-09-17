@@ -76,13 +76,17 @@ fn compose_frame(
         );
 
         let spinner_phase = (app.spinner_epoch.elapsed().as_millis() / 100) as usize;
+        let projected_count = crate::overlays::session::project_session_rows(
+            &app.sessions_overview,
+            Some(&app.sessions_expanded),
+        )
+        .len();
         let drawn_modal_rect = render::draw_sessions_modal(
             f,
             crate::overlays::session::SessionsModalProps {
                 sessions: &app.sessions_overview,
-                selected: app
-                    .modal_index
-                    .min(app.sessions_overview.len().saturating_sub(1)),
+                expanded_sessions: Some(&app.sessions_expanded),
+                selected: app.modal_index.min(projected_count.saturating_sub(1)),
                 scroll: &mut app.session_scroll,
                 follow: app.session_modal_follow,
                 startup_picker: app.startup_overlay == crate::StartupOverlay::SessionsPicker,
@@ -291,6 +295,9 @@ fn compose_frame(
         interruptible: viewed_running,
         parent_note: "",
         breadcrumbs: breadcrumbs_string.as_deref(),
+        back_key: app
+            .key_overrides
+            .effective_binding(crate::keymap::CommandId::CancelOrBack),
     };
 
     // Empty-state guidance policy (ADR-0057/0104): the app shell picks the
@@ -979,27 +986,35 @@ fn compose_frame(
                         &app.theme,
                     )
                 }
-                DialogKind::Sessions => Some(render::draw_sessions_modal(
-                    f,
-                    crate::overlays::session::SessionsModalProps {
-                        sessions: &app.sessions_overview,
-                        selected: app
-                            .modal_index
-                            .min(app.sessions_overview.len().saturating_sub(1)),
-                        scroll: &mut app.session_scroll,
-                        follow: app.session_modal_follow,
-                        startup_picker: app.startup_overlay
-                            == crate::StartupOverlay::SessionsPicker,
-                        spinner_phase,
-                        session_info_detail: app.session_info_detail,
-                        session_detail: app.session_detail.as_ref(),
-                        session_info_scroll: &mut app.session_info_scroll,
-                        sessions_loading: app.sessions_loading,
-                    },
-                    &app.theme,
-                    &app.selection,
-                    &mut layout_map,
-                )),
+                DialogKind::Sessions => {
+                    let projected_count = crate::overlays::session::project_session_rows(
+                        &app.sessions_overview,
+                        Some(&app.sessions_expanded),
+                    )
+                    .len();
+                    Some(render::draw_sessions_modal(
+                        f,
+                        crate::overlays::session::SessionsModalProps {
+                            sessions: &app.sessions_overview,
+                            expanded_sessions: Some(&app.sessions_expanded),
+                            selected: app
+                                .modal_index
+                                .min(projected_count.saturating_sub(1)),
+                            scroll: &mut app.session_scroll,
+                            follow: app.session_modal_follow,
+                            startup_picker: app.startup_overlay
+                                == crate::StartupOverlay::SessionsPicker,
+                            spinner_phase,
+                            session_info_detail: app.session_info_detail,
+                            session_detail: app.session_detail.as_ref(),
+                            session_info_scroll: &mut app.session_info_scroll,
+                            sessions_loading: app.sessions_loading,
+                        },
+                        &app.theme,
+                        &app.selection,
+                        &mut layout_map,
+                    ))
+                }
                 DialogKind::Telemetry => {
                     let report = app.token_source_report(viewed_session_id);
                     let loading = app.token_ledger.is_none() && report.is_none();

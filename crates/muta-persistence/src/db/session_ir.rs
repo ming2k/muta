@@ -41,13 +41,14 @@ pub fn initialize_session_ir_schema(conn: &Connection) -> Result<()> {
 
         -- 3. Immutable causal graph nodes replacing legacy entries, entry_memberships, and JSON trees
         CREATE TABLE IF NOT EXISTS causal_nodes (
-            id                    TEXT PRIMARY KEY,
+            id                    TEXT NOT NULL,
             session_id            TEXT NOT NULL REFERENCES sessions_v2(id) ON DELETE CASCADE,
-            parent_id             TEXT REFERENCES causal_nodes(id),
+            parent_id             TEXT,
             seq                   INTEGER NOT NULL,
             kind                  TEXT NOT NULL CHECK (kind IN ('dialogue','compaction','termination','system_notice')),
             payload_json          TEXT NOT NULL,
             timestamp_ms          INTEGER NOT NULL,
+            PRIMARY KEY (session_id, id),
             UNIQUE(session_id, seq)
         );
 
@@ -78,10 +79,11 @@ pub fn save_session_delta(conn: &Connection, delta: &SessionDelta) -> Result<()>
         conn.execute(
             r#"
             INSERT INTO sessions_v2 (
-                id, active_leaf, status, suspension_payload,
+                id, parent_session_id, active_leaf, status, suspension_payload,
                 pending_notifications, round_counter, created_at_s, updated_at_s
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
             ON CONFLICT(id) DO UPDATE SET
+                parent_session_id = COALESCE(excluded.parent_session_id, sessions_v2.parent_session_id),
                 active_leaf = excluded.active_leaf,
                 status = excluded.status,
                 suspension_payload = excluded.suspension_payload,
@@ -91,6 +93,7 @@ pub fn save_session_delta(conn: &Connection, delta: &SessionDelta) -> Result<()>
             "#,
             params![
                 delta.session_id,
+                delta.parent_session_id.as_deref(),
                 delta.state_update.active_leaf,
                 status_str,
                 suspension_str,
@@ -244,8 +247,24 @@ pub fn load_session_ir(conn: &Connection, session_id: &str) -> Result<Option<Ses
     let pending_notifications: Vec<SystemNoticePayload> =
         serde_json::from_str(&notifications_str).unwrap_or_default();
 
+    let mut timelines = std::collections::HashMap::new();
+    timelines.insert(
+        "main".to_string(),
+        muta_contracts::TimelineCursor {
+            id: "main".to_string(),
+            name: "Mainline".to_string(),
+            kind: muta_contracts::TimelineKind::Main,
+            head_node: active_leaf.clone(),
+            forked_from_node: None,
+            created_at_s,
+            updated_at_s,
+        },
+    );
+
     let state = SessionState {
         active_leaf,
+        active_timeline: "main".to_string(),
+        timelines,
         status,
         pending_notifications,
         round_counter,

@@ -755,6 +755,8 @@ pub struct App {
     pub question_modal_follow: bool,
     /// Rows shown in the sessions picker (`/sessions` or `mutx attach`).
     pub sessions_overview: Vec<SessionOverview>,
+    /// Set of expanded trunk session IDs in the sessions picker (ADR-0251).
+    pub sessions_expanded: std::collections::HashSet<String>,
     /// Whether the sessions modal is currently querying the sessions list.
     pub sessions_loading: bool,
     /// When switching sessions, holds the short id of the target session being loaded.

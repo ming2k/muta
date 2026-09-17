@@ -224,6 +224,7 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: SettingsProps<'_>) -> Co
         interruptible: false,
         parent_note: "",
         breadcrumbs: props.breadcrumbs,
+        back_key: None,
     };
     draw_view_header_hints(frame, subhead_rect, &view_hints, props.theme);
 

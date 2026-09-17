@@ -1082,44 +1082,75 @@ fn spawn_mcp_config_watcher(
             }
         }
 
-        // 2. Watch workspace .muta directory if present
+        // 2. Watch workspace directory and .muta directory
         if let Some(ref root) = workspace_root {
             let workspace_muta_dir = root.join(".muta");
             if workspace_muta_dir.exists() {
                 let _ = watcher.watch(&workspace_muta_dir, false);
+            } else if root.exists() {
+                // If .muta does not exist yet, watch the workspace root non-recursively
+                // so that creating .muta during the session dynamically attaches the watcher.
+                let _ = watcher.watch(root, false);
             }
         }
 
         let mut events_rx = watcher.subscribe();
 
         while let Ok(event) = events_rx.recv().await {
-            let mut affects_mcp = false;
-            let mut is_workspace_mcp = false;
-
-            for path in &event.paths {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name == "config.toml" || name == "mcp.json" {
-                        affects_mcp = true;
-                        if let Some(ref root) = workspace_root {
-                            if path.starts_with(root) {
-                                is_workspace_mcp = true;
-                            }
-                        }
-                    }
+            // Dynamic watch attachment: if .muta was just created, start watching it.
+            if let Some(ref root) = workspace_root {
+                let ws_muta = root.join(".muta");
+                if event.paths.iter().any(|p| p == &ws_muta) && ws_muta.exists() {
+                    let _ = watcher.watch(&ws_muta, false);
                 }
             }
 
-            if !affects_mcp {
+            let is_user_config = event.paths.iter().any(|p| p == &user_config_file);
+            let is_workspace_event = workspace_root.as_ref().map_or(false, |root| {
+                let ws_config = root.join(".muta/config.toml");
+                let ws_mcp = root.join(".muta/mcp.json");
+                event.paths.iter().any(|p| {
+                    p != &user_config_file
+                        && (p == &ws_config
+                            || p == &ws_mcp
+                            || (p.file_name().is_some_and(|n| n == "config.toml" || n == "mcp.json")
+                                && p.parent().is_some_and(|parent| {
+                                    parent.file_name().is_some_and(|d| d == ".muta")
+                                })
+                                && p.starts_with(root)))
+                })
+            });
+
+            if !is_user_config && !is_workspace_event {
+                continue;
+            }
+
+            let project_mcp = workspace_root
+                .as_ref()
+                .map(|root| Config::load_project_mcp(root))
+                .unwrap_or_default();
+            let has_project_mcp = !project_mcp.is_empty();
+
+            // If a workspace file changed but the workspace has no MCP declarations,
+            // this event doesn't affect MCP unless the user-level config was also touched.
+            if is_workspace_event && !has_project_mcp && !is_user_config {
                 continue;
             }
 
             // Check workspace trust for workspace-level config
-            let is_trusted = workspace_root
+            let mcp_trust = workspace_root
                 .as_ref()
-                .map(|root| workspace_security.snapshot(root).mcp.is_trusted())
-                .unwrap_or(true);
+                .map(|root| workspace_security.snapshot(root).mcp)
+                .unwrap_or(muta_contracts::WorkspaceTrustState::Trusted);
 
-            if is_workspace_mcp && !is_trusted {
+            if is_workspace_event
+                && has_project_mcp
+                && matches!(
+                    mcp_trust,
+                    muta_contracts::WorkspaceTrustState::Quarantined
+                        | muta_contracts::WorkspaceTrustState::Changed
+                )
+            {
                 let _ = resp_tx.send(round_response(
                     &session_id,
                     RoundEvent::Notice(
@@ -1140,10 +1171,8 @@ fn spawn_mcp_config_watcher(
 
             // Reload configuration and reconfigure MCP runtime
             let mut effective = Config::load();
-            if let Some(ref root) = workspace_root {
-                if is_trusted {
-                    effective.merge_project_mcp(Config::load_project_mcp(root));
-                }
+            if mcp_trust.is_trusted() && has_project_mcp {
+                effective.merge_project_mcp(project_mcp);
             }
 
             let report = mcp_runtime.reconfigure(effective.mcp).await;
@@ -1169,4 +1198,175 @@ fn spawn_mcp_config_watcher(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_mcp_watcher_ignores_non_mcp_workspace_config() {
+        let tmp = tempdir().unwrap();
+        let ws_root = tmp.path().to_path_buf();
+        let dot_muta = ws_root.join(".muta");
+        std::fs::create_dir_all(&dot_muta).unwrap();
+
+        let cfg_file = dot_muta.join("config.toml");
+        std::fs::write(&cfg_file, "[workspace]\nadditional_roots = [\"../foo\"]\n").unwrap();
+
+        let sec_file = tmp.path().join("workspace_security.json");
+        let security = Arc::new(WorkspaceSecurityStore::load_from(sec_file));
+
+        let agent = Arc::new(Agent::new(
+            Arc::new(muta_agent::NoProvider),
+            vec![],
+            muta_contracts::AgentIdentity::default(),
+        ));
+        let mcp = Arc::new(McpRuntime::start_background(
+            Default::default(),
+            agent.dynamic_tool_sink(),
+        ));
+
+        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+        spawn_mcp_config_watcher(
+            mcp,
+            Some(ws_root.clone()),
+            security,
+            resp_tx,
+            "test-session".to_string(),
+        );
+
+        // Give watcher thread a moment to initialize inotify
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Modify .muta/config.toml with non-MCP content
+        std::fs::write(&cfg_file, "[workspace]\nadditional_roots = [\"../bar\"]\n").unwrap();
+
+        // Wait for debounce window (500ms + margin)
+        let notice = tokio::time::timeout(Duration::from_millis(800), resp_rx.recv()).await;
+
+        // Should NOT receive any TrustChanged warning
+        if let Ok(Some(AgentResponse::Round {
+            event: RoundEvent::Notice(n),
+            ..
+        })) = notice
+        {
+            panic!(
+                "Unexpected notice for non-MCP config modification: {:?}",
+                n.title
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mcp_watcher_warns_on_untrusted_workspace_mcp() {
+        let tmp = tempdir().unwrap();
+        let ws_root = tmp.path().to_path_buf();
+        let dot_muta = ws_root.join(".muta");
+        std::fs::create_dir_all(&dot_muta).unwrap();
+
+        let sec_file = tmp.path().join("workspace_security.json");
+        let security = Arc::new(WorkspaceSecurityStore::load_from(sec_file));
+
+        let agent = Arc::new(Agent::new(
+            Arc::new(muta_agent::NoProvider),
+            vec![],
+            muta_contracts::AgentIdentity::default(),
+        ));
+        let mcp = Arc::new(McpRuntime::start_background(
+            Default::default(),
+            agent.dynamic_tool_sink(),
+        ));
+
+        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+        spawn_mcp_config_watcher(
+            mcp,
+            Some(ws_root.clone()),
+            security,
+            resp_tx,
+            "test-session".to_string(),
+        );
+
+        // Give watcher thread a moment to initialize
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Write an MCP server into .muta/mcp.json
+        let mcp_json = dot_muta.join("mcp.json");
+        std::fs::write(
+            &mcp_json,
+            r#"{"mcpServers": {"test": {"command": "echo", "args": ["hello"]}}}"#,
+        )
+        .unwrap();
+
+        // Should receive TrustChanged warning
+        let mut got_warning = false;
+        while let Ok(Some(resp)) =
+            tokio::time::timeout(Duration::from_millis(1000), resp_rx.recv()).await
+        {
+            if let AgentResponse::Round {
+                event: RoundEvent::Notice(n),
+                ..
+            } = resp
+            {
+                if n.kind == muta_contracts::NoticeKind::TrustChanged {
+                    got_warning = true;
+                    break;
+                }
+            }
+        }
+        assert!(got_warning, "Expected TrustChanged warning for untrusted workspace MCP");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_watcher_user_config_does_not_trigger_workspace_warning() {
+        let tmp = tempdir().unwrap();
+        // Simulate a workspace root containing user config directory
+        let ws_root = tmp.path().to_path_buf();
+        let user_config_file = muta_paths::paths::Dirs::system().config_file();
+
+        let sec_file = tmp.path().join("workspace_security.json");
+        let security = Arc::new(WorkspaceSecurityStore::load_from(sec_file));
+
+        let agent = Arc::new(Agent::new(
+            Arc::new(muta_agent::NoProvider),
+            vec![],
+            muta_contracts::AgentIdentity::default(),
+        ));
+        let mcp = Arc::new(McpRuntime::start_background(
+            Default::default(),
+            agent.dynamic_tool_sink(),
+        ));
+
+        let (resp_tx, mut resp_rx) = mpsc::unbounded_channel();
+        // If workspace_root is the parent of user_config_file (e.g. $HOME)
+        let home_root = user_config_file
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or(ws_root);
+
+        spawn_mcp_config_watcher(
+            mcp,
+            Some(home_root),
+            security,
+            resp_tx,
+            "test-session".to_string(),
+        );
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Verify that no spurious TrustChanged notice is emitted
+        let notice = tokio::time::timeout(Duration::from_millis(300), resp_rx.recv()).await;
+        if let Ok(Some(AgentResponse::Round {
+            event: RoundEvent::Notice(n),
+            ..
+        })) = notice
+        {
+            if n.kind == muta_contracts::NoticeKind::TrustChanged {
+                panic!("User config modification must not trigger TrustChanged warning!");
+            }
+        }
+    }
 }

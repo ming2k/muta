@@ -34,14 +34,48 @@ pub struct SessionIR {
 impl SessionIR {
     /// Initialize a fresh Session IR with the given policy and initial root state.
     pub fn new(session_id: impl Into<String>, policy: SessionPolicy, timestamp_s: u64) -> Self {
+        let mut state = SessionState::new();
+        state.timelines.insert(
+            "main".into(),
+            TimelineCursor {
+                id: "main".into(),
+                name: "Mainline".into(),
+                kind: TimelineKind::Main,
+                head_node: None,
+                forked_from_node: None,
+                created_at_s: timestamp_s,
+                updated_at_s: timestamp_s,
+            },
+        );
         Self {
             session_id: session_id.into(),
             parent_session_id: None,
             created_at_s: timestamp_s,
             updated_at_s: timestamp_s,
             history: CausalGraph::new(),
-            state: SessionState::new(),
+            state,
             policy,
+        }
+    }
+
+    /// Fork the session IR into a child branch or aside session.
+    pub fn fork(&self, new_session_id: impl Into<String>) -> Self {
+        let sid = new_session_id.into();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut child_state = self.state.clone();
+        child_state.round_counter = 0;
+        child_state.pending_notifications.clear();
+        Self {
+            session_id: sid,
+            parent_session_id: Some(self.session_id.clone()),
+            created_at_s: now,
+            updated_at_s: now,
+            history: self.history.clone(),
+            state: child_state,
+            policy: self.policy.clone(),
         }
     }
 
@@ -62,8 +96,65 @@ impl SessionIR {
 
         self.history.insert_node(node);
         self.state.active_leaf = Some(node_id.clone());
+        if let Some(timeline) = self.state.timelines.get_mut(&self.state.active_timeline) {
+            timeline.head_node = Some(node_id.clone());
+            timeline.updated_at_s = timestamp_ms / 1000;
+        }
         self.updated_at_s = timestamp_ms / 1000;
         node_id
+    }
+
+    /// Create a new named timeline branching from the current active leaf (ADR-0251).
+    pub fn create_timeline(
+        &mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        kind: TimelineKind,
+    ) -> String {
+        let id = id.into();
+        let name = name.into();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let cursor = TimelineCursor {
+            id: id.clone(),
+            name,
+            kind,
+            head_node: self.state.active_leaf.clone(),
+            forked_from_node: self.state.active_leaf.clone(),
+            created_at_s: now,
+            updated_at_s: now,
+        };
+        self.state.timelines.insert(id.clone(), cursor);
+        self.state.active_timeline = id.clone();
+        id
+    }
+
+    /// Switch active timeline to the given timeline ID (ADR-0251).
+    /// Updates `active_leaf` to the timeline's head node.
+    pub fn switch_timeline(&mut self, id: &str) -> bool {
+        if let Some(cursor) = self.state.timelines.get(id) {
+            self.state.active_leaf = cursor.head_node.clone();
+            self.state.active_timeline = id.to_string();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Resolve the linear causal sequence of nodes along the specified timeline (ADR-0251).
+    pub fn resolve_timeline_branch(&self, timeline_id: &str) -> Vec<&CausalNode> {
+        let head = self
+            .state
+            .timelines
+            .get(timeline_id)
+            .and_then(|c| c.head_node.as_deref())
+            .or(self.state.active_leaf.as_deref());
+        match head {
+            Some(leaf) => self.history.linear_path(leaf),
+            None => Vec::new(),
+        }
     }
 
     /// Record an execution termination event (e.g. human interrupt, fatal fault).
@@ -315,10 +406,16 @@ pub enum TerminationReason {
 }
 
 /// Mutable working memory, cursor registers, and execution status.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionState {
     /// Current active leaf cursor in the causal graph.
     pub active_leaf: Option<NodeId>,
+    /// Active timeline identifier (default "main").
+    #[serde(default = "default_main_timeline")]
+    pub active_timeline: String,
+    /// Named timeline branch cursors (ADR-0251).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub timelines: HashMap<String, TimelineCursor>,
     /// Current execution state machine position.
     pub status: ExecutionStatus,
     /// Queue of asynchronous notifications received during sleep/suspension.
@@ -326,6 +423,44 @@ pub struct SessionState {
     pub pending_notifications: Vec<SystemNoticePayload>,
     /// Turn counter within the current session.
     pub round_counter: u64,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self {
+            active_leaf: None,
+            active_timeline: "main".to_string(),
+            timelines: HashMap::new(),
+            status: ExecutionStatus::Idle,
+            pending_notifications: Vec::new(),
+            round_counter: 0,
+        }
+    }
+}
+
+fn default_main_timeline() -> String {
+    "main".to_string()
+}
+
+/// A named branch cursor on the Causal DAG (ADR-0251).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimelineCursor {
+    pub id: String,
+    pub name: String,
+    pub kind: TimelineKind,
+    pub head_node: Option<NodeId>,
+    pub forked_from_node: Option<NodeId>,
+    pub created_at_s: u64,
+    pub updated_at_s: u64,
+}
+
+/// Semantic kind of a timeline branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TimelineKind {
+    Main,
+    Aside,
+    Speculation,
 }
 
 impl SessionState {
@@ -476,6 +611,49 @@ mod tests {
         assert_eq!(path.len(), 2);
         assert_eq!(path[0].id, id1);
         assert_eq!(path[1].id, id2);
+
+        // Test fork
+        let forked = ir.fork("session-fork-1");
+        assert_eq!(forked.session_id, "session-fork-1");
+        assert_eq!(forked.parent_session_id, Some("session-1".into()));
+        assert_eq!(forked.history.nodes.len(), 2);
+        assert_eq!(forked.state.active_leaf, Some(id2));
+        assert_eq!(forked.state.round_counter, 0);
+    }
+
+    #[test]
+    fn test_session_ir_timelines() {
+        let mut ir = SessionIR::new("session-timeline-test", SessionPolicy::default(), 1000);
+        let n1 = ir.append_message("n1", 1000_000, Message::new(Role::User, "Main 1"));
+        let n2 = ir.append_message("n2", 1001_000, Message::new(Role::Assistant, "Main response 1"));
+
+        // Create an aside timeline branching off n2
+        let aside_id = ir.create_timeline("aside-1", "Explain this detail", TimelineKind::Aside);
+        assert_eq!(ir.state.active_timeline, aside_id);
+        assert_eq!(ir.state.active_leaf, Some(n2.clone()));
+
+        // Append to aside timeline
+        let a1 = ir.append_message("a1", 1002_000, Message::new(Role::User, "Aside question"));
+        let a2 = ir.append_message("a2", 1003_000, Message::new(Role::Assistant, "Aside answer"));
+
+        let aside_path = ir.resolve_timeline_branch(&aside_id);
+        assert_eq!(aside_path.len(), 4);
+        assert_eq!(aside_path[0].id, n1);
+        assert_eq!(aside_path[1].id, n2);
+        assert_eq!(aside_path[2].id, a1);
+        assert_eq!(aside_path[3].id, a2);
+
+        // Switch back to main timeline
+        assert!(ir.switch_timeline("main"));
+        assert_eq!(ir.state.active_leaf, Some(n2.clone()));
+
+        // Append to main timeline
+        let n3 = ir.append_message("n3", 1004_000, Message::new(Role::User, "Main 2"));
+        let main_path = ir.resolve_timeline_branch("main");
+        assert_eq!(main_path.len(), 3);
+        assert_eq!(main_path[0].id, n1);
+        assert_eq!(main_path[1].id, n2);
+        assert_eq!(main_path[2].id, n3);
     }
 
     #[test]

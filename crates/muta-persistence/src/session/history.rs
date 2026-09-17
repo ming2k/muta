@@ -619,6 +619,16 @@ impl SessionStore {
         *self.role.write().unwrap() = state.data.role.clone();
         state.invalidate_projection_cache();
         state.defer_persist = false;
+        drop(state);
+
+        // Fork canonical SessionIR into SQLite (ADR-0241/ADR-0249)
+        let parent_ir = self.session_ir().await;
+        let child_ir = parent_ir.fork(&fork_child_id);
+        let delta = child_ir.drain_delta(0);
+        if let Err(e) = self.writer.save_session_delta(delta).await {
+            tracing::warn!(error = %e, "failed to persist forked SessionDelta to sessions_v2 / causal_nodes");
+        }
+
         Ok((fork_child_id, parent_id))
     }
 
@@ -638,6 +648,7 @@ impl SessionStore {
             side.id = side_id.clone();
             side.parent_id = Some(parent_id.clone());
             side.fork_kind = muta_contracts::SessionForkKind::Aside;
+            side.title = None;
             side.created_at = now;
             side.updated_at = now;
             side.request_usage_records.clear();
@@ -645,6 +656,15 @@ impl SessionStore {
         };
         // Blocking I/O stays outside the session lock.
         persist_to(&self.writer, &side, &self.blob_store)?;
+
+        // Fork canonical SessionIR into SQLite (ADR-0241/ADR-0249)
+        let parent_ir = self.session_ir().await;
+        let side_ir = parent_ir.fork(&side_id);
+        let delta = side_ir.drain_delta(0);
+        if let Err(e) = self.writer.save_session_delta(delta).await {
+            tracing::warn!(error = %e, "failed to persist forked SessionDelta to sessions_v2 / causal_nodes");
+        }
+
         Ok((side_id, parent_id))
     }
 
