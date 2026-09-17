@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.48.4] - 2026-10-04
+## [0.48.5] - 2026-10-04
+
+### Added
+
+- **Causal DAG Branching Timelines, Unified Multiverse Session Routing, and Trunk-First Sessions (ADR-0251):**
+  - Formalized `TimelineCursor` and `TimelineKind` (`Main`, `Aside`, `Speculation`) in `SessionState`, modeling asides as first-class branch cursors on the canonical `SessionIR` Causal DAG.
+  - Implemented SQLite Migration 21 upgrading `causal_nodes` to composite primary key `(session_id, id)` with `session_list_view` sync.
+  - Upgraded `fork_to_side` and `fork` in `muta-persistence` to fork full Session IR and preserve rich `Message` payloads losslessly.
+  - Replaced premature destructive discard on aside detach with non-destructive retention, keeping asides accessible until explicit user close.
+  - Wired autonomous background AI titler to aside agents with real-time `BtwList` updates and dynamic title retrieval.
+  - Enforced ADR-0238 INV-3 across scene header breadcrumbs and settings, resolving keycaps dynamically from key overrides and eliminating hardcoded `Esc`.
+  - Implemented trunk-first expandable accordion hierarchy in `/sessions` modal with inline `Tab` expand/collapse and child timeline direct navigation.
 
 ### Added
 
@@ -7302,7 +7313,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.4...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.5...HEAD
+[0.48.5]: https://github.com/ming2k/muta/compare/v0.48.4...v0.48.5
 [0.48.4]: https://github.com/ming2k/muta/compare/v0.48.3...v0.48.4
 [0.48.3]: https://github.com/ming2k/muta/compare/v0.48.2...v0.48.3
 [0.48.2]: https://github.com/ming2k/muta/compare/v0.48.1...v0.48.2
