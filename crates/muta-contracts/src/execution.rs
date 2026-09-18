@@ -368,6 +368,7 @@ pub fn global_skills_roots() -> Vec<PathBuf> {
         roots.push(cache.join("muta").join("skills"));
     }
     if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".muta").join("skills"));
         roots.push(
             home.join(".local")
                 .join("share")
@@ -375,8 +376,6 @@ pub fn global_skills_roots() -> Vec<PathBuf> {
                 .join("skills"),
         );
         roots.push(home.join(".cache").join("muta").join("skills"));
-        roots.push(home.join(".agents").join("skills"));
-        roots.push(home.join(".claude").join("skills"));
     }
     let raw_roots = roots.clone();
     for raw in raw_roots {

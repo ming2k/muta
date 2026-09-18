@@ -160,7 +160,8 @@ pub use execution::{
 };
 pub use hazard::{HazardLevel, HazardTier, ProcessKillSpec, ToolPermissionSubmission};
 pub use security::{
-    AssetSpec, AttestationStatus, TrustDomain, WorkspaceSecuritySnapshot, WorkspaceTrustState,
+    AssetLocator, AssetSpec, AttestationStatus, TrustDomain, WorkspaceSecuritySnapshot,
+    WorkspaceTrustState,
 };
 
 pub mod workspace;

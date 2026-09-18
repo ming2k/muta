@@ -25,7 +25,8 @@ pub(crate) async fn reload_trusted_assets(
     skills_registry: &SkillRegistry,
     shared_additional_roots: &muta_contracts::SharedAdditionalRoots,
 ) -> Result<AssetReloadReport, String> {
-    let snapshot = workspace_security.snapshot(project_root);
+    let mut snapshot = workspace_security.snapshot(project_root);
+    snapshot.user_assets = compute_user_assets_trust();
     let mut effective = Config::load();
     if snapshot.mcp.is_trusted() {
         effective.merge_project_mcp(Config::load_project_mcp(project_root));
@@ -61,6 +62,133 @@ pub(crate) async fn reload_trusted_assets(
     })
 }
 
+pub(crate) fn compute_user_assets_trust() -> muta_contracts::WorkspaceTrustState {
+    let config = Config::load();
+    let ledger = muta_persistence::AssetAttestationLedger::load();
+    let mut user_asset_count = 0;
+    let mut user_untrusted_count = 0;
+    let mut user_changed_count = 0;
+    let mut user_expired_count = 0;
+    for (name, server_cfg) in &config.mcp {
+        if server_cfg.sandbox_root.is_none() && server_cfg.enabled {
+            user_asset_count += 1;
+            let locator = muta_contracts::security::AssetLocator::UserMcp { name: name.clone() };
+            let spec = if let Some(url) = &server_cfg.url {
+                muta_contracts::security::AssetSpec::RemoteEndpoint {
+                    url: url.clone(),
+                    headers: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            } else {
+                muta_contracts::security::AssetSpec::Process {
+                    command: server_cfg.command.clone(),
+                    env: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            };
+            match ledger.status(&locator, &spec) {
+                muta_contracts::security::AttestationStatus::Trusted
+                | muta_contracts::security::AttestationStatus::SessionEphemeral
+                | muta_contracts::security::AttestationStatus::Denied => {}
+                muta_contracts::security::AttestationStatus::Changed => {
+                    user_changed_count += 1;
+                    user_untrusted_count += 1;
+                }
+                muta_contracts::security::AttestationStatus::Expired => {
+                    user_expired_count += 1;
+                    user_untrusted_count += 1;
+                }
+                muta_contracts::security::AttestationStatus::Quarantined => {
+                    user_untrusted_count += 1;
+                }
+            }
+        }
+    }
+    if user_asset_count == 0 {
+        muta_contracts::WorkspaceTrustState::Absent
+    } else if user_untrusted_count == 0 {
+        muta_contracts::WorkspaceTrustState::Trusted
+    } else if user_changed_count > 0 || user_expired_count > 0 {
+        muta_contracts::WorkspaceTrustState::Changed
+    } else {
+        muta_contracts::WorkspaceTrustState::Quarantined
+    }
+}
+
+pub(crate) fn trust_user_assets() -> Vec<String> {
+    let config = Config::load();
+    let ledger = muta_persistence::AssetAttestationLedger::load();
+    let mut trusted = Vec::new();
+    for (name, server_cfg) in &config.mcp {
+        if server_cfg.sandbox_root.is_none() {
+            let locator = muta_contracts::security::AssetLocator::UserMcp { name: name.clone() };
+            let spec = if let Some(url) = &server_cfg.url {
+                muta_contracts::security::AssetSpec::RemoteEndpoint {
+                    url: url.clone(),
+                    headers: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            } else {
+                muta_contracts::security::AssetSpec::Process {
+                    command: server_cfg.command.clone(),
+                    env: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            };
+            if let Ok(()) = ledger.trust_asset(&locator, &spec) {
+                trusted.push(format!("user:mcp:{name}"));
+            }
+        }
+    }
+    trusted
+}
+
+pub(crate) fn deny_user_assets() -> Vec<String> {
+    let config = Config::load();
+    let ledger = muta_persistence::AssetAttestationLedger::load();
+    let mut denied = Vec::new();
+    for (name, server_cfg) in &config.mcp {
+        if server_cfg.sandbox_root.is_none() {
+            let locator = muta_contracts::security::AssetLocator::UserMcp { name: name.clone() };
+            let spec = if let Some(url) = &server_cfg.url {
+                muta_contracts::security::AssetSpec::RemoteEndpoint {
+                    url: url.clone(),
+                    headers: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            } else {
+                muta_contracts::security::AssetSpec::Process {
+                    command: server_cfg.command.clone(),
+                    env: server_cfg
+                        .environment
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                }
+            };
+            if let Ok(()) = ledger.deny_asset(&locator, &spec) {
+                denied.push(format!("user:mcp:{name}"));
+            }
+        }
+    }
+    denied
+}
+
 #[allow(dead_code)]
 pub(crate) fn parse_trust_domain(sub: &str) -> Result<TrustDomain, String> {
     match sub {
@@ -71,8 +199,9 @@ pub(crate) fn parse_trust_domain(sub: &str) -> Result<TrustDomain, String> {
         "ex-workspace" | "ex-workspaces" | "externals" | "workspace" => {
             Ok(TrustDomain::ExWorkspace)
         }
+        "user-assets" | "user" | "user_assets" => Ok(TrustDomain::UserAssets),
         other => Err(format!(
-            "Unknown trust domain `{other}`. Valid domains: `instructions`, `ex-workspace`, `mcp`, `skills`, `hooks`, or `all`."
+            "Unknown trust domain `{other}`. Valid domains: `instructions`, `ex-workspace`, `mcp`, `skills`, `hooks`, `user-assets`, or `all`."
         )),
     }
 }
@@ -104,11 +233,14 @@ pub(crate) fn trust_route(name: &str, parts: &[&str]) -> Result<TrustRoute, Stri
         Some("ex-workspace") | Some("ex-workspaces") | Some("externals") | Some("workspace") => {
             Ok(TrustRoute::Grant(TrustDomain::ExWorkspace))
         }
+        Some("user-assets") | Some("user") | Some("user_assets") => {
+            Ok(TrustRoute::Grant(TrustDomain::UserAssets))
+        }
         Some("status") => Ok(TrustRoute::Status),
         Some("revoke") => Ok(TrustRoute::Revoke),
         Some(other) => Err(format!(
             "Unknown /trust subcommand '{other}'. Use `/trust`, `/trust all`, `/trust instructions`, \
-             `/trust ex-workspace`, `/trust mcp`, `/trust skills`, `/trust hooks`, `/trust status`, or `/trust revoke`."
+             `/trust ex-workspace`, `/trust mcp`, `/trust skills`, `/trust hooks`, `/trust user-assets`, `/trust status`, or `/trust revoke`."
         )),
     }
 }

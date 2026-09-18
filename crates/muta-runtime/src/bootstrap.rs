@@ -367,10 +367,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // they are not part of this static capability set.
     // Spatial admission resolves global and trusted project-declared roots.
     let workspace_security = Arc::new(WorkspaceSecurityStore::load());
-    let security_snapshot = match &workspace_root {
+    let mut security_snapshot = match &workspace_root {
         Some(root) => workspace_security.snapshot(root),
         None => muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free"),
     };
+    security_snapshot.user_assets =
+        crate::handlers_slash::security_ops::compute_user_assets_trust();
     let mut additional_roots: Vec<std::path::PathBuf> = Vec::new();
     let resolved_additional = match &workspace_root {
         Some(root) => {
@@ -625,37 +627,11 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         ));
     }
     let command_catalog = crate::startup::command_catalog(&[]);
-    // Wire universal asset attestation verifier into muta-mcp (ADR-0243).
+    // Wire universal asset attestation verifier into muta-mcp (ADR-0243, ADR-0252).
     let attestation_ledger = muta_persistence::AssetAttestationLedger::load();
-    for (_name, server_cfg) in &config.mcp {
-        if server_cfg.sandbox_root.is_none() {
-            let spec = if let Some(url) = &server_cfg.url {
-                muta_contracts::security::AssetSpec::RemoteEndpoint {
-                    url: url.clone(),
-                    headers: server_cfg
-                        .environment
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                }
-            } else {
-                muta_contracts::security::AssetSpec::Process {
-                    command: server_cfg.command.clone(),
-                    env: server_cfg
-                        .environment
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                }
-            };
-            if !attestation_ledger.is_trusted(&spec) {
-                let _ = attestation_ledger.trust_asset(&spec);
-            }
-        }
-    }
     let ledger_for_mcp = attestation_ledger.clone();
-    muta_mcp::set_attestation_verifier(Arc::new(move |spec| {
-        ledger_for_mcp.is_trusted(spec)
+    muta_mcp::set_attestation_verifier(Arc::new(move |locator, spec| {
+        ledger_for_mcp.is_trusted(locator, spec)
     }));
 
     // Wire workspace security trust verifier into muta-mcp so MCP server
@@ -1368,5 +1344,59 @@ mod tests {
                 panic!("User config modification must not trigger TrustChanged warning!");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_user_assets_zero_bypass_and_ttl_lifecycle() {
+        use muta_contracts::security::{AssetLocator, AssetSpec, AttestationStatus};
+        use muta_contracts::WorkspaceTrustState;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let handle = muta_persistence::db::PersistenceHandle::spawn(tmp.path().join("assets.db"), None);
+        let ledger = muta_persistence::AssetAttestationLedger::for_handle(handle);
+
+        let locator = AssetLocator::UserMcp {
+            name: "sqlite_audit".into(),
+        };
+        let spec_v1 = AssetSpec::Process {
+            command: vec!["uvx".into(), "mcp-server-sqlite".into()],
+            env: std::collections::BTreeMap::new(),
+        };
+
+        // 1. Zero implicit trust: user assets start strictly Quarantined
+        assert_eq!(ledger.status(&locator, &spec_v1), AttestationStatus::Quarantined);
+        assert!(!ledger.is_trusted(&locator, &spec_v1));
+
+        // 2. Trust asset grants a 30-day lease
+        ledger.trust_asset(&locator, &spec_v1).unwrap();
+        assert_eq!(ledger.status(&locator, &spec_v1), AttestationStatus::Trusted);
+        assert!(ledger.is_trusted(&locator, &spec_v1));
+
+        // 3. Modifying command on the same locator triggers Changed (replacement semantics)
+        let spec_v2 = AssetSpec::Process {
+            command: vec!["uvx".into(), "mcp-server-sqlite".into(), "--read-only".into()],
+            env: std::collections::BTreeMap::new(),
+        };
+        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Changed);
+        assert!(!ledger.is_trusted(&locator, &spec_v2));
+
+        // 4. Re-trusting restores Trusted state
+        ledger.trust_asset(&locator, &spec_v2).unwrap();
+        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Trusted);
+
+        // 5. Expired lease (> 30 days) fails closed
+        ledger
+            .trust_asset_with_expiry(&locator, &spec_v2, 100, 200)
+            .unwrap();
+        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Expired);
+        assert!(!ledger.is_trusted(&locator, &spec_v2));
+
+        // 6. Snapshot aggregate reflects user-level quarantine even in workspace-free sessions
+        let mut snapshot = muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free");
+        assert_eq!(snapshot.aggregate(), WorkspaceTrustState::Absent);
+        snapshot.user_assets = WorkspaceTrustState::Quarantined;
+        assert_eq!(snapshot.aggregate(), WorkspaceTrustState::Quarantined);
+        snapshot.user_assets = WorkspaceTrustState::Trusted;
+        assert_eq!(snapshot.aggregate(), WorkspaceTrustState::Trusted);
     }
 }

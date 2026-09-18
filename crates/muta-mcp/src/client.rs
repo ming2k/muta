@@ -41,19 +41,22 @@ pub fn is_sandbox_trusted(root: &Path) -> bool {
     TRUST_VERIFIER.get().map(|v| v(root)).unwrap_or(true)
 }
 
-/// Pluggable universal asset attestation verifier (ADR-0243).
+/// Pluggable universal asset attestation verifier (ADR-0243, ADR-0252).
 pub type McpAttestationVerifier =
-    Arc<dyn Fn(&muta_contracts::security::AssetSpec) -> bool + Send + Sync>;
+    Arc<dyn Fn(&muta_contracts::security::AssetLocator, &muta_contracts::security::AssetSpec) -> bool + Send + Sync>;
 
 static ATTESTATION_VERIFIER: OnceLock<McpAttestationVerifier> = OnceLock::new();
 
-/// Configure the universal attestation verifier used across all MCP scopes (ADR-0243).
+/// Configure the universal attestation verifier used across all MCP scopes (ADR-0243, ADR-0252).
 pub fn set_attestation_verifier(verifier: McpAttestationVerifier) {
     let _ = ATTESTATION_VERIFIER.set(verifier);
 }
 
-pub fn is_asset_attested(spec: &muta_contracts::security::AssetSpec) -> bool {
-    ATTESTATION_VERIFIER.get().map(|v| v(spec)).unwrap_or(true)
+pub fn is_asset_attested(
+    locator: &muta_contracts::security::AssetLocator,
+    spec: &muta_contracts::security::AssetSpec,
+) -> bool {
+    ATTESTATION_VERIFIER.get().map(|v| v(locator, spec)).unwrap_or(true)
 }
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -638,10 +641,20 @@ impl McpServer {
             }
         };
 
-        if !is_asset_attested(&spec) {
+        let locator = match &self.config.sandbox_root {
+            Some(root) => muta_contracts::security::AssetLocator::WorkspaceMcp {
+                workspace_root: root.to_string_lossy().to_string(),
+                name: self.server_name.clone(),
+            },
+            None => muta_contracts::security::AssetLocator::UserMcp {
+                name: self.server_name.clone(),
+            },
+        };
+
+        if !is_asset_attested(&locator, &spec) {
             *self.client.lock().await = None;
             return Err(format!(
-                "MCP server '{}' is quarantined: external executable [{}] has not been attested in AssetAttestationLedger",
+                "MCP server '{}' is quarantined or expired: external executable [{}] has not been attested in AssetAttestationLedger (run `/trust` to authorize)",
                 self.server_name,
                 spec.summary()
             ));

@@ -49,6 +49,7 @@ pub type WakeTx = tokio::sync::mpsc::Sender<SystemWake>;
 /// Classify a fabric event for wake eligibility (ADR-0190 D3).
 pub(crate) enum FabricWake {
     /// Offer a continuation for this settlement.
+    #[allow(dead_code)]
     Wake { digest: String },
     /// UI-only event — never a continuation.
     Silent,

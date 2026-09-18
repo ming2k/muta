@@ -1008,17 +1008,6 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             }
         }
         Some(BuiltinCmd::Trust) | Some(BuiltinCmd::Untrust) => {
-            let Some(project_root_for_side) = project_root_for_side else {
-                record_error(
-                    session,
-                    resp_tx,
-                    name,
-                    args,
-                    "project asset trust is unavailable in a workspace-free session".to_string(),
-                )
-                .await;
-                return;
-            };
             let route = match trust_route(name, &parts) {
                 Ok(route) => route,
                 Err(error) => {
@@ -1026,9 +1015,85 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     return;
                 }
             };
+            let Some(project_root_for_side) = project_root_for_side else {
+                match route {
+                    TrustRoute::GrantAll | TrustRoute::Grant(TrustDomain::UserAssets) => {
+                        let user_granted =
+                            crate::handlers_slash::security_ops::trust_user_assets();
+                        let effective = muta_persistence::config::Config::load();
+                        let mcp_report = mcp_runtime.reconfigure(effective.mcp.clone()).await;
+                        let mut snap =
+                            muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free");
+                        snap.user_assets =
+                            crate::handlers_slash::security_ops::compute_user_assets_trust();
+                        agent.set_workspace_security(snap.clone());
+                        let user_granted_str = if user_granted.is_empty() {
+                            "none".to_string()
+                        } else {
+                            user_granted.join(", ")
+                        };
+                        let message = format!(
+                            "User asset trust recorded (30-day lease granted).\n\
+                             - Granted: {}\n\
+                             - Connected MCP: {}",
+                            user_granted_str,
+                            if mcp_report.connected.is_empty() {
+                                "none".to_string()
+                            } else {
+                                mcp_report
+                                    .connected
+                                    .iter()
+                                    .filter_map(|(n, ok)| ok.then_some(n.as_str()))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            }
+                        );
+                        record_command(session, resp_tx, name, args, CommandResult::Text(message))
+                            .await;
+                    }
+                    TrustRoute::Status => {
+                        let mut snapshot =
+                            muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free");
+                        snapshot.user_assets =
+                            crate::handlers_slash::security_ops::compute_user_assets_trust();
+                        agent.set_workspace_security(snapshot.clone());
+                        let message = format!(
+                            "Session Asset Trust (Workspace-Free)\n\
+                             - User Assets: {}\n\
+                             - Aggregate: {}\n\
+                             Asset trust does not grant runtime execution permission.",
+                            snapshot.user_assets.as_str(),
+                            snapshot.aggregate().as_str(),
+                        );
+                        record_command(session, resp_tx, name, args, CommandResult::Text(message))
+                            .await;
+                    }
+                    _ => {
+                        record_error(
+                            session,
+                            resp_tx,
+                            name,
+                            args,
+                            "project asset trust is unavailable in a workspace-free session".to_string(),
+                        )
+                        .await;
+                    }
+                }
+                send_harness_state_for_session(
+                    resp_tx,
+                    &session.id().await,
+                    agent,
+                    session,
+                    LoopStatus::Idle,
+                )
+                .await;
+                return;
+            };
             match route {
                 TrustRoute::Status => {
-                    let snapshot = workspace_security.snapshot(project_root_for_side);
+                    let mut snapshot = workspace_security.snapshot(project_root_for_side);
+                    snapshot.user_assets =
+                        crate::handlers_slash::security_ops::compute_user_assets_trust();
                     agent.set_workspace_security(snapshot.clone());
                     let message = format!(
                         "Workspace Asset Trust\n\
@@ -1038,6 +1103,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                          - MCP: {}\n\
                          - Skills: {}\n\
                          - Hooks: {}\n\
+                         - User Assets: {}\n\
                          - Aggregate: {}\n\
                          Asset trust does not grant runtime execution permission.",
                         snapshot.root,
@@ -1046,6 +1112,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         snapshot.mcp.as_str(),
                         snapshot.skills.as_str(),
                         snapshot.hooks.as_str(),
+                        snapshot.user_assets.as_str(),
                         snapshot.aggregate().as_str(),
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))
@@ -1057,14 +1124,33 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         TrustRoute::Grant(ref domain) => std::slice::from_ref(domain),
                         _ => unreachable!(),
                     };
-                    let granted =
-                        match workspace_security.trust_domains(project_root_for_side, domains) {
+                    let should_trust_user = route == TrustRoute::GrantAll
+                        || matches!(route, TrustRoute::Grant(TrustDomain::UserAssets));
+                    let user_granted = if should_trust_user {
+                        crate::handlers_slash::security_ops::trust_user_assets()
+                    } else {
+                        Vec::new()
+                    };
+
+                    let ws_domains: Vec<TrustDomain> = domains
+                        .iter()
+                        .copied()
+                        .filter(|d| *d != TrustDomain::UserAssets)
+                        .collect();
+                    let mut granted = if ws_domains.is_empty() {
+                        Vec::new()
+                    } else {
+                        match workspace_security.trust_domains(project_root_for_side, &ws_domains) {
                             Ok(granted) => granted,
                             Err(error) => {
                                 record_error(session, resp_tx, name, args, error).await;
                                 return;
                             }
-                        };
+                        }
+                    };
+                    if !user_granted.is_empty() {
+                        granted.push(TrustDomain::UserAssets);
+                    }
                     let report = match reload_trusted_assets(
                         agent,
                         mcp_runtime,
@@ -1081,8 +1167,8 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             return;
                         }
                     };
-                    let granted = if granted.is_empty() {
-                        "none (the selected domains have no project assets)".to_string()
+                    let granted_str = if granted.is_empty() {
+                        "none (the selected domains have no assets)".to_string()
                     } else {
                         granted
                             .iter()
@@ -1096,17 +1182,18 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                         format!("\n- MCP connected: {}", report.connected_mcp.join(", "))
                     };
                     let message = format!(
-                        "Project asset trust recorded.\n\
+                        "Asset trust recorded (30-day lease granted).\n\
                          - Root: {}\n\
                          - Granted: {}\n\
-                         - Instructions: {}; Ex-Workspace: {}; MCP: {}; Skills: {}; Hooks: {}{}",
+                         - Instructions: {}; Ex-Workspace: {}; MCP: {}; Skills: {}; Hooks: {}; User Assets: {}{}",
                         report.snapshot.root,
-                        granted,
+                        granted_str,
                         report.snapshot.instructions.as_str(),
                         report.snapshot.ex_workspace.as_str(),
                         report.snapshot.mcp.as_str(),
                         report.snapshot.skills.as_str(),
                         report.snapshot.hooks.as_str(),
+                        report.snapshot.user_assets.as_str(),
                         mcp,
                     );
                     record_command(session, resp_tx, name, args, CommandResult::Text(message))

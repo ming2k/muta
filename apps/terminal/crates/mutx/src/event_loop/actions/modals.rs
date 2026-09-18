@@ -972,14 +972,8 @@ pub(crate) mod question_effects {
                     // TRUST_GATE_REQUEST_ID reply.
                     if request_id == crate::trust_gate::TRUST_GATE_REQUEST_ID {
                         runtime.trust_gate_dismissed.store(true, Ordering::SeqCst);
-                        if matches!(
-                            crate::trust_gate::answer_to_decision(answers),
-                            crate::trust_gate::TrustGateDecision::Trust
-                        ) {
-                            app.send_intent(AgentRequest::TrustWorkspace {
-                                domains: Vec::new(),
-                            });
-                        }
+                        let domains = crate::trust_gate::answer_to_domains(answers);
+                        app.send_intent(AgentRequest::TrustWorkspace { domains });
                         continue;
                     }
                     let parent_call_id = app.subagent_question_parent.remove(request_id);

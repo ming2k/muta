@@ -6,6 +6,7 @@ use muta_contracts::{RequestUsageKey, RequestUsageRecord};
 
 #[derive(Debug, Clone, Default)]
 pub struct UsageStatsStore {
+    #[allow(dead_code)]
     root: Option<PathBuf>,
     handle: Option<crate::db::PersistenceHandle>,
 }

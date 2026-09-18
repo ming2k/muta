@@ -1253,18 +1253,55 @@ impl SessionDriver {
                     .await;
                 }
                 AgentRequest::TrustWorkspace { domains } => {
-                    let domains_to_trust = if domains.is_empty() {
-                        muta_contracts::TrustDomain::ALL.to_vec()
+                    if domains.contains(&muta_contracts::TrustDomain::UserAssets) {
+                        crate::handlers_slash::security_ops::trust_user_assets();
                     } else {
-                        domains
-                    };
+                        crate::handlers_slash::security_ops::deny_user_assets();
+                    }
                     let effective = if let Some(root) = &project_root_for_side {
-                        if let Err(error) =
-                            workspace_security.trust_domains(root, &domains_to_trust)
-                        {
-                            tracing::error!(?error, "failed to persist workspace trust");
+                        let ws_domains: Vec<muta_contracts::TrustDomain> = domains
+                            .iter()
+                            .copied()
+                            .filter(|d| *d != muta_contracts::TrustDomain::UserAssets)
+                            .collect();
+                        if !ws_domains.is_empty() {
+                            if let Err(error) =
+                                workspace_security.trust_domains(root, &ws_domains)
+                            {
+                                tracing::error!(?error, "failed to persist workspace trust");
+                            }
                         }
-                        let snapshot = workspace_security.snapshot(root);
+
+                        // Determine any present workspace domains that were NOT selected by human -> deny them (ADR-0253)
+                        let current_snap = workspace_security.snapshot(root);
+                        let all_present_ws: Vec<muta_contracts::TrustDomain> = [
+                            muta_contracts::TrustDomain::Mcp,
+                            muta_contracts::TrustDomain::Skills,
+                            muta_contracts::TrustDomain::Hooks,
+                            muta_contracts::TrustDomain::Instructions,
+                            muta_contracts::TrustDomain::ExWorkspace,
+                        ]
+                        .into_iter()
+                        .filter(|&d| {
+                            !matches!(
+                                current_snap.state(d),
+                                muta_contracts::WorkspaceTrustState::Absent
+                            )
+                        })
+                        .collect();
+
+                        let unselected_ws: Vec<muta_contracts::TrustDomain> = all_present_ws
+                            .into_iter()
+                            .filter(|d| !ws_domains.contains(d))
+                            .collect();
+
+                        if !unselected_ws.is_empty() {
+                            let _ = workspace_security.deny_domains(root, &unselected_ws);
+                        }
+
+                        let mut snapshot = workspace_security.snapshot(root);
+                        snapshot.user_assets =
+                            crate::handlers_slash::security_ops::compute_user_assets_trust();
                         agent.set_workspace_security(snapshot.clone());
 
                         // Fast path: load in-memory configs, rules, hooks, roots immediately
@@ -1301,10 +1338,12 @@ impl SessionDriver {
                             .set_hooks(crate::hooks::build_hook_registry(&effective.hooks, &agent));
                         effective
                     } else {
-                        // Workspace-free session: there are no project assets to trust.
-                        agent.set_workspace_security(
-                            muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free"),
-                        );
+                        // Workspace-free session: user-level assets only.
+                        let mut snapshot =
+                            muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free");
+                        snapshot.user_assets =
+                            crate::handlers_slash::security_ops::compute_user_assets_trust();
+                        agent.set_workspace_security(snapshot);
                         muta_persistence::config::Config::load()
                     };
 

@@ -124,6 +124,26 @@ impl Dirs {
         self.config_dir.join("roles.toml")
     }
 
+    /// Role-scoped config directory (`$XDG_CONFIG_HOME/muta/roles/<name>/`, ADR-0253).
+    pub fn role_config_dir(&self, role: &str) -> PathBuf {
+        self.config_dir.join("roles").join(role)
+    }
+
+    /// Role-scoped MCP file (`$XDG_CONFIG_HOME/muta/roles/<name>/mcp.json`, ADR-0253).
+    pub fn role_mcp_file(&self, role: &str) -> PathBuf {
+        self.role_config_dir(role).join("mcp.json")
+    }
+
+    /// Role-scoped data directory (`$XDG_DATA_HOME/muta/roles/<name>/`, ADR-0253).
+    pub fn role_data_dir(&self, role: &str) -> PathBuf {
+        self.data_dir.join("roles").join(role)
+    }
+
+    /// Role-scoped skills directory (`$XDG_DATA_HOME/muta/roles/<name>/skills/`, ADR-0253).
+    pub fn role_skills_dir(&self, role: &str) -> PathBuf {
+        self.role_data_dir(role).join("skills")
+    }
+
     /// User-declared model provider customizations
     /// (`$XDG_CONFIG_HOME/muta/model_providers.toml`, ADR-0199, ADR-0201).
     pub fn model_providers_file(&self) -> PathBuf {

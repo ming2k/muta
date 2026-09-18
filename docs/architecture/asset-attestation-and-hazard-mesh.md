@@ -48,17 +48,19 @@ Every external tool provider, stdio process, or remote connection is modeled as 
 - `Process { command: Vec<String>, env: BTreeMap<String, String> }`: OS child process (e.g. Stdio MCP server, git hooks).
 - `RemoteEndpoint { url: String, headers: BTreeMap<String, String> }`: External HTTP/SSE service.
 
-### 2.2 Normalized Cryptographic Fingerprint
-The ledger computes an immutable SHA-256 digest over the canonical serialization of the `AssetSpec`. Any change to the binary name, command arguments, sensitive environment variables, or endpoint URL alters the digest.
+### 2.2 Normalized Cryptographic Fingerprint & Composite Identity
+The ledger computes an immutable SHA-256 digest over the canonical serialization of the `AssetSpec`. Every asset is identified by a composite key: `(AssetLocator, Fingerprint)`. Any change to the binary name, command arguments, sensitive environment variables, or endpoint URL alters the digest and immediately supersedes the active record at that locator, reverting the asset to `Changed` (ADR-0252).
 
 ### 2.3 Universal Attestation Ledger (`assets.db`)
-Stored in SQLite under `$XDG_DATA_HOME/muta/assets.db`.
-- **Zero Workspace Dependency**: Operates system-wide. Whether an asset is introduced via `~/.config/muta/roles.toml` (e.g. for `philosophist`) or `<workspace>/.muta/mcp.json`, it must possess an attestation entry.
-- **Fail-Closed Spawn**: `McpRuntime` queries the ledger before spawning any process or connecting any remote endpoint. Unattested assets are marked `Quarantined`; physical process spawn is blocked (`[INV-TRUST-03]`).
+Stored in SQLite via single-writer actor (`PersistenceHandle`).
+- **Zero Workspace Dependency**: Operates system-wide. Whether an asset is introduced via global config (`~/.config/muta/config.toml`), user roles, or `<workspace>/.muta/mcp.json`, it must possess a valid attestation entry.
+- **Fail-Closed Spawn**: `McpRuntime` queries the ledger before spawning any process or connecting any remote endpoint. Unattested or expired assets fail closed; physical process spawn is blocked (`[INV-TRUST-03]`, `[INV-ASSET-05]`).
+- **30-Day Bounded Lease (TTL)**: No trust grant is permanent. All approvals expire after 30 calendar days (`2,592,000` seconds) and require routine re-attestation.
 
-### 2.4 Asymmetric UX: Intent Inference
-- **Interactive CLI Actions (`muta mcp add`)**: When a human directly executes a CLI addition, the interactive command execution proves human intent. The CLI automatically registers the calculated digest as `Trusted`.
-- **Imported / File Assets (`roles.toml`, cloned `.muta/mcp.json`)**: Detected on startup or file-change. If the digest is unknown, a non-blocking composer card prompts for single-click verification (`[A] Trust Always`, `[S] Session Only`, `[D] Deny`).
+### 2.4 Zero Implicit Bypass: Declarative-Only Ingestion
+- **Zero Imperative Bypasses**: Imperative CLI configuration mutations (`muta mcp add/rm`) are completely deleted. Configuration is purely file-authored in TOML.
+- **Zero Config Location Immunity**: Configuration placement (`~/.config/` vs `.muta/`) never confers automatic execution authority. User-level and workspace assets pass through the identical attestation ledger.
+- **Unified Pre-Session Diff Gate**: On session bootstrap, the runtime computes the diff-set of un-attested, changed, or expired assets. If non-empty, the Pre-Attach Gate displays the pending assets with their command/URL specifications for single-action human approval before any external processes spawn.
 
 ---
 

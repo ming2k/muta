@@ -52,94 +52,109 @@ pub fn quarantined_domains(snapshot: &WorkspaceSecuritySnapshot) -> Vec<TrustDom
         (TrustDomain::Hooks, snapshot.hooks),
         (TrustDomain::Instructions, snapshot.instructions),
         (TrustDomain::ExWorkspace, snapshot.ex_workspace),
+        (TrustDomain::UserAssets, snapshot.user_assets),
     ]
     .into_iter()
-    .filter(|(_, state)| *state != WorkspaceTrustState::Absent)
+    .filter(|(_, state)| {
+        matches!(
+            *state,
+            WorkspaceTrustState::Quarantined
+                | WorkspaceTrustState::Changed
+                | WorkspaceTrustState::Expired
+        )
+    })
     .map(|(domain, _)| domain)
     .collect()
 }
 
-/// Build the trust-gate question request for a quarantined workspace, or
-/// `None` when nothing needs gating (workspace trusted/absent, or already
-/// previously trusted and merely changed — the changed case is escalated by
-/// the daemon's banner instead, since the user already made a decision for
-/// this workspace once).
+pub fn status_badge(state: WorkspaceTrustState) -> &'static str {
+    match state {
+        WorkspaceTrustState::Quarantined => "New",
+        WorkspaceTrustState::Changed => "Changed",
+        WorkspaceTrustState::Expired => "Expired",
+        WorkspaceTrustState::Denied => "Denied",
+        WorkspaceTrustState::Trusted => "Trusted",
+        WorkspaceTrustState::Absent => "",
+    }
+}
+
+/// Build the trust-gate question request for unverified file assets, or
+/// `None` when nothing needs gating (trusted, absent, or explicitly denied).
 pub fn gate_request(snapshot: &WorkspaceSecuritySnapshot) -> Option<UserQuestionRequest> {
     let domains = quarantined_domains(snapshot);
-    if domains.is_empty() || snapshot.aggregate() == WorkspaceTrustState::Trusted {
+    if domains.is_empty() {
         return None;
     }
-    // Previously trusted content that changed on disk is not a first-contact
-    // decision; the daemon's attach banner covers it.
-    if snapshot.aggregate() == WorkspaceTrustState::Changed {
-        return None;
-    }
-    let domain_rows: Vec<String> = domains
+
+    let options = domains
         .iter()
-        .map(|d| format!("• {}", domain_label(*d)))
+        .map(|d| {
+            let state = snapshot.state(*d);
+            let badge = status_badge(state);
+            let label = if badge.is_empty() {
+                domain_label(*d).to_string()
+            } else {
+                format!("{}  ·  [{badge}]", domain_label(*d))
+            };
+            UserQuestionOption {
+                label,
+                description: Some(domain_description(*d).to_string()),
+            }
+        })
         .collect();
-    let question = format!(
-        "This workspace contains untrusted project configurations:\n{}",
-        domain_rows.join("\n")
-    );
+
     Some(UserQuestionRequest {
         id: TRUST_GATE_REQUEST_ID.to_string(),
         questions: vec![UserQuestion {
             header: None,
-            question,
-            options: vec![
-                UserQuestionOption {
-                    label: "Trust and continue (Recommended)".to_string(),
-                    description: Some(
-                        "Enable project configurations for this workspace.".to_string(),
-                    ),
-                },
-                UserQuestionOption {
-                    label: "Keep quarantined and exit".to_string(),
-                    description: Some("Quit without loading project configurations.".to_string()),
-                },
-            ],
-            multi_select: false,
+            question: "Select unverified file assets to authorize:\n(Unselected assets will remain quarantined and invisible during this session)".to_string(),
+            options,
+            multi_select: true,
         }],
-        origin: Some("workspace trust".to_string()),
+        origin: Some("file asset trust".to_string()),
     })
 }
 
-/// Decision made from the trust-gate dialog answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrustGateDecision {
-    Trust,
-    Quit,
+/// Map a trust-gate dialog answer back to the selected trust domains.
+pub fn answer_to_domains(answers: &[Vec<String>]) -> Vec<TrustDomain> {
+    let selected_labels = answers.first().cloned().unwrap_or_default();
+    let mut domains = Vec::new();
+    for label in selected_labels {
+        let path = label.split("  ·  ").next().unwrap_or(&label).trim();
+        match path {
+            "~/.config/muta/config.toml" | "~/.muta/config.toml" => {
+                domains.push(TrustDomain::UserAssets)
+            }
+            ".muta/config.toml" => domains.push(TrustDomain::ExWorkspace),
+            ".muta/mcp.json" => domains.push(TrustDomain::Mcp),
+            ".muta/skills/" => domains.push(TrustDomain::Skills),
+            ".muta/hooks/" => domains.push(TrustDomain::Hooks),
+            "AGENTS.md" => domains.push(TrustDomain::Instructions),
+            _ => {}
+        }
+    }
+    domains
 }
 
-/// Map a trust-gate dialog answer back to a typed decision.
-///
-/// `answers` is the `ask_user` reply shape: one `Vec<String>` of selected
-/// option labels per question.
-pub fn answer_to_decision(answers: &[Vec<String>]) -> TrustGateDecision {
-    let labels: Vec<String> = answers
-        .first()
-        .map(|labels| {
-            labels
-                .iter()
-                .map(|l| l.trim().to_ascii_lowercase())
-                .collect()
-        })
-        .unwrap_or_default();
-    if labels.iter().any(|l| l.starts_with("trust")) {
-        TrustGateDecision::Trust
-    } else {
-        TrustGateDecision::Quit
+pub fn domain_label(domain: TrustDomain) -> &'static str {
+    match domain {
+        TrustDomain::UserAssets => "~/.config/muta/config.toml",
+        TrustDomain::ExWorkspace => ".muta/config.toml",
+        TrustDomain::Mcp => ".muta/mcp.json",
+        TrustDomain::Skills => ".muta/skills/",
+        TrustDomain::Hooks => ".muta/hooks/",
+        TrustDomain::Instructions => "AGENTS.md",
     }
 }
 
-fn domain_label(domain: TrustDomain) -> &'static str {
+pub fn domain_description(domain: TrustDomain) -> &'static str {
     match domain {
-        TrustDomain::Mcp => "MCP servers (.muta/mcp.json)",
-        TrustDomain::Skills => "Skills (.muta/skills or .agents/skills)",
-        TrustDomain::Hooks => "Hooks (.muta/hooks.json)",
-        TrustDomain::Instructions => "Instructions (AGENTS.md)",
-        TrustDomain::ExWorkspace => "External workspaces ([workspace].additional_roots)",
+        TrustDomain::UserAssets => "User global configuration",
+        TrustDomain::ExWorkspace => "Workspace configuration & additional roots",
+        TrustDomain::Mcp => "Model Context Protocol servers",
+        TrustDomain::Skills => "Project-local custom skills",
+        TrustDomain::Hooks => "Lifecycle execution hooks",
+        TrustDomain::Instructions => "Project rules & instructions",
     }
 }
 
@@ -160,6 +175,7 @@ mod tests {
             hooks,
             instructions,
             ex_workspace: WorkspaceTrustState::Absent,
+            user_assets: WorkspaceTrustState::Absent,
         }
     }
 
@@ -177,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_and_changed_do_not_gate() {
+    fn trusted_and_denied_do_not_gate() {
         assert!(
             gate_request(&snapshot(
                 WorkspaceTrustState::Trusted,
@@ -187,13 +203,13 @@ mod tests {
             ))
             .is_none()
         );
-        // Changed: the user already decided once; banner territory.
+        // Explicitly denied domains do not gate again (ADR-0253 zero-nagging).
         assert!(
             gate_request(&snapshot(
-                WorkspaceTrustState::Changed,
+                WorkspaceTrustState::Denied,
                 WorkspaceTrustState::Trusted,
                 WorkspaceTrustState::Absent,
-                WorkspaceTrustState::Absent
+                WorkspaceTrustState::Denied
             ))
             .is_none()
         );
@@ -210,26 +226,36 @@ mod tests {
         .expect("quarantined workspace must gate");
         assert_eq!(req.id, TRUST_GATE_REQUEST_ID);
         let q = req.questions.first().unwrap();
-        assert_eq!(q.options.len(), 2);
-        assert!(q.question.contains("MCP servers"));
-        assert!(q.question.contains("Skills"));
-        assert!(q.question.contains("Instructions"));
-        assert!(!q.question.contains("Hooks"));
-        assert!(!q.multi_select);
+        assert!(q.multi_select);
+        let labels: Vec<&str> = q.options.iter().map(|o| o.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec![
+                ".muta/mcp.json  ·  [New]",
+                ".muta/skills/  ·  [New]",
+                "AGENTS.md  ·  [New]"
+            ]
+        );
     }
 
     #[test]
-    fn answers_map_to_decisions() {
-        assert_eq!(
-            answer_to_decision(&[vec!["Trust and continue (Recommended)".to_string()]]),
-            TrustGateDecision::Trust
-        );
-        assert_eq!(
-            answer_to_decision(&[vec!["Keep quarantined and exit".to_string()]]),
-            TrustGateDecision::Quit
-        );
-        // Esc / empty reply: quit.
-        assert_eq!(answer_to_decision(&[]), TrustGateDecision::Quit);
-        assert_eq!(answer_to_decision(&[Vec::new()]), TrustGateDecision::Quit);
+    fn answers_map_to_domains() {
+        let domains = answer_to_domains(&[vec![
+            ".muta/mcp.json  ·  [New]".to_string(),
+            "AGENTS.md  ·  [Changed]".to_string(),
+        ]]);
+        assert_eq!(domains, vec![TrustDomain::Mcp, TrustDomain::Instructions]);
+
+        let empty = answer_to_domains(&[]);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn user_assets_quarantine_triggers_gate_in_workspace_free() {
+        let mut snap = WorkspaceSecuritySnapshot::new("workspace-free");
+        snap.user_assets = WorkspaceTrustState::Quarantined;
+        let req = gate_request(&snap).expect("untrusted user assets must trigger gate even without workspace");
+        let q = req.questions.first().unwrap();
+        assert_eq!(q.options[0].label, "~/.config/muta/config.toml  ·  [New]");
     }
 }

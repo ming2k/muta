@@ -112,8 +112,10 @@ impl PreAttachState {
     pub fn from_snapshot(snapshot: &WorkspaceSecuritySnapshot) -> Option<Self> {
         let request = trust_gate::gate_request(snapshot)?;
         let domains = trust_gate::quarantined_domains(snapshot);
+        let mut model = QuestionModel::open(request);
+        model.select_all(0);
         Some(Self {
-            model: QuestionModel::open(request),
+            model,
             acceptance: false,
             submitting: false,
             domains,
@@ -133,13 +135,16 @@ impl PreAttachState {
             hooks: WorkspaceTrustState::Quarantined,
             instructions: WorkspaceTrustState::Quarantined,
             ex_workspace: WorkspaceTrustState::Quarantined,
+            user_assets: WorkspaceTrustState::Quarantined,
         };
         let request = trust_gate::gate_request(&snapshot).expect(
             "synthesized quarantined snapshot with all five domains must produce a gate request",
         );
         let domains = trust_gate::quarantined_domains(&snapshot);
+        let mut model = QuestionModel::open(request);
+        model.select_all(0);
         Self {
-            model: QuestionModel::open(request),
+            model,
             acceptance: true,
             submitting: false,
             domains,
@@ -192,15 +197,9 @@ impl PreAttachState {
         for effect in effects {
             match effect {
                 QuestionEffect::Reply { answers, .. } => {
-                    return match trust_gate::answer_to_decision(&answers) {
-                        trust_gate::TrustGateDecision::Trust => {
-                            self.submitting = true;
-                            Some(PreAttachDecision::Trust {
-                                domains: self.domains.clone(),
-                            })
-                        }
-                        trust_gate::TrustGateDecision::Quit => Some(PreAttachDecision::Quit),
-                    };
+                    let selected = trust_gate::answer_to_domains(&answers);
+                    self.submitting = true;
+                    return Some(PreAttachDecision::Trust { domains: selected });
                 }
                 QuestionEffect::Cancelled { .. } => return Some(PreAttachDecision::Quit),
                 // `Closed` always follows `Reply` or `Cancelled` in
@@ -253,7 +252,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
 
     // Header (origin badge)
     lines.push(Line::from(vec![Span::styled(
-        "[workspace trust]",
+        "[file asset trust]",
         Style::default()
             .fg(theme.info())
             .add_modifier(Modifier::BOLD),
@@ -265,7 +264,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
             &mut lines,
             INDENT,
             INDENT,
-            "Trusting workspace...",
+            "Attesting file assets...",
             Style::default()
                 .fg(theme.info())
                 .add_modifier(Modifier::BOLD),
@@ -276,7 +275,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
             &mut lines,
             INDENT,
             INDENT,
-            "Enabling configurations and entering session...",
+            "Granting 30-day lease and entering session...",
             Style::default().fg(theme.muted()),
             body_width,
         );
@@ -331,6 +330,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
         // Options
         let selected_bg = theme.selected();
         let selected_fg = contrast_fg(selected_bg);
+        let is_multi = question.multi_select;
         for (idx, opt) in question.options.iter().enumerate() {
             let is_highlighted = idx == highlight;
             let (row_bg, row_fg, row_mod) = if is_highlighted {
@@ -338,10 +338,21 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
             } else {
                 (Color::Reset, theme.fg(), Modifier::empty())
             };
+            let prefix = if is_multi {
+                let is_checked = qmodel
+                    .selected()
+                    .get(current)
+                    .map(|sel| sel.contains(&idx))
+                    .unwrap_or(false);
+                if is_checked { "[x] " } else { "[ ] " }
+            } else {
+                ""
+            };
+            let display_label = format!("{prefix}{}", opt.label);
             // Highlight is conveyed purely by background fill across
             // the whole row — pad the label out to the panel width so
             // the inversion reads as a solid bar, not a fragment.
-            let label_line = format_option_row(opt.label.as_str(), body_width, INDENT.len());
+            let label_line = format_option_row(display_label.as_str(), body_width, INDENT.len());
             lines.push(Line::from(vec![Span::styled(
                 label_line,
                 Style::default().bg(row_bg).fg(row_fg).add_modifier(row_mod),
@@ -368,8 +379,13 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
     lines.push(Line::default());
 
     // Footer key hints
+    let hint_text = if qmodel.active_multi_select() {
+        "↑/↓ navigate   Space toggle   Enter confirm   Esc quit"
+    } else {
+        "↑/↓ navigate   Enter select   Esc quit"
+    };
     let hint = Span::styled(
-        "↑/↓ navigate   Enter select   Esc quit",
+        hint_text,
         Style::default().fg(theme.muted()),
     );
     lines.push(Line::from(hint));
@@ -431,6 +447,7 @@ mod tests {
             hooks: WorkspaceTrustState::Absent,
             instructions: WorkspaceTrustState::Quarantined,
             ex_workspace: WorkspaceTrustState::Absent,
+            user_assets: WorkspaceTrustState::Absent,
         }
     }
 
@@ -443,6 +460,7 @@ mod tests {
             hooks: WorkspaceTrustState::Trusted,
             instructions: WorkspaceTrustState::Trusted,
             ex_workspace: WorkspaceTrustState::Trusted,
+            user_assets: WorkspaceTrustState::Trusted,
         };
         assert!(PreAttachState::from_snapshot(&trusted).is_none());
     }
@@ -470,18 +488,20 @@ mod tests {
             .questions
             .first()
             .expect("trust gate has one question");
-        // Every domain appears since every domain is Quarantined.
-        assert!(q.question.contains("MCP servers"));
-        assert!(q.question.contains("Skills"));
-        assert!(q.question.contains("Hooks"));
-        assert!(q.question.contains("Instructions"));
-        assert!(q.question.contains("External workspaces"));
+        assert!(q.multi_select);
+        let labels: Vec<&str> = q.options.iter().map(|o| o.label.as_str()).collect();
+        assert!(labels.iter().any(|l| l.starts_with(".muta/mcp.json")));
+        assert!(labels.iter().any(|l| l.starts_with(".muta/skills/")));
+        assert!(labels.iter().any(|l| l.starts_with(".muta/hooks/")));
+        assert!(labels.iter().any(|l| l.starts_with("AGENTS.md")));
+        assert!(labels.iter().any(|l| l.starts_with(".muta/config.toml")));
+        assert!(labels.iter().any(|l| l.starts_with("~/.config/muta/config.toml")));
     }
 
     #[test]
     fn navigate_then_submit_trust_all_emits_command() {
         let mut state = PreAttachState::from_snapshot(&quarantined_snapshot()).unwrap();
-        // Highlight starts at 0 ("Trust and continue (Recommended)").
+        // By default, all options start selected. Pressing enter trusts all of them.
         let decision = state.apply(QuestionAction::Submit);
         assert_eq!(
             decision,
@@ -500,11 +520,21 @@ mod tests {
     }
 
     #[test]
-    fn navigate_to_keep_quarantined_then_submit_emits_quit() {
+    fn space_toggles_and_submits_partial_selection() {
         let mut state = PreAttachState::from_snapshot(&quarantined_snapshot()).unwrap();
-        state.apply(QuestionAction::Down); // → "Keep quarantined and exit"
+        // Option 0: .muta/mcp.json, Option 1: .muta/skills/, Option 2: AGENTS.md
+        state.apply(QuestionAction::Down); // highlight -> 1 (.muta/skills/)
+        state.apply(QuestionAction::Toggle); // toggle off .muta/skills/
         let decision = state.apply(QuestionAction::Submit);
-        assert_eq!(decision, Some(PreAttachDecision::Quit));
+        assert_eq!(
+            decision,
+            Some(PreAttachDecision::Trust {
+                domains: vec![
+                    TrustDomain::Mcp,
+                    TrustDomain::Instructions,
+                ],
+            })
+        );
     }
 
     #[test]

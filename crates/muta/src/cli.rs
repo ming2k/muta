@@ -44,34 +44,15 @@ pub enum Mode {
     Help(Option<String>),
 }
 
-/// `muta mcp …`
+/// `muta mcp …` (ADR-0252: read-only inspection; mutations are file-authored)
 #[derive(Debug, Clone, PartialEq)]
 pub enum McpAction {
     /// `muta mcp ls` — list configured MCP servers.
     List,
-    /// `muta mcp add <name> [--url <url> | -- <command> [args…]]` — register a
-    /// server in the user-level config (`[mcp.<name>]`, `~/.config/muta/config.toml`).
-    Add {
-        name: String,
-        url: Option<String>,
-        command: Vec<String>,
-        environment: Vec<(String, String)>,
-        read_only: bool,
-        disabled: bool,
-        allow_tools: Vec<String>,
-        deny_tools: Vec<String>,
-    },
-    /// `muta mcp rm <name>` — remove a server from the user-level config.
-    Remove { name: String },
-    /// `muta mcp enable <name>` / `muta mcp disable <name>`.
-    SetEnabled { name: String, enabled: bool },
     /// `muta mcp get <name>` — print one server's effective TOML entry.
     Get { name: String },
     /// `muta mcp probe <name>` — connect once, list the advertised tools.
     Probe { name: String },
-    /// `muta mcp import (- | <file>)` — read `[mcp.*]` TOML (e.g. the output of
-    /// `aegis-mcp print-config`) and merge it into the user-level config.
-    Import { source: String },
 }
 
 /// `muta skill …`
@@ -426,111 +407,6 @@ fn parse_u64(flag: &str, value: &str) -> Result<u64, FlagError> {
         .map_err(|_| FlagError::new(flag, format!("'{value}' is not a number")))
 }
 
-/// `muta mcp add <name> [--url <url>] [--env K=V]… [--read-only] [--disabled]
-///                        [--allow-tools a,b] [--deny-tools a,b] -- <cmd> [args…]`
-///
-/// The `--` separator protects a server command's own flags from ours; the
-/// positional `<name>` is required, and either `--url` or a command after
-/// `--` must declare a transport.
-fn parse_mcp_add(rest: &[&str]) -> Result<McpAction, String> {
-    let mut url = None;
-    let mut environment = Vec::new();
-    let mut read_only = false;
-    let mut disabled = false;
-    let mut allow_tools = Vec::new();
-    let mut deny_tools = Vec::new();
-    let mut command: Vec<String> = Vec::new();
-    let mut name: Option<String> = None;
-
-    let owned: Vec<String> = rest.iter().map(|s| s.to_string()).collect();
-    let mut iter = owned.iter();
-    while let Some(arg) = iter.next() {
-        let arg = arg.as_str();
-        // Everything after `--` is the server command, verbatim.
-        if arg == "--" {
-            command = iter.by_ref().cloned().collect();
-            break;
-        }
-        let (flag, inline) = split_flag(arg);
-        match flag {
-            "--url" => {
-                url = Some(flag_value("--url", inline, &mut iter).map_err(|e| e.0)?);
-            }
-            "--env" => {
-                let pair = flag_value("--env", inline, &mut iter).map_err(|e| e.0)?;
-                let (key, value) = pair
-                    .split_once('=')
-                    .ok_or_else(|| format!("--env: expected KEY=VALUE, got '{pair}'"))?;
-                if key.is_empty() {
-                    return Err("--env: empty variable name".into());
-                }
-                environment.push((key.to_string(), value.to_string()));
-            }
-            "--read-only" => read_only = true,
-            "--disabled" => disabled = true,
-            "--allow-tools" => {
-                let list = flag_value("--allow-tools", inline, &mut iter).map_err(|e| e.0)?;
-                allow_tools = split_tool_list(&list)?;
-            }
-            "--deny-tools" => {
-                let list = flag_value("--deny-tools", inline, &mut iter).map_err(|e| e.0)?;
-                deny_tools = split_tool_list(&list)?;
-            }
-            _ if arg.starts_with('-') && arg != "-" => {
-                return Err(format!("unknown flag '{arg}' for `muta mcp add`"));
-            }
-            _ => {
-                if name.is_some() {
-                    return Err(format!(
-                        "unexpected '{arg}': server arguments go after `--` (muta mcp add <name> -- <command> [args…])"
-                    ));
-                }
-                name = Some(arg.to_string());
-            }
-        }
-    }
-
-    let Some(name) = name else {
-        return Err("muta mcp add requires a server name".into());
-    };
-    if url.is_none() && command.is_empty() {
-        return Err(format!(
-            "muta mcp add {name}: declare a transport — `--url <endpoint>` or `-- <command> [args…]`"
-        ));
-    }
-    if url.is_some() && !command.is_empty() {
-        return Err(format!(
-            "muta mcp add {name}: `--url` and a command are mutually exclusive"
-        ));
-    }
-    Ok(McpAction::Add {
-        name,
-        url,
-        command,
-        environment,
-        read_only,
-        disabled,
-        allow_tools,
-        deny_tools,
-    })
-}
-
-/// `--allow-tools a, b` → `["a", "b"]`; trims whitespace, rejects empties.
-fn split_tool_list(list: &str) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    for item in list.split(',') {
-        let item = item.trim();
-        if item.is_empty() {
-            return Err("tool lists must be comma-separated names without empty items".into());
-        }
-        out.push(item.to_string());
-    }
-    if out.is_empty() {
-        return Err("tool list cannot be empty".into());
-    }
-    Ok(out)
-}
-
 /// The `muta start` flags (one table — the `serve` duplication is gone).
 #[derive(Default)]
 struct DaemonStartFlags {
@@ -818,26 +694,8 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 // shape; `config`/`auth` default to `list` because they
                 // have several — `mcp` now does too, but the lesson
                 // stays worth the keystroke).
-                [] => return Err("muta mcp needs a subcommand: `muta mcp ls`".into()),
+                [] => return Err("muta mcp needs a subcommand: `muta mcp ls`, `muta mcp get <name>`, `muta mcp probe <name>`".into()),
                 ["ls"] | ["list"] => Mode::Mcp(McpAction::List),
-                ["add", rest @ ..] => Mode::Mcp(parse_mcp_add(rest)?),
-                ["rm", name] | ["remove", name] => Mode::Mcp(McpAction::Remove {
-                    name: (*name).to_string(),
-                }),
-                ["rm"] | ["remove"] => {
-                    return Err("muta mcp rm requires a server name".into());
-                }
-                ["enable", name] => Mode::Mcp(McpAction::SetEnabled {
-                    name: (*name).to_string(),
-                    enabled: true,
-                }),
-                ["disable", name] => Mode::Mcp(McpAction::SetEnabled {
-                    name: (*name).to_string(),
-                    enabled: false,
-                }),
-                ["enable"] | ["disable"] => {
-                    return Err("muta mcp enable/disable requires a server name".into());
-                }
                 ["get", name] => Mode::Mcp(McpAction::Get {
                     name: (*name).to_string(),
                 }),
@@ -846,12 +704,11 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                     name: (*name).to_string(),
                 }),
                 ["probe"] => return Err("muta mcp probe requires a server name".into()),
-                ["import", source] => Mode::Mcp(McpAction::Import {
-                    source: (*source).to_string(),
-                }),
-                ["import"] => {
+                ["add", ..] | ["rm", ..] | ["remove", ..] | ["enable", ..] | ["disable", ..] | ["import", ..] => {
                     return Err(
-                        "muta mcp import requires a source: `-` for stdin or a file path".into(),
+                        "muta mcp mutation commands (add, rm, enable, disable, import) are retired (ADR-0252). \
+                         Configure MCP servers declaratively in ~/.config/muta/config.toml or .muta/config.toml."
+                            .into(),
                     );
                 }
                 [bad, ..] => return unexpected(bad),
@@ -1276,58 +1133,28 @@ mod surface_tests {
             Mode::Mcp(McpAction::List)
         ));
         assert!(matches!(
-            parse(&["mcp", "add", "aegis", "--", "/usr/bin/aegis-mcp"]).unwrap().mode,
-            Mode::Mcp(McpAction::Add { ref name, ref command, url: None, .. })
-                if name == "aegis" && command == &["/usr/bin/aegis-mcp".to_string()]
-        ));
-        // Server flags survive verbatim behind `--`.
-        let expected: Vec<String> = ["npx", "--yes", "@ctx/mcp", "--port", "3"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let parsed = parse(&[
-            "mcp", "add", "ctx", "--", "npx", "--yes", "@ctx/mcp", "--port", "3",
-        ])
-        .unwrap();
-        assert!(matches!(
-            parsed.mode,
-            Mode::Mcp(McpAction::Add { ref command, .. }) if *command == expected
-        ));
-        assert!(matches!(
-            parse(&["mcp", "add", "ctx", "--url", "https://example.com/mcp"])
-                .unwrap()
-                .mode,
-            Mode::Mcp(McpAction::Add { ref url, .. }) if url.as_deref() == Some("https://example.com/mcp")
-        ));
-        assert!(matches!(
-            parse(&["mcp", "rm", "aegis"]).unwrap().mode,
-            Mode::Mcp(McpAction::Remove { ref name }) if name == "aegis"
-        ));
-        assert!(matches!(
-            parse(&["mcp", "disable", "aegis"]).unwrap().mode,
-            Mode::Mcp(McpAction::SetEnabled { enabled: false, .. })
+            parse(&["mcp", "get", "aegis"]).unwrap().mode,
+            Mode::Mcp(McpAction::Get { ref name }) if name == "aegis"
         ));
         assert!(matches!(
             parse(&["mcp", "probe", "aegis"]).unwrap().mode,
             Mode::Mcp(McpAction::Probe { ref name }) if name == "aegis"
         ));
-        assert!(matches!(
-            parse(&["mcp", "import", "-"]).unwrap().mode,
-            Mode::Mcp(McpAction::Import { ref source }) if source == "-"
-        ));
     }
 
     #[test]
-    fn mcp_add_rejects_incomplete_or_ambiguous_input() {
-        // No transport declared.
-        assert!(parse(&["mcp", "add", "aegis"]).is_err());
-        // Both transports at once.
-        assert!(parse(&["mcp", "add", "aegis", "--url", "https://x/mcp", "--", "cmd"]).is_err());
-        // Unknown flag.
-        assert!(parse(&["mcp", "add", "aegis", "--bogus", "--", "cmd"]).is_err());
-        // Stray positional beyond the name.
-        assert!(parse(&["mcp", "add", "aegis", "stray", "--", "cmd"]).is_err());
-        // Malformed env pair.
-        assert!(parse(&["mcp", "add", "aegis", "--env", "NOEQUALS", "--", "cmd"]).is_err());
+    fn mcp_mutations_are_retired_with_informative_error() {
+        // ADR-0252: imperative mutations are retired in favor of declarative TOML configuration.
+        let add_err = parse(&["mcp", "add", "aegis", "--", "cmd"]).unwrap_err();
+        assert!(add_err.contains("retired (ADR-0252)"));
+
+        let rm_err = parse(&["mcp", "rm", "aegis"]).unwrap_err();
+        assert!(rm_err.contains("retired (ADR-0252)"));
+
+        let enable_err = parse(&["mcp", "enable", "aegis"]).unwrap_err();
+        assert!(enable_err.contains("retired (ADR-0252)"));
+
+        let import_err = parse(&["mcp", "import", "-"]).unwrap_err();
+        assert!(import_err.contains("retired (ADR-0252)"));
     }
 }

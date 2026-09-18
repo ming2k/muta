@@ -29,6 +29,10 @@ pub struct SkillsConfig {
     /// project instead of whichever directory first spawned the daemon.
     #[serde(skip)]
     pub project_root: Option<PathBuf>,
+    /// Active agent role name (e.g. "philosophist", "developer").
+    /// Runtime-populated by the session bootstrap (ADR-0253).
+    #[serde(skip)]
+    pub role: Option<String>,
 }
 
 impl SkillsConfig {

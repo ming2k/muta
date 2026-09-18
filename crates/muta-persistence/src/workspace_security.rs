@@ -19,16 +19,20 @@ const CURRENT_VERSION: u32 = 2;
 
 const MCP_PATHS: &[&str] = &[".muta/mcp.json"];
 
-const SKILLS_PATHS: &[&str] = &[".muta/skills", ".agents/skills", ".claude/skills", "skills"];
+const SKILLS_PATHS: &[&str] = &[".muta/skills"];
 
 const HOOK_PATHS: &[&str] = &[".muta/hooks"];
 
-const INSTRUCTION_PATHS: &[&str] = &["AGENTS.md", ".cursorrules", ".windsurfrules"];
+const INSTRUCTION_PATHS: &[&str] = &["AGENTS.md"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct WorkspaceRecord {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     domain_digests: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    denied_digests: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    expires_at_s: BTreeMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +98,8 @@ impl WorkspaceSecurityStore {
             Ok(current) => trust_state(
                 current.as_deref(),
                 record.domain_digests.get(domain.as_str()),
+                record.denied_digests.get(domain.as_str()),
+                record.expires_at_s.get(domain.as_str()).copied(),
             ),
             Err(error) => {
                 tracing::warn!(
@@ -102,7 +108,9 @@ impl WorkspaceSecurityStore {
                     domain = domain.as_str(),
                     "cannot attest project asset domain; quarantining it"
                 );
-                if record.domain_digests.contains_key(domain.as_str()) {
+                if record.domain_digests.contains_key(domain.as_str())
+                    || record.denied_digests.contains_key(domain.as_str())
+                {
                     WorkspaceTrustState::Changed
                 } else {
                     WorkspaceTrustState::Quarantined
@@ -117,6 +125,7 @@ impl WorkspaceSecurityStore {
             hooks: state_for(TrustDomain::Hooks),
             instructions: state_for(TrustDomain::Instructions),
             ex_workspace: state_for(TrustDomain::ExWorkspace),
+            user_assets: WorkspaceTrustState::Absent,
         }
     }
 
@@ -146,11 +155,53 @@ impl WorkspaceSecurityStore {
             return Ok(Vec::new());
         }
 
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let expires_at = now.saturating_add(crate::asset_attestation::ATTESTATION_LEASE_TTL_SECS);
+
         let mut state = self.read_state_for_update()?;
         let record = state.workspaces.entry(key).or_default();
         for (domain, digest) in &digests {
+            record.denied_digests.remove(domain.as_str());
             record
                 .domain_digests
+                .insert(domain.as_str().to_string(), digest.clone());
+            record
+                .expires_at_s
+                .insert(domain.as_str().to_string(), expires_at);
+        }
+        self.persist(&state)?;
+        Ok(digests.into_iter().map(|(domain, _)| domain).collect())
+    }
+
+    /// Explicitly deny and record the human rejection for project asset domains (ADR-0253).
+    /// Prevents repeated trust gate nagging unless the content changes on disk.
+    pub fn deny_domains(
+        &self,
+        workspace: &Path,
+        domains: &[TrustDomain],
+    ) -> Result<Vec<TrustDomain>, String> {
+        let root = workspace_identity(workspace);
+        let key = canonical_string(&root);
+        let mut digests = Vec::new();
+        for &domain in domains {
+            if let Some(digest) = domain_digest(&root, domain)? {
+                digests.push((domain, digest));
+            }
+        }
+        if digests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut state = self.read_state_for_update()?;
+        let record = state.workspaces.entry(key).or_default();
+        for (domain, digest) in &digests {
+            record.domain_digests.remove(domain.as_str());
+            record.expires_at_s.remove(domain.as_str());
+            record
+                .denied_digests
                 .insert(domain.as_str().to_string(), digest.clone());
         }
         self.persist(&state)?;
@@ -231,12 +282,32 @@ fn canonical_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-fn trust_state(current: Option<&str>, trusted: Option<&String>) -> WorkspaceTrustState {
-    match (current, trusted.map(String::as_str)) {
-        (None, _) => WorkspaceTrustState::Absent,
-        (Some(current), Some(saved)) if current == saved => WorkspaceTrustState::Trusted,
-        (Some(_), Some(_)) => WorkspaceTrustState::Changed,
-        (Some(_), None) => WorkspaceTrustState::Quarantined,
+fn trust_state(
+    current: Option<&str>,
+    trusted: Option<&String>,
+    denied: Option<&String>,
+    expires_at: Option<u64>,
+) -> WorkspaceTrustState {
+    match (
+        current,
+        trusted.map(String::as_str),
+        denied.map(String::as_str),
+    ) {
+        (None, _, _) => WorkspaceTrustState::Absent,
+        (Some(curr), Some(saved), _) if curr == saved => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            if let Some(exp) = expires_at && exp > 0 && now > exp {
+                WorkspaceTrustState::Expired
+            } else {
+                WorkspaceTrustState::Trusted
+            }
+        }
+        (Some(curr), _, Some(denied_hash)) if curr == denied_hash => WorkspaceTrustState::Denied,
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => WorkspaceTrustState::Changed,
+        (Some(_), None, None) => WorkspaceTrustState::Quarantined,
     }
 }
 
@@ -246,11 +317,14 @@ fn domain_paths(domain: TrustDomain) -> &'static [&'static str] {
         TrustDomain::Skills => SKILLS_PATHS,
         TrustDomain::Hooks => HOOK_PATHS,
         TrustDomain::Instructions => INSTRUCTION_PATHS,
-        TrustDomain::ExWorkspace => &[],
+        TrustDomain::ExWorkspace | TrustDomain::UserAssets => &[],
     }
 }
 
 fn domain_digest(workspace: &Path, domain: TrustDomain) -> Result<Option<String>, String> {
+    if domain == TrustDomain::UserAssets {
+        return Ok(None);
+    }
     let mut files = Vec::new();
     for relative in domain_paths(domain) {
         let entry_path = workspace.join(relative);
@@ -261,7 +335,7 @@ fn domain_digest(workspace: &Path, domain: TrustDomain) -> Result<Option<String>
         TrustDomain::Mcp => project_config_projection(workspace, "mcp")?,
         TrustDomain::Hooks => project_config_projection(workspace, "hooks")?,
         TrustDomain::ExWorkspace => project_config_projection(workspace, "workspace")?,
-        TrustDomain::Skills | TrustDomain::Instructions => None,
+        TrustDomain::Skills | TrustDomain::Instructions | TrustDomain::UserAssets => None,
     };
 
     if files.is_empty() && config_projection.is_none() {
@@ -564,5 +638,37 @@ mod tests {
         .unwrap();
         let snap = store.snapshot(root);
         assert_eq!(snap.ex_workspace, WorkspaceTrustState::Changed);
+    }
+
+    #[test]
+    fn denied_domain_lifecycle_and_invalidation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let store = WorkspaceSecurityStore::load_from(root.join("state/workspace_security.json"));
+
+        std::fs::create_dir_all(root.join(".muta/skills/demo")).unwrap();
+        let skill_file = root.join(".muta/skills/demo/SKILL.md");
+        std::fs::write(&skill_file, "skill content v1").unwrap();
+
+        // 1. Initially Quarantined
+        assert_eq!(store.snapshot(root).skills, WorkspaceTrustState::Quarantined);
+
+        // 2. Deny domain -> becomes Denied (ADR-0253)
+        store.deny_domains(root, &[TrustDomain::Skills]).unwrap();
+        let snap = store.snapshot(root);
+        assert_eq!(snap.skills, WorkspaceTrustState::Denied);
+        assert!(snap.skills.is_denied());
+        // In aggregate, when only Denied is present, aggregate is Denied (does not gate)
+        assert_eq!(snap.aggregate(), WorkspaceTrustState::Denied);
+
+        // 3. Modifying file on disk invalidates Denied -> becomes Changed!
+        std::fs::write(&skill_file, "skill content v2 (altered)").unwrap();
+        let snap2 = store.snapshot(root);
+        assert_eq!(snap2.skills, WorkspaceTrustState::Changed);
+        assert_eq!(snap2.aggregate(), WorkspaceTrustState::Changed);
+
+        // 4. User trusts it now -> becomes Trusted
+        store.trust_domains(root, &[TrustDomain::Skills]).unwrap();
+        assert_eq!(store.snapshot(root).skills, WorkspaceTrustState::Trusted);
     }
 }

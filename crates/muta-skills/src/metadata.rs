@@ -12,6 +12,8 @@ pub enum SkillScope {
     Remote,
     /// User-global skills: XDG (`$XDG_DATA_HOME/muta/skills`). See ADR-0013/0014.
     User,
+    /// Role-scoped skills: XDG (`$XDG_DATA_HOME/muta/roles/<name>/skills/`). See ADR-0253.
+    Role,
     /// Additional paths configured in `config.toml`.
     Extra,
     /// Project-local skills (`.muta/skills`, `skills/` in the project working tree).
@@ -24,8 +26,9 @@ impl SkillScope {
         match self {
             SkillScope::Remote => 0,
             SkillScope::User => 1,
-            SkillScope::Extra => 2,
-            SkillScope::Repo => 3,
+            SkillScope::Role => 2,
+            SkillScope::Extra => 3,
+            SkillScope::Repo => 4,
         }
     }
 }
@@ -35,6 +38,7 @@ impl fmt::Display for SkillScope {
         match self {
             SkillScope::Remote => write!(f, "remote"),
             SkillScope::User => write!(f, "user"),
+            SkillScope::Role => write!(f, "role"),
             SkillScope::Extra => write!(f, "extra"),
             SkillScope::Repo => write!(f, "repo"),
         }

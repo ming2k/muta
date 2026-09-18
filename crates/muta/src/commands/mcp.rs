@@ -1,144 +1,21 @@
 use crate::cli::McpAction;
 use muta_contracts::mcp::McpServerConfig;
 use muta_persistence::config::Config;
-use std::io::Read;
 
-/// `muta mcp …` — manage the user-level `[mcp.*]` table in config.toml.
+/// `muta mcp …` — read-only discovery and inspection for MCP servers (ADR-0252).
 ///
-/// Project-scope MCP (`.muta/config.toml`, `.muta/mcp.json`) stays
-/// file-authored and trust-gated (ADR-0085); these verbs only ever touch the
-/// user config, which the user already owns.
+/// Imperative CLI mutations (add, rm, enable, disable, import) have been
+/// permanently retired in ADR-0252. Configuration is declarative-only in
+/// `~/.config/muta/config.toml` or `<repo>/.muta/config.toml`.
 pub fn run(action: McpAction) -> Result<(), Box<dyn std::error::Error>> {
     match action {
         McpAction::List => list(),
-        McpAction::Add {
-            name,
-            url,
-            command,
-            environment,
-            read_only,
-            disabled,
-            allow_tools,
-            deny_tools,
-        } => {
-            let mut config = Config::load();
-            if config.mcp.contains_key(&name) {
-                return Err(format!(
-                    "server '{name}' already exists (edit config.toml or `muta mcp rm {name}` first)"
-                )
-                .into());
-            }
-            let server_cfg = McpServerConfig {
-                url,
-                command,
-                environment: environment.into_iter().collect(),
-                enabled: !disabled,
-                read_only,
-                allow_tools,
-                deny_tools,
-                sandbox_root: None,
-            };
-            // Interactive CLI registration implicitly attests human intent (ADR-0243).
-            let spec = if let Some(url) = &server_cfg.url {
-                muta_contracts::security::AssetSpec::RemoteEndpoint {
-                    url: url.clone(),
-                    headers: server_cfg
-                        .environment
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                }
-            } else {
-                muta_contracts::security::AssetSpec::Process {
-                    command: server_cfg.command.clone(),
-                    env: server_cfg
-                        .environment
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                }
-            };
-            let _ = muta_persistence::AssetAttestationLedger::load().trust_asset(&spec);
-            config.mcp.insert(name.clone(), server_cfg);
-            config.save()?;
-            println!(
-                "Added [mcp.{name}] to {}",
-                Config::config_file_path().display()
-            );
-            Ok(())
-        }
-        McpAction::Remove { name } => {
-            let mut config = Config::load();
-            match config.mcp.remove(&name) {
-                Some(_) => {
-                    config.save()?;
-                    println!("Removed [mcp.{name}]");
-                    Ok(())
-                }
-                None => Err(format!("no MCP server named '{name}' in config.toml").into()),
-            }
-        }
-        McpAction::SetEnabled { name, enabled } => {
-            let mut config = Config::load();
-            let Some(server) = config.mcp.get_mut(&name) else {
-                return Err(format!("no MCP server named '{name}' in config.toml").into());
-            };
-            server.enabled = enabled;
-            config.save()?;
-            println!(
-                "{} [mcp.{name}]",
-                if enabled { "Enabled" } else { "Disabled" }
-            );
-            Ok(())
-        }
         McpAction::Get { name } => {
             let config = Config::load();
             let Some(server) = config.mcp.get(&name) else {
                 return Err(format!("no MCP server named '{name}' in config.toml").into());
             };
             print_server(&name, server);
-            Ok(())
-        }
-        McpAction::Import { source } => {
-            let content = if source == "-" {
-                let mut buf = String::new();
-                std::io::stdin()
-                    .read_to_string(&mut buf)
-                    .map_err(|e| format!("could not read stdin: {e}"))?;
-                buf
-            } else {
-                std::fs::read_to_string(&source)
-                    .map_err(|e| format!("could not read '{source}': {e}"))?
-            };
-            let servers = Config::parse_mcp_toml(&content)?;
-            if servers.is_empty() {
-                return Err("input contains no [mcp.<name>] tables".into());
-            }
-            let mut config = Config::load();
-            let mut added = Vec::new();
-            let mut skipped = Vec::new();
-            for (name, server) in servers {
-                if config.mcp.contains_key(&name) {
-                    skipped.push(name);
-                } else {
-                    config.mcp.insert(name.clone(), server);
-                    added.push(name);
-                }
-            }
-            config.save()?;
-            println!(
-                "Imported {} server(s) into {}",
-                added.len(),
-                Config::config_file_path().display()
-            );
-            for name in &added {
-                println!("  + [mcp.{name}]");
-            }
-            for name in &skipped {
-                println!(
-                    "  = [mcp.{name}] already configured — left unchanged (rm it first to re-import)"
-                );
-            }
             Ok(())
         }
         McpAction::Probe { .. } => unreachable!("probe is async; dispatched in main"),
@@ -150,7 +27,7 @@ fn list() -> Result<(), Box<dyn std::error::Error>> {
     if config.mcp.is_empty() {
         println!("No MCP servers configured in config.toml.");
         println!(
-            "Tip: add MCP servers in config.toml under [mcp.<name>] or use /mcp inside the TUI."
+            "Tip: configure MCP servers declaratively in config.toml under [mcp.<name>]."
         );
         return Ok(());
     }
@@ -173,8 +50,6 @@ fn list() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn print_row(name: &str, server: &McpServerConfig, status: &str) {
-    // A `url` server displays its endpoint; a stdio server displays its
-    // program and arguments.
     let (command, args) = match &server.url {
         Some(url) => ("http", url.clone()),
         None => (
@@ -243,8 +118,6 @@ pub async fn probe(name: &str) -> Result<(), Box<dyn std::error::Error>> {
             for tool in &tools {
                 println!("  {:<32} {}", tool.name(), first_line(tool.description()));
             }
-            // Dropping the handle terminates the child process tree
-            // (`kill_on_drop` + native tree containment in the transport).
             drop(_handle);
             Ok(())
         }

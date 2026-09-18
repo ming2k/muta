@@ -1265,6 +1265,66 @@ impl Config {
         servers
     }
 
+    /// Load role-scoped MCP servers from `$XDG_CONFIG_HOME/muta/roles/<role>/mcp.json` (ADR-0253).
+    pub fn load_role_mcp(role: &str) -> HashMap<String, McpServerConfig> {
+        let json_path = paths::get().role_mcp_file(role);
+        let mut servers = HashMap::new();
+        if let Ok(content) = fs::read_to_string(&json_path) {
+            #[derive(Deserialize, Default)]
+            struct RoleMcpJson {
+                #[serde(default, rename = "mcpServers")]
+                mcp_servers: HashMap<String, RoleMcpJsonServer>,
+            }
+            #[derive(Deserialize)]
+            struct RoleMcpJsonServer {
+                command: String,
+                #[serde(default)]
+                args: Vec<String>,
+                #[serde(default, rename = "env")]
+                environment: HashMap<String, String>,
+                #[serde(default = "default_true")]
+                enabled: bool,
+                #[serde(default)]
+                read_only: bool,
+                #[serde(default)]
+                allow_tools: Vec<String>,
+                #[serde(default)]
+                deny_tools: Vec<String>,
+            }
+            fn default_true() -> bool {
+                true
+            }
+            if let Ok(parsed) = serde_json::from_str::<RoleMcpJson>(&content) {
+                for (name, entry) in parsed.mcp_servers {
+                    let mut command = Vec::with_capacity(entry.args.len() + 1);
+                    command.push(entry.command);
+                    command.extend(entry.args);
+                    servers.insert(
+                        name,
+                        McpServerConfig {
+                            url: None,
+                            command,
+                            environment: entry.environment,
+                            enabled: entry.enabled,
+                            read_only: entry.read_only,
+                            allow_tools: entry.allow_tools,
+                            deny_tools: entry.deny_tools,
+                            sandbox_root: None,
+                        },
+                    );
+                }
+            }
+        }
+        servers
+    }
+
+    /// Merge a role-scoped MCP server set into this config (ADR-0253).
+    pub fn merge_role_mcp(&mut self, role_mcp: HashMap<String, McpServerConfig>) {
+        for (name, server) in role_mcp {
+            self.mcp.insert(name, server);
+        }
+    }
+
     /// Merge a project-local MCP server set into this (global-origin) config.
     /// A project entry with the same name as a global entry **replaces** it
     /// wholesale (ADR-0085 §4); project entries with new names are added. The
@@ -1273,22 +1333,6 @@ impl Config {
         for (name, cfg) in project_mcp {
             self.mcp.insert(name, cfg);
         }
-    }
-
-    /// Parse a bare `[mcp.<name>]` TOML document — the same table shape a
-    /// project `.muta/config.toml` carries and a server-side `print-config`
-    /// command emits — into named server entries. A *narrow* projection like
-    /// [`Self::load_project_mcp`]: unrelated well-formed keys are ignored, so
-    /// a full user config can be piped through. Used by `muta mcp import`.
-    pub fn parse_mcp_toml(content: &str) -> Result<HashMap<String, McpServerConfig>, String> {
-        #[derive(Deserialize)]
-        struct McpProjection {
-            #[serde(default)]
-            mcp: HashMap<String, McpServerConfig>,
-        }
-        toml::from_str::<McpProjection>(content)
-            .map(|parsed| parsed.mcp)
-            .map_err(|error| format!("input is not valid TOML with [mcp.<name>] tables: {error}"))
     }
 
     /// Load only the `[[hooks]]` array from a project-local
@@ -2409,43 +2453,6 @@ name = "DeepSeek"
         // Global hook ordering preserved; project hooks come after.
         assert_eq!(global.hooks[0].command, "global-notify.sh");
         assert_eq!(global.hooks[1].command, ".muta/hooks/lint.sh");
-    }
-
-    #[test]
-    fn parse_mcp_toml_projects_only_the_mcp_table() {
-        // The `aegis-mcp print-config` shape: unrelated keys may appear.
-        let input = r#"
-            title = "unrelated scalar"
-
-            [mcp.aegis]
-            command = ["/usr/bin/aegis-mcp"]
-            enabled = true
-            read_only = false
-            environment = { AEGIS_MCP_INSTANCE_ID = "8d1b62d6" }
-
-            [mcp.docs]
-            url = "https://example.com/mcp"
-        "#;
-        let servers = Config::parse_mcp_toml(input).unwrap();
-        assert_eq!(servers.len(), 2);
-        let aegis_command = vec!["/usr/bin/aegis-mcp".to_string()];
-        assert_eq!(servers["aegis"].command, aegis_command);
-        let instance_id = servers["aegis"].environment.get("AEGIS_MCP_INSTANCE_ID");
-        assert_eq!(instance_id.map(String::as_str), Some("8d1b62d6"));
-        assert_eq!(
-            servers["docs"].url.as_deref(),
-            Some("https://example.com/mcp")
-        );
-        // Runtime-only marker never leaks in from serialized input.
-        assert!(servers["aegis"].sandbox_root.is_none());
-    }
-
-    #[test]
-    fn parse_mcp_toml_rejects_invalid_toml_and_ignores_empty_tables() {
-        assert!(Config::parse_mcp_toml("not = = toml").is_err());
-        // A document without [mcp.*] parses to an empty map, not an error.
-        let empty = Config::parse_mcp_toml("[other]\nx = 1\n").unwrap();
-        assert!(empty.is_empty());
     }
 
     #[test]

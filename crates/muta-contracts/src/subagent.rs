@@ -338,7 +338,7 @@ pub const SUBAGENT_SKILL: SubagentPreset = SubagentPreset {
 You are a skill-discovery subagent. Your role is to locate, \
 inspect, and synthesize specialized instructions and procedures from available \
 skills (project-local `.muta/skills/`, user-global `~/.local/share/muta/skills/`, \
-`.agents/skills/`, `.claude/skills/`, etc.) to guide the delegated task. Read the \
+and role-scoped skills) to guide the delegated task. Read the \
 relevant `SKILL.md` documents and associated reference files, extract the concrete \
 rules, tool sequences, edge cases, and best practices, and return an actionable, \
 well-structured domain briefing to the calling agent. Do not modify files or ask \

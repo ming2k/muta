@@ -20,8 +20,12 @@ pub enum WorkspaceTrustState {
     Quarantined,
     /// The exact current content digest of contributions was explicitly trusted by the user.
     Trusted,
-    /// Contributions were previously trusted, but their content/digest has changed.
+    /// Contributions were explicitly rejected/denied by human review (ADR-0253).
+    Denied,
+    /// Contributions were previously trusted or denied, but their content/digest has changed.
     Changed,
+    /// Asset 30-day lease has expired and requires routine human re-attestation (ADR-0252).
+    Expired,
 }
 
 impl WorkspaceTrustState {
@@ -29,12 +33,22 @@ impl WorkspaceTrustState {
         matches!(self, Self::Trusted)
     }
 
+    pub fn is_denied(self) -> bool {
+        matches!(self, Self::Denied)
+    }
+
+    pub fn is_expired(self) -> bool {
+        matches!(self, Self::Expired)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Absent => "absent",
             Self::Quarantined => "quarantined",
             Self::Trusted => "trusted",
+            Self::Denied => "denied",
             Self::Changed => "changed",
+            Self::Expired => "expired",
         }
     }
 }
@@ -61,15 +75,19 @@ pub enum TrustDomain {
     /// Trust project-level external workspace roots (`[workspace].additional_roots`).
     #[serde(rename = "ex_workspace", alias = "ex-workspace")]
     ExWorkspace,
+    /// Trust user-level MCP and global executable assets (ADR-0252).
+    #[serde(rename = "user_assets", alias = "user-assets")]
+    UserAssets,
 }
 
 impl TrustDomain {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Mcp,
         Self::Skills,
         Self::Hooks,
         Self::Instructions,
         Self::ExWorkspace,
+        Self::UserAssets,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -79,6 +97,7 @@ impl TrustDomain {
             Self::Hooks => "hooks",
             Self::Instructions => "instructions",
             Self::ExWorkspace => "ex-workspace",
+            Self::UserAssets => "user-assets",
         }
     }
 }
@@ -104,6 +123,9 @@ pub struct WorkspaceSecuritySnapshot {
     /// Trust status for project-declared external workspace roots.
     #[serde(default)]
     pub ex_workspace: WorkspaceTrustState,
+    /// Trust status for user-level MCP and global executable assets (ADR-0252).
+    #[serde(default)]
+    pub user_assets: WorkspaceTrustState,
 }
 
 impl WorkspaceSecuritySnapshot {
@@ -115,6 +137,7 @@ impl WorkspaceSecuritySnapshot {
             hooks: WorkspaceTrustState::Absent,
             instructions: WorkspaceTrustState::Absent,
             ex_workspace: WorkspaceTrustState::Absent,
+            user_assets: WorkspaceTrustState::Absent,
         }
     }
 
@@ -125,6 +148,7 @@ impl WorkspaceSecuritySnapshot {
             TrustDomain::Hooks => self.hooks,
             TrustDomain::Instructions => self.instructions,
             TrustDomain::ExWorkspace => self.ex_workspace,
+            TrustDomain::UserAssets => self.user_assets,
         }
     }
 
@@ -140,6 +164,7 @@ impl WorkspaceSecuritySnapshot {
             self.hooks,
             self.instructions,
             self.ex_workspace,
+            self.user_assets,
         ];
         let present = states
             .into_iter()
@@ -147,13 +172,24 @@ impl WorkspaceSecuritySnapshot {
             .collect::<Vec<_>>();
         if present.is_empty() {
             WorkspaceTrustState::Absent
-        } else if present
-            .iter()
-            .all(|state| *state == WorkspaceTrustState::Trusted)
-        {
-            WorkspaceTrustState::Trusted
         } else if present.contains(&WorkspaceTrustState::Changed) {
             WorkspaceTrustState::Changed
+        } else if present.contains(&WorkspaceTrustState::Expired) {
+            WorkspaceTrustState::Expired
+        } else if present.iter().all(|state| {
+            matches!(
+                *state,
+                WorkspaceTrustState::Trusted | WorkspaceTrustState::Denied
+            )
+        }) {
+            if present
+                .iter()
+                .all(|state| *state == WorkspaceTrustState::Trusted)
+            {
+                WorkspaceTrustState::Trusted
+            } else {
+                WorkspaceTrustState::Denied
+            }
         } else {
             WorkspaceTrustState::Quarantined
         }
@@ -224,7 +260,92 @@ impl AssetSpec {
     }
 }
 
-/// Attestation status for an asset in the universal ledger (ADR-0243).
+/// Canonical locator identifying an external capability unit (ADR-0252).
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
+)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub enum AssetLocator {
+    /// User-level MCP server declared in global config.toml.
+    UserMcp { name: String },
+    /// User-level custom skill in ~/.config/muta/skills or global paths.
+    UserSkill { name: String },
+    /// User-level lifecycle hook in global configuration.
+    UserHook { event: String },
+    /// Role-scoped MCP server declared in role bundle (ADR-0253).
+    RoleMcp { role: String, name: String },
+    /// Role-scoped custom skill (ADR-0253).
+    RoleSkill { role: String, name: String },
+    /// Workspace-scoped MCP server declared in workspace configuration.
+    WorkspaceMcp { workspace_root: String, name: String },
+    /// Project-level custom skill.
+    WorkspaceSkill { workspace_root: String, name: String },
+    /// Project-level lifecycle hook.
+    WorkspaceHook { workspace_root: String, event: String },
+    /// Project instructions and rules (AGENTS.md).
+    WorkspaceInstructions { workspace_root: String },
+    /// Project-declared external workspace roots.
+    WorkspaceExRoots { workspace_root: String },
+    /// Standalone external script or executable referenced by absolute path.
+    ExternalPath { path: String },
+}
+
+impl AssetLocator {
+    /// Deterministic string key for persistence lookup.
+    pub fn to_key_string(&self) -> String {
+        match self {
+            Self::UserMcp { name } => format!("user:mcp:{name}"),
+            Self::UserSkill { name } => format!("user:skill:{name}"),
+            Self::UserHook { event } => format!("user:hook:{event}"),
+            Self::RoleMcp { role, name } => format!("role:{role}:mcp:{name}"),
+            Self::RoleSkill { role, name } => format!("role:{role}:skill:{name}"),
+            Self::WorkspaceMcp { workspace_root, name } => {
+                format!("ws:{}:mcp:{name}", canonical_root_prefix(workspace_root))
+            }
+            Self::WorkspaceSkill { workspace_root, name } => {
+                format!("ws:{}:skill:{name}", canonical_root_prefix(workspace_root))
+            }
+            Self::WorkspaceHook { workspace_root, event } => {
+                format!("ws:{}:hook:{event}", canonical_root_prefix(workspace_root))
+            }
+            Self::WorkspaceInstructions { workspace_root } => {
+                format!("ws:{}:instructions", canonical_root_prefix(workspace_root))
+            }
+            Self::WorkspaceExRoots { workspace_root } => {
+                format!("ws:{}:ex_roots", canonical_root_prefix(workspace_root))
+            }
+            Self::ExternalPath { path } => format!("ext:{path}"),
+        }
+    }
+
+    /// User-friendly label for UI presentation.
+    pub fn label(&self) -> String {
+        match self {
+            Self::UserMcp { name } => format!("User MCP: {name}"),
+            Self::UserSkill { name } => format!("User Skill: {name}"),
+            Self::UserHook { event } => format!("User Hook: {event}"),
+            Self::RoleMcp { role, name } => format!("Role ({role}) MCP: {name}"),
+            Self::RoleSkill { role, name } => format!("Role ({role}) Skill: {name}"),
+            Self::WorkspaceMcp { name, .. } => format!("Project MCP: {name}"),
+            Self::WorkspaceSkill { name, .. } => format!("Project Skill: {name}"),
+            Self::WorkspaceHook { event, .. } => format!("Project Hook: {event}"),
+            Self::WorkspaceInstructions { .. } => "Project Instructions (AGENTS.md)".to_string(),
+            Self::WorkspaceExRoots { .. } => "External Workspace Roots".to_string(),
+            Self::ExternalPath { path } => format!("External Executable: {path}"),
+        }
+    }
+}
+
+fn canonical_root_prefix(root: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(root.as_bytes());
+    let hex = format!("{:x}", hasher.finalize());
+    hex[..16].to_string()
+}
+
+/// Attestation status for an asset in the universal ledger (ADR-0243, ADR-0252).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
@@ -236,6 +357,13 @@ pub enum AttestationStatus {
     Trusted,
     /// Asset is temporarily allowed for the active session lifetime only.
     SessionEphemeral,
+    /// Asset was explicitly rejected / denied by human review (ADR-0253).
+    /// Silently quarantined; does not re-trigger trust gate unless content hash changes.
+    Denied,
+    /// Asset content has changed compared to previously trusted or denied fingerprint (ADR-0252, ADR-0253).
+    Changed,
+    /// Asset lease has expired (> 30 days) and requires re-attestation (ADR-0252).
+    Expired,
 }
 
 impl AttestationStatus {
@@ -243,11 +371,18 @@ impl AttestationStatus {
         matches!(self, Self::Trusted | Self::SessionEphemeral)
     }
 
+    pub fn is_denied(self) -> bool {
+        matches!(self, Self::Denied)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Quarantined => "quarantined",
             Self::Trusted => "trusted",
             Self::SessionEphemeral => "session_ephemeral",
+            Self::Denied => "denied",
+            Self::Changed => "changed",
+            Self::Expired => "expired",
         }
     }
 }

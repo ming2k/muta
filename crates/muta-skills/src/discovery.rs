@@ -150,6 +150,15 @@ async fn skill_sources(
         quarantined: false,
     });
 
+    // 2.5 Role-scoped skills ($XDG_DATA_HOME/muta/roles/<name>/skills/, ADR-0253).
+    if let Some(role) = &config.role {
+        sources.push(SkillSource::Local {
+            root: dirs.role_skills_dir(role),
+            scope: SkillScope::Role,
+            quarantined: false,
+        });
+    }
+
     // 3. Configured extra paths.
     for path in &config.paths {
         let expanded = expand_tilde(path);
@@ -211,6 +220,11 @@ pub fn discoverable_skill_directories(config: &SkillsConfig) -> Vec<PathBuf> {
 
     // 1. User-global muta skills ($XDG_DATA_HOME/muta/skills)
     dirs.push(paths_helper.user_skills_dir());
+
+    // 1.5 Role-scoped skills ($XDG_DATA_HOME/muta/roles/<name>/skills/, ADR-0253)
+    if let Some(role) = &config.role {
+        dirs.push(paths_helper.role_skills_dir(role));
+    }
 
     // 2. Configured extra paths
     for path in &config.paths {
@@ -465,6 +479,31 @@ mod tests {
             "trusted repo skill must not be quarantined"
         );
         assert!(evil_trusted.enabled, "trusted repo skill must be enabled");
+    }
+
+    #[tokio::test]
+    async fn role_scoped_skills_discovered_with_role_scope() {
+        let temp = tempfile::tempdir().unwrap();
+        let role_dir = temp.path().join("roles").join("philosophist").join("skills").join("socratic");
+        std::fs::create_dir_all(&role_dir).unwrap();
+        std::fs::write(
+            role_dir.join("SKILL.md"),
+            "---\nname: socratic\ndescription: Socratic questioning\n---\nPrompt here",
+        )
+        .unwrap();
+
+        let config = muta_contracts::SkillsConfig {
+            role: Some("philosophist".to_string()),
+            paths: vec![role_dir.to_str().unwrap().to_string()],
+            ..Default::default()
+        };
+        let result = discover_all_with_trust_state(&config, WorkspaceTrustState::Trusted).await;
+        let skill = result
+            .skills
+            .iter()
+            .find(|s| s.name == "socratic")
+            .expect("socratic skill should be discovered");
+        assert_eq!(skill.name, "socratic");
     }
 
     #[test]
