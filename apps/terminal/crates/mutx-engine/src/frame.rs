@@ -474,7 +474,13 @@ mod tests {
         crossterm::style::force_color_output(true);
         let mut output = Vec::new();
         {
-            let backend = Backend::with_bce(&mut output, Bce::No);
+            let backend = Backend::with_bce_and_driver(
+                &mut output,
+                Bce::No,
+                crate::driver::TerminalDriver::for_profile(
+                    &crate::profile::TerminalProfile::direct_color(),
+                ),
+            );
             let mut terminal = Terminal::new(backend);
 
             terminal
@@ -617,7 +623,13 @@ mod tests {
     #[test]
     fn failed_frame_closes_envelope_then_forces_clear_and_full_repaint() {
         crossterm::style::force_color_output(true);
-        let backend = Backend::with_bce(FailOnByteWriter::default(), Bce::No);
+        let backend = Backend::with_bce_and_driver(
+            FailOnByteWriter::default(),
+            Bce::No,
+            crate::driver::TerminalDriver::for_profile(
+                &crate::profile::TerminalProfile::direct_color(),
+            ),
+        );
         let mut terminal = Terminal::new(backend);
         terminal
             .draw(|frame| {
