@@ -1898,6 +1898,7 @@ fn is_auth_error(err: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
 
