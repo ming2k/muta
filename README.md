@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  A universal, security-first AI agent harness — featuring flexible in-framework extensibility, native implementation of all four major wire protocol paradigms, comprehensive frontier model capabilities, and extensible frontends across terminal, web, and headless runtimes.
+  A universal, security-first AI agent harness.
 </p>
 
 <p align="center">
