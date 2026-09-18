@@ -1041,9 +1041,10 @@ fn spawn_mcp_config_watcher(
     resp_tx: mpsc::UnboundedSender<AgentResponse>,
     session_id: String,
 ) {
-    tokio::spawn(async move {
-        let mut watcher = match muta_platform::FsWatcher::new(std::time::Duration::from_millis(500))
-        {
+    let workspace_root = workspace_root.map(|r| r.canonicalize().unwrap_or(r));
+
+    let mut watcher =
+        match muta_platform::FsWatcher::new(muta_platform::FsWatcher::DEFAULT_DEBOUNCE) {
             Ok(w) => w,
             Err(err) => {
                 tracing::warn!(error = %err, "could not initialize MCP config filesystem watcher");
@@ -1051,52 +1052,89 @@ fn spawn_mcp_config_watcher(
             }
         };
 
-        // 1. Watch user config directory
-        let user_config_file = muta_paths::paths::Dirs::system().config_file();
-        if let Some(user_config_dir) = user_config_file.parent()
-            && user_config_dir.exists()
-        {
-            let _ = watcher.watch(user_config_dir, false);
+    // 1. Watch user config directory
+    let user_config_file = muta_paths::paths::Dirs::system().config_file();
+    let canon_user_config = user_config_file.canonicalize().ok();
+    if let Some(user_config_dir) = user_config_file.parent()
+        && user_config_dir.exists()
+    {
+        let _ = watcher.watch(user_config_dir, false);
+    }
+
+    // 2. Watch workspace directory and .muta directory
+    if let Some(ref root) = workspace_root {
+        if root.exists() {
+            let _ = watcher.watch(root, false);
         }
-
-        // 2. Watch workspace directory and .muta directory
-        if let Some(ref root) = workspace_root {
-            let workspace_muta_dir = root.join(".muta");
-            if workspace_muta_dir.exists() {
-                let _ = watcher.watch(&workspace_muta_dir, false);
-            } else if root.exists() {
-                // If .muta does not exist yet, watch the workspace root non-recursively
-                // so that creating .muta during the session dynamically attaches the watcher.
-                let _ = watcher.watch(root, false);
-            }
+        let workspace_muta_dir = root.join(".muta");
+        if workspace_muta_dir.exists() {
+            let _ = watcher.watch(&workspace_muta_dir, false);
         }
+    }
 
-        let mut events_rx = watcher.subscribe();
+    let mut events_rx = watcher.subscribe();
 
+    tokio::spawn(async move {
+        let mut watcher = watcher;
         while let Ok(event) = events_rx.recv().await {
             // Dynamic watch attachment: if .muta was just created, start watching it.
             if let Some(ref root) = workspace_root {
                 let ws_muta = root.join(".muta");
-                if event.paths.iter().any(|p| p == &ws_muta) && ws_muta.exists() {
+                let canon_muta = root
+                    .canonicalize()
+                    .unwrap_or_else(|_| root.clone())
+                    .join(".muta");
+                if event.paths.iter().any(|p| {
+                    p == &ws_muta
+                        || p == &canon_muta
+                        || p.canonicalize().ok().as_ref() == Some(&canon_muta)
+                }) && ws_muta.exists()
+                {
                     let _ = watcher.watch(&ws_muta, false);
                 }
             }
 
-            let is_user_config = event.paths.iter().any(|p| p == &user_config_file);
+            let is_user_config = event.paths.iter().any(|p| {
+                p == &user_config_file
+                    || canon_user_config.as_ref().is_some_and(|c| p == c)
+                    || p.canonicalize().ok().as_ref() == canon_user_config.as_ref()
+            });
+
             let is_workspace_event = workspace_root.as_ref().is_some_and(|root| {
                 let ws_config = root.join(".muta/config.toml");
                 let ws_mcp = root.join(".muta/mcp.json");
+                let canon_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+                let canon_ws_config = canon_root.join(".muta/config.toml");
+                let canon_ws_mcp = canon_root.join(".muta/mcp.json");
+
                 event.paths.iter().any(|p| {
-                    p != &user_config_file
-                        && (p == &ws_config
-                            || p == &ws_mcp
-                            || (p
-                                .file_name()
-                                .is_some_and(|n| n == "config.toml" || n == "mcp.json")
-                                && p.parent().is_some_and(|parent| {
-                                    parent.file_name().is_some_and(|d| d == ".muta")
-                                })
-                                && p.starts_with(root)))
+                    if p == &user_config_file || canon_user_config.as_ref().is_some_and(|c| p == c)
+                    {
+                        return false;
+                    }
+                    if p == &ws_config
+                        || p == &ws_mcp
+                        || p == &canon_ws_config
+                        || p == &canon_ws_mcp
+                    {
+                        return true;
+                    }
+                    let canon_p = p.canonicalize().unwrap_or_else(|_| p.clone());
+                    if canon_p == canon_ws_config || canon_p == canon_ws_mcp {
+                        return true;
+                    }
+                    let is_target_file = p
+                        .file_name()
+                        .is_some_and(|n| n == "config.toml" || n == "mcp.json");
+                    let is_in_muta = p
+                        .parent()
+                        .is_some_and(|parent| parent.file_name().is_some_and(|d| d == ".muta"));
+                    is_target_file
+                        && is_in_muta
+                        && (p.starts_with(root)
+                            || p.starts_with(&canon_root)
+                            || canon_p.starts_with(root)
+                            || canon_p.starts_with(&canon_root))
                 })
             });
 
@@ -1188,7 +1226,10 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_watcher_ignores_non_mcp_workspace_config() {
         let tmp = tempdir().unwrap();
-        let ws_root = tmp.path().to_path_buf();
+        let ws_root = tmp
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| tmp.path().to_path_buf());
         let dot_muta = ws_root.join(".muta");
         std::fs::create_dir_all(&dot_muta).unwrap();
 
@@ -1242,7 +1283,10 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_watcher_warns_on_untrusted_workspace_mcp() {
         let tmp = tempdir().unwrap();
-        let ws_root = tmp.path().to_path_buf();
+        let ws_root = tmp
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| tmp.path().to_path_buf());
         let dot_muta = ws_root.join(".muta");
         std::fs::create_dir_all(&dot_muta).unwrap();
 
@@ -1304,7 +1348,10 @@ mod tests {
     async fn test_mcp_watcher_user_config_does_not_trigger_workspace_warning() {
         let tmp = tempdir().unwrap();
         // Simulate a workspace root containing user config directory
-        let ws_root = tmp.path().to_path_buf();
+        let ws_root = tmp
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| tmp.path().to_path_buf());
         let user_config_file = muta_paths::paths::Dirs::system().config_file();
 
         let sec_file = tmp.path().join("workspace_security.json");
