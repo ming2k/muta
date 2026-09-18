@@ -423,9 +423,11 @@ mod tests {
     ///   recovered 77 tokens, and 3 more came back from injecting the mode enum
     ///   into the schema. (The surface also carried +21 from an unrelated
     ///   `process` change already in the tree when this was measured.)
+    /// - 1955 (ADR-0246) — `recall_memory` (113) added to the built-in tool
+    ///   surface for symmetric role memory recall across sessions.
     #[test]
     fn builtin_tool_surface_stays_within_its_token_budget() {
-        const BUDGET_TOKENS: usize = 1_864;
+        const BUDGET_TOKENS: usize = 1_955;
 
         let ctx = muta_contracts::ToolContextBuilder::new().build();
         let mut tools = muta_contracts::collect_toolset(&ctx).default_view();

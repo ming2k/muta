@@ -1169,9 +1169,7 @@ mod supervision {
         assert!(
             engine
                 .search_history("retry OR NOT needle", None, 20)
-                .unwrap()
-                .is_empty()
-                || true,
+                .is_ok(),
             "sanitized query must not error"
         );
     }
