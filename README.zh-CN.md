@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  通用、安全优先的 AI 智能体驾驭底座 —— 具备框架内灵活扩展、完备的主流多模型支持、以及涵盖终端、Web 与后台守护的可扩展前端生态。
+  通用、安全优先的 AI 智能体驾驭底座 —— 具备框架内灵活扩展、四大主流接口范式的原生协议栈支持、完备的前沿模型能力、以及涵盖终端、Web 与后台守护的可扩展前端生态。
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 - **通用智能体底座 (Universal Agent Purpose)** — 超越单一代码辅助工具；提供通用的智能体架构，既支持软件工程（`developer`），也支持纯认知研究与思辨对话（`philosophist`），角色定义对称且自包含。
 - **框架内灵活扩展 (Flexible Extensibility)** — 通过自包含角色包 (Role Bundles)、按需技能 (Skills)、生命周期钩子 (Hooks) 与模型上下文协议 (MCP) 实现能力即插即用，按需隔离。
-- **多模型接口支持 (Multi-Model Interfaces)** — 原生适配 Anthropic、OpenAI、Gemini、DeepSeek 及自定义 OpenAI 兼容接口，支持按任务与角色灵活配置路由。
+- **四大接口范式原生支持 (Four Wire Protocol Paradigms)** — 坚决拒绝粗暴一刀切的“Chat Completions 伪适配”反模式；原生实现四大底层通信协议栈：**OpenAI Chat Completions**、**OpenAI Responses** (最新一代规范)、**Anthropic Messages**、以及 **Google Gemini (GenerateContent)**，100% 保真保留前沿模型（Claude, GPT, Gemini, DeepSeek 等）独有的深度思考链、提示词缓存断点与结构化输出。
 - **主流模型能力完备 (Comprehensive Capabilities)** — 完备覆盖前沿模型全套能力：结构化工具调用 (Tool Calling)、深度思考推理链 (Thinking Tiers)、多模态视觉 (Vision)、实时流式输出与前缀缓存优化。
 - **可扩展前端生态 (Extensible Frontends)** — 自研高性能语义化终端 (TUI `mutx`)、现代响应式 Web 应用与后台会话守护进程 (Daemon)，通过强类型契约层彻底解耦与自由驱动。
 - **专注安全与资产信任 (Security-First & Trust)** — 严格的三大正交安全平面：基于内容的物理文件资产认证（SHA-256 指纹与 30 天 TTL 租期）、用户所有的物理空间目录隔离，以及防御提示词注入劫持的四级运行时危险网格。

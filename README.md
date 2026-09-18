@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  A universal, security-first AI agent harness — featuring flexible in-framework extensibility, multi-model interfaces with comprehensive mainstream capabilities, and extensible frontends across terminal, web, and headless runtimes.
+  A universal, security-first AI agent harness — featuring flexible in-framework extensibility, native implementation of all four major wire protocol paradigms, comprehensive frontier model capabilities, and extensible frontends across terminal, web, and headless runtimes.
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@
 
 - **Universal Agent Purpose** — Beyond a simple code editor; a general-purpose agent harness supporting cognitive research, software engineering, and custom personas with hermetic, symmetric role definitions.
 - **Flexible In-Framework Extensibility** — Modular capability expansion through self-contained role bundles, on-demand skills, lifecycle hooks, and Model Context Protocol (MCP) integrations.
-- **Multi-Model Provider Support** — Native, first-class adapters for Anthropic, OpenAI, Gemini, DeepSeek, and custom OpenAI-compatible endpoints with dynamic, role-level model routing.
+- **Four Wire Protocol Paradigms** — Rejects the degraded "chat completions only" wrapper anti-pattern; natively implements all four foundational wire protocol paradigms: **OpenAI Chat Completions**, **OpenAI Responses**, **Anthropic Messages**, and **Google Gemini (GenerateContent)**, preserving 100% protocol-native fidelity across frontier models (Claude, GPT, Gemini, DeepSeek, and custom endpoints).
 - **Comprehensive Model Capabilities** — Complete frontier capability coverage: structured tool calling, reasoning/thinking tiers, multimodal vision, live streaming, and deterministic prompt caching.
 - **Extensible Frontends** — High-performance semantic terminal TUI (`mutx`), reactive Web interface, and background session daemon decoupled through strongly-typed contracts.
 - **Security-First & Trust Architecture** — Three orthogonal security planes: cryptographic file asset attestation with 30-day bounded leases, strict user-owned spatial boundaries, and a four-tier runtime hazard mesh guarding against indirect prompt injection.
