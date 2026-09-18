@@ -1969,6 +1969,9 @@ mod tests {
 
     #[tokio::test]
     async fn add_provider_oauth_auth_mismatch_never_writes_connection_or_token() {
+        let _guard = muta_persistence::paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let dirs = muta_persistence::paths::Dirs {
             config_dir: dir.path().join("config"),
@@ -2050,6 +2053,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn query_connection_detail_sends_initial_and_background_detail() {
+        let _guard = muta_persistence::paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let dirs = muta_persistence::paths::Dirs {
             config_dir: dir.path().join("config"),
@@ -2103,6 +2109,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn connection_update_surfaces_warning_and_picker_then_final_keys() {
+        let _guard = muta_persistence::paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let dirs = muta_persistence::paths::Dirs {
             config_dir: dir.path().join("config"),
@@ -2160,6 +2169,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn adr0199_handlers_mutate_preset_and_connection_scopes() {
+        let _guard = muta_persistence::paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let dirs = muta_persistence::paths::Dirs {
             config_dir: dir.path().join("config"),
@@ -2231,6 +2243,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn add_provider_snapshots_rules_without_materializing_model_ids() {
+        let _guard = muta_persistence::paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let dirs = muta_persistence::paths::Dirs {
             config_dir: dir.path().join("config"),
