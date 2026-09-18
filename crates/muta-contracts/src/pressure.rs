@@ -272,6 +272,13 @@ pub fn prune_tool_results(
     Some(apply_prune(messages, plan, protect_recent_tokens))
 }
 
+/// Whether there are prunable tool results (such as superseded build commands,
+/// invalidated reads, or evicted images) that can be reclaimed outside the
+/// recent protection window (ADR-0254).
+pub fn has_stale_tool_results(messages: &[Message], protect_recent_tokens: usize) -> bool {
+    !plan_prune(messages, protect_recent_tokens).is_empty()
+}
+
 /// One planned degradation: replace `messages[index].content` with
 /// `new_content`, reclaiming `reclaim` chars of own content.
 struct PrunePlan {
@@ -297,9 +304,33 @@ struct ToolMeta {
     /// True when the call mutated the file (write/edit). A mutation invalidates
     /// every prior read of the same path regardless of range.
     mutates: bool,
+    /// Salient command string for shell/command tools (ADR-0254).
+    command_str: Option<String>,
 }
 
 impl ToolMeta {
+    /// Whether this tool represents a build, test, or check command (ADR-0254).
+    fn is_build_or_test_command(&self) -> bool {
+        let Some(cmd) = &self.command_str else {
+            return false;
+        };
+        let c = cmd.trim().to_ascii_lowercase();
+        c.starts_with("ninja")
+            || c.starts_with("meson")
+            || c.starts_with("cargo test")
+            || c.starts_with("cargo nextest")
+            || c.starts_with("cargo check")
+            || c.starts_with("cargo build")
+            || c.starts_with("pytest")
+            || c.starts_with("ctest")
+            || c.starts_with("make test")
+            || c.starts_with("npm test")
+            || c.starts_with("yarn test")
+            || c.starts_with("pnpm test")
+            || c.contains(" test")
+            || c.contains(" check")
+            || c.contains(" build")
+    }
     /// Does this (later) same-file result supersede an `earlier` one, making the
     /// earlier one stale? The caller guarantees both touched the same file.
     ///
@@ -369,13 +400,25 @@ fn plan_prune(messages: &[Message], protect_recent_tokens: usize) -> Vec<PrunePl
             continue;
         }
         let meta_i = meta.get(&i).cloned().unwrap_or_default();
-        let stale = meta_i.file_key.as_deref().is_some_and(|fk| {
+        let file_stale = meta_i.file_key.as_deref().is_some_and(|fk| {
             tools[pos + 1..].iter().any(|j| {
                 meta.get(j).is_some_and(|meta_j| {
                     meta_j.file_key.as_deref() == Some(fk) && meta_j.supersedes(&meta_i)
                 })
             })
         });
+
+        // Command staleness (ADR-0254):
+        // 1. A build/test command is superseded if a LATER tool call is also a build/test command.
+        // 2. A build/test command is invalidated if a LATER tool call mutated files (`mutates == true`).
+        let command_stale = meta_i.is_build_or_test_command() && {
+            tools[pos + 1..].iter().any(|j| {
+                meta.get(j)
+                    .is_some_and(|meta_j| meta_j.is_build_or_test_command() || meta_j.mutates)
+            })
+        };
+
+        let stale = file_stale || command_stale;
         // Keep-alive spares a *fresh* result whose file target is still in play.
         // A stale result is cleared even if mentioned, because its content is
         // outdated. "In play" means referenced *after* this result was produced
@@ -387,12 +430,21 @@ fn plan_prune(messages: &[Message], protect_recent_tokens: usize) -> Vec<PrunePl
         }
         let content = &messages[i].content;
         let new_content = degrade(content, &meta_i, stale);
-        let content_tokens = tokenizer::count_tokens(content);
+        let mut content_tokens = tokenizer::count_tokens(content);
+        let has_companion_image = messages.get(i + 1).is_some_and(|m| {
+            m.origin
+                .as_ref()
+                .is_some_and(|o| o.kind == crate::message::InjectionKind::ToolImage)
+                && m.images.is_some()
+        });
+        if has_companion_image {
+            content_tokens += 1600;
+        }
         let new_tokens = tokenizer::count_tokens(&new_content);
         if new_tokens >= content_tokens {
             continue; // no real gain
         }
-        let reclaim = content_tokens - new_tokens;
+        let reclaim = content_tokens.saturating_sub(new_tokens);
         plan.push(PrunePlan {
             index: i,
             new_content,
@@ -416,6 +468,21 @@ fn apply_prune(
         outcome.cleared_count += 1;
         messages[item.index].content = item.new_content;
         messages[item.index].reasoning_content = None;
+        // ADR-0254: Strip image attachments from pruned messages
+        messages[item.index].images = None;
+        // ADR-0254: Also prune companion ToolImage user message if immediately following
+        if let Some(next_msg) = messages.get_mut(item.index + 1)
+            && next_msg
+                .origin
+                .as_ref()
+                .is_some_and(|o| o.kind == crate::message::InjectionKind::ToolImage)
+            && next_msg.images.is_some()
+        {
+            outcome.originals.push(next_msg.clone());
+            next_msg.images = None;
+            next_msg.content = "[cleared image payload]".to_string();
+            outcome.reclaimed_tokens += 1600;
+        }
         // A `task` result carries the subagent's whole transcript as
         // `children`; its old `Tool` results are the same kind of bulky weight,
         // so prune them too (ungated — durability already happened when the
@@ -475,11 +542,19 @@ fn collect_tool_meta(messages: &[Message]) -> HashMap<usize, ToolMeta> {
                 } else {
                     (None, false)
                 };
+                let is_cmd = matches!(*name, "run_command" | "execute_command" | "bash" | "sh");
+                let command_str = if is_cmd {
+                    let parsed = parsed_args(args);
+                    arg_str(&parsed, &["command", "cmd"]).map(|s| s.to_string())
+                } else {
+                    None
+                };
                 ToolMeta {
                     label: tool_label(name, args),
                     file_key,
                     read_range,
                     mutates,
+                    command_str,
                 }
             })
             .unwrap_or_default();
@@ -706,6 +781,10 @@ pub fn estimate_message_tokens(message: &Message) -> i64 {
             tokens += 2;
         }
     }
+    // ADR-0254: Account for multimodal vision tokens (~1600 tokens per image on standard vision models).
+    if let Some(images) = message.images.as_ref() {
+        tokens += (images.len() * 1600) as i64;
+    }
     tokens
 }
 
@@ -743,6 +822,13 @@ fn message_fingerprint(message: &Message) -> MessageContentFingerprint {
         for call in calls {
             call.name.hash(&mut h1);
             call.arguments.hash(&mut h2);
+        }
+    }
+    // ADR-0254: Track image content fingerprint
+    if let Some(images) = message.images.as_ref() {
+        for img in images {
+            img.mime.hash(&mut h1);
+            img.data.len().hash(&mut h2);
         }
     }
     MessageContentFingerprint(h1.finish(), h2.finish())
@@ -1383,5 +1469,73 @@ mod tests {
         let est = crate::estimate_tokens(&[m]);
         // CJK content alone is 6 glyphs; plus the ASCII prefix ~3 tokens.
         assert!(est >= 6, "got {est}");
+    }
+
+    #[test]
+    fn prior_build_command_is_superseded_by_later_build_command() {
+        let call1 = call("c1", "run_command", "{\"command\":\"ninja -C build test\"}");
+        let call2 = call("c2", "run_command", "{\"command\":\"ninja -C build test\"}");
+        let log1 = "FAILED: test_embed\nAssertionError: failed\n".repeat(15);
+        let log2 = "PASSED: all 134 tests passed\n".repeat(15);
+        let mut messages = vec![
+            assistant_with_call("c1", "run_command", "{\"command\":\"ninja -C build test\"}"),
+            Message::tool_result(&call1, log1),
+            assistant_with_call("c2", "run_command", "{\"command\":\"ninja -C build test\"}"),
+            Message::tool_result(&call2, log2),
+        ];
+
+        // Zero protect_recent_tokens: call1 is stale because call2 is also a build/test command
+        let out = prune_tool_results(&mut messages, 0, 1).unwrap();
+        assert_eq!(out.cleared_count, 2); // Both are eligible, earlier is stale and fully cleared
+        assert!(messages[1].content.starts_with(CLEARED_TOOL_PREFIX));
+    }
+
+    #[test]
+    fn prior_build_command_is_invalidated_by_code_mutation() {
+        let call1 = call("c1", "run_command", "{\"command\":\"ninja -C build test\"}");
+        let call2 = call(
+            "c2",
+            "edit_text",
+            "{\"path\":\"src/main.rs\",\"old_string\":\"foo\",\"new_string\":\"bar\"}",
+        );
+        let log1 = "error: undefined reference to foo in embed.c\n".repeat(15);
+        let mut messages = vec![
+            assistant_with_call("c1", "run_command", "{\"command\":\"ninja -C build test\"}"),
+            Message::tool_result(&call1, log1),
+            assistant_with_call(
+                "c2",
+                "edit_text",
+                "{\"path\":\"src/main.rs\",\"old_string\":\"foo\",\"new_string\":\"bar\"}",
+            ),
+            Message::tool_result(&call2, "edited successfully"),
+        ];
+
+        let out = prune_tool_results(&mut messages, 0, 1).unwrap();
+        assert!(out.cleared_count >= 1);
+        assert!(messages[1].content.starts_with(CLEARED_TOOL_PREFIX));
+    }
+
+    #[test]
+    fn companion_tool_image_is_evicted_on_prune() {
+        let call1 = call("c1", "read_image", "{\"path\":\"screenshot.png\"}");
+        let tool_msg = Message::tool_result(&call1, "[image: image/png]");
+        let companion = Message::new(Role::User, "Image from screenshot")
+            .with_images(vec![crate::ImagePart {
+                mime: "image/png".into(),
+                data: "very_large_base64_data".into(),
+            }])
+            .with_origin(crate::InjectionOrigin::new(
+                crate::message::InjectionKind::ToolImage,
+            ));
+        let mut messages = vec![
+            assistant_with_call("c1", "read_image", "{\"path\":\"screenshot.png\"}"),
+            tool_msg,
+            companion,
+        ];
+
+        let out = prune_tool_results(&mut messages, 0, 1).unwrap();
+        assert!(out.cleared_count >= 1);
+        assert!(messages[2].images.is_none());
+        assert_eq!(messages[2].content, "[cleared image payload]");
     }
 }

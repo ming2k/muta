@@ -1,4 +1,4 @@
-use muta_contracts::{Message, Role, SessionEntry, SessionEntryKind};
+use muta_contracts::{CausalNode, Message, NodePayload, Role};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -45,25 +45,13 @@ impl FileOperations {
         }
     }
 
-    /// Extract file operations from a session entry (including previous summaries).
-    pub fn extract_from_entry(&mut self, entry: &SessionEntry) {
-        match &entry.kind {
-            SessionEntryKind::Message { message } => {
+    /// Extract file operations from a Session IR CausalNode (ADR-0255).
+    pub fn extract_from_node(&mut self, node: &CausalNode) {
+        match &node.payload {
+            NodePayload::Message { message } => {
                 self.extract_from_message(message);
             }
-            SessionEntryKind::Compaction {
-                read_files,
-                modified_files,
-                ..
-            } => {
-                for f in read_files {
-                    self.read.insert(f.clone());
-                }
-                for f in modified_files {
-                    self.modified.insert(f.clone());
-                }
-            }
-            SessionEntryKind::BranchSummary {
+            NodePayload::Compaction {
                 read_files,
                 modified_files,
                 ..

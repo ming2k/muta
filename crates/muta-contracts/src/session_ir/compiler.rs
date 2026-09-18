@@ -148,7 +148,9 @@ fn pass1_active_branch_projection(ir: &SessionIR) -> Result<Vec<&CausalNode>, Co
             if !ir.history.nodes.contains_key(leaf_id) {
                 return Err(CompilerError::InvalidActiveLeaf(leaf_id.clone()));
             }
-            Ok(ir.history.linear_path(leaf_id))
+            Ok(ir
+                .history
+                .linear_path_with_horizon(leaf_id, ir.state.compaction_horizon.as_deref()))
         }
         None => Ok(Vec::new()),
     }
@@ -179,12 +181,24 @@ fn pass2_context_budgeting(
                 }
                 messages.push(msg);
             }
-            NodePayload::Compaction { summary, .. } => {
+            NodePayload::Compaction {
+                summary,
+                read_files,
+                modified_files,
+                ..
+            } => {
                 // Compaction nodes inject a system-role compaction summary into dialogue view
-                let summary_msg = Message::new(
-                    Role::System,
-                    format!("[Conversation Summary Checkpoint]:\n{summary}"),
-                );
+                let mut content = format!("[Conversation Summary Checkpoint]:\n{summary}");
+                if !read_files.is_empty() || !modified_files.is_empty() {
+                    content.push_str("\n\n### Tracked Files:\n");
+                    if !modified_files.is_empty() {
+                        content.push_str(&format!("- Modified: {}\n", modified_files.join(", ")));
+                    }
+                    if !read_files.is_empty() {
+                        content.push_str(&format!("- Consulted: {}\n", read_files.join(", ")));
+                    }
+                }
+                let summary_msg = Message::new(Role::System, content);
                 messages.push(summary_msg);
             }
             NodePayload::Termination {
@@ -219,6 +233,11 @@ fn pass2_context_budgeting(
                 messages.push(notice_msg);
             }
         }
+    }
+
+    // ADR-0254: Prune superseded build/test results and evict stale companion image payloads
+    if let Some(outcome) = crate::pressure::prune_tool_results(&mut messages, 4_000, 100) {
+        truncated_count += outcome.cleared_count;
     }
 
     Ok((messages, truncated_count))

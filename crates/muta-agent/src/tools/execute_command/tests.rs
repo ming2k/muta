@@ -558,3 +558,78 @@ fn execute_command_schema_documents_1800s_default_timeout() {
         "schema description should state default 1800s: {desc}"
     );
 }
+
+#[test]
+fn semantic_folding_collapses_pure_green_ninja_test_runs() {
+    use super::pipes::{OutputCollector, is_pure_green_test_line};
+    use muta_contracts::tool_output::{ShellLine, ShellStream};
+
+    // Verify pattern matching
+    assert!(is_pure_green_test_line("[1/134] test_alpha OK 0.01s"));
+    assert!(is_pure_green_test_line("[ 2/134] test_beta OK 0.02s"));
+    assert!(is_pure_green_test_line(
+        "PASS [ 0.005s] crate::test_something"
+    ));
+    assert!(is_pure_green_test_line("test crate::test_something ... ok"));
+    assert!(is_pure_green_test_line("✓ test_something"));
+
+    // Verify negative invariants: warnings and errors are NEVER pure green
+    assert!(!is_pure_green_test_line(
+        "[1/134] test_foo OK (warning: leak detected)"
+    ));
+    assert!(!is_pure_green_test_line("[1/134] test_foo FAILED 0.05s"));
+    assert!(!is_pure_green_test_line("test_foo ... FAILED"));
+
+    // Build realistic collector with 10 passing tests followed by 1 failure
+    let mut collector = OutputCollector::new();
+    for i in 1..=10 {
+        collector.lines.push(ShellLine {
+            stream: ShellStream::Out,
+            text: format!("[{i}/11] test_case_{i} OK 0.01s"),
+        });
+        collector
+            .stdout_buf
+            .push_str(&format!("[{i}/11] test_case_{i} OK 0.01s\n"));
+    }
+    collector.lines.push(ShellLine {
+        stream: ShellStream::Out,
+        text: "[11/11] test_case_11 FAILED 0.05s".into(),
+    });
+    collector
+        .stdout_buf
+        .push_str("[11/11] test_case_11 FAILED 0.05s\n");
+
+    // Apply caps with folding enabled (raw: false)
+    let (stdout, _stderr, lines, _truncated) = collector.apply_caps_ex(Some(1), false);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        lines[0].text,
+        "⋯ 10 tests passed (pure-green output folded)"
+    );
+    assert_eq!(lines[1].text, "[11/11] test_case_11 FAILED 0.05s");
+    assert!(stdout.contains("⋯ 10 tests passed (pure-green output folded)"));
+    assert!(stdout.contains("FAILED"));
+}
+
+#[test]
+fn semantic_folding_bypassed_when_raw_is_true() {
+    use super::pipes::OutputCollector;
+    use muta_contracts::tool_output::{ShellLine, ShellStream};
+
+    let mut collector = OutputCollector::new();
+    for i in 1..=5 {
+        collector.lines.push(ShellLine {
+            stream: ShellStream::Out,
+            text: format!("[{i}/5] test_{i} OK 0.01s"),
+        });
+        collector
+            .stdout_buf
+            .push_str(&format!("[{i}/5] test_{i} OK 0.01s\n"));
+    }
+
+    // Apply caps with raw: true -> no folding
+    let (stdout, _stderr, lines, _truncated) = collector.apply_caps_ex(Some(0), true);
+    assert_eq!(lines.len(), 5);
+    assert!(stdout.contains("[1/5] test_1 OK 0.01s"));
+    assert!(!stdout.contains("pure-green output folded"));
+}

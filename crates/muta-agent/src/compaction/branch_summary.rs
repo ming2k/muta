@@ -1,27 +1,25 @@
 use super::file_tracker::FileOperations;
-use muta_contracts::{Message, ModelRequest, Provider, Role, SessionEntry, SessionEntryKind};
+use super::split_compaction::serialize_nodes_for_summary;
+use muta_contracts::{CausalNode, Message, ModelRequest, NodePayload, Provider, Role};
 use std::sync::Arc;
 use tokio::time::Duration;
 
-const BRANCH_SUMMARY_TIMEOUT: Duration = Duration::from_secs(30);
+const BRANCH_SUMMARY_TIMEOUT: Duration = Duration::from_secs(45);
 
 const BRANCH_SUMMARY_SYSTEM_PROMPT: &str = "\
-You are a technical context summarizer for an AI software engineering assistant. \
-Your task is to summarize the work, exploration, and key findings of a conversation branch \
-so that the user and assistant can seamlessly continue work on another branch without losing context.";
+You are a session branch summarization assistant. \
+Your job is to summarize work done on a side branch or abandoned timeline into a concise summary \
+so that another branch or future rounds can understand what was tried, what was completed, and why it was left.";
 
 const BRANCH_SUMMARY_USER_INSTRUCTIONS: &str = "\
-Create a structured summary of this conversation branch for context when returning later.
+Summarize the work done on this timeline into a clear, structured summary.
 
-Use this EXACT format:
+Format:
 
-## Goal
-[What was the user trying to accomplish in this branch?]
+## Branch Objective
+[What was this branch attempting to accomplish?]
 
-## Constraints & Preferences
-- [Any constraints, preferences, or requirements mentioned, or (none)]
-
-## Progress
+## Work Done
 ### Done
 - [x] [Completed tasks or changes]
 
@@ -39,40 +37,23 @@ Use this EXACT format:
 
 Keep each section concise and factual. Preserve exact file paths, function names, and error messages.";
 
-/// Serialize session entries to text representation for LLM summarization.
-pub fn serialize_entries_for_summary(entries: &[SessionEntry]) -> String {
-    let mut out = String::new();
-    for entry in entries {
-        if let Some(msg) = entry.to_context_message() {
-            let role_label = match msg.role {
-                Role::User => "User",
-                Role::Assistant => "Assistant",
-                Role::Tool => "Tool Result",
-                Role::System => "System",
-            };
-            out.push_str(&format!("[{}]\n{}\n\n", role_label, msg.content));
-        }
-    }
-    out
-}
-
-/// Generate a structured branch summary for abandoned entries when transitioning branches.
+/// Generate a structured branch summary for abandoned nodes when transitioning branches (ADR-0255).
 pub async fn generate_branch_summary(
     provider: Arc<dyn Provider>,
     from_leaf_id: &str,
-    abandoned_entries: &[SessionEntry],
+    abandoned_nodes: &[&CausalNode],
     custom_instructions: Option<&str>,
-) -> Result<Option<SessionEntryKind>, String> {
-    if abandoned_entries.is_empty() {
+) -> Result<Option<NodePayload>, String> {
+    if abandoned_nodes.is_empty() {
         return Ok(None);
     }
 
     let mut file_tracker = FileOperations::new();
-    for entry in abandoned_entries {
-        file_tracker.extract_from_entry(entry);
+    for node in abandoned_nodes {
+        file_tracker.extract_from_node(node);
     }
 
-    let conversation_text = serialize_entries_for_summary(abandoned_entries);
+    let conversation_text = serialize_nodes_for_summary(abandoned_nodes);
     if conversation_text.trim().is_empty() {
         return Ok(None);
     }
@@ -108,9 +89,10 @@ pub async fn generate_branch_summary(
     let read_files: Vec<String> = file_tracker.read.into_iter().collect();
     let modified_files: Vec<String> = file_tracker.modified.into_iter().collect();
 
-    Ok(Some(SessionEntryKind::BranchSummary {
+    Ok(Some(NodePayload::Compaction {
         summary,
-        from_id: from_leaf_id.to_string(),
+        first_kept_node_id: from_leaf_id.to_string(),
+        tokens_before: 0,
         read_files,
         modified_files,
     }))
@@ -122,16 +104,28 @@ mod tests {
 
     #[test]
     fn serialization_preserves_dialogue() {
-        let entries = vec![
-            SessionEntry::new_message("1", None, 100, Message::new(Role::User, "Hello")),
-            SessionEntry::new_message(
-                "2",
-                Some("1".into()),
-                101,
-                Message::new(Role::Assistant, "Hi there"),
-            ),
-        ];
-        let text = serialize_entries_for_summary(&entries);
+        let n1 = CausalNode {
+            id: "1".into(),
+            parent_id: None,
+            seq: 1,
+            timestamp_ms: 100,
+            kind: muta_contracts::NodeKind::Dialogue,
+            payload: NodePayload::Message {
+                message: Message::new(Role::User, "Hello"),
+            },
+        };
+        let n2 = CausalNode {
+            id: "2".into(),
+            parent_id: Some("1".into()),
+            seq: 2,
+            timestamp_ms: 101,
+            kind: muta_contracts::NodeKind::Dialogue,
+            payload: NodePayload::Message {
+                message: Message::new(Role::Assistant, "Hi there"),
+            },
+        };
+        let nodes = vec![&n1, &n2];
+        let text = serialize_nodes_for_summary(&nodes);
         assert!(text.contains("[User]\nHello"));
         assert!(text.contains("[Assistant]\nHi there"));
     }

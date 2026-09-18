@@ -39,7 +39,7 @@ use muta_contracts::{
 use muta_persistence::{
     CommitTurn,
     config::Config,
-    session::{ContextProjectionCheckpoint, ContextProjectionResult, SessionStore, run_compaction},
+    session::{ContextProjectionCheckpoint, ContextProjectionResult, SessionStore},
 };
 
 /// Wrap a session-scoped [`RoundEvent`] in the [`AgentResponse::Round`]
@@ -540,10 +540,16 @@ pub struct MidTurnPruneProjectionGate {
 impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
     async fn project_context(&self, messages: Vec<Message>) -> Option<Vec<Message>> {
         let mut messages = messages;
+        let min_reclaim =
+            if muta_contracts::has_stale_tool_results(&messages, self.prune_protect_tokens) {
+                100
+            } else {
+                ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS
+            };
         let outcome = muta_contracts::prune_tool_results(
             &mut messages,
             self.prune_protect_tokens,
-            ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS,
+            min_reclaim,
         )?;
         let window_tokens_after =
             estimate_session_weight_off_executor(Arc::clone(&self.weights), &messages).await;
@@ -1260,7 +1266,14 @@ pub async fn execute_round(
         return Err(HarnessError::Interrupted);
     }
     let mut request_estimate = estimate_off_executor(&agent, &round_history).await;
-    if projection.prune && request_estimate.total_tokens > projection.budget.prune_threshold_tokens
+    // ADR-0254: Pruning engages either when window pressure exceeds the model-relative
+    // prune threshold, OR when prunable stale tool results (superseded build/test runs,
+    // invalidated file reads, or evicted images) exist outside recency protection.
+    let near_tail_stale = projection.prune
+        && muta_contracts::has_stale_tool_results(&round_history, projection.prune_protect_tokens);
+    if projection.prune
+        && (request_estimate.total_tokens > projection.budget.prune_threshold_tokens
+            || near_tail_stale)
     {
         prune_and_commit(
             &mut round_history,
@@ -2072,23 +2085,33 @@ pub async fn compact_round_history(
     provider: Option<Arc<dyn Provider>>,
     extra_context: Vec<String>,
 ) -> Result<Option<ContextProjectionCheckpoint>, String> {
-    // Skip the model call entirely when summarization is disabled; the excerpt
-    // fallback inside `run_compaction` still produces a checkpoint.
     let provider = if settings.summarize { provider } else { None };
-    let Some(result) = run_compaction(
-        history,
-        settings.budget.target_tokens,
-        settings.preserve_rounds,
+
+    // Canonical path: Session IR Native Causal Compaction (ADR-0255)
+    let mut ir = session.session_ir().await;
+    if let Some(outcome) = crate::compaction::CausalCompactor::compact_session_ir(
+        &mut ir,
         provider,
+        settings.budget.target_tokens,
         extra_context,
     )
     .await?
-    else {
-        return Ok(None);
-    };
-    let checkpoint = result.checkpoint.clone();
-    session.commit_context_projection(result).await?;
-    Ok(Some(checkpoint))
+    {
+        session.commit_session_ir(&ir).await?;
+        let active_msgs = ir.resolve_active_messages();
+        let tokens_after = muta_contracts::pressure::estimate_tokens(&active_msgs);
+        let checkpoint = ContextProjectionCheckpoint {
+            operation: muta_persistence::session::ContextProjectionKind::Compact,
+            archived_messages: outcome.nodes_folded,
+            active_messages: active_msgs.len(),
+            window_tokens_before: outcome.tokens_before,
+            window_tokens_after: tokens_after,
+        };
+        *history = active_msgs;
+        Ok(Some(checkpoint))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Prune old tool results in place and durably commit the change. Pruning is an
@@ -2108,11 +2131,15 @@ pub async fn prune_and_commit(
 ) -> Result<(), String> {
     let window_tokens_before =
         estimate_session_weight_off_executor(Arc::clone(&weights), history).await;
-    let Some(outcome) = muta_contracts::prune_tool_results(
-        history,
-        settings.prune_protect_tokens,
-        ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS,
-    ) else {
+    let min_reclaim =
+        if muta_contracts::has_stale_tool_results(history, settings.prune_protect_tokens) {
+            100
+        } else {
+            ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS
+        };
+    let Some(outcome) =
+        muta_contracts::prune_tool_results(history, settings.prune_protect_tokens, min_reclaim)
+    else {
         return Ok(());
     };
     let window_tokens_after =

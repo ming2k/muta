@@ -165,6 +165,7 @@ pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
         active_leaf,
         active_timeline: "main".to_string(),
         timelines,
+        compaction_horizon: None,
         status,
         pending_notifications: Vec::new(),
         round_counter: data.round_counter,

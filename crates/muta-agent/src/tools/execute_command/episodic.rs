@@ -112,6 +112,7 @@ pub async fn run_episodic_command(
     stdin_policy: muta_contracts::StdinPolicy,
     on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + '_),
     job_service: Option<Arc<dyn muta_contracts::BackgroundJobService>>,
+    raw: bool,
 ) -> Result<muta_contracts::ToolOutput, String> {
     // Resolve the stdin policy into the `Stdio` the child is spawned with.
     let stdin_bytes = match &stdin_policy {
@@ -251,7 +252,7 @@ pub async fn run_episodic_command(
             {
                 Ok(info) => {
                     collector.flush_stream(on_stream);
-                    let (stdout, stderr, lines, truncated) = collector.apply_caps(None);
+                    let (stdout, stderr, lines, truncated) = collector.apply_caps_ex(None, raw);
                     return Ok(muta_contracts::ToolOutput::Shell {
                         command: command.to_string(),
                         stdout,
@@ -301,7 +302,32 @@ pub async fn run_episodic_command(
         muta_contracts::tool_output::ShellTermination::Exited
     };
 
-    let (stdout, stderr, lines, truncated) = collector.apply_caps(exit);
+    let raw_unabridged_stdout = collector.stdout_buf.clone();
+    let (mut stdout, stderr, lines, truncated) = collector.apply_caps_ex(exit, raw);
+
+    // ADR-0254: When semantic folding collapses output, spill unabridged log to CAS
+    if stdout.contains("pure-green test pass lines folded") {
+        let spill_dir = env.workspace_root().join(".muta").join("spill");
+        if env.fs().create_dir_all(&spill_dir).await.is_ok() {
+            let filename = format!(
+                "shell_{}_{}.log",
+                chrono::Utc::now().format("%Y%m%d_%H%M%S"),
+                fastrand::u32(1000..9999)
+            );
+            let spill_path = spill_dir.join(&filename);
+            if env
+                .fs()
+                .write(&spill_path, raw_unabridged_stdout.as_bytes())
+                .await
+                .is_ok()
+            {
+                stdout.push_str(&format!(
+                    "[Full unabridged test log saved to '{}'. Use `read_text` or `search_text` to inspect specific tests.]\n",
+                    spill_path.display()
+                ));
+            }
+        }
+    }
 
     Ok(muta_contracts::ToolOutput::Shell {
         command: command.to_string(),

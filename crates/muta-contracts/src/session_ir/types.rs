@@ -229,6 +229,43 @@ impl SessionIR {
         node_id
     }
 
+    /// Append a compaction checkpoint node and advance the authoritative compaction horizon (ADR-0255).
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_compaction(
+        &mut self,
+        node_id: impl Into<String>,
+        parent_id: Option<NodeId>,
+        timestamp_ms: u64,
+        summary: String,
+        first_kept_node_id: String,
+        tokens_before: usize,
+        read_files: Vec<String>,
+        modified_files: Vec<String>,
+    ) -> NodeId {
+        let node_id = node_id.into();
+        let seq = self.history.next_seq();
+
+        let node = CausalNode {
+            id: node_id.clone(),
+            parent_id,
+            seq,
+            timestamp_ms,
+            kind: NodeKind::Compaction,
+            payload: NodePayload::Compaction {
+                summary,
+                first_kept_node_id,
+                tokens_before,
+                read_files,
+                modified_files,
+            },
+        };
+
+        self.history.insert_node(node);
+        self.state.compaction_horizon = Some(node_id.clone());
+        self.updated_at_s = timestamp_ms / 1000;
+        node_id
+    }
+
     /// Resolve the active linear branch (Pass 1 of compiler lowering).
     pub fn resolve_active_branch(&self) -> Vec<&CausalNode> {
         match &self.state.active_leaf {
@@ -316,12 +353,22 @@ impl CausalGraph {
     /// Trace the linear lineage from a target leaf backward to root or compaction anchor.
     /// Returns the nodes ordered chronologically (root/anchor -> leaf).
     pub fn linear_path(&self, leaf_id: &str) -> Vec<&CausalNode> {
+        self.linear_path_with_horizon(leaf_id, None)
+    }
+
+    /// Trace linear lineage stopping at the given horizon or compaction anchor (ADR-0255).
+    pub fn linear_path_with_horizon(
+        &self,
+        leaf_id: &str,
+        horizon: Option<&str>,
+    ) -> Vec<&CausalNode> {
         let mut path = Vec::new();
         let mut current_id = Some(leaf_id);
 
         while let Some(id) = current_id {
             if let Some(node) = self.nodes.get(id) {
-                let is_compaction = matches!(node.kind, NodeKind::Compaction);
+                let is_compaction =
+                    matches!(node.kind, NodeKind::Compaction) || horizon == Some(id);
                 path.push(node);
                 if is_compaction {
                     // Compaction acts as a causal horizon; ancestor nodes prior to
@@ -422,6 +469,10 @@ pub struct SessionState {
     /// Named timeline branch cursors (ADR-0251).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub timelines: HashMap<String, TimelineCursor>,
+    /// Authoritative compaction horizon (ADR-0255).
+    /// Nodes strictly prior to this pointer along the active branch are folded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_horizon: Option<NodeId>,
     /// Current execution state machine position.
     pub status: ExecutionStatus,
     /// Queue of asynchronous notifications received during sleep/suspension.
@@ -437,6 +488,7 @@ impl Default for SessionState {
             active_leaf: None,
             active_timeline: "main".to_string(),
             timelines: HashMap::new(),
+            compaction_horizon: None,
             status: ExecutionStatus::Idle,
             pending_notifications: Vec::new(),
             round_counter: 0,

@@ -268,6 +268,7 @@ pub fn load_session_ir(conn: &Connection, session_id: &str) -> Result<Option<Ses
         active_leaf,
         active_timeline: "main".to_string(),
         timelines,
+        compaction_horizon: None,
         status,
         pending_notifications,
         round_counter,

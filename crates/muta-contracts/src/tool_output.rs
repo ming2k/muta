@@ -772,9 +772,18 @@ fn shell_to_text(stdout: &str, stderr: &str, exit: Option<i32>, truncated: bool)
     let inner = shell_inner_text(stdout, stderr, exit);
     if truncated || inner.len() > SHELL_MAX_OUTPUT_CHARS {
         let tokens = crate::tokenizer::count_tokens(&inner);
+        let head_bytes = SHELL_TRUNCATED_CHARS / 2;
+        let tail_bytes = SHELL_TRUNCATED_CHARS / 2;
+        let head_part = truncate_utf8(&inner, head_bytes);
+        let tail_target = inner.len().saturating_sub(tail_bytes);
+        let mut tail_idx = tail_target;
+        while !inner.is_char_boundary(tail_idx) && tail_idx < inner.len() {
+            tail_idx += 1;
+        }
+        let tail_part = &inner[tail_idx..];
         format!(
-            "[Output truncated: {tokens} tokens total]\n{}\n\n[Output was large — use search_text or read_text if you need specific parts]",
-            truncate_utf8(&inner, SHELL_TRUNCATED_CHARS)
+            "[Output truncated: {tokens} tokens total]\n{}\n\n⋯ [middle output omitted to relieve context] ⋯\n\n{}\n\n[Output was large — use search_text or read_text if you need specific parts]",
+            head_part, tail_part
         )
     } else {
         inner

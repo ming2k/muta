@@ -34,6 +34,10 @@ struct ExecuteCommandArgs {
         desc = "Optional human-readable label for the background job (e.g. 'cargo-test', 'dev-server')."
     )]
     label: Option<String>,
+    #[tool(
+        desc = "Set to true to bypass semantic folding and output raw unabridged command stream (default false)."
+    )]
+    raw: Option<bool>,
 }
 
 #[allow(dead_code)] // tool-schema: dynamic JSON schema generation
@@ -45,6 +49,10 @@ struct WorkspaceExecuteCommandArgs {
         desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is killed early as a blocked-command guard."
     )]
     timeout: Option<u64>,
+    #[tool(
+        desc = "Set to true to bypass semantic folding and output raw unabridged command stream (default false)."
+    )]
+    raw: Option<bool>,
 }
 
 /// Execute a command in a non-interactive shell.
@@ -326,6 +334,7 @@ impl Tool for ExecuteCommandTool {
             .env
             .clone()
             .unwrap_or_else(|| env_from_root(&self.root));
+        let raw = args.raw.unwrap_or(false);
         episodic::run_episodic_command(
             &args.command,
             timeout_duration,
@@ -334,6 +343,7 @@ impl Tool for ExecuteCommandTool {
             stdin_policy,
             on_stream,
             self.job_service.clone(),
+            raw,
         )
         .await
     }

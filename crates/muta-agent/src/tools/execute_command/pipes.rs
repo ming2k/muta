@@ -193,7 +193,39 @@ impl OutputCollector {
     }
 
     /// Apply head+tail byte caps and line count caps to prevent unbound memory growth.
-    pub fn apply_caps(mut self, exit: Option<i32>) -> (String, String, Vec<ShellLine>, bool) {
+    #[allow(dead_code)]
+    pub fn apply_caps(self, exit: Option<i32>) -> (String, String, Vec<ShellLine>, bool) {
+        self.apply_caps_ex(exit, false)
+    }
+
+    /// Apply caps with optional bypass of semantic folding when `raw` is true (ADR-0254).
+    pub fn apply_caps_ex(
+        mut self,
+        exit: Option<i32>,
+        raw: bool,
+    ) -> (String, String, Vec<ShellLine>, bool) {
+        // ADR-0254 Ingestion-time semantic folding:
+        // When not in raw mode, deterministically collapse consecutive pure-green passing test
+        // runs (Ninja/Meson/Nextest) while preserving 100% of failures, warnings, and stderr.
+        if !raw {
+            let (folded_lines, folded_count) =
+                fold_pure_green_runs(std::mem::take(&mut self.lines));
+            if folded_count > 0 {
+                let mut new_stdout = String::new();
+                for line in &folded_lines {
+                    if line.stream == ShellStream::Out {
+                        new_stdout.push_str(&line.text);
+                        new_stdout.push('\n');
+                    }
+                }
+                new_stdout.push_str(&format!(
+                    "\n[Note: {folded_count} pure-green test pass lines folded. Use `raw: true` if you need unabridged test output.]\n"
+                ));
+                self.stdout_buf = new_stdout;
+            }
+            self.lines = folded_lines;
+        }
+
         let mut collection_truncated = self.truncated;
         if self.stdout_buf.len() > SHELL_COLLECT_MAX_CHARS {
             self.stdout_buf = head_tail(&self.stdout_buf, SHELL_COLLECT_MAX_CHARS / 2);
@@ -228,6 +260,90 @@ impl OutputCollector {
 
         (self.stdout_buf, self.stderr_buf, self.lines, truncated)
     }
+}
+
+/// Check if a stdout line represents a pure-green test pass line (Ninja, Meson, Nextest, Jest, TAP, etc.)
+pub fn is_pure_green_test_line(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let lower = t.to_ascii_lowercase();
+    // Invariant: any line containing warnings, errors, failures, leaks, or panics is NEVER folded.
+    if lower.contains("warn")
+        || lower.contains("fail")
+        || lower.contains("panic")
+        || lower.contains("error")
+        || lower.contains("leak")
+        || lower.contains("assert")
+    {
+        return false;
+    }
+
+    // Pattern 1: Ninja / Meson progress and pass lines:
+    // e.g. `[1/134] test_foo OK 0.01s`, `[ 2/134] test_bar OK 0.02s`, or `1/134 test_foo OK 0.01s`
+    if (t.starts_with('[')
+        && t.contains('/')
+        && (t.contains(" OK") || t.ends_with(" OK") || t.contains(" PASSED")))
+        || (t.contains('/')
+            && (t.ends_with(" OK")
+                || t.ends_with(" PASSED")
+                || t.contains(" OK ")
+                || t.contains(" PASSED ")))
+    {
+        return true;
+    }
+
+    // Pattern 2: Cargo / Nextest:
+    // e.g. `PASS [   0.004s] crate::test_name` or `test crate::test_name ... ok`
+    if t.starts_with("PASS [") || t.ends_with("... ok") || t.ends_with("... OK") {
+        return true;
+    }
+
+    // Pattern 3: Jest / TAP / Generic checkmark pass:
+    // e.g. `✓ test_name` or `ok 1 - test_name`
+    if t.starts_with("✓ ") || (t.starts_with("ok ") && t.contains(" - ")) {
+        return true;
+    }
+
+    false
+}
+
+/// Deterministically fold runs of pure-green passing test lines (threshold >= 3 consecutive lines).
+pub fn fold_pure_green_runs(lines: Vec<ShellLine>) -> (Vec<ShellLine>, usize) {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    let mut total_folded = 0;
+
+    while i < lines.len() {
+        if lines[i].stream == ShellStream::Out && is_pure_green_test_line(&lines[i].text) {
+            let mut j = i;
+            while j < lines.len()
+                && lines[j].stream == ShellStream::Out
+                && is_pure_green_test_line(&lines[j].text)
+            {
+                j += 1;
+            }
+            let count = j - i;
+            if count >= 3 {
+                out.push(ShellLine {
+                    stream: ShellStream::Out,
+                    text: format!("⋯ {count} tests passed (pure-green output folded)"),
+                });
+                total_folded += count - 1;
+            } else {
+                for line in &lines[i..j] {
+                    out.push(line.clone());
+                }
+            }
+            i = j;
+        } else {
+            out.push(lines[i].clone());
+            i += 1;
+        }
+    }
+
+    (out, total_folded)
 }
 
 /// Keep the first `head` and last `head` bytes of `s` (UTF-8-safe, without
