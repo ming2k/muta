@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-10-18
+
+### Added
+
+- **Unified Asset Identity, TTL Lifecycle Lease, and Zero-Bypass Attestation (ADR-0252):**
+  - Replaced naked content-hash ledger with composite `(AssetLocator, Fingerprint)` indexing in `AssetAttestationLedger`, establishing in-place replacement semantics that eliminate unbounded hash accumulation.
+  - Enforced mandatory 30-day bounded lease TTL (`2,592,000` seconds) across all asset grants, eradicating permanent trust.
+  - Purged implicit intent exemptions in `bootstrap.rs` and permanently retired imperative CLI mutation subcommands (`muta mcp add/rm/enable/disable/import`) in favor of declarative TOML configuration.
+  - Standardized unified session-entry attestation diff engine, preventing background executable child-process spawns before affirmative human attestation.
+  - Upgraded terminal Pre-Attach Trust Gate to interactive multi-select checkboxes with real-time attestation status badges (`[New]`, `[Changed]`, `[Expired]`).
+- **Explicit Negative Attestation, XDG Standard Compliance, and Role-Scoped Assets (ADR-0253):**
+  - Implemented `AttestationStatus::Denied` and `WorkspaceTrustState::Denied` with persistent `denied_digests` in `WorkspaceSecurityStore`, eliminating repetitive trust gate nagging for rejected assets while maintaining strict fail-closed isolation.
+  - Established content-mutation invalidation invariant: altering any byte of a denied asset invalidates negative attestation and reverts status to `Changed` for fresh review.
+  - Enforced strict compliance with XDG Base Directory specification, eliminating home-directory pollution and standardizing user assets under `~/.config/muta/` and `~/.local/share/muta/`.
+  - Introduced first-class role-scoped asset taxonomy (`$XDG_DATA_HOME/muta/roles/<name>/skills/`, `$XDG_CONFIG_HOME/muta/roles/<name>/mcp.json`) for hermetic workspace-free role capabilities.
+
 ## [0.48.5] - 2026-10-04
 
 ### Added
@@ -7313,7 +7329,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.48.5...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.49.0...HEAD
+[0.49.0]: https://github.com/ming2k/muta/compare/v0.48.5...v0.49.0
 [0.48.5]: https://github.com/ming2k/muta/compare/v0.48.4...v0.48.5
 [0.48.4]: https://github.com/ming2k/muta/compare/v0.48.3...v0.48.4
 [0.48.3]: https://github.com/ming2k/muta/compare/v0.48.2...v0.48.3
