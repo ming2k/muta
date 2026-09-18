@@ -14,14 +14,17 @@ impl fmt::Debug for PersistenceHandle {
 
 /// Get or initialize the global shared [`PersistenceHandle`].
 pub fn get_persistence_handle() -> PersistenceHandle {
-    GLOBAL_HANDLE
-        .get_or_init(|| {
-            let dirs = crate::paths::get();
-            let db_path = dirs.db_file();
-            let blobs = Some(BlobStore::new(dirs.blobs_dir()));
-            PersistenceHandle::spawn(db_path, blobs)
-        })
-        .clone()
+    let dirs = crate::paths::get();
+    let db_path = dirs.db_file();
+    if let Some(handle) = GLOBAL_HANDLE.get() {
+        if handle.db_path == db_path {
+            return handle.clone();
+        }
+    }
+    let blobs = Some(BlobStore::new(dirs.blobs_dir()));
+    let handle = PersistenceHandle::spawn(db_path, blobs);
+    let _ = GLOBAL_HANDLE.set(handle.clone());
+    handle
 }
 
 impl PersistenceHandle {
