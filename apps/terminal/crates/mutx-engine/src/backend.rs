@@ -687,7 +687,11 @@ mod tests {
     fn sync_update_envelope_brackets_out_of_band_writes() {
         let mut buf: Vec<u8> = Vec::new();
         {
-            let mut be = Backend::new(&mut buf);
+            let mut be = Backend::with_bce_and_driver(
+                &mut buf,
+                Bce::Yes,
+                TerminalDriver::for_profile(&crate::profile::TerminalProfile::direct_color()),
+            );
             be.begin_sync_update().unwrap();
             be.show_cursor_at(5, 7).unwrap();
             be.end_sync_update().unwrap();
@@ -714,7 +718,11 @@ mod tests {
     fn sync_update_envelopes_never_nest() {
         let mut buf: Vec<u8> = Vec::new();
         {
-            let mut be = Backend::new(&mut buf);
+            let mut be = Backend::with_bce_and_driver(
+                &mut buf,
+                Bce::Yes,
+                TerminalDriver::for_profile(&crate::profile::TerminalProfile::direct_color()),
+            );
             for _ in 0..3 {
                 be.begin_sync_update().unwrap();
                 be.hide_cursor_at(0, 0).unwrap();
