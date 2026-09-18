@@ -609,8 +609,11 @@ impl AgentRoleDelegation {
     }
 
     /// All shipping agent role delegations, developer first.
-    pub const ALL: &'static [AgentRoleDelegation] =
-        &[AGENT_ROLE_DEVELOPER, AGENT_ROLE_PHILOSOPHIST, AGENT_ROLE_OPS];
+    pub const ALL: &'static [AgentRoleDelegation] = &[
+        AGENT_ROLE_DEVELOPER,
+        AGENT_ROLE_PHILOSOPHIST,
+        AGENT_ROLE_OPS,
+    ];
 
     pub fn declared_tools(&self) -> Option<&'static [&'static str]> {
         match self.role_id {
@@ -680,7 +683,10 @@ mod tests {
         assert_eq!(p.config.hard_stop_turns, 0);
         assert!(!p.config.allow_model_stdin);
         assert!(!p.config.skip_interactive_input);
-        assert_eq!(p.config.trajectory_guard, crate::TrajectoryGuardConfig::default());
+        assert_eq!(
+            p.config.trajectory_guard,
+            crate::TrajectoryGuardConfig::default()
+        );
     }
 
     #[test]
@@ -821,12 +827,7 @@ mod tests {
         assert!(ops_manifest.tools.contains(&"process".to_string()));
         assert!(ops_manifest.tools.contains(&"ask_user".to_string()));
         assert!(!ops_manifest.tools.contains(&"code_query".to_string()));
-        assert!(
-            ops_manifest
-                .identity
-                .preamble()
-                .starts_with("Role: ops.")
-        );
+        assert!(ops_manifest.identity.preamble().starts_with("Role: ops."));
 
         let serialized = serde_json::to_string(&ops_manifest).expect("serialize ops manifest");
         let deserialized: SessionRoleManifest =

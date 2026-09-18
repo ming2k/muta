@@ -407,11 +407,9 @@ mod tests {
 
         for s in &spans {
             assert_eq!(
-                s.style.fg,
-                base_style.fg,
+                s.style.fg, base_style.fg,
                 "Span '{}' must have base style color {:?}",
-                s.content,
-                base_style.fg
+                s.content, base_style.fg
             );
         }
     }

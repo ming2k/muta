@@ -434,9 +434,7 @@ mod tests {
     use super::*;
     use crate::registry::HostParams;
     use crate::ui_bridge::{CopyOutcome, UiBridge};
-    use muta_contracts::{
-        AgentRoleProfile, MeshStation, Message, ModelRequest, Provider, Role,
-    };
+    use muta_contracts::{AgentRoleProfile, MeshStation, Message, ModelRequest, Provider, Role};
 
     struct DummyUi;
     #[async_trait::async_trait]

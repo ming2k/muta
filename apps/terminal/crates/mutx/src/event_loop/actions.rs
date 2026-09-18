@@ -1163,10 +1163,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 &app.sessions_overview,
                 Some(&app.sessions_expanded),
             );
-            if let Some(item) = rows.get(
-                app.modal_index
-                    .min(rows.len().saturating_sub(1)),
-            ) {
+            if let Some(item) = rows.get(app.modal_index.min(rows.len().saturating_sub(1))) {
                 let session = item.session();
                 let id = session.id.clone();
                 let short_id = crate::session::short_session_id(&id);
@@ -1314,10 +1311,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 &app.sessions_overview,
                 Some(&app.sessions_expanded),
             );
-            if let Some(item) = rows.get(
-                app.modal_index
-                    .min(rows.len().saturating_sub(1)),
-            ) {
+            if let Some(item) = rows.get(app.modal_index.min(rows.len().saturating_sub(1))) {
                 let session = item.session();
                 app.session_info_detail = true;
                 app.session_detail = None;
@@ -1447,11 +1441,9 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::DialogKeysScroll { delta } => {
             if delta < 0 {
-                app.dialog_keys_scroll =
-                    app.dialog_keys_scroll.saturating_sub((-delta) as usize);
+                app.dialog_keys_scroll = app.dialog_keys_scroll.saturating_sub((-delta) as usize);
             } else {
-                app.dialog_keys_scroll =
-                    app.dialog_keys_scroll.saturating_add(delta as usize);
+                app.dialog_keys_scroll = app.dialog_keys_scroll.saturating_add(delta as usize);
             }
         }
         input::InputAction::ScrollUp => {
@@ -2661,7 +2653,10 @@ mod transcript_scroll_tests {
 
         // 2. Wheel inside modal (x=20, y=8): scrolls modal body
         handle_wheel(&mut app, false, 20, 8);
-        assert_eq!(app.usage_stats_scroll, 6, "modal scrolled inside modal_rect");
+        assert_eq!(
+            app.usage_stats_scroll, 6,
+            "modal scrolled inside modal_rect"
+        );
         assert_eq!(app.scroll, 100, "transcript scroll untouched");
     }
 

@@ -302,10 +302,7 @@ async fn commit_turn_rebuilds_on_divergence() {
 async fn commit_turn_honors_the_revision_precondition() {
     let store = store("commit-guard").await;
     let messages = vec![user("hello")];
-    let first = store
-        .commit_turn(CommitTurn::new(&messages))
-        .await
-        .unwrap();
+    let first = store.commit_turn(CommitTurn::new(&messages)).await.unwrap();
 
     // A precondition that does not match the durable revision fails closed.
     let stale = store
@@ -355,10 +352,7 @@ async fn crash_residue_is_durably_settled_as_abandoned() {
         projected_prompt_tokens: 321,
         ..Default::default()
     };
-    store
-        .set_request_usage_records(vec![record])
-        .await
-        .unwrap();
+    store.set_request_usage_records(vec![record]).await.unwrap();
 
     assert_eq!(store.settle_abandoned_attempts().await.unwrap(), 1);
 
@@ -384,10 +378,11 @@ async fn crash_residue_is_durably_settled_as_abandoned() {
 fn row_checksum_and_delta_ignore_retained_attempts() {
     use muta_contracts::{RequestUsageKey, RequestUsageRecord, RequestUsageStatus};
     let mut data = SessionData::default();
-    data.transcript.push(muta_contracts::TranscriptEntry::from_message(
-        0,
-        &user("hello"),
-    ));
+    data.transcript
+        .push(muta_contracts::TranscriptEntry::from_message(
+            0,
+            &user("hello"),
+        ));
     let baseline = compute_checksum(&data).unwrap();
 
     for attempt in 1..=1_000 {
@@ -606,19 +601,29 @@ async fn request_projections_persist_outside_the_window() {
 
     // The archive is not the window: E_n never enters model-visible history.
     let window = store.model_window().await;
-    assert!(window.iter().all(|m| !m.content.contains("request-local evidence")));
+    assert!(
+        window
+            .iter()
+            .all(|m| !m.content.contains("request-local evidence"))
+    );
 
     // Durable round-trip: the projection survives a reload, still outside the
     // window.
     let reloaded = SessionStore::for_path(path);
     let window = reloaded.model_window().await;
-    assert!(window.iter().all(|m| !m.content.contains("request-local evidence")));
+    assert!(
+        window
+            .iter()
+            .all(|m| !m.content.contains("request-local evidence"))
+    );
     let restored = reloaded.request_projections().await;
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].prefix_fingerprint, "sha256:0100");
-    assert!(restored[0].temporary_context[0]
-        .content
-        .contains("request-local evidence"));
+    assert!(
+        restored[0].temporary_context[0]
+            .content
+            .contains("request-local evidence")
+    );
 }
 
 #[tokio::test]
@@ -908,7 +913,10 @@ async fn test_session_store_ir_and_compile_request() {
 
     let compiled = store.compile_request(options).await.unwrap();
     assert_eq!(compiled.request.messages.len(), 1);
-    assert_eq!(compiled.request.messages[0].content, "Implement compiler pass");
+    assert_eq!(
+        compiled.request.messages[0].content,
+        "Implement compiler pass"
+    );
     assert_eq!(compiled.request.tool_specs.len(), 1);
     assert_eq!(compiled.request.tool_specs[0].name, "run_command");
     assert!(!compiled.cache_boundary.prefix_fingerprint.is_empty());

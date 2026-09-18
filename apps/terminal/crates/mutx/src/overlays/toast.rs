@@ -42,9 +42,5 @@ pub fn draw_notice_toast(
         NoticeSeverity::Warning => ToastKind::Warning,
         NoticeSeverity::Info => ToastKind::Info,
     };
-    ToastBubble {
-        message,
-        kind,
-    }
-    .render(frame, theme);
+    ToastBubble { message, kind }.render(frame, theme);
 }

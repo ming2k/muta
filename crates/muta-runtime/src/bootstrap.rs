@@ -851,10 +851,10 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
             agent.fire_session_start(source, &mut messages).await;
             // Persist the hook-injected setup context through the single write
             // path so the session stays the source of truth (ADR-0048).
-            if messages.len() > before_len {
-                if let Err(err) = session.append_turn(&messages).await {
-                    tracing::warn!(error = %err, "failed to persist SessionStart hook context");
-                }
+            if messages.len() > before_len
+                && let Err(err) = session.append_turn(&messages).await
+            {
+                tracing::warn!(error = %err, "failed to persist SessionStart hook context");
             }
         }
     }
@@ -1042,7 +1042,8 @@ fn spawn_mcp_config_watcher(
     session_id: String,
 ) {
     tokio::spawn(async move {
-        let mut watcher = match muta_platform::FsWatcher::new(std::time::Duration::from_millis(500)) {
+        let mut watcher = match muta_platform::FsWatcher::new(std::time::Duration::from_millis(500))
+        {
             Ok(w) => w,
             Err(err) => {
                 tracing::warn!(error = %err, "could not initialize MCP config filesystem watcher");
@@ -1052,10 +1053,10 @@ fn spawn_mcp_config_watcher(
 
         // 1. Watch user config directory
         let user_config_file = muta_paths::paths::Dirs::system().config_file();
-        if let Some(user_config_dir) = user_config_file.parent() {
-            if user_config_dir.exists() {
-                let _ = watcher.watch(user_config_dir, false);
-            }
+        if let Some(user_config_dir) = user_config_file.parent()
+            && user_config_dir.exists()
+        {
+            let _ = watcher.watch(user_config_dir, false);
         }
 
         // 2. Watch workspace directory and .muta directory
@@ -1082,14 +1083,16 @@ fn spawn_mcp_config_watcher(
             }
 
             let is_user_config = event.paths.iter().any(|p| p == &user_config_file);
-            let is_workspace_event = workspace_root.as_ref().map_or(false, |root| {
+            let is_workspace_event = workspace_root.as_ref().is_some_and(|root| {
                 let ws_config = root.join(".muta/config.toml");
                 let ws_mcp = root.join(".muta/mcp.json");
                 event.paths.iter().any(|p| {
                     p != &user_config_file
                         && (p == &ws_config
                             || p == &ws_mcp
-                            || (p.file_name().is_some_and(|n| n == "config.toml" || n == "mcp.json")
+                            || (p
+                                .file_name()
+                                .is_some_and(|n| n == "config.toml" || n == "mcp.json")
                                 && p.parent().is_some_and(|parent| {
                                     parent.file_name().is_some_and(|d| d == ".muta")
                                 })
@@ -1285,14 +1288,16 @@ mod tests {
                 event: RoundEvent::Notice(n),
                 ..
             } = resp
+                && n.kind == muta_contracts::NoticeKind::TrustChanged
             {
-                if n.kind == muta_contracts::NoticeKind::TrustChanged {
-                    got_warning = true;
-                    break;
-                }
+                got_warning = true;
+                break;
             }
         }
-        assert!(got_warning, "Expected TrustChanged warning for untrusted workspace MCP");
+        assert!(
+            got_warning,
+            "Expected TrustChanged warning for untrusted workspace MCP"
+        );
     }
 
     #[tokio::test]
@@ -1339,20 +1344,20 @@ mod tests {
             event: RoundEvent::Notice(n),
             ..
         })) = notice
+            && n.kind == muta_contracts::NoticeKind::TrustChanged
         {
-            if n.kind == muta_contracts::NoticeKind::TrustChanged {
-                panic!("User config modification must not trigger TrustChanged warning!");
-            }
+            panic!("User config modification must not trigger TrustChanged warning!");
         }
     }
 
     #[tokio::test]
     async fn test_user_assets_zero_bypass_and_ttl_lifecycle() {
-        use muta_contracts::security::{AssetLocator, AssetSpec, AttestationStatus};
         use muta_contracts::WorkspaceTrustState;
+        use muta_contracts::security::{AssetLocator, AssetSpec, AttestationStatus};
 
         let tmp = tempfile::tempdir().unwrap();
-        let handle = muta_persistence::db::PersistenceHandle::spawn(tmp.path().join("assets.db"), None);
+        let handle =
+            muta_persistence::db::PersistenceHandle::spawn(tmp.path().join("assets.db"), None);
         let ledger = muta_persistence::AssetAttestationLedger::for_handle(handle);
 
         let locator = AssetLocator::UserMcp {
@@ -1364,31 +1369,50 @@ mod tests {
         };
 
         // 1. Zero implicit trust: user assets start strictly Quarantined
-        assert_eq!(ledger.status(&locator, &spec_v1), AttestationStatus::Quarantined);
+        assert_eq!(
+            ledger.status(&locator, &spec_v1),
+            AttestationStatus::Quarantined
+        );
         assert!(!ledger.is_trusted(&locator, &spec_v1));
 
         // 2. Trust asset grants a 30-day lease
         ledger.trust_asset(&locator, &spec_v1).unwrap();
-        assert_eq!(ledger.status(&locator, &spec_v1), AttestationStatus::Trusted);
+        assert_eq!(
+            ledger.status(&locator, &spec_v1),
+            AttestationStatus::Trusted
+        );
         assert!(ledger.is_trusted(&locator, &spec_v1));
 
         // 3. Modifying command on the same locator triggers Changed (replacement semantics)
         let spec_v2 = AssetSpec::Process {
-            command: vec!["uvx".into(), "mcp-server-sqlite".into(), "--read-only".into()],
+            command: vec![
+                "uvx".into(),
+                "mcp-server-sqlite".into(),
+                "--read-only".into(),
+            ],
             env: std::collections::BTreeMap::new(),
         };
-        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Changed);
+        assert_eq!(
+            ledger.status(&locator, &spec_v2),
+            AttestationStatus::Changed
+        );
         assert!(!ledger.is_trusted(&locator, &spec_v2));
 
         // 4. Re-trusting restores Trusted state
         ledger.trust_asset(&locator, &spec_v2).unwrap();
-        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Trusted);
+        assert_eq!(
+            ledger.status(&locator, &spec_v2),
+            AttestationStatus::Trusted
+        );
 
         // 5. Expired lease (> 30 days) fails closed
         ledger
             .trust_asset_with_expiry(&locator, &spec_v2, 100, 200)
             .unwrap();
-        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Expired);
+        assert_eq!(
+            ledger.status(&locator, &spec_v2),
+            AttestationStatus::Expired
+        );
         assert!(!ledger.is_trusted(&locator, &spec_v2));
 
         // 6. Snapshot aggregate reflects user-level quarantine even in workspace-free sessions

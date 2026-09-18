@@ -16,8 +16,12 @@ use std::sync::{Arc, Mutex};
 /// Durable request accounting. Callers await admission and settlement explicitly;
 /// a persistence failure is observable and cannot be swallowed by a sync callback.
 pub trait UsageStatSink: Send + Sync {
-    fn persist_usage<'a>(&'a self, recorded_at_ms: u64, project: &'a str, record: RequestUsageRecord)
-        -> futures::future::BoxFuture<'a, Result<(), String>>;
+    fn persist_usage<'a>(
+        &'a self,
+        recorded_at_ms: u64,
+        project: &'a str,
+        record: RequestUsageRecord,
+    ) -> futures::future::BoxFuture<'a, Result<(), String>>;
 }
 
 /// Lifecycle state of one concrete provider request attempt.
@@ -853,7 +857,10 @@ impl TokenSourceLedger {
                 ..Default::default()
             },
         );
-        self.dirty_usage.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone());
+        self.dirty_usage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone());
         key
     }
 
@@ -959,7 +966,10 @@ impl TokenSourceLedger {
             // repair is visible in the report itself.
             record.sanitize_poisoned_estimate();
         }
-        self.dirty_usage.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone());
+        self.dirty_usage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone());
     }
 
     pub fn pending_records_for_session(&self, session_id: &str) -> Vec<RequestUsageRecord> {
@@ -982,16 +992,28 @@ impl TokenSourceLedger {
         let requests = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         let mut dirty = self.dirty_usage.lock().unwrap_or_else(|e| e.into_inner());
         for record in records {
-            if requests.get(&record.key) == Some(record) { dirty.remove(&record.key); }
+            if requests.get(&record.key) == Some(record) {
+                dirty.remove(&record.key);
+            }
         }
     }
 
     pub async fn persist_request(&self, key: &RequestUsageKey) -> Result<(), String> {
-        let sink = self.usage_sink.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let record = self.requests.lock().unwrap_or_else(|e| e.into_inner()).get(key).cloned();
+        let sink = self
+            .usage_sink
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let record = self
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .cloned();
         if let (Some(sink), Some(record)) = (sink, record) {
             let project = self.usage_snapshot();
-            sink.persist_usage(record.started_at_ms, &project, record.clone()).await?;
+            sink.persist_usage(record.started_at_ms, &project, record.clone())
+                .await?;
             self.acknowledge_records(&[record]);
         }
         Ok(())
@@ -1286,12 +1308,19 @@ mod tests {
     }
 
     impl UsageStatSink for CollectingSink {
-        fn persist_usage<'a>(&'a self, recorded_at_ms: u64, project: &'a str, record: RequestUsageRecord) -> futures::future::BoxFuture<'a, Result<(), String>> {
-            Box::pin(async move { self.received.lock().unwrap().push((
-                recorded_at_ms,
-                project.to_string(),
-                record,
-            )); Ok(()) })
+        fn persist_usage<'a>(
+            &'a self,
+            recorded_at_ms: u64,
+            project: &'a str,
+            record: RequestUsageRecord,
+        ) -> futures::future::BoxFuture<'a, Result<(), String>> {
+            Box::pin(async move {
+                self.received
+                    .lock()
+                    .unwrap()
+                    .push((recorded_at_ms, project.to_string(), record));
+                Ok(())
+            })
         }
     }
 

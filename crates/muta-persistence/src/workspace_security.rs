@@ -220,9 +220,10 @@ impl WorkspaceSecurityStore {
     }
 
     fn read_state(&self) -> Result<PersistedWorkspaceSecurity, String> {
-        let reader = self.handle.reader().map_err(|e| {
-            format!("cannot open sqlite db '{}': {e}", self.db_path.display())
-        })?;
+        let reader = self
+            .handle
+            .reader()
+            .map_err(|e| format!("cannot open sqlite db '{}': {e}", self.db_path.display()))?;
 
         if let Ok(Some(state)) =
             reader.get_json::<PersistedWorkspaceSecurity>("state:workspace_security")
@@ -299,7 +300,10 @@ fn trust_state(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            if let Some(exp) = expires_at && exp > 0 && now > exp {
+            if let Some(exp) = expires_at
+                && exp > 0
+                && now > exp
+            {
                 WorkspaceTrustState::Expired
             } else {
                 WorkspaceTrustState::Trusted
@@ -651,7 +655,10 @@ mod tests {
         std::fs::write(&skill_file, "skill content v1").unwrap();
 
         // 1. Initially Quarantined
-        assert_eq!(store.snapshot(root).skills, WorkspaceTrustState::Quarantined);
+        assert_eq!(
+            store.snapshot(root).skills,
+            WorkspaceTrustState::Quarantined
+        );
 
         // 2. Deny domain -> becomes Denied (ADR-0253)
         store.deny_domains(root, &[TrustDomain::Skills]).unwrap();

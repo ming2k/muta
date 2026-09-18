@@ -14,6 +14,7 @@ fn send_intent(
         .map_err(|error| format!("daemon link lost before intent delivery: {error}").into())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_headless(
     prompt: String,
     json: bool,

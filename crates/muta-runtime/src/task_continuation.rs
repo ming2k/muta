@@ -24,7 +24,7 @@ use muta_contracts::{BackgroundJobOutcome, JobState};
 ///
 /// Carries only the session identity: the driver claims that session's retained
 /// outcomes itself, so the result it reasons about is the one it acknowledged
-/// (ADR-0234). This rides a dedicated channel, never [`AgentRequest`], so
+/// (ADR-0234). This rides a dedicated channel, never [`muta_contracts::AgentRequest`], so
 /// machine-generated work cannot be mistaken for human intent (INV-BG-04).
 #[derive(Debug, Clone)]
 pub struct SystemWake {

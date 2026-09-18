@@ -102,7 +102,11 @@ impl Tool for RecallMemoryTool {
                 access = mem.access_count,
             ));
             output.push_str(&format!("**User:** {}\n\n", mem.user_prompt.trim()));
-            output.push_str(&format!("**{}:** {}\n\n", capitalize(role), mem.role_response.trim()));
+            output.push_str(&format!(
+                "**{}:** {}\n\n",
+                capitalize(role),
+                mem.role_response.trim()
+            ));
             output.push_str("---\n\n");
         }
 
@@ -131,10 +135,18 @@ mod tests {
         assert_eq!(tool.permission_label(), "Recall dialogue memory");
 
         let params = tool.parameters();
-        assert!(params.get("properties").and_then(|p| p.get("query")).is_some());
+        assert!(
+            params
+                .get("properties")
+                .and_then(|p| p.get("query"))
+                .is_some()
+        );
 
         // Empty query search should return empty or not found
-        let res = tool.call(r#"{"query": "non_existent_topic_xyz123"}"#).await.unwrap();
+        let res = tool
+            .call(r#"{"query": "non_existent_topic_xyz123"}"#)
+            .await
+            .unwrap();
         assert!(
             res.contains("No past dialogues matching"),
             "expected not found message, got: {res}"
@@ -154,7 +166,10 @@ mod tests {
             .unwrap();
 
         let tool = RecallMemoryTool;
-        let res = tool.call(r#"{"query": "Nietzsche eternal recurrence"}"#).await.unwrap();
+        let res = tool
+            .call(r#"{"query": "Nietzsche eternal recurrence"}"#)
+            .await
+            .unwrap();
 
         assert!(res.contains("Recalled"));
         assert!(res.contains("eternal recurrence"));

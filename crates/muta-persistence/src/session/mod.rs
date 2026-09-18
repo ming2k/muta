@@ -321,7 +321,7 @@ impl SessionData {
     }
 }
 
-/// Serde default for [`SessionData::project_root`]. Resolves to the current
+/// Serde default for [`SessionData`]'s workspace root. Resolves to the current
 /// process cwd so legacy snapshots (which predate the field) load with the
 /// closest-to-correct project binding on first deserialisation.
 fn default_project_root() -> PathBuf {

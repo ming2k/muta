@@ -579,9 +579,7 @@ mod tests {
                 query_active: false,
             },
         );
-        let restored = store
-            .open(DialogKind::UsageStats)
-            .expect("state retained");
+        let restored = store.open(DialogKind::UsageStats).expect("state retained");
         assert_eq!(
             (restored.index, restored.scroll, restored.follow),
             (3, 12, false)

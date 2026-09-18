@@ -46,10 +46,15 @@ trap cleanup EXIT
 # normal one-process-per-test execution would let each export overwrite the
 # shared target and leave a truncated file. Run from the contracts package,
 # matching Cargo's libtest cwd so dependency imports have stable canonical paths.
-LIST_JSON="$(cargo nextest list -p muta-contracts --lib --locked \
-    --list-type binaries-only --message-format json)"
-TEST_BINARY="$(printf '%s\n' "$LIST_JSON" \
-    | sed -n 's/.*"binary-path":"\([^"]*\)".*/\1/p')"
+if command -v cargo-nextest >/dev/null 2>&1; then
+    LIST_JSON="$(cargo nextest list -p muta-contracts --lib --locked \
+        --list-type binaries-only --message-format json)"
+    TEST_BINARY="$(printf '%s\n' "$LIST_JSON" \
+        | sed -n 's/.*"binary-path":"\([^"]*\)".*/\1/p')"
+else
+    TEST_BINARY="$(cargo test -p muta-contracts --lib --no-run --locked --message-format=json \
+        | sed -n 's/.*"target":{"kind":\["lib"\],"crate_types":\["lib"\],"name":"muta_contracts".*"executable":"\([^"]*\)".*/\1/p')"
+fi
 if [ -z "$TEST_BINARY" ] || [ ! -x "$TEST_BINARY" ]; then
     echo "::error::generate-wire: could not resolve the muta-contracts test binary" >&2
     exit 1

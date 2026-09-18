@@ -1,10 +1,10 @@
 //! Universal Asset Attestation Ledger (ADR-0243, ADR-0252): Cryptographic
 //! fingerprinting, composite identity, replacement semantics, and bounded 30-day leases.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::db::PersistenceHandle;
 use muta_contracts::security::{AssetLocator, AssetSpec, AttestationStatus};
 use serde::{Deserialize, Serialize};
-use crate::db::PersistenceHandle;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Default lease duration: 30 calendar days in seconds (ADR-0252).
 pub const ATTESTATION_LEASE_TTL_SECS: u64 = 30 * 86_400;
@@ -191,12 +191,18 @@ mod tests {
         };
 
         // 1. Initially untrusted / quarantined
-        assert_eq!(ledger.status(&locator, &spec_v1), AttestationStatus::Quarantined);
+        assert_eq!(
+            ledger.status(&locator, &spec_v1),
+            AttestationStatus::Quarantined
+        );
         assert!(!ledger.is_trusted(&locator, &spec_v1));
 
         // 2. Trust asset -> Trusted with 30d lease
         ledger.trust_asset(&locator, &spec_v1).unwrap();
-        assert_eq!(ledger.status(&locator, &spec_v1), AttestationStatus::Trusted);
+        assert_eq!(
+            ledger.status(&locator, &spec_v1),
+            AttestationStatus::Trusted
+        );
         assert!(ledger.is_trusted(&locator, &spec_v1));
 
         // 3. Changed content on the SAME locator -> Status becomes Changed!
@@ -204,23 +210,35 @@ mod tests {
             command: vec!["python3".into(), "-m".into(), "philpapers_mcp_v2".into()],
             env,
         };
-        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Changed);
+        assert_eq!(
+            ledger.status(&locator, &spec_v2),
+            AttestationStatus::Changed
+        );
         assert!(!ledger.is_trusted(&locator, &spec_v2));
 
         // 4. Re-trusting with spec_v2 supersedes and restores trust
         ledger.trust_asset(&locator, &spec_v2).unwrap();
-        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Trusted);
+        assert_eq!(
+            ledger.status(&locator, &spec_v2),
+            AttestationStatus::Trusted
+        );
 
         // 5. Expiration boundary test
         ledger
             .trust_asset_with_expiry(&locator, &spec_v2, 1000, 2000)
             .unwrap();
-        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Expired);
+        assert_eq!(
+            ledger.status(&locator, &spec_v2),
+            AttestationStatus::Expired
+        );
         assert!(!ledger.is_trusted(&locator, &spec_v2));
 
         // 6. Quarantine asset
         ledger.quarantine_asset(&locator, &spec_v2).unwrap();
-        assert_eq!(ledger.status(&locator, &spec_v2), AttestationStatus::Quarantined);
+        assert_eq!(
+            ledger.status(&locator, &spec_v2),
+            AttestationStatus::Quarantined
+        );
         assert!(!ledger.is_trusted(&locator, &spec_v2));
 
         // 7. Explicit denial (ADR-0253)
@@ -234,6 +252,9 @@ mod tests {
             command: vec!["python3".into(), "-m".into(), "philpapers_mcp_v3".into()],
             env: BTreeMap::new(),
         };
-        assert_eq!(ledger.status(&locator, &spec_v3), AttestationStatus::Changed);
+        assert_eq!(
+            ledger.status(&locator, &spec_v3),
+            AttestationStatus::Changed
+        );
     }
 }

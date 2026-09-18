@@ -356,7 +356,6 @@ mod owned {
             self.sink = Some(sink);
             self
         }
-
     }
     #[async_trait::async_trait]
     impl<C: Connector> Egress for MutaNetEgress<C> {

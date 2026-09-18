@@ -26,8 +26,7 @@
 //!   [`MIN_TOAST_WIDTH`] and [`MAX_TOAST_WIDTH`].
 
 use mutx_engine::{
-    Block as RtBlock, Clear, Color, Frame, Modifier, Paragraph, Rect, Span,
-    {Line, Style},
+    Block as RtBlock, Clear, Color, Frame, Modifier, Paragraph, Rect, Span, {Line, Style},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -182,7 +181,8 @@ pub(crate) fn draw_toast_bubble(
         .unwrap_or(0);
 
     // Toast width: content width + leading gutter + trailing pad
-    let toast_width = ((max_content_w + chrome_w) as u16).clamp(MIN_TOAST_WIDTH, max_toast_w as u16);
+    let toast_width =
+        ((max_content_w + chrome_w) as u16).clamp(MIN_TOAST_WIDTH, max_toast_w as u16);
     let x = width.saturating_sub(toast_width).saturating_sub(2).max(1);
 
     // Borderless pill height matches the content line count directly (compact zero border chrome)
@@ -260,7 +260,10 @@ mod tests {
 
         // y=0: outside toast
         let row_0 = grid_row(&terminal, 0);
-        assert!(!row_0.contains("copied to clipboard"), "row 0 should be outside toast");
+        assert!(
+            !row_0.contains("copied to clipboard"),
+            "row 0 should be outside toast"
+        );
 
         // y=1: single compact content row (borderless floating pill)
         let row_1 = grid_row(&terminal, 1);
@@ -319,7 +322,10 @@ mod tests {
 
         // y=3: outside toast
         let row_3 = grid_row(&terminal, 3);
-        assert!(!row_3.contains("roots"), "row 3 should not contain toast: {row_3}");
+        assert!(
+            !row_3.contains("roots"),
+            "row 3 should not contain toast: {row_3}"
+        );
     }
 
     #[test]
@@ -332,35 +338,68 @@ mod tests {
         });
 
         let row_1 = grid_row(&terminal, 1);
-        assert!(row_1.contains("  ℹ  This is a very long"), "row 1 starts with info glyph: {row_1}");
+        assert!(
+            row_1.contains("  ℹ  This is a very long"),
+            "row 1 starts with info glyph: {row_1}"
+        );
 
         let row_2 = grid_row(&terminal, 2);
-        assert!(row_2.starts_with(' ') || row_2.contains("     "), "row 2 indented: {row_2}");
+        assert!(
+            row_2.starts_with(' ') || row_2.contains("     "),
+            "row 2 indented: {row_2}"
+        );
     }
 
     #[test]
     fn ascii_toast_renders_ascii_glyphs() {
-        let mut theme = Theme::default();
-        theme.glyphs = mutx_engine::ASCII_GLYPHS;
+        let theme = Theme {
+            glyphs: mutx_engine::ASCII_GLYPHS,
+            ..Default::default()
+        };
         let mut terminal = TestTerminal::new(80, 10);
         terminal.draw(|f| {
             draw_toast_bubble(f, &theme, "copied to clipboard", ToastKind::CopyOk, 80);
         });
 
         let row_1 = grid_row(&terminal, 1);
-        assert!(!row_1.contains('|') && !row_1.contains('+'), "row 1 should be borderless in ASCII too: {row_1}");
-        assert!(row_1.contains("[OK]"), "row 1 should contain ASCII check [OK]: {row_1}");
-        assert!(row_1.contains("copied to clipboard"), "row 1 has text: {row_1}");
+        assert!(
+            !row_1.contains('|') && !row_1.contains('+'),
+            "row 1 should be borderless in ASCII too: {row_1}"
+        );
+        assert!(
+            row_1.contains("[OK]"),
+            "row 1 should contain ASCII check [OK]: {row_1}"
+        );
+        assert!(
+            row_1.contains("copied to clipboard"),
+            "row 1 has text: {row_1}"
+        );
     }
 
     #[test]
     fn preview_toast_styles() {
         let theme = Theme::default();
         let cases = [
-            ("1. Success / Copied", "copied to clipboard", ToastKind::CopyOk),
-            ("2. Failure / Error", "clipboard is empty", ToastKind::CopyFailed),
-            ("3. Armed Confirmation", "Esc again interrupts", ToastKind::Armed),
-            ("4. Command Ack / Info", "/delegate on: sub-agent routing active", ToastKind::Info),
+            (
+                "1. Success / Copied",
+                "copied to clipboard",
+                ToastKind::CopyOk,
+            ),
+            (
+                "2. Failure / Error",
+                "clipboard is empty",
+                ToastKind::CopyFailed,
+            ),
+            (
+                "3. Armed Confirmation",
+                "Esc again interrupts",
+                ToastKind::Armed,
+            ),
+            (
+                "4. Command Ack / Info",
+                "/delegate on: sub-agent routing active",
+                ToastKind::Info,
+            ),
             (
                 "5. Multiline Notice",
                 "Workspace roots could not be loaded\nSkipped: `../opencode`",

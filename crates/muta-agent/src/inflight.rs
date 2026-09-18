@@ -16,10 +16,12 @@ use std::hash::Hash;
 use std::sync::Arc;
 use tokio::sync::{Mutex, watch};
 
+type InflightTaskMap<K, V> = Arc<Mutex<HashMap<K, watch::Sender<Option<Result<V, String>>>>>>;
+
 /// Inflight request manager for deduplicating concurrent operations by key.
 #[derive(Clone)]
 pub struct Inflight<K, V> {
-    tasks: Arc<Mutex<HashMap<K, watch::Sender<Option<Result<V, String>>>>>>,
+    tasks: InflightTaskMap<K, V>,
 }
 
 impl<K, V> Default for Inflight<K, V>
@@ -86,7 +88,7 @@ where
         let borrow = rx.borrow();
         borrow
             .as_ref()
-            .expect("watched result must be present after wait_for")
+            .ok_or_else(|| "watched result must be present after wait_for".to_string())?
             .clone()
     }
 

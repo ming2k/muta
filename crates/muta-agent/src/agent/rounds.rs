@@ -276,14 +276,25 @@ impl Agent {
     /// per-round state are already present, so the next invocation sends the
     /// same pending provider request instead of executing those tools again.
     pub(crate) async fn resume_streaming_with_events<F>(
-        self: &Arc<Self>, messages: &mut Vec<Message>, cancel: &CancellationToken,
-        round: &mut StreamingRoundState, on_event: F,
-    ) -> Result<RoundOutcome, HarnessError> where F: FnMut(AgentEvent) + Send {
-        let result = self.resume_streaming_inner(messages, cancel, round, on_event).await;
-        if result.is_err() {
-            if let Some(ledger) = self.token_ledger() {
-                ledger.persist_pending(&self.thread_id().unwrap_or_default()).await.map_err(HarnessError::Other)?;
-            }
+        self: &Arc<Self>,
+        messages: &mut Vec<Message>,
+        cancel: &CancellationToken,
+        round: &mut StreamingRoundState,
+        on_event: F,
+    ) -> Result<RoundOutcome, HarnessError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        let result = self
+            .resume_streaming_inner(messages, cancel, round, on_event)
+            .await;
+        if result.is_err()
+            && let Some(ledger) = self.token_ledger()
+        {
+            ledger
+                .persist_pending(&self.thread_id().unwrap_or_default())
+                .await
+                .map_err(HarnessError::Other)?;
         }
         result
     }
@@ -408,8 +419,12 @@ impl Agent {
                 round.turn_index,
                 request_projection,
             );
-            if let (Some(ledger), Some(key)) = (&request_accounting.ledger, &request_accounting.key) {
-                ledger.persist_request(key).await.map_err(HarnessError::Other)?;
+            if let (Some(ledger), Some(key)) = (&request_accounting.ledger, &request_accounting.key)
+            {
+                ledger
+                    .persist_request(key)
+                    .await
+                    .map_err(HarnessError::Other)?;
             }
             request_accounting.start_request();
             // Stamp this attempt's own telemetry handle onto the request it
@@ -1156,7 +1171,9 @@ impl Agent {
             //      inside `execute_tool` (never serialised across the batch);
             //   3. schedule — concurrent execution through the ToolScheduler;
             //   4. finalize — input-ordered recording, post-tool hooks, nudge.
-            let prepared = self.dispatch_preflight(tool_calls, messages, state, on_event).await;
+            let prepared = self
+                .dispatch_preflight(tool_calls, messages, state, on_event)
+                .await;
             let outcome = if prepared.exec_indices.is_empty() {
                 None
             } else {

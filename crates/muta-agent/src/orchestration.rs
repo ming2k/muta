@@ -632,7 +632,11 @@ pub async fn send_harness_state_for_session(
             workspace: session
                 .workspace()
                 .map(|w| w.root.to_string_lossy().to_string())
-                .or_else(|| agent.workspace_root().map(|p| p.to_string_lossy().to_string())),
+                .or_else(|| {
+                    agent
+                        .workspace_root()
+                        .map(|p| p.to_string_lossy().to_string())
+                }),
         }),
     ));
     if let Some(performance) =
@@ -1206,7 +1210,11 @@ pub async fn execute_round(
                     })
                     .await
                     .map(|_| ());
-                if outcome.is_ok() { if let Some(ref ledger) = ledger { ledger.acknowledge_records(usage_slice); } }
+                if outcome.is_ok()
+                    && let Some(ref ledger) = ledger
+                {
+                    ledger.acknowledge_records(usage_slice);
+                }
                 // ADR-0209: Proactive push of token ledger updates on mid-round turn boundary.
                 // When an LLM turn produces tool calls or outputs and commits, stream the live
                 // report immediately so open telemetry dialogs update turn-by-turn without polling.
@@ -1632,7 +1640,9 @@ pub async fn execute_round(
         })
         .await?;
 
-    if let Some(ref ledger) = ledger { ledger.acknowledge_records(usage_slice); }
+    if let Some(ref ledger) = ledger {
+        ledger.acknowledge_records(usage_slice);
+    }
 
     let outcome = match outcome {
         Ok(outcome) => outcome,
@@ -1654,21 +1664,19 @@ pub async fn execute_round(
 
     let visible = outcome.message.content.trim().to_string();
     if !visible.is_empty() && !streamed_text.load(Ordering::SeqCst) {
-        let _ = tx.send(round_response(&session_id, RoundEvent::Text(visible.clone())));
+        let _ = tx.send(round_response(
+            &session_id,
+            RoundEvent::Text(visible.clone()),
+        ));
     }
 
     // Record dialogue into role-scoped cognitive memory (pure user <-> role turns)
-    if let (Some(prompt), Some(role)) = (prompt_for_memory, agent.active_role()) {
-        if !prompt.trim().is_empty() && !visible.is_empty() {
-            if let Ok(store) = muta_persistence::get_role_memory_store() {
-                let _ = store.record_dialogue(
-                    &role,
-                    Some(&session_id),
-                    &prompt,
-                    &visible,
-                );
-            }
-        }
+    if let (Some(prompt), Some(role)) = (prompt_for_memory, agent.active_role())
+        && !prompt.trim().is_empty()
+        && !visible.is_empty()
+        && let Ok(store) = muta_persistence::get_role_memory_store()
+    {
+        let _ = store.record_dialogue(&role, Some(&session_id), &prompt, &visible);
     }
 
     // ADR-0236 D5 / invariant #5: publish the authoritative completion as soon

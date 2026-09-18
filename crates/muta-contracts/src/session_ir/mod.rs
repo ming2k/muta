@@ -19,8 +19,8 @@ pub mod delta;
 pub mod types;
 
 pub use compiler::{
-    compile_session_request, CacheBoundary, CompilationArtifact, CompilationStats,
-    CompilerError, CompilerOptions,
+    CacheBoundary, CompilationArtifact, CompilationStats, CompilerError, CompilerOptions,
+    compile_session_request,
 };
 pub use delta::{SessionDelta, StateUpdate};
 pub use types::{

@@ -6,7 +6,7 @@
 //! runtime failure the caller cannot diagnose, and the acceptable node-kind
 //! vocabulary differs per grammar. This module defines the opposite trade — a
 //! tiny grammar over the closed kind vocabulary in
-//! [`declarations::DECLARATION_KINDS`], where a bad clause is rejected with the
+//! [`crate::syntax::declarations::DECLARATION_KINDS`], where a bad clause is rejected with the
 //! legal values named.
 //!
 //! ```text

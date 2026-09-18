@@ -35,7 +35,9 @@ pub fn spawn_refresh(catalog: impl DynamicCatalog + 'static) {
             // Apply exponential backoff when consecutive failures occur, capping at 4x period or 60s.
             let next_delay = if consecutive_failures > 0 {
                 let multiplier = 1u32.checked_shl(consecutive_failures.min(3)).unwrap_or(8);
-                period.saturating_mul(multiplier).min(Duration::from_secs(60))
+                period
+                    .saturating_mul(multiplier)
+                    .min(Duration::from_secs(60))
             } else {
                 period
             };

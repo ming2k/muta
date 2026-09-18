@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 ///   for the daemon's coordinator). Empty means "unnamed".
 /// - [`AgentIdentity::mission`] — what the agent is for (e.g. a research
 ///   frontend's mission; empty means no mission framing).
-/// - [`AgentIdentity::persona`] — optional full-text override of the opening.
+/// - [`AgentIdentity::directive`] — optional full-text override of the opening.
 ///   When set, [`AgentIdentity::preamble`] returns it verbatim and ignores
 ///   `name`/`mission`. Subagents use this to inject their role's full task
 ///   prompt as the identity; focused roles use it for their imperative role

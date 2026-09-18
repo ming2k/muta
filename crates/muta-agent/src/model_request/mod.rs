@@ -78,7 +78,10 @@ impl ModelRequestAssembler {
         tools: &[Arc<dyn Tool>],
         dialect: Option<String>,
     ) -> Result<muta_contracts::CompilationArtifact, muta_contracts::CompilerError> {
-        let tool_specs = tools.iter().map(|t| muta_contracts::ToolSpec::from_tool(t.as_ref())).collect();
+        let tool_specs = tools
+            .iter()
+            .map(|t| muta_contracts::ToolSpec::from_tool(t.as_ref()))
+            .collect();
         let options = muta_contracts::CompilerOptions {
             tool_specs,
             temporary_context,

@@ -997,9 +997,7 @@ fn compose_frame(
                         crate::overlays::session::SessionsModalProps {
                             sessions: &app.sessions_overview,
                             expanded_sessions: Some(&app.sessions_expanded),
-                            selected: app
-                                .modal_index
-                                .min(projected_count.saturating_sub(1)),
+                            selected: app.modal_index.min(projected_count.saturating_sub(1)),
                             scroll: &mut app.session_scroll,
                             follow: app.session_modal_follow,
                             startup_picker: app.startup_overlay

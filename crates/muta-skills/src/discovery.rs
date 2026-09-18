@@ -484,7 +484,12 @@ mod tests {
     #[tokio::test]
     async fn role_scoped_skills_discovered_with_role_scope() {
         let temp = tempfile::tempdir().unwrap();
-        let role_dir = temp.path().join("roles").join("philosophist").join("skills").join("socratic");
+        let role_dir = temp
+            .path()
+            .join("roles")
+            .join("philosophist")
+            .join("skills")
+            .join("socratic");
         std::fs::create_dir_all(&role_dir).unwrap();
         std::fs::write(
             role_dir.join("SKILL.md"),

@@ -22,8 +22,8 @@ mod reader;
 pub mod session_ir;
 
 pub use handle::get_persistence_handle;
-pub use migrations::CURRENT_DB_VERSION;
 pub(crate) use migrations::*;
+pub use migrations::{CURRENT_DB_VERSION, SessionTranscriptView};
 
 #[cfg(test)]
 mod tests;
@@ -507,7 +507,10 @@ impl fmt::Display for SaveError {
                 "stale session revision: expected {expected}, durable revision is {actual}"
             ),
             Self::OperationConflict { operation_id } => {
-                write!(f, "operation {operation_id} was reused with a different payload")
+                write!(
+                    f,
+                    "operation {operation_id} was reused with a different payload"
+                )
             }
         }
     }
@@ -603,7 +606,9 @@ fn persist_usage_records(
     entries: Vec<muta_contracts::usage_stats::UsageStatRecord>,
 ) -> Result<()> {
     let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    for entry in entries { upsert_attempt(&tx, &entry)?; }
+    for entry in entries {
+        upsert_attempt(&tx, &entry)?;
+    }
     tx.commit()
 }
 
@@ -705,15 +710,36 @@ fn apply_durable_attempt_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
         }
     }
     let mut stmt = tx.prepare("SELECT u.payload, COALESCE(s.workspace_root,''), COALESCE(s.updated_at_s,0) FROM legacy_usage_records u LEFT JOIN sessions s ON s.id=u.session_id")?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?)))?.collect::<Result<Vec<_>>>()?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, u64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>>>()?;
     drop(stmt);
     for (payload, root, at) in rows {
         let record: muta_contracts::RequestUsageRecord = decode_json(&payload)?;
-        let at = if record.started_at_ms > 0 { record.started_at_ms } else { at.saturating_mul(1000) };
-        import_legacy_attempt(tx, &muta_contracts::usage_stats::UsageStatRecord {
-            day: muta_contracts::usage_stats::day_key_from_epoch_ms(at), recorded_at_ms: at,
-            project: if root.is_empty() { String::new() } else { crate::paths::project_bucket_name(Path::new(&root)) }, record,
-        })?;
+        let at = if record.started_at_ms > 0 {
+            record.started_at_ms
+        } else {
+            at.saturating_mul(1000)
+        };
+        import_legacy_attempt(
+            tx,
+            &muta_contracts::usage_stats::UsageStatRecord {
+                day: muta_contracts::usage_stats::day_key_from_epoch_ms(at),
+                recorded_at_ms: at,
+                project: if root.is_empty() {
+                    String::new()
+                } else {
+                    crate::paths::project_bucket_name(Path::new(&root))
+                },
+                record,
+            },
+        )?;
     }
     tx.execute_batch("DROP TABLE legacy_usage_records;")?;
     if has_kv_store {
@@ -722,7 +748,10 @@ fn apply_durable_attempt_schema(tx: &rusqlite::Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-fn upsert_attempt(conn: &Connection, entry: &muta_contracts::usage_stats::UsageStatRecord) -> Result<bool> {
+fn upsert_attempt(
+    conn: &Connection,
+    entry: &muta_contracts::usage_stats::UsageStatRecord,
+) -> Result<bool> {
     use muta_contracts::{RequestUsageRecord, RequestUsageSource};
     let key = &entry.record.key;
     let previous: Option<String> = conn.query_row(
@@ -730,21 +759,40 @@ fn upsert_attempt(conn: &Connection, entry: &muta_contracts::usage_stats::UsageS
         params![key.session_id,key.actor_id,key.round,key.turn,key.attempt], |r| r.get(0)).optional()?;
     if let Some(previous) = previous {
         let old: RequestUsageRecord = decode_json(&previous)?;
-        if old == entry.record { return Ok(false); }
+        if old == entry.record {
+            return Ok(false);
+        }
         if old.status.is_terminal() {
-            if !entry.record.status.is_terminal() { return Ok(false); }
-            if old.source == RequestUsageSource::Reported && entry.record.source != RequestUsageSource::Reported { return Ok(false); }
-            if old.source == RequestUsageSource::Reported && entry.record.source == RequestUsageSource::Reported {
+            if !entry.record.status.is_terminal() {
+                return Ok(false);
+            }
+            if old.source == RequestUsageSource::Reported
+                && entry.record.source != RequestUsageSource::Reported
+            {
+                return Ok(false);
+            }
+            if old.source == RequestUsageSource::Reported
+                && entry.record.source == RequestUsageSource::Reported
+            {
                 // Allow repaired metadata, but never conflicting authoritative counts.
-                if old.prompt_tokens != entry.record.prompt_tokens || old.completion_tokens != entry.record.completion_tokens || old.total_tokens != entry.record.total_tokens {
-                    return Err(rusqlite::Error::InvalidParameterName(format!("conflicting reported usage for {:?}", key)));
+                if old.prompt_tokens != entry.record.prompt_tokens
+                    || old.completion_tokens != entry.record.completion_tokens
+                    || old.total_tokens != entry.record.total_tokens
+                {
+                    return Err(rusqlite::Error::InvalidParameterName(format!(
+                        "conflicting reported usage for {:?}",
+                        key
+                    )));
                 }
             }
         }
     }
-    let payload = serde_json::to_string(&entry.record).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    let payload = serde_json::to_string(&entry.record)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     conn.execute("UPDATE usage_clock SET revision=revision+1 WHERE id=1", [])?;
-    let revision: i64 = conn.query_row("SELECT revision FROM usage_clock WHERE id=1", [], |r| r.get(0))?;
+    let revision: i64 = conn.query_row("SELECT revision FROM usage_clock WHERE id=1", [], |r| {
+        r.get(0)
+    })?;
     conn.execute("INSERT INTO usage_records(session_id,actor_id,round,turn,attempt,payload,day,recorded_at_ms,project,revision)
         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
         ON CONFLICT(session_id,actor_id,round,turn,attempt) DO UPDATE SET payload=excluded.payload, revision=excluded.revision,
@@ -796,7 +844,9 @@ pub(crate) enum PersistenceCommand {
         record: muta_contracts::RequestProjection,
         ack: oneshot::Sender<Result<(), PersistenceError>>,
     },
-    ProjectUsage { ack: oneshot::Sender<Result<usize, PersistenceError>> },
+    ProjectUsage {
+        ack: oneshot::Sender<Result<usize, PersistenceError>>,
+    },
     RecordUsageStats {
         entries: Vec<muta_contracts::usage_stats::UsageStatRecord>,
         ack: Option<oneshot::Sender<Result<(), PersistenceError>>>,
@@ -990,11 +1040,13 @@ struct RegisteredOwner {
     lease: std::sync::Weak<muta_platform::lock::ProcessLock>,
 }
 
-static OWNERS: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, RegisteredOwner>>> = OnceLock::new();
+static OWNERS: OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, RegisteredOwner>>> =
+    OnceLock::new();
 
 fn database_identity(path: &Path) -> std::result::Result<PathBuf, String> {
     if path.exists() {
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::MetadataExt;
             if std::fs::metadata(path).map_err(|e| e.to_string())?.nlink() != 1 {
                 return Err("hard-linked databases are not supported".into());
@@ -1002,10 +1054,13 @@ fn database_identity(path: &Path) -> std::result::Result<PathBuf, String> {
         }
         return path.canonicalize().map_err(|e| e.to_string());
     }
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    Ok(parent.canonicalize().map_err(|e| e.to_string())?.join(
-        path.file_name().ok_or("database path has no filename")?,
-    ))
+    Ok(parent
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .join(path.file_name().ok_or("database path has no filename")?))
 }
-

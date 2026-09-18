@@ -166,7 +166,10 @@ async fn a_cold_attempt_reports_its_connection_phases() {
     // A connection to a literal address skips resolution, so DNS may legitimately
     // be absent; the TCP phase cannot be.
     assert!(timings.tcp_us.is_some(), "no TCP phase: {timings:?}");
-    assert!(timings.connected_us.is_some(), "no connect instant: {timings:?}");
+    assert!(
+        timings.connected_us.is_some(),
+        "no connect instant: {timings:?}"
+    );
     assert!(
         timings.request_sent_us.is_some(),
         "no upload anchor: {timings:?}"
@@ -324,7 +327,10 @@ async fn a_failed_connection_still_publishes_what_it_observed() {
 
     let provider = provider_for(&url);
     let telemetry = TransportTelemetry::new();
-    let error = match provider.stream_chat_events(request_with(telemetry.clone())).await {
+    let error = match provider
+        .stream_chat_events(request_with(telemetry.clone()))
+        .await
+    {
         Ok(_) => panic!("nothing is listening on {address}, yet the stream opened"),
         Err(error) => error,
     };
@@ -334,9 +340,9 @@ async fn a_failed_connection_still_publishes_what_it_observed() {
         "a refused connection is a transport failure"
     );
 
-    let timings = telemetry.read().expect(
-        "the transport watched this attempt fail, and must say so rather than fall silent",
-    );
+    let timings = telemetry
+        .read()
+        .expect("the transport watched this attempt fail, and must say so rather than fall silent");
     assert!(
         timings.dispatch_at.is_some(),
         "the anchor is present even when the attempt failed: {timings:?}"

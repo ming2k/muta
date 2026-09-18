@@ -28,17 +28,36 @@ impl DatabaseEngine {
     pub(crate) fn project_usage_batch(&self, limit: usize) -> Result<usize> {
         use muta_contracts::{RequestUsageSource, RequestUsageStatus};
         let mut stmt = self.conn.prepare("SELECT u.payload,u.day,u.revision FROM usage_dirty d JOIN usage_records u USING(session_id,actor_id,round,turn,attempt) ORDER BY d.revision LIMIT ?1")?;
-        let rows = stmt.query_map([limit.min(128) as i64], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,i64>(2)?)))?.collect::<Result<Vec<_>>>()?;
+        let rows = stmt
+            .query_map([limit.min(128) as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>>>()?;
         drop(stmt);
-        if rows.is_empty() { return Ok(0); }
+        if rows.is_empty() {
+            return Ok(0);
+        }
         // Pure preparation precedes the write transaction; each batch is bounded.
-        let prepared = rows.into_iter().map(|(json,day,rev)| Ok((decode_json::<muta_contracts::RequestUsageRecord>(&json)?,day,rev))).collect::<Result<Vec<_>>>()?;
+        let prepared = rows
+            .into_iter()
+            .map(|(json, day, rev)| {
+                Ok((
+                    decode_json::<muta_contracts::RequestUsageRecord>(&json)?,
+                    day,
+                    rev,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        for (record,day,revision) in &prepared {
+        for (record, day, revision) in &prepared {
             let k = &record.key;
             let terminal = record.status.is_terminal();
             let reported = terminal && record.source == RequestUsageSource::Reported;
-            let reported_count = |n:i64| if reported { n.max(0) } else { 0 };
+            let reported_count = |n: i64| if reported { n.max(0) } else { 0 };
             tx.execute("INSERT INTO usage_contributions VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
                 ON CONFLICT(session_id,actor_id,round,turn,attempt) DO UPDATE SET
                 revision=excluded.revision, day=excluded.day,provider=excluded.provider,model=excluded.model,
@@ -1105,7 +1124,8 @@ impl DatabaseEngine {
                      ORDER BY updated_at_s DESC;"
                 );
                 let mut stmt = self.conn.prepare(&sql)?;
-                let rows = stmt.query_map(params![path.to_string_lossy(), active_id], map_summary_row)?;
+                let rows =
+                    stmt.query_map(params![path.to_string_lossy(), active_id], map_summary_row)?;
                 for item in rows {
                     push_summary(&mut summaries, item?, active_id);
                 }
@@ -1250,13 +1270,12 @@ impl DatabaseEngine {
         };
         let mut stmt = self.conn.prepare(&sql)?;
         let get = |row: &Row| row.get::<_, String>(0);
-        let found = if bind_path && persona.is_some() {
+        let found = if let (true, Some(persona_val)) = (bind_path, persona) {
             let path = filter
                 .as_path()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            stmt.query_row(params![path, persona.unwrap()], get)
-                .optional()?
+            stmt.query_row(params![path, persona_val], get).optional()?
         } else if bind_path {
             let path = filter
                 .as_path()
@@ -1280,12 +1299,16 @@ impl DatabaseEngine {
         let get = |row: &Row| row.get::<_, String>(0);
         let found = match partition {
             muta_contracts::SessionPartition::Workspace(path) => {
-                let sql = format!("{base} AND workspace_root = ?1 ORDER BY updated_at_s DESC LIMIT 1");
+                let sql =
+                    format!("{base} AND workspace_root = ?1 ORDER BY updated_at_s DESC LIMIT 1");
                 let mut stmt = self.conn.prepare(&sql)?;
-                stmt.query_row(params![path.to_string_lossy()], get).optional()?
+                stmt.query_row(params![path.to_string_lossy()], get)
+                    .optional()?
             }
             muta_contracts::SessionPartition::Role(role_id) => {
-                let sql = format!("{base} AND workspace_root IS NULL AND persona = ?1 ORDER BY updated_at_s DESC LIMIT 1");
+                let sql = format!(
+                    "{base} AND workspace_root IS NULL AND persona = ?1 ORDER BY updated_at_s DESC LIMIT 1"
+                );
                 let mut stmt = self.conn.prepare(&sql)?;
                 stmt.query_row(params![role_id], get).optional()?
             }
@@ -1853,4 +1876,3 @@ impl DatabaseEngine {
 // ---------------------------------------------------------------------------
 // The read door (ADR-0231)
 // ---------------------------------------------------------------------------
-

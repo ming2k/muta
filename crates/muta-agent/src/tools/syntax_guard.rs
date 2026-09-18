@@ -109,7 +109,12 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(output.to_text().contains("Warning: non-blocking syntax diagnostic"), warning);
+            assert_eq!(
+                output
+                    .to_text()
+                    .contains("Warning: non-blocking syntax diagnostic"),
+                warning
+            );
             assert_eq!(
                 std::fs::read_to_string(dir.path().join("config.json")).unwrap(),
                 before.replacen(old, new, 1)

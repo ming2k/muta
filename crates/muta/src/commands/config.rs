@@ -250,9 +250,9 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                         .map_err(|_| "invalid integer for agent.trajectory_guard.threshold")?;
                 }
                 "agent.trajectory_guard.cognitive_review" => {
-                    config.agent.trajectory_guard.cognitive_review = value
-                        .parse()
-                        .map_err(|_| "invalid boolean for agent.trajectory_guard.cognitive_review")?;
+                    config.agent.trajectory_guard.cognitive_review = value.parse().map_err(
+                        |_| "invalid boolean for agent.trajectory_guard.cognitive_review",
+                    )?;
                 }
                 "daemon.shutdown_grace_secs" => {
                     config.daemon.shutdown_grace_secs = value

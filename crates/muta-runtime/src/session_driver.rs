@@ -1264,12 +1264,10 @@ impl SessionDriver {
                             .copied()
                             .filter(|d| *d != muta_contracts::TrustDomain::UserAssets)
                             .collect();
-                        if !ws_domains.is_empty() {
-                            if let Err(error) =
-                                workspace_security.trust_domains(root, &ws_domains)
-                            {
-                                tracing::error!(?error, "failed to persist workspace trust");
-                            }
+                        if !ws_domains.is_empty()
+                            && let Err(error) = workspace_security.trust_domains(root, &ws_domains)
+                        {
+                            tracing::error!(?error, "failed to persist workspace trust");
                         }
 
                         // Determine any present workspace domains that were NOT selected by human -> deny them (ADR-0253)

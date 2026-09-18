@@ -541,7 +541,10 @@ pub enum InputAction {
     /// sequence across `event::read()` boundaries, and crossterm then hands the
     /// leftover bytes back as spurious `KeyCode::Char` events (issue #854/#668).
     /// Re-arming capture is the cleanest way to get both sides back in step.
-    TerminalResized { cols: u16, rows: u16 },
+    TerminalResized {
+        cols: u16,
+        rows: u16,
+    },
 }
 
 impl InputAction {

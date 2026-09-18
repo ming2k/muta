@@ -77,9 +77,24 @@ workspace: string | null,
 limit: number | null, } } | { "UpdateWebSearchConfig": WebConfigUpdate };
 
 /**
+ * Canonical locator identifying an external capability unit (ADR-0252).
+ */
+export type AssetLocator = { "kind": "user_mcp", name: string, } | { "kind": "user_skill", name: string, } | { "kind": "user_hook", event: string, } | { "kind": "role_mcp", role: string, name: string, } | { "kind": "role_skill", role: string, name: string, } | { "kind": "workspace_mcp", workspace_root: string, name: string, } | { "kind": "workspace_skill", workspace_root: string, name: string, } | { "kind": "workspace_hook", workspace_root: string, event: string, } | { "kind": "workspace_instructions", workspace_root: string, } | { "kind": "workspace_ex_roots", workspace_root: string, } | { "kind": "external_path", path: string, };
+
+/**
+ * Specification of an external capability unit subject to attestation (ADR-0243).
+ */
+export type AssetSpec = { "type": "process", command: Array<string>, env?: { [key in string]: string }, } | { "type": "remote_endpoint", url: string, headers?: { [key in string]: string }, };
+
+/**
  * What role the connection wants to assume.
  */
-export type AttachAction = { "new": SessionInitOptions | null } | { "attach": string | null } | "picker" | { "control": ControlRequest } | { "monitor": MonitorAction };
+export type AttachAction = { "new": SessionInitOptions | null } | { "attach": string | null } | { "picker": SessionInitOptions | null } | { "control": ControlRequest } | { "monitor": MonitorAction };
+
+/**
+ * Attestation status for an asset in the universal ledger (ADR-0243, ADR-0252).
+ */
+export type AttestationStatus = "quarantined" | "trusted" | "session_ephemeral" | "denied" | "changed" | "expired";
 
 /**
  * What happens to an `ask_user` question when the session's human channel
@@ -521,7 +536,15 @@ workspace_security: WorkspaceSecuritySnapshot,
  * is a no-op for it. Frontends use this to offer the `/retry` affordance
  * instead of scanning the transcript for error notices.
  */
-retry_pending: boolean, };
+retry_pending: boolean, 
+/**
+ * Active staffing role for this session (e.g. "developer", "philosophist").
+ */
+role: string | null, 
+/**
+ * Bound workspace path for this session, or None for workspace-free sessions.
+ */
+workspace: string | null, };
 
 /**
  * Consequence / threat level of a tool invocation.
@@ -530,6 +553,11 @@ retry_pending: boolean, };
  * command executions, and process lifecycle operations.
  */
 export type HazardLevel = "safe" | "file_modification" | "command_execution" | "process_lifecycle" | "network_or_external";
+
+/**
+ * Four-tier runtime hazard taxonomy for tool invocation and prompt-injection defense (ADR-0243).
+ */
+export type HazardTier = "tier0_query" | "tier1_mutation" | "tier2_egress" | "tier3_shell";
 
 /**
  * One full-text search hit across persisted session transcripts (ADR-0208).
@@ -2431,7 +2459,7 @@ retransmits: number, observation: TransportObservation, };
  * expands to [`TrustDomain::ALL`]. Persisting an aggregate grant would create
  * a second source of truth and make a concrete domain impossible to revoke.
  */
-export type TrustDomain = "mcp" | "skills" | "hooks" | "instructions" | "ex_workspace";
+export type TrustDomain = "mcp" | "skills" | "hooks" | "instructions" | "ex_workspace" | "user_assets";
 
 /**
  * Live, compact performance update for the latest settled model turn.
@@ -2559,9 +2587,13 @@ instructions: WorkspaceTrustState,
 /**
  * Trust status for project-declared external workspace roots.
  */
-ex_workspace: WorkspaceTrustState, };
+ex_workspace: WorkspaceTrustState, 
+/**
+ * Trust status for user-level MCP and global executable assets (ADR-0252).
+ */
+user_assets: WorkspaceTrustState, };
 
 /**
  * Trust state for one project-authored asset domain.
  */
-export type WorkspaceTrustState = "absent" | "quarantined" | "trusted" | "changed";
+export type WorkspaceTrustState = "absent" | "quarantined" | "trusted" | "denied" | "changed" | "expired";

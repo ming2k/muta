@@ -148,12 +148,8 @@ impl HarnessTaskPipeline {
         &self,
         input: TrajectoryLoopReviewInput,
     ) -> TrajectoryLoopVerdict {
-        self.consult_with_fallback(
-            TrajectoryLoopReviewerTask,
-            input,
-            TrajectoryLoopVerdict::No,
-        )
-        .await
+        self.consult_with_fallback(TrajectoryLoopReviewerTask, input, TrajectoryLoopVerdict::No)
+            .await
     }
 
     /// Distill an excerpt into a concise session title.

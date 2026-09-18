@@ -524,11 +524,9 @@ async fn interrupted_round_preserves_retry_history_and_appends_interrupt_entry()
     let runtime = crate::event_loop::UiRuntime::minimal_for_test();
 
     // 1. User prompt is delivered
-    let prompt = crate::model::document::TranscriptMessage::new(
-        muta_contracts::Role::User,
-        "calculate pi",
-    )
-    .sending();
+    let prompt =
+        crate::model::document::TranscriptMessage::new(muta_contracts::Role::User, "calculate pi")
+            .sending();
     app.messages.push(prompt);
 
     // 2. Provider retry occurs
@@ -563,7 +561,11 @@ async fn interrupted_round_preserves_retry_history_and_appends_interrupt_entry()
     //    [0] User prompt (cancelled)
     //    [1] Settled provider retry failure notice (NOT deleted!)
     //    [2] Interrupt entry ("Round 1 — cancelled via [Esc Esc]")
-    assert_eq!(app.messages.len(), 3, "retry entry must be preserved alongside interrupt entry");
+    assert_eq!(
+        app.messages.len(),
+        3,
+        "retry entry must be preserved alongside interrupt entry"
+    );
 
     assert_eq!(
         app.messages[0].delivery,
@@ -572,16 +574,30 @@ async fn interrupted_round_preserves_retry_history_and_appends_interrupt_entry()
 
     // Settled retry entry checks
     let retry_entry = &app.messages[1];
-    assert!(!retry_entry.is_provider_retry(), "settled retry is no longer an active ticking retry");
-    assert!(retry_entry.is_notice(), "settled retry becomes a static notice");
-    let crate::model::document::MessageKind::Notice { severity, ref parts, .. } = retry_entry.kind else {
+    assert!(
+        !retry_entry.is_provider_retry(),
+        "settled retry is no longer an active ticking retry"
+    );
+    assert!(
+        retry_entry.is_notice(),
+        "settled retry becomes a static notice"
+    );
+    let crate::model::document::MessageKind::Notice {
+        severity,
+        ref parts,
+        ..
+    } = retry_entry.kind
+    else {
         panic!("expected Notice kind");
     };
     assert_eq!(severity, crate::model::document::NoticeSeverity::Warning);
     let parts = parts.as_ref().expect("expected parts");
     assert_eq!(parts.topic.as_deref(), Some("retry"));
     assert_eq!(parts.title, "Provider request failed (attempt 2/5)");
-    assert_eq!(parts.detail.as_deref(), Some("Anthropic HTTP 529: Overloaded"));
+    assert_eq!(
+        parts.detail.as_deref(),
+        Some("Anthropic HTTP 529: Overloaded")
+    );
 
     // Interrupt entry checks
     let interrupt_entry = &app.messages[2];
@@ -597,7 +613,11 @@ async fn interrupted_round_preserves_retry_history_and_appends_interrupt_entry()
             edit: crate::event_loop::TranscriptEdit::RetainNotRetry,
         },
     );
-    assert_eq!(app.messages.len(), 3, "settled retry must survive RetainNotRetry");
+    assert_eq!(
+        app.messages.len(),
+        3,
+        "settled retry must survive RetainNotRetry"
+    );
 }
 
 #[tokio::test]
@@ -632,4 +652,3 @@ async fn tool_result_does_not_forge_reasoning_phase() {
     assert_eq!(app.phase, Some(crate::phase::Phase::Preparing));
     assert_eq!(app.phase.as_ref().unwrap().label(), "preparing context");
 }
-

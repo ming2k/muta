@@ -25,6 +25,11 @@ const WS_URL = BASE.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
 const TOKEN = process.env.DAEMON_TOKEN ?? "";
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const VERSION = process.env.CLIENT_VERSION ?? packageJson.version;
+const wireRs = readFileSync(new URL("../../../crates/muta-contracts/src/wire.rs", import.meta.url), "utf8");
+const protocolMatch = wireRs.match(/pub const PROTOCOL_VERSION:\s*u32\s*=\s*(\d+);/);
+const minProtocolMatch = wireRs.match(/pub const MIN_PROTOCOL_VERSION:\s*u32\s*=\s*(\d+);/);
+const PROTOCOL_VERSION = protocolMatch ? parseInt(protocolMatch[1], 10) : 13;
+const MIN_PROTOCOL_VERSION = minProtocolMatch ? parseInt(minProtocolMatch[1], 10) : 12;
 
 let step = "startup";
 const timer = setTimeout(() => fail(step, "timeout"), 30_000);
@@ -82,7 +87,7 @@ async function main() {
   step = "monitor";
   const monitor = await wsConnect(
     { monitor: { watch: true, include_idle: true } },
-    { protocol: 2 },
+    { protocol: PROTOCOL_VERSION },
   ).catch((e) => fail(step, e.message));
   const snapshot = await nextFrame(
     monitor,
@@ -94,7 +99,7 @@ async function main() {
   step = "create_session";
   const control = await wsConnect(
     { control: { verb: "create_session", project: "/" } },
-    { protocol: 2 },
+    { protocol: PROTOCOL_VERSION },
   ).catch((e) => fail(step, e.message));
   const reply = await nextFrame(control, (f) => f.type === "ControlReply", "control").catch((e) =>
     fail(step, e.message),
@@ -103,7 +108,7 @@ async function main() {
   ok(`create_session → ${reply.session_id}`);
 
   step = "attach";
-  const session = await wsConnect({ attach: reply.session_id }, { protocol: 2 }).catch((e) =>
+  const session = await wsConnect({ attach: reply.session_id }, { protocol: PROTOCOL_VERSION }).catch((e) =>
     fail(step, e.message),
   );
   const welcome = await nextFrame(session, (f) => f.type === "Welcome", "welcome").catch((e) =>
@@ -159,7 +164,7 @@ async function main() {
   step = "protocol-wins-over-version";
   const served = await wsConnect(
     { monitor: { watch: false, include_idle: true } },
-    { version: "0.0.0-skew", protocol: 1 },
+    { version: "0.0.0-skew", protocol: MIN_PROTOCOL_VERSION },
   ).catch((e) => fail(step, e.message));
   const protoSnapshot = await nextFrame(served, (f) => f.type === "Monitor", "snapshot").catch(
     (e) => fail(step, e.message),
@@ -172,7 +177,7 @@ async function main() {
   step = "protocol-code";
   const future = await wsConnect(
     { monitor: { watch: false, include_idle: true } },
-    { protocol: 99 },
+    { protocol: PROTOCOL_VERSION + 100 },
   ).catch((e) => fail(step, e.message));
   const perr = await nextFrame(future, (f) => f.type === "Error", "protocol-skew").catch((e) =>
     fail(step, e.message),

@@ -444,10 +444,7 @@ fn browse_view_reopen_restores_scroll_and_selection() {
     // Reopen: first-open returned false and the retained state is back.
     assert!(!app.open_dialog(crate::surfaces::DialogKind::UsageStats));
     assert_eq!(app.modal_index, 3, "selection retained across hide");
-    assert_eq!(
-        app.usage_stats_scroll, 42,
-        "scroll retained across hide"
-    );
+    assert_eq!(app.usage_stats_scroll, 42, "scroll retained across hide");
 }
 
 #[test]

@@ -236,7 +236,9 @@ impl<R: Send + 'static> ToolScheduler<R> {
             drained = std::mem::take(&mut inner.queued);
         }
         for qt in drained {
-            let _ = qt.completion.send(Err(SchedulerError::CancelledBeforeStart));
+            let _ = qt
+                .completion
+                .send(Err(SchedulerError::CancelledBeforeStart));
         }
         self.shared.cancel.cancel();
     }
@@ -262,7 +264,9 @@ impl<R: Send + 'static> ToolScheduler<R> {
             )
         };
         for qt in queued {
-            let _ = qt.completion.send(Err(SchedulerError::CancelledBeforeStart));
+            let _ = qt
+                .completion
+                .send(Err(SchedulerError::CancelledBeforeStart));
         }
         for task in active {
             // Abort first; `task` then drops at the end of the iteration,

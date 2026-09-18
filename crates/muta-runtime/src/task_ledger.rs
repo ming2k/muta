@@ -49,8 +49,8 @@ pub fn record_outcome(
     };
     match serde_json::to_string(&row) {
         Ok(json) => {
-            if let Err(error) = writer
-                .set_kv_blocking(format!("{LEDGER_PREFIX}{}", outcome.job_id.0), json)
+            if let Err(error) =
+                writer.set_kv_blocking(format!("{LEDGER_PREFIX}{}", outcome.job_id.0), json)
             {
                 tracing::warn!(%error, job = %outcome.job_id.0, "task ledger write failed");
             }

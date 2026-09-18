@@ -8,11 +8,11 @@
 //! - Self-pruning and bounded capacity to prevent unbounded growth for end-user maintainability.
 //! - Embedded SQLite + FTS5 full-text indexing with CJK / substring matching fallback.
 
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use rusqlite::{Connection, OptionalExtension, params};
-use serde::{Deserialize, Serialize};
 
 /// Default half-life stability factor in days (7 days).
 pub const DEFAULT_BASE_TAU_DAYS: f64 = 7.0;
@@ -349,11 +349,15 @@ impl RoleMemoryStore {
         }
 
         // Step 2: Fallback retrieval for CJK text (where unicode61 doesn't segment without spaces)
-        let has_cjk = query.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let has_cjk = query
+            .chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
         let cjk_chunks: Vec<String> = if has_cjk {
             query
                 .split(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
-                .filter(|t| !t.is_empty() && t.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)))
+                .filter(|t| {
+                    !t.is_empty() && t.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+                })
                 .map(|t| t.to_string())
                 .collect()
         } else {
@@ -383,7 +387,10 @@ impl RoleMemoryStore {
         let terms: Vec<String> = query
             .split_whitespace()
             .filter_map(|t| {
-                let s: String = t.chars().filter(|c| c.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(c)).collect();
+                let s: String = t
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(c))
+                    .collect();
                 if s.is_empty() {
                     None
                 } else {
@@ -419,7 +426,8 @@ impl RoleMemoryStore {
 
             if let Some(entry) = entry {
                 let elapsed_s = (now_s - entry.last_accessed_at_s).max(0);
-                let retention = calculate_retention(elapsed_s, entry.strength, DEFAULT_BASE_TAU_DAYS);
+                let retention =
+                    calculate_retention(elapsed_s, entry.strength, DEFAULT_BASE_TAU_DAYS);
 
                 // Base relevance: from FTS if present, or term overlap count
                 let base_rel = *fts_scores.get(&entry.id).unwrap_or(&1.0);
@@ -674,7 +682,9 @@ mod tests {
         assert_eq!(store.count_memories("philosophist").unwrap(), 1);
 
         // Recall with related query
-        let hits = store.recall("philosophist", "Camus Absurd meaning", 5).unwrap();
+        let hits = store
+            .recall("philosophist", "Camus Absurd meaning", 5)
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].user_prompt, "What is Camus's view of the Absurd?");
         assert_eq!(hits[0].memory_type, "Working Memory");

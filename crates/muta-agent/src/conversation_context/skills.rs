@@ -163,7 +163,11 @@ mod tests {
             Message::new(Role::User, "please use @rust-expert again"),
         ];
         inject_mentioned_skills(&registry, &mut messages_legacy);
-        assert_eq!(messages_legacy.len(), 2, "legacy skill must not be duplicated");
+        assert_eq!(
+            messages_legacy.len(),
+            2,
+            "legacy skill must not be duplicated"
+        );
     }
 
     /// Text with no mention grammar (`@`, `skill://`) exits before any

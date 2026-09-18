@@ -1,7 +1,7 @@
 //! Named-declaration extraction: the structural index behind structural
 //! queries (ADR-0237).
 //!
-//! [`crate::syntax::extract_symbols`] answers "what does this file look like?"
+//! `extract_symbols` answers "what does this file look like?"
 //! by rendering one signature line per top-level item. A structural *query*
 //! needs something stronger: a stable **kind**, a **name** to match on, and a
 //! **byte range** to slice source from. That is what this module produces.
@@ -13,8 +13,8 @@
 //!   each grammar's node kinds. The model never writes a tree-sitter query, so
 //!   a miss is a miss against a small word list rather than a broken
 //!   S-expression.
-//! - **Extraction is bounded** by [`MAX_DECLARATIONS`] and
-//!   [`MAX_NESTING_DEPTH`]. It is a syntactic index, not a type-aware symbol
+//! - **Extraction is bounded** by `MAX_DECLARATIONS` and
+//!   `MAX_NESTING_DEPTH`. It is a syntactic index, not a type-aware symbol
 //!   table: no resolution, no generics, no macro expansion.
 
 use tree_sitter::Node;

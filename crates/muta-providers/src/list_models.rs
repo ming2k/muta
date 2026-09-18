@@ -579,7 +579,9 @@ fn validate_catalog_shape(protocol: DiscoveryProtocol, json: &Value) -> Result<(
                     "response is missing the required models collection"
                 }
                 DiscoveryProtocol::GoogleCloudCode => "response is missing the required models map",
-                DiscoveryProtocol::OpencodeGo => "response is missing the required opencode-go models map",
+                DiscoveryProtocol::OpencodeGo => {
+                    "response is missing the required opencode-go models map"
+                }
             }
             .to_string(),
         )
@@ -1004,11 +1006,7 @@ mod tests {
             "https://models.opencode.ai/api.json"
         );
         assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::OpencodeGo,
-                "http://127.0.0.1:8080"
-            )
-            .unwrap(),
+            models_endpoint_for(DiscoveryProtocol::OpencodeGo, "http://127.0.0.1:8080").unwrap(),
             "http://127.0.0.1:8080/api.json"
         );
     }

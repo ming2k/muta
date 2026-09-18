@@ -698,8 +698,7 @@ async fn turn_retries_transient_provider_failure_before_tool_activity() {
 /// key-addressed archive, and that archive never enters the model window.
 #[tokio::test]
 async fn execute_round_archives_a_request_projection_outside_the_window() {
-    let directory =
-        std::env::temp_dir().join(format!("muta-projection-{}", uuid::Uuid::new_v4()));
+    let directory = std::env::temp_dir().join(format!("muta-projection-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&directory).expect("create test directory");
     let session = Arc::new(SessionStore::for_path(directory.join("session.json")));
     let agent = Arc::new(Agent::new(
@@ -760,7 +759,11 @@ async fn execute_round_archives_a_request_projection_outside_the_window() {
 
     // The archive is not history.
     let window = session.model_window().await;
-    assert!(window.iter().all(|m| !m.content.contains("temporary-context")));
+    assert!(
+        window
+            .iter()
+            .all(|m| !m.content.contains("temporary-context"))
+    );
     let _ = std::fs::remove_dir_all(directory);
 }
 

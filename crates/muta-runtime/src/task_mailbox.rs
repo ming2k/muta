@@ -9,10 +9,10 @@
 //!
 //! - **Classification.** Whether a settle is wake-eligible at all (an operator
 //!   cancellation is not; a service reporting readiness is not a completion).
-//! - **Vehicle.** A wake rides a dedicated [`SystemWake`](crate::task_continuation::SystemWake)
+//! - **Vehicle.** A wake rides a dedicated [`SystemWake`]
 //!   channel. ADR-0212 removed the shortcut of routing machine outcomes through
 //!   the human follow-up queue, and that boundary stands: a machine result must
-//!   never be smuggled in as [`AgentRequest::FollowUp`]. Whether a wake is
+//!   never be smuggled in as [`muta_contracts::AgentRequest::FollowUp`]. Whether a wake is
 //!   *admitted* is the driver's decision, because only the driver knows the
 //!   round state, the authorization, and whether a human is waiting.
 
@@ -88,9 +88,12 @@ pub(crate) fn classify_outcome(outcome: &BackgroundJobOutcome) -> FabricWake {
 /// shutdown, not an error — the result stays retained for the session's
 /// lifetime.
 pub(crate) async fn request_wake_turn(env: &MailboxEnv, session_id: &str) {
-    let _ = env.wake_tx.send(SystemWake {
-        session_id: session_id.to_string(),
-    });
+    let _ = env
+        .wake_tx
+        .send(SystemWake {
+            session_id: session_id.to_string(),
+        })
+        .await;
 }
 
 /// Consume the manager's event stream and offer eligible settlements to the

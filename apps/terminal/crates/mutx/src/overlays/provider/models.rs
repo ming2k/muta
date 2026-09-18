@@ -272,7 +272,10 @@ pub(crate) fn model_list_body(
                 let id_matched = match_set(rm.match_id.as_ref());
                 let id_group = RowGroup::fixed().matched_text(
                     &id_text,
-                    Style::default().bg(style.bg).fg(style.fg).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .bg(style.bg)
+                        .fg(style.fg)
+                        .add_modifier(Modifier::BOLD),
                     Style::default()
                         .bg(style.bg)
                         .fg(if is_selected { style.fg } else { theme.brand() })
@@ -284,29 +287,26 @@ pub(crate) fn model_list_body(
                 let mut list_row = ListRow::new(style, body_width).group(id_group);
 
                 // 2. Model Name: Secondary column, dimmed, anchored at column (id_col_width + 2).
-                let distinct_name = rm
-                    .name
-                    .as_deref()
-                    .filter(|name| *name != rm.model.as_str());
+                let distinct_name = rm.name.as_deref().filter(|name| *name != rm.model.as_str());
 
                 let name_col = id_col_width + 2;
                 let name_budget = identity_budget.saturating_sub(name_col);
-                if let Some(name) = distinct_name {
-                    if name_budget >= 6 {
-                        let name_text = truncate_ellipsis(name, name_budget);
-                        let name_matched = match_set(rm.match_name.as_ref());
-                        let name_group = RowGroup::column(name_col).matched_text(
-                            &name_text,
-                            Style::default().bg(style.bg).fg(style.dim),
-                            Style::default()
-                                .bg(style.bg)
-                                .fg(if is_selected { style.fg } else { theme.brand() })
-                                .add_modifier(Modifier::BOLD),
-                            &name_matched,
-                            0,
-                        );
-                        list_row = list_row.group(name_group);
-                    }
+                if let Some(name) = distinct_name
+                    && name_budget >= 6
+                {
+                    let name_text = truncate_ellipsis(name, name_budget);
+                    let name_matched = match_set(rm.match_name.as_ref());
+                    let name_group = RowGroup::column(name_col).matched_text(
+                        &name_text,
+                        Style::default().bg(style.bg).fg(style.dim),
+                        Style::default()
+                            .bg(style.bg)
+                            .fg(if is_selected { style.fg } else { theme.brand() })
+                            .add_modifier(Modifier::BOLD),
+                        &name_matched,
+                        0,
+                    );
+                    list_row = list_row.group(name_group);
                 }
 
                 // 3. Connection Name: Starts at ratio(3, 5), dimmed, with connection match highlighting.

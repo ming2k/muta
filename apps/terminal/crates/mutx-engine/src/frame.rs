@@ -276,7 +276,9 @@ impl<W: io::Write> Terminal<W> {
         }
 
         if self.pending_clear {
-            self.backend.writer().queue(crossterm::cursor::MoveTo(0, 0))?;
+            self.backend
+                .writer()
+                .queue(crossterm::cursor::MoveTo(0, 0))?;
             self.backend.writer().queue(crossterm::terminal::Clear(
                 crossterm::terminal::ClearType::All,
             ))?;

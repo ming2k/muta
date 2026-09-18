@@ -9,7 +9,7 @@
 //! ## Why the shipped agent has no self-description
 //!
 //! The engine composes an identity preamble only when the embedding supplies
-//! one ([`AgentIdentity`]); this CLI supplies none. Nothing in the harness
+//! one ([`muta_contracts::AgentIdentity`]); this CLI supplies none. Nothing in the harness
 //! reads the model's self-name: no feature parses "I am muta", addressing is
 //! user-side (`@role:` / `/role`), and the product name already travels
 //! with the binary, the UI chrome, and the config paths. Capabilities are

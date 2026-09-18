@@ -77,6 +77,9 @@ jobs:
       # muta-contracts by ts-rs via deterministic generator; fail on any diff.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: wire.gen.ts is up to date
         working-directory: .
         run: bash scripts/generate-wire.sh --check

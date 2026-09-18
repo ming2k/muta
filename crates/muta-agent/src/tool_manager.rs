@@ -129,7 +129,11 @@ impl ToolManager {
         }
 
         // 2. mcp (dynamic snapshot, filtered by role admission patterns, ADR-0242).
-        let admit_patterns = self.admit_mcp.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let admit_patterns = self
+            .admit_mcp
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         for entry in self.dynamic.snapshot() {
             let name = entry.tool.name();
             let server = name
@@ -301,7 +305,11 @@ mod tests {
     #[test]
     fn static_shadows_mcp_on_name_clash() {
         // Same name in both buckets — builtin wins.
-        let m = manager(vec![StubTool::new("dup")], vec![StubTool::new("dup")], vec![]);
+        let m = manager(
+            vec![StubTool::new("dup")],
+            vec![StubTool::new("dup")],
+            vec![],
+        );
         let installed = m.installed();
         assert_eq!(installed.len(), 1, "name clash collapses to one");
         assert_eq!(installed[0].source, ToolSource::Builtin);
@@ -381,7 +389,14 @@ mod tests {
 
         // Filter to philosophist pattern: only obsidian and philpapers
         m.set_admit_mcp(vec!["obsidian".to_string(), "phil*".to_string()]);
-        let names: Vec<String> = m.installed().iter().map(|s| s.tool.name().to_string()).collect();
-        assert_eq!(names, vec!["mcp__obsidian__search", "mcp__philpapers__query"]);
+        let names: Vec<String> = m
+            .installed()
+            .iter()
+            .map(|s| s.tool.name().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["mcp__obsidian__search", "mcp__philpapers__query"]
+        );
     }
 }

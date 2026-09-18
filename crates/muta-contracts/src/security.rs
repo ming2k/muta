@@ -197,9 +197,7 @@ impl WorkspaceSecuritySnapshot {
 }
 
 /// Specification of an external capability unit subject to attestation (ADR-0243).
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum AssetSpec {
@@ -261,9 +259,7 @@ impl AssetSpec {
 }
 
 /// Canonical locator identifying an external capability unit (ADR-0252).
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
 pub enum AssetLocator {
@@ -278,11 +274,20 @@ pub enum AssetLocator {
     /// Role-scoped custom skill (ADR-0253).
     RoleSkill { role: String, name: String },
     /// Workspace-scoped MCP server declared in workspace configuration.
-    WorkspaceMcp { workspace_root: String, name: String },
+    WorkspaceMcp {
+        workspace_root: String,
+        name: String,
+    },
     /// Project-level custom skill.
-    WorkspaceSkill { workspace_root: String, name: String },
+    WorkspaceSkill {
+        workspace_root: String,
+        name: String,
+    },
     /// Project-level lifecycle hook.
-    WorkspaceHook { workspace_root: String, event: String },
+    WorkspaceHook {
+        workspace_root: String,
+        event: String,
+    },
     /// Project instructions and rules (AGENTS.md).
     WorkspaceInstructions { workspace_root: String },
     /// Project-declared external workspace roots.
@@ -300,13 +305,22 @@ impl AssetLocator {
             Self::UserHook { event } => format!("user:hook:{event}"),
             Self::RoleMcp { role, name } => format!("role:{role}:mcp:{name}"),
             Self::RoleSkill { role, name } => format!("role:{role}:skill:{name}"),
-            Self::WorkspaceMcp { workspace_root, name } => {
+            Self::WorkspaceMcp {
+                workspace_root,
+                name,
+            } => {
                 format!("ws:{}:mcp:{name}", canonical_root_prefix(workspace_root))
             }
-            Self::WorkspaceSkill { workspace_root, name } => {
+            Self::WorkspaceSkill {
+                workspace_root,
+                name,
+            } => {
                 format!("ws:{}:skill:{name}", canonical_root_prefix(workspace_root))
             }
-            Self::WorkspaceHook { workspace_root, event } => {
+            Self::WorkspaceHook {
+                workspace_root,
+                event,
+            } => {
                 format!("ws:{}:hook:{event}", canonical_root_prefix(workspace_root))
             }
             Self::WorkspaceInstructions { workspace_root } => {

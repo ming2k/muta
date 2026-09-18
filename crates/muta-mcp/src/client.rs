@@ -42,8 +42,11 @@ pub fn is_sandbox_trusted(root: &Path) -> bool {
 }
 
 /// Pluggable universal asset attestation verifier (ADR-0243, ADR-0252).
-pub type McpAttestationVerifier =
-    Arc<dyn Fn(&muta_contracts::security::AssetLocator, &muta_contracts::security::AssetSpec) -> bool + Send + Sync>;
+pub type McpAttestationVerifier = Arc<
+    dyn Fn(&muta_contracts::security::AssetLocator, &muta_contracts::security::AssetSpec) -> bool
+        + Send
+        + Sync,
+>;
 
 static ATTESTATION_VERIFIER: OnceLock<McpAttestationVerifier> = OnceLock::new();
 
@@ -56,7 +59,10 @@ pub fn is_asset_attested(
     locator: &muta_contracts::security::AssetLocator,
     spec: &muta_contracts::security::AssetSpec,
 ) -> bool {
-    ATTESTATION_VERIFIER.get().map(|v| v(locator, spec)).unwrap_or(true)
+    ATTESTATION_VERIFIER
+        .get()
+        .map(|v| v(locator, spec))
+        .unwrap_or(true)
 }
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -1049,7 +1055,9 @@ pub(crate) fn compact_mcp_output(raw: &str) -> String {
         .join("\n");
     let tail_start = lines.len().saturating_sub(MCP_PREVIEW_TAIL_LINES);
     let tail = lines[tail_start..].join("\n");
-    let skipped = lines.len().saturating_sub(MCP_PREVIEW_HEAD_LINES + MCP_PREVIEW_TAIL_LINES);
+    let skipped = lines
+        .len()
+        .saturating_sub(MCP_PREVIEW_HEAD_LINES + MCP_PREVIEW_TAIL_LINES);
 
     format!(
         "[MCP Output truncated: {line_count} lines, {} bytes. Exceeded 16KB/200-line safety boundary (ADR-0240 [INV-MCP-05])]\n\

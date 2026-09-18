@@ -384,10 +384,7 @@ pub fn draw_pre_attach(f: &mut Frame, state: &PreAttachState, theme: &Theme) {
     } else {
         "↑/↓ navigate   Enter select   Esc quit"
     };
-    let hint = Span::styled(
-        hint_text,
-        Style::default().fg(theme.muted()),
-    );
+    let hint = Span::styled(hint_text, Style::default().fg(theme.muted()));
     lines.push(Line::from(hint));
 
     f.render_widget(
@@ -495,7 +492,11 @@ mod tests {
         assert!(labels.iter().any(|l| l.starts_with(".muta/hooks/")));
         assert!(labels.iter().any(|l| l.starts_with("AGENTS.md")));
         assert!(labels.iter().any(|l| l.starts_with(".muta/config.toml")));
-        assert!(labels.iter().any(|l| l.starts_with("~/.config/muta/config.toml")));
+        assert!(
+            labels
+                .iter()
+                .any(|l| l.starts_with("~/.config/muta/config.toml"))
+        );
     }
 
     #[test]
@@ -529,10 +530,7 @@ mod tests {
         assert_eq!(
             decision,
             Some(PreAttachDecision::Trust {
-                domains: vec![
-                    TrustDomain::Mcp,
-                    TrustDomain::Instructions,
-                ],
+                domains: vec![TrustDomain::Mcp, TrustDomain::Instructions,],
             })
         );
     }

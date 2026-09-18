@@ -202,7 +202,7 @@ impl Agent {
             token_weights: std::sync::Arc::new(muta_contracts::MessageTokenWeights::new()),
             tool_schema_weights: std::sync::Arc::new(muta_contracts::ToolSchemaWeights::new()),
             extensions: Arc::new(std::sync::RwLock::new(vec![Arc::new(
-                crate::extension::CodeIntelligenceExtension::default(),
+                crate::extension::CodeIntelligenceExtension,
             )])),
             active_role: std::sync::RwLock::new(Some("developer".to_string())),
         }
@@ -378,20 +378,19 @@ impl Agent {
         let hook_ctx =
             muta_contracts::extension::HookContext::temporary_context(ws_root.as_deref());
         for extension in self.extensions() {
-            match extension.run(
-                muta_contracts::HookPhase::ProjectTemporaryContext,
-                &hook_ctx,
-            ) {
-                muta_contracts::extension::HookOutcome::TemporaryContext(projection) => {
-                    if projection.is_empty() {
-                        continue;
-                    }
-                    temporary_context.push(crate::conversation_context::hidden_user(
-                        muta_contracts::InjectionKind::SystemReminder,
-                        bound_temporary_context(projection),
-                    ));
+            if let muta_contracts::extension::HookOutcome::TemporaryContext(projection) = extension
+                .run(
+                    muta_contracts::HookPhase::ProjectTemporaryContext,
+                    &hook_ctx,
+                )
+            {
+                if projection.is_empty() {
+                    continue;
                 }
-                _ => {}
+                temporary_context.push(crate::conversation_context::hidden_user(
+                    muta_contracts::InjectionKind::SystemReminder,
+                    bound_temporary_context(projection),
+                ));
             }
         }
 
@@ -416,18 +415,17 @@ impl Agent {
         let hook_ctx =
             muta_contracts::extension::HookContext::temporary_context(ws_root.as_deref());
         for extension in self.extensions() {
-            if let muta_contracts::extension::HookOutcome::TemporaryContext(projection) =
-                extension.run(
+            if let muta_contracts::extension::HookOutcome::TemporaryContext(projection) = extension
+                .run(
                     muta_contracts::HookPhase::ProjectTemporaryContext,
                     &hook_ctx,
                 )
+                && !projection.is_empty()
             {
-                if !projection.is_empty() {
-                    temporary_context.push(crate::conversation_context::hidden_user(
-                        muta_contracts::InjectionKind::SystemReminder,
-                        bound_temporary_context(projection),
-                    ));
-                }
+                temporary_context.push(crate::conversation_context::hidden_user(
+                    muta_contracts::InjectionKind::SystemReminder,
+                    bound_temporary_context(projection),
+                ));
             }
         }
 
@@ -853,10 +851,13 @@ impl Agent {
             }),
             None => {
                 if let Some(ledger) = self.token_ledger() {
-                    ledger.persist_pending(&self.thread_id().unwrap_or_default()).await.map_err(HarnessError::Other)?;
+                    ledger
+                        .persist_pending(&self.thread_id().unwrap_or_default())
+                        .await
+                        .map_err(HarnessError::Other)?;
                 }
                 Ok(())
-            },
+            }
         }
     }
 

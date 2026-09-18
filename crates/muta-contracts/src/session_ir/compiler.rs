@@ -77,7 +77,9 @@ impl std::fmt::Display for CompilerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptySession => write!(f, "Session IR has no active nodes or instructions"),
-            Self::InvalidActiveLeaf(id) => write!(f, "Active leaf '{id}' not found in causal graph"),
+            Self::InvalidActiveLeaf(id) => {
+                write!(f, "Active leaf '{id}' not found in causal graph")
+            }
         }
     }
 }
@@ -198,7 +200,9 @@ fn pass2_context_budgeting(
                     super::types::TerminationReason::Superseded => "Superseded by user message",
                 };
                 let content = match partial_output {
-                    Some(out) => format!("[Execution stopped: {reason_str}]\nPartial output:\n{out}"),
+                    Some(out) => {
+                        format!("[Execution stopped: {reason_str}]\nPartial output:\n{out}")
+                    }
                     None => format!("[Execution stopped: {reason_str}]"),
                 };
                 messages.push(Message::new(Role::System, content));
@@ -230,15 +234,15 @@ fn pass3_cache_boundary_analysis(
     let mut static_bytes = 0;
 
     // 1. Base Tier: System Persona
-    if let Some(persona) = &ir.policy.rules.system_persona {
-        if !persona.trim().is_empty() {
-            static_bytes += persona.len();
-            slices.push(InstructionSlice::new(
-                "base_persona",
-                InstructionTier::Base,
-                persona.clone(),
-            ));
-        }
+    if let Some(persona) = &ir.policy.rules.system_persona
+        && !persona.trim().is_empty()
+    {
+        static_bytes += persona.len();
+        slices.push(InstructionSlice::new(
+            "base_persona",
+            InstructionTier::Base,
+            persona.clone(),
+        ));
     }
 
     // 2. Session Tier: Workspace rules (AGENTS.md, conventions)
@@ -254,14 +258,14 @@ fn pass3_cache_boundary_analysis(
     }
 
     // 3. Ephemeral Tier: Dynamic scratchpad or task-scoped hints
-    if let Some(ephemeral) = &options.ephemeral_instruction {
-        if !ephemeral.trim().is_empty() {
-            slices.push(InstructionSlice::new(
-                "ephemeral_hint",
-                InstructionTier::Ephemeral,
-                ephemeral.clone(),
-            ));
-        }
+    if let Some(ephemeral) = &options.ephemeral_instruction
+        && !ephemeral.trim().is_empty()
+    {
+        slices.push(InstructionSlice::new(
+            "ephemeral_hint",
+            InstructionTier::Ephemeral,
+            ephemeral.clone(),
+        ));
     }
 
     let bundle = InstructionBundle::new(slices);
@@ -320,31 +324,37 @@ mod tests {
 
     #[test]
     fn test_compiler_pipeline_full_flow() {
-        let mut policy = SessionPolicy::default();
-        policy.rules = RuleSet {
-            system_persona: Some("You are Muta AI".to_string()),
-            workspace_root: Some("/workspace".to_string()),
-            project_rules: vec!["Rule 1: Be fast".to_string()],
-        };
-        policy.budget = BudgetPolicy {
-            max_context_tokens: 100_000,
-            compaction_trigger_tokens: 80_000,
-            max_tool_output_tokens: 10, // 40 chars limit for test
+        let policy = SessionPolicy {
+            rules: RuleSet {
+                system_persona: Some("You are Muta AI".to_string()),
+                workspace_root: Some("/workspace".to_string()),
+                project_rules: vec!["Rule 1: Be fast".to_string()],
+            },
+            budget: BudgetPolicy {
+                max_context_tokens: 100_000,
+                compaction_trigger_tokens: 80_000,
+                max_tool_output_tokens: 10, // 40 chars limit for test
+            },
+            ..Default::default()
         };
 
         let mut ir = SessionIR::new("session-compile-test", policy, 1000);
 
         // Turn 1: User
-        ir.append_message("u1", 1000_000, Message::new(Role::User, "Hello"));
+        ir.append_message("u1", 1_000_000, Message::new(Role::User, "Hello"));
         // Turn 2: Assistant with normal output
-        ir.append_message("a1", 1001_000, Message::new(Role::Assistant, "I will run a tool"));
+        ir.append_message(
+            "a1",
+            1_001_000,
+            Message::new(Role::Assistant, "I will run a tool"),
+        );
         // Turn 3: Tool with very long output exceeding budget
         let huge_tool_output = "a".repeat(200);
-        ir.append_message("t1", 1002_000, Message::new(Role::Tool, huge_tool_output));
+        ir.append_message("t1", 1_002_000, Message::new(Role::Tool, huge_tool_output));
         // Turn 4: Assistant interrupted
         ir.record_termination(
             "term1",
-            1003_000,
+            1_003_000,
             TerminationReason::UserInterrupt,
             Some("Working on it".to_string()),
             None,
@@ -365,11 +375,19 @@ mod tests {
 
         // Tool output must be truncated
         let tool_msg = &artifact.request.messages[2];
-        assert!(tool_msg.content.contains("Tool output truncated by Session IR compiler"));
+        assert!(
+            tool_msg
+                .content
+                .contains("Tool output truncated by Session IR compiler")
+        );
 
         // Interrupted turn must yield synthetic notification
         let term_msg = &artifact.request.messages[3];
-        assert!(term_msg.content.contains("Execution stopped: Interrupted by user"));
+        assert!(
+            term_msg
+                .content
+                .contains("Execution stopped: Interrupted by user")
+        );
 
         // Assert Pass 3 Cache Boundary
         assert_eq!(artifact.cache_boundary.stable_message_count, 3);
@@ -387,8 +405,8 @@ mod tests {
         policy.rules.project_rules = vec!["Rule A".to_string()];
 
         let mut ir = SessionIR::new("session-fp-test", policy, 1000);
-        ir.append_message("u1", 1000_000, Message::new(Role::User, "Msg 1"));
-        ir.append_message("a1", 1001_000, Message::new(Role::Assistant, "Resp 1"));
+        ir.append_message("u1", 1_000_000, Message::new(Role::User, "Msg 1"));
+        ir.append_message("a1", 1_001_000, Message::new(Role::Assistant, "Resp 1"));
 
         let art1 = compile_session_request(&ir, CompilerOptions::default()).unwrap();
         let art2 = compile_session_request(&ir, CompilerOptions::default()).unwrap();

@@ -1,7 +1,7 @@
 //! `PersistenceHandle`: the public front door and every typed verb (ADR-0196/0231).
 //! The struct and its observability types live in `db.rs`.
-use super::*;
 use super::actor::run_supervisor;
+use super::*;
 
 impl fmt::Debug for PersistenceHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -35,13 +35,22 @@ impl PersistenceHandle {
     pub fn spawn(db_path: PathBuf, blob_store: Option<BlobStore>) -> Self {
         let identity = database_identity(&db_path);
         let db_path = identity.as_ref().cloned().unwrap_or(db_path);
-        let mut registry = OWNERS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        let mut registry = OWNERS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         registry.retain(|_, entry| entry.lease.strong_count() > 0);
         if let Some(owner) = registry.get(&db_path) {
             if let Some(supervisor) = owner.supervisor.upgrade() {
-                return Self { supervisor, health: owner.health.clone(), db_path,
-                    blob_store: owner.blob_store.clone(), startup_error: None,
-                    readers: owner.readers.clone(), reader_ages: owner.reader_ages.clone() };
+                return Self {
+                    supervisor,
+                    health: owner.health.clone(),
+                    db_path,
+                    blob_store: owner.blob_store.clone(),
+                    startup_error: None,
+                    readers: owner.readers.clone(),
+                    reader_ages: owner.reader_ages.clone(),
+                };
             }
             // A previous local owner is draining accepted commands. Do not
             // race its last transaction or release its lease prematurely.
@@ -58,39 +67,77 @@ impl PersistenceHandle {
         // progress while a synchronous constructor waits for readiness.
         let opened = std::thread::spawn(move || {
             identity?;
-            let lease = Arc::new(muta_platform::lock::ProcessLock::acquire(&path.with_extension("db.owner.lock"))?);
+            let lease = Arc::new(muta_platform::lock::ProcessLock::acquire(
+                &path.with_extension("db.owner.lock"),
+            )?);
             let engine = DatabaseEngine::open(&path, blobs).map_err(|e| e.to_string())?;
             Ok::<_, String>((engine, lease))
-        }).join().unwrap_or_else(|_| Err("database initialization panicked".into()));
+        })
+        .join()
+        .unwrap_or_else(|_| Err("database initialization panicked".into()));
         let readers = Arc::new(tokio::sync::Semaphore::new(READER_POOL_CAPACITY));
         let reader_ages = Arc::new(ReaderAges::default());
         let startup_error = match opened {
             Ok((engine, lease)) => {
-                registry.insert(db_path.clone(), RegisteredOwner {
-                    supervisor: supervisor.downgrade(), health: health_rx.clone(),
-                    blob_store: blob_store.clone(), readers: readers.clone(),
-                    reader_ages: reader_ages.clone(), lease: Arc::downgrade(&lease),
-                });
-                let run = run_supervisor(front_rx, db_path.clone(), blob_store.clone(), health_tx, lease, Some(engine), reader_ages.clone());
-                std::thread::Builder::new().name("muta-persistence-supervisor".into()).spawn(move || {
-                    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
-                        .expect("failed to build persistence supervisor runtime");
-                    runtime.block_on(run);
-                }).expect("failed to spawn persistence supervisor thread");
+                registry.insert(
+                    db_path.clone(),
+                    RegisteredOwner {
+                        supervisor: supervisor.downgrade(),
+                        health: health_rx.clone(),
+                        blob_store: blob_store.clone(),
+                        readers: readers.clone(),
+                        reader_ages: reader_ages.clone(),
+                        lease: Arc::downgrade(&lease),
+                    },
+                );
+                let run = run_supervisor(
+                    front_rx,
+                    db_path.clone(),
+                    blob_store.clone(),
+                    health_tx,
+                    lease,
+                    Some(engine),
+                    reader_ages.clone(),
+                );
+                std::thread::Builder::new()
+                    .name("muta-persistence-supervisor".into())
+                    .spawn(move || {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("failed to build persistence supervisor runtime");
+                        runtime.block_on(run);
+                    })
+                    .expect("failed to spawn persistence supervisor thread");
                 None
             }
             Err(error) => {
-                let _ = health_tx.send(WriterHealth::Down { attempt: 0, since_ms: unix_ms(), error: error.clone() });
+                let _ = health_tx.send(WriterHealth::Down {
+                    attempt: 0,
+                    since_ms: unix_ms(),
+                    error: error.clone(),
+                });
                 drop(front_rx);
                 Some(Arc::from(error))
             }
         };
-        Self { supervisor, health: health_rx, db_path, blob_store, startup_error, readers, reader_ages }
+        Self {
+            supervisor,
+            health: health_rx,
+            db_path,
+            blob_store,
+            startup_error,
+            readers,
+            reader_ages,
+        }
     }
 
     /// Startup must succeed before a daemon admits work.
     pub fn ensure_ready(&self) -> std::result::Result<(), String> {
-        match &self.startup_error { Some(error) => Err(error.to_string()), None => Ok(()) }
+        match &self.startup_error {
+            Some(error) => Err(error.to_string()),
+            None => Ok(()),
+        }
     }
 
     /// The current writer health snapshot (ADR-0196 D4).
@@ -272,9 +319,18 @@ impl PersistenceHandle {
         self.run_blocking(PersistenceCommand::ProjectUsage { ack }, rx)
     }
 
-    pub async fn record_attempts(&self, entries: Vec<muta_contracts::usage_stats::UsageStatRecord>) -> Result<(), PersistenceError> {
+    pub async fn record_attempts(
+        &self,
+        entries: Vec<muta_contracts::usage_stats::UsageStatRecord>,
+    ) -> Result<(), PersistenceError> {
         let (ack, rx) = oneshot::channel();
-        self.supervisor.send(PersistenceCommand::RecordUsageStats { entries, ack: Some(ack) }).await.map_err(|_| PersistenceError::WriterDown)?;
+        self.supervisor
+            .send(PersistenceCommand::RecordUsageStats {
+                entries,
+                ack: Some(ack),
+            })
+            .await
+            .map_err(|_| PersistenceError::WriterDown)?;
         rx.await.map_err(|_| PersistenceError::WriterDown)?
     }
 
@@ -447,24 +503,40 @@ impl PersistenceHandle {
     /// with the writer — so this returns immediately instead of queueing
     /// behind a slow write.
     pub fn reader(&self) -> Result<DbReader> {
-        self.ensure_ready().map_err(|error| rusqlite::Error::InvalidParameterName(error))?;
-        let permit = self.readers.clone().try_acquire_owned()
-            .map_err(|_| rusqlite::Error::InvalidParameterName("database reader capacity exhausted".into()))?;
-        let conn = Connection::open_with_flags(&self.db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        self.ensure_ready()
+            .map_err(rusqlite::Error::InvalidParameterName)?;
+        let permit = self.readers.clone().try_acquire_owned().map_err(|_| {
+            rusqlite::Error::InvalidParameterName("database reader capacity exhausted".into())
+        })?;
+        let conn = Connection::open_with_flags(
+            &self.db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
         conn.pragma_update(None, "query_only", true)?;
         conn.busy_timeout(Duration::from_millis(250))?;
         let version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if version != CURRENT_DB_VERSION {
-            return Err(rusqlite::Error::InvalidParameterName(format!("reader schema mismatch: {version}")));
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "reader schema mismatch: {version}"
+            )));
         }
         conn.execute_batch("BEGIN DEFERRED")?;
         // Register only after every fallible step: an error must not leak a
         // registration whose guard was never constructed.
         let reader_ages = self.reader_ages.clone();
-        let age = ReaderAgeGuard { id: reader_ages.register(), reader_ages };
-        Ok(DbReader { engine: DatabaseEngine { conn, blob_store: self.blob_store.clone() },
-            db_path: self.db_path.clone(), _permit: Some(permit), _age: Some(age) })
+        let age = ReaderAgeGuard {
+            id: reader_ages.register(),
+            reader_ages,
+        };
+        Ok(DbReader {
+            engine: DatabaseEngine {
+                conn,
+                blob_store: self.blob_store.clone(),
+            },
+            db_path: self.db_path.clone(),
+            _permit: Some(permit),
+            _age: Some(age),
+        })
     }
 
     /// Execute a scoped read closure against a fresh [`DbReader`].
@@ -519,7 +591,10 @@ impl PersistenceHandle {
             wal_bytes: size(&wal_path),
             active_readers: self.reader_ages.active(),
             reader_capacity: READER_POOL_CAPACITY,
-            oldest_reader_ms: self.reader_ages.oldest_age().map(|age| age.as_millis() as u64),
+            oldest_reader_ms: self
+                .reader_ages
+                .oldest_age()
+                .map(|age| age.as_millis() as u64),
         }
     }
 
@@ -613,9 +688,7 @@ impl PersistenceHandle {
                 .map_err(|_| PersistenceError::WriterDown)?
         };
         match tokio::runtime::Handle::try_current() {
-            Ok(handle)
-                if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread =>
-            {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
                 tokio::task::block_in_place(run)
             }
             _ => std::thread::spawn(run).join().map_err(|_| {
@@ -624,5 +697,3 @@ impl PersistenceHandle {
         }
     }
 }
-
-

@@ -805,7 +805,10 @@ async fn opencode_go_source_materializes_catalog_models() {
     instances.save().unwrap();
 
     let outcome = discover_provider_models().await;
-    assert!(outcome.changed, "opencode-go discovery must record a change");
+    assert!(
+        outcome.changed,
+        "opencode-go discovery must record a change"
+    );
     assert!(
         outcome.failures.is_empty(),
         "failures: {:?}",
@@ -1120,7 +1123,11 @@ fn antigravity_models_derivation_and_hidden_filter() {
         .find(|r| r.id == "g11")
         .expect("g11 in picker");
 
-    assert!(g11_row.models.contains(&"gemini-3.7-flash-tiered".to_string()));
+    assert!(
+        g11_row
+            .models
+            .contains(&"gemini-3.7-flash-tiered".to_string())
+    );
     assert!(
         !g11_row
             .models

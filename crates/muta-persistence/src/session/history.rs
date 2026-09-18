@@ -142,7 +142,8 @@ impl SessionStore {
         session_id: String,
         record: muta_contracts::RequestProjection,
     ) {
-        self.writer.try_record_request_projection(session_id, record);
+        self.writer
+            .try_record_request_projection(session_id, record);
     }
 
     /// Clear every round-interrupt record (C11). Called when the interrupted
@@ -516,7 +517,11 @@ impl SessionStore {
     /// second call finds nothing to settle.
     pub async fn settle_abandoned_attempts(&self) -> Result<usize, String> {
         use muta_contracts::{RequestUsageSource, RequestUsageStatus};
-        let (path, data, settled): (PathBuf, SessionData, Vec<muta_contracts::RequestUsageRecord>) = {
+        let (path, data, settled): (
+            PathBuf,
+            SessionData,
+            Vec<muta_contracts::RequestUsageRecord>,
+        ) = {
             let mut state = self.state.lock().await;
             let mut settled = Vec::new();
             for record in state.data.request_usage_records.iter_mut() {
@@ -540,13 +545,8 @@ impl SessionStore {
             )
         };
         let count = settled.len();
-        self.persist_with_usage_guarded(
-            path,
-            data,
-            settled,
-            crate::db::CommitGuard::default(),
-        )
-        .await?;
+        self.persist_with_usage_guarded(path, data, settled, crate::db::CommitGuard::default())
+            .await?;
         Ok(count)
     }
 
@@ -615,8 +615,8 @@ impl SessionStore {
         // Repoint this store at the child; the parent state is already current.
         state.path = child_path;
         state.data = child;
-        *self.workspace.write().unwrap() = state.data.workspace.clone();
-        *self.role.write().unwrap() = state.data.role.clone();
+        *self.workspace.write().unwrap_or_else(|e| e.into_inner()) = state.data.workspace.clone();
+        *self.role.write().unwrap_or_else(|e| e.into_inner()) = state.data.role.clone();
         state.invalidate_projection_cache();
         state.defer_persist = false;
         drop(state);
@@ -672,8 +672,12 @@ impl SessionStore {
     pub async fn open_side(&self, side_id: &str) -> Result<SessionStore, String> {
         let side_path = self.sessions_dir.join(format!("{side_id}.json"));
         let db_path = self.db_path.clone();
-        let workspace = self.workspace.read().unwrap().clone();
-        let role = self.role.read().unwrap().clone();
+        let workspace = self
+            .workspace
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let role = self.role.read().unwrap_or_else(|e| e.into_inner()).clone();
         let blob_store = BlobStore::new(self.blob_store.root().to_path_buf());
         let reader = self.writer.reader().map_err(|e| e.to_string())?;
         let data = if let Some(data) = reader
@@ -757,10 +761,10 @@ impl SessionStore {
     /// Project the current session state into canonical [`muta_contracts::SessionIR`] (ADR-0241/ADR-0249).
     pub async fn session_ir(&self) -> muta_contracts::SessionIR {
         let session_id = self.id().await;
-        if let Ok(reader) = self.writer.reader() {
-            if let Ok(Some(ir)) = reader.load_session_ir(&session_id) {
-                return ir;
-            }
+        if let Ok(reader) = self.writer.reader()
+            && let Ok(Some(ir)) = reader.load_session_ir(&session_id)
+        {
+            return ir;
         }
         let state = self.state.lock().await;
         #[allow(deprecated)]

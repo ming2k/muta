@@ -4,7 +4,7 @@
 - **Date:** 2026-10-18
 - **Scope:** `security/attestation`, `core/contracts`, `core/runtime`, `cli/mcp`, `muta-persistence`
 - **Deciders:** Muta Architecture Team
-- **Builds on:** [ADR-0147](0147-orthogonal-workspace-security-planes.md) (orthogonal security planes), [ADR-0175](0175-pre-attach-workspace-trust-interstitial.md) (pre-attach trust gate), [ADR-0185](0185-non-blocking-workspace-trust-pipeline.md) (non-blocking trust pipeline), [ADR-0243](0243-unified-asset-attestation-and-zero-trust-hazard-mesh.md) (unified asset attestation ledger)
+- **Builds on:** [ADR-0147](0147-orthogonal-workspace-security-planes.md) (orthogonal security planes), [ADR-0175](0175-pre-attach-workspace-trust-interstitial.md) (pre-attach trust gate), [ADR-0185](0185-non-blocking-workspace-trust-and-projection-preserved-interrupted-turn-architecture.md) (non-blocking trust pipeline), [ADR-0243](0243-unified-asset-attestation-and-zero-trust-hazard-mesh.md) (unified asset attestation ledger)
 - **Amends / Supersedes:** Amends ADR-0243 §1 (retiring "Implicit Intent Exemption"); permanently retires `muta mcp add/rm/set-enabled` CLI mutation paths
 
 ---

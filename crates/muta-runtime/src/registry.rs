@@ -46,7 +46,7 @@ pub struct HostedSession {
     /// and the registry can read rows out for snapshots.
     pub tracker: Arc<Mutex<MonitorTracker>>,
     /// Durable workspace trust store for the project at
-    /// [`HostedSession::project_root`]. Surfaced through [`BoundSession`]
+    /// [`HostedSession::workspace_root`]. Surfaced through [`BoundSession`]
     /// so the WS attach path can push the trust decision to a client when
     /// the workspace contributions are unreviewed (`WorkspaceTrustState::Quarantined`).
     pub security: Arc<muta_persistence::workspace_security::WorkspaceSecurityStore>,
@@ -629,22 +629,35 @@ impl SessionRegistry {
                 let ws = if role_id.as_deref() == Some("philosophist") {
                     None
                 } else if let Some(r_id) = role_id.as_deref() {
-                    let roles_cfg = muta_persistence::roles::RolesConfig::load_for_workspace(Some(caller_project));
+                    let roles_cfg = muta_persistence::roles::RolesConfig::load_for_workspace(Some(
+                        caller_project,
+                    ));
                     if let Some(role_entry) = roles_cfg.get(r_id) {
                         match role_entry.resolved_workspace() {
                             muta_persistence::roles::RoleWorkspace::None => None,
-                            muta_persistence::roles::RoleWorkspace::Inherit => Some(muta_contracts::WorkspaceBinding::new(caller_project.to_path_buf())),
-                            muta_persistence::roles::RoleWorkspace::Fixed(root) => Some(muta_contracts::WorkspaceBinding::new(root)),
+                            muta_persistence::roles::RoleWorkspace::Inherit => Some(
+                                muta_contracts::WorkspaceBinding::new(caller_project.to_path_buf()),
+                            ),
+                            muta_persistence::roles::RoleWorkspace::Fixed(root) => {
+                                Some(muta_contracts::WorkspaceBinding::new(root))
+                            }
                         }
                     } else {
-                        Some(muta_contracts::WorkspaceBinding::new(caller_project.to_path_buf()))
+                        Some(muta_contracts::WorkspaceBinding::new(
+                            caller_project.to_path_buf(),
+                        ))
                     }
                 } else {
-                    Some(muta_contracts::WorkspaceBinding::new(caller_project.to_path_buf()))
+                    Some(muta_contracts::WorkspaceBinding::new(
+                        caller_project.to_path_buf(),
+                    ))
                 };
                 self.assemble_hosted(
                     crate::startup::SessionStart::Picker,
-                    SessionBinding { workspace: ws, role: role_id },
+                    SessionBinding {
+                        workspace: ws,
+                        role: role_id,
+                    },
                     opts,
                 )
                 .await
@@ -1386,8 +1399,10 @@ impl SessionRegistry {
 
         if let Some(manifest) = manifest {
             let role_identity = manifest.identity;
-            let mut role =
-                muta_contracts::AgentRoleProfile::with_identity(manifest.role_id.clone(), role_identity.clone());
+            let mut role = muta_contracts::AgentRoleProfile::with_identity(
+                manifest.role_id.clone(),
+                role_identity.clone(),
+            );
             role.tools = muta_contracts::ToolSelection::from_allowlist(&manifest.tools);
             role.admit_mcp = manifest.admit_mcp.clone();
             identity = role_identity;
@@ -1406,8 +1421,10 @@ impl SessionRegistry {
                     };
                 }
                 let role_identity = role_entry.identity();
-                let mut role =
-                    muta_contracts::AgentRoleProfile::with_identity(role_id.to_string(), role_identity.clone());
+                let mut role = muta_contracts::AgentRoleProfile::with_identity(
+                    role_id.to_string(),
+                    role_identity.clone(),
+                );
                 role.tools = muta_contracts::ToolSelection::from_allowlist(&role_entry.tools);
                 role.admit_mcp = role_entry.admit_mcp.clone();
                 identity = role_identity;
@@ -1427,8 +1444,9 @@ impl SessionRegistry {
             }
         }
         let workspace_root = workspace.as_ref().map(|binding| binding.root.clone());
-        let effective_confined = if let Some(builtin) =
-            role_id.as_deref().and_then(muta_contracts::MainAgentRole::parse)
+        let effective_confined = if let Some(builtin) = role_id
+            .as_deref()
+            .and_then(muta_contracts::MainAgentRole::parse)
         {
             if !builtin.requires_workspace() {
                 builtin.default_confined() && init_options.confined

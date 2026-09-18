@@ -153,12 +153,19 @@ impl Agent {
             let mut ctx = String::new();
             for m in messages.iter().rev().take(6) {
                 if !m.content.is_empty() {
-                    ctx.push_str(&format!("{:?}: {}\n", m.role, m.content.chars().take(500).collect::<String>()));
+                    ctx.push_str(&format!(
+                        "{:?}: {}\n",
+                        m.role,
+                        m.content.chars().take(500).collect::<String>()
+                    ));
                 }
             }
             ctx
         };
-        let trajectory_action = if let Some(input) = state.guards.check_trajectory_candidate(&trajectory_calls, preceding_context) {
+        let trajectory_action = if let Some(input) = state
+            .guards
+            .check_trajectory_candidate(&trajectory_calls, preceding_context)
+        {
             tracing::info!(
                 signature = %input.signature,
                 tier = input.threshold_tier,
@@ -177,7 +184,9 @@ impl Agent {
                     tier = input.threshold_tier,
                     "Cognitive arbiter acquitted candidate; escalating backoff ladder (ADR-0247)"
                 );
-                state.guards.acquit_and_backoff(&input.signature, &trajectory_calls);
+                state
+                    .guards
+                    .acquit_and_backoff(&input.signature, &trajectory_calls);
                 crate::guard::GuardAction::Continue
             }
         } else {
@@ -315,9 +324,7 @@ impl Agent {
             checkpoint_replays,
             exec_indices,
             results,
-            signals: TurnSignals {
-                trajectory_nudge,
-            },
+            signals: TurnSignals { trajectory_nudge },
         }
     }
 

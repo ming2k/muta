@@ -2024,7 +2024,7 @@ mod tests {
             "no other session's result may be delivered to s1"
         );
         assert!(
-            claimed.iter().all(|p| !p.claimed == false),
+            claimed.iter().all(|p| p.claimed),
             "returned entries are marked claimed"
         );
 

@@ -262,7 +262,7 @@ impl SessionStore {
         workspace: Option<muta_contracts::WorkspaceBinding>,
     ) -> Result<(), String> {
         {
-            let mut ws_guard = self.workspace.write().unwrap();
+            let mut ws_guard = self.workspace.write().unwrap_or_else(|e| e.into_inner());
             *ws_guard = workspace.clone();
         }
         let (path, data, should_persist) = {
@@ -395,7 +395,10 @@ mod tests {
         assert!(manifest.is_some());
         let m = manifest.unwrap();
         assert_eq!(m.role_id, "philosophist");
-        assert_eq!(m.tools, vec!["read_url", "search_web", "ask_user", "recall_memory"]);
+        assert_eq!(
+            m.tools,
+            vec!["read_url", "search_web", "ask_user", "recall_memory"]
+        );
         assert!(m.identity.preamble().starts_with("Role: philosophist."));
     }
 }

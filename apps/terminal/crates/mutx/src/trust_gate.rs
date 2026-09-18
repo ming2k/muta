@@ -254,7 +254,8 @@ mod tests {
     fn user_assets_quarantine_triggers_gate_in_workspace_free() {
         let mut snap = WorkspaceSecuritySnapshot::new("workspace-free");
         snap.user_assets = WorkspaceTrustState::Quarantined;
-        let req = gate_request(&snap).expect("untrusted user assets must trigger gate even without workspace");
+        let req = gate_request(&snap)
+            .expect("untrusted user assets must trigger gate even without workspace");
         let q = req.questions.first().unwrap();
         assert_eq!(q.options[0].label, "~/.config/muta/config.toml  ·  [New]");
     }

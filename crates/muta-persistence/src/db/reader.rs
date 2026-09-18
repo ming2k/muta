@@ -3,7 +3,6 @@
 use super::*;
 
 impl DbReader {
-
     /// The database file this reader is bound to.
     pub fn db_path(&self) -> &Path {
         &self.db_path
@@ -33,44 +32,122 @@ impl DbReader {
 
     #[allow(dead_code)]
     pub(crate) fn usage_days(&self, limit: usize) -> Result<Vec<String>> {
-        let mut stmt = self.engine.conn.prepare("SELECT DISTINCT day FROM usage_records ORDER BY day DESC LIMIT ?1")?;
+        let mut stmt = self
+            .engine
+            .conn
+            .prepare("SELECT DISTINCT day FROM usage_records ORDER BY day DESC LIMIT ?1")?;
         stmt.query_map([limit as i64], |r| r.get(0))?.collect()
     }
 
-    pub(crate) fn usage_records(&self, days: usize, limit: usize) -> Result<Vec<muta_contracts::usage_stats::UsageStatRecord>> {
+    pub(crate) fn usage_records(
+        &self,
+        days: usize,
+        limit: usize,
+    ) -> Result<Vec<muta_contracts::usage_stats::UsageStatRecord>> {
         let mut stmt = self.engine.conn.prepare("SELECT payload,day,recorded_at_ms,project FROM usage_records
             WHERE day IN (SELECT DISTINCT day FROM usage_records ORDER BY day DESC LIMIT ?1)
             AND json_extract(payload,'$.status') != 'in_flight' ORDER BY recorded_at_ms DESC,session_id,actor_id,round,turn,attempt LIMIT ?2")?;
-        let rows = stmt.query_map(params![days as i64,limit.min(i64::MAX as usize) as i64], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,String>(3)?)))?.collect::<Result<Vec<_>>>()?;
-        rows.into_iter().map(|(payload,day,recorded_at_ms,project)| Ok(muta_contracts::usage_stats::UsageStatRecord {record:decode_json(&payload)?,day,recorded_at_ms,project})).collect()
+        let rows = stmt
+            .query_map(
+                params![days as i64, limit.min(i64::MAX as usize) as i64],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, u64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|(payload, day, recorded_at_ms, project)| {
+                Ok(muta_contracts::usage_stats::UsageStatRecord {
+                    record: decode_json(&payload)?,
+                    day,
+                    recorded_at_ms,
+                    project,
+                })
+            })
+            .collect()
     }
 
-    pub(crate) fn usage_report(&self, days: usize, event_cap: usize) -> Result<muta_contracts::usage_stats::UsageStatsReport> {
+    pub(crate) fn usage_report(
+        &self,
+        days: usize,
+        event_cap: usize,
+    ) -> Result<muta_contracts::usage_stats::UsageStatsReport> {
         use muta_contracts::usage_stats::*;
         let mut report = UsageStatsReport::default();
-        let mut day_map = std::collections::BTreeMap::<String,UsageModelTotals>::new();
-        let mut model_map = std::collections::BTreeMap::<(String,String),UsageModelTotals>::new();
+        let mut day_map = std::collections::BTreeMap::<String, UsageModelTotals>::new();
+        let mut model_map = std::collections::BTreeMap::<(String, String), UsageModelTotals>::new();
         let mut stmt = self.engine.conn.prepare("SELECT day,provider,model,SUM(requests),SUM(completed),SUM(prompt_tokens),SUM(completion_tokens),SUM(total_tokens),SUM(cache_write_tokens),SUM(cache_read_tokens),SUM(estimated_tokens)
             FROM usage_contributions WHERE requests>0 AND day IN (SELECT DISTINCT day FROM usage_records ORDER BY day DESC LIMIT ?1) GROUP BY day,provider,model")?;
-        let rows = stmt.query_map([days as i64], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,UsageModelTotals {
-            requests:r.get(3)?,completed:r.get(4)?,prompt_tokens:r.get(5)?,completion_tokens:r.get(6)?,total_tokens:r.get(7)?,cache_write_tokens:r.get(8)?,cache_read_tokens:r.get(9)?,estimated_tokens:r.get(10)?,
-        })))?;
-        fn add(a:&mut UsageModelTotals,b:&UsageModelTotals) {
-            a.requests+=b.requests;a.completed+=b.completed;a.prompt_tokens+=b.prompt_tokens;a.completion_tokens+=b.completion_tokens;
-            a.total_tokens+=b.total_tokens;a.cache_write_tokens+=b.cache_write_tokens;a.cache_read_tokens+=b.cache_read_tokens;a.estimated_tokens+=b.estimated_tokens;
+        let rows = stmt.query_map([days as i64], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                UsageModelTotals {
+                    requests: r.get(3)?,
+                    completed: r.get(4)?,
+                    prompt_tokens: r.get(5)?,
+                    completion_tokens: r.get(6)?,
+                    total_tokens: r.get(7)?,
+                    cache_write_tokens: r.get(8)?,
+                    cache_read_tokens: r.get(9)?,
+                    estimated_tokens: r.get(10)?,
+                },
+            ))
+        })?;
+        fn add(a: &mut UsageModelTotals, b: &UsageModelTotals) {
+            a.requests += b.requests;
+            a.completed += b.completed;
+            a.prompt_tokens += b.prompt_tokens;
+            a.completion_tokens += b.completion_tokens;
+            a.total_tokens += b.total_tokens;
+            a.cache_write_tokens += b.cache_write_tokens;
+            a.cache_read_tokens += b.cache_read_tokens;
+            a.estimated_tokens += b.estimated_tokens;
         }
         for row in rows {
-            let (day,provider,model,totals)=row?;
-            add(day_map.entry(day).or_default(),&totals);add(model_map.entry((provider,model)).or_default(),&totals);add(&mut report.grand_total,&totals);
+            let (day, provider, model, totals) = row?;
+            add(day_map.entry(day).or_default(), &totals);
+            add(model_map.entry((provider, model)).or_default(), &totals);
+            add(&mut report.grand_total, &totals);
         }
-        report.days=day_map.into_iter().map(|(day,totals)|UsageDayTotals{day,totals}).collect();
-        report.models=model_map.into_iter().map(|((provider,model),totals)|UsageModelRow{provider,model,totals}).collect();
-        report.models.sort_by_key(|r|std::cmp::Reverse(r.totals.grand_total()));
-        report.first_day=report.days.first().map(|r|r.day.clone());report.last_day=report.days.last().map(|r|r.day.clone());
-        report.events=self.usage_records(days,event_cap.min(1000))?;report.events.reverse();
-        report.source_revision=self.engine.conn.query_row("SELECT revision FROM usage_clock WHERE id=1",[],|r|r.get(0))?;
-        let oldest:Option<u64>=self.engine.conn.query_row("SELECT MIN(revision) FROM usage_dirty",[],|r|r.get(0))?;
-        report.projection_revision=oldest.map(|r|r.saturating_sub(1)).unwrap_or(report.source_revision);
+        report.days = day_map
+            .into_iter()
+            .map(|(day, totals)| UsageDayTotals { day, totals })
+            .collect();
+        report.models = model_map
+            .into_iter()
+            .map(|((provider, model), totals)| UsageModelRow {
+                provider,
+                model,
+                totals,
+            })
+            .collect();
+        report
+            .models
+            .sort_by_key(|r| std::cmp::Reverse(r.totals.grand_total()));
+        report.first_day = report.days.first().map(|r| r.day.clone());
+        report.last_day = report.days.last().map(|r| r.day.clone());
+        report.events = self.usage_records(days, event_cap.min(1000))?;
+        report.events.reverse();
+        report.source_revision =
+            self.engine
+                .conn
+                .query_row("SELECT revision FROM usage_clock WHERE id=1", [], |r| {
+                    r.get(0)
+                })?;
+        let oldest: Option<u64> =
+            self.engine
+                .conn
+                .query_row("SELECT MIN(revision) FROM usage_dirty", [], |r| r.get(0))?;
+        report.projection_revision = oldest
+            .map(|r| r.saturating_sub(1))
+            .unwrap_or(report.source_revision);
         Ok(report)
     }
 
@@ -104,7 +181,8 @@ impl DbReader {
         partition: &muta_contracts::SessionPartition,
         active_id: &str,
     ) -> Result<Vec<crate::session::SessionSummary>> {
-        self.engine.list_session_summaries_in_partition(partition, active_id)
+        self.engine
+            .list_session_summaries_in_partition(partition, active_id)
     }
 
     /// The most recently updated session id in `partition` (ADR-0250 `--resume`).

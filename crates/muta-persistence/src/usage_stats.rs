@@ -1,8 +1,8 @@
 //! Authoritative request-attempt accounting and recoverable usage projections (ADR-0236).
 //! No production read imports legacy files, and no settlement rewrites a day bucket.
-use std::path::PathBuf;
 use muta_contracts::usage_stats::{UsageStatRecord, UsageStatsReport, day_key_from_epoch_ms};
 use muta_contracts::{RequestUsageKey, RequestUsageRecord};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default)]
 pub struct UsageStatsStore {
@@ -11,50 +11,109 @@ pub struct UsageStatsStore {
     handle: Option<crate::db::PersistenceHandle>,
 }
 impl UsageStatsStore {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
     pub fn with_root(root: PathBuf) -> Self {
-        let root=root.join("usage");
-        let handle=crate::db::PersistenceHandle::spawn(root.join("usage.db"),None);
-        Self { root:Some(root), handle:Some(handle) }
+        let root = root.join("usage");
+        let handle = crate::db::PersistenceHandle::spawn(root.join("usage.db"), None);
+        Self {
+            root: Some(root),
+            handle: Some(handle),
+        }
     }
-    fn handle(&self)->crate::db::PersistenceHandle { self.handle.clone().unwrap_or_else(crate::db::get_persistence_handle) }
-    pub fn record(&self,at:u64,project:&str,record:&RequestUsageRecord)->Result<(),String> {
-        self.record_batch(&[(at,project,record.clone())])
+    fn handle(&self) -> crate::db::PersistenceHandle {
+        self.handle
+            .clone()
+            .unwrap_or_else(crate::db::get_persistence_handle)
     }
-    pub fn record_batch(&self,entries:&[(u64,&str,RequestUsageRecord)])->Result<(),String> {
-        let records=entries.iter().filter(|(_,_,r)|r.status.is_terminal()).map(|(at,p,r)|UsageStatRecord {
-            day:day_key_from_epoch_ms(*at),recorded_at_ms:*at,project:p.to_string(),record:r.clone(),
-        }).collect();
-        self.handle().record_usage_stats_blocking(records).map_err(|e|e.to_string())
+    pub fn record(
+        &self,
+        at: u64,
+        project: &str,
+        record: &RequestUsageRecord,
+    ) -> Result<(), String> {
+        self.record_batch(&[(at, project, record.clone())])
     }
-    pub async fn persist_attempt(&self,at:u64,project:&str,record:RequestUsageRecord)->Result<(),String> {
-        self.handle().record_attempts(vec![UsageStatRecord {day:day_key_from_epoch_ms(at),recorded_at_ms:at,project:project.into(),record}]).await.map_err(|e|e.to_string())
+    pub fn record_batch(&self, entries: &[(u64, &str, RequestUsageRecord)]) -> Result<(), String> {
+        let records = entries
+            .iter()
+            .filter(|(_, _, r)| r.status.is_terminal())
+            .map(|(at, p, r)| UsageStatRecord {
+                day: day_key_from_epoch_ms(*at),
+                recorded_at_ms: *at,
+                project: p.to_string(),
+                record: r.clone(),
+            })
+            .collect();
+        self.handle()
+            .record_usage_stats_blocking(records)
+            .map_err(|e| e.to_string())
     }
-    pub fn all_records(&self)->Vec<UsageStatRecord> {
-        self.handle().reader().and_then(|r|r.usage_records(400,usize::MAX)).unwrap_or_else(|e| {tracing::warn!(%e,"usage read failed");Vec::new()})
+    pub async fn persist_attempt(
+        &self,
+        at: u64,
+        project: &str,
+        record: RequestUsageRecord,
+    ) -> Result<(), String> {
+        self.handle()
+            .record_attempts(vec![UsageStatRecord {
+                day: day_key_from_epoch_ms(at),
+                recorded_at_ms: at,
+                project: project.into(),
+                record,
+            }])
+            .await
+            .map_err(|e| e.to_string())
     }
-    pub fn report(&self,event_cap:usize)->UsageStatsReport {
-        let handle=self.handle();
+    pub fn all_records(&self) -> Vec<UsageStatRecord> {
+        self.handle()
+            .reader()
+            .and_then(|r| r.usage_records(400, usize::MAX))
+            .unwrap_or_else(|e| {
+                tracing::warn!(%e,"usage read failed");
+                Vec::new()
+            })
+    }
+    pub fn report(&self, event_cap: usize) -> UsageStatsReport {
+        let handle = self.handle();
         // On-demand bounded catch-up; never called from turn completion.
-        if let Err(error)=handle.catch_up_usage() {tracing::warn!(%error,"usage projection catch-up failed");}
-        handle.reader().and_then(|r|r.usage_report(400,event_cap)).unwrap_or_else(|e| {tracing::warn!(%e,"usage report failed");UsageStatsReport::default()})
+        if let Err(error) = handle.catch_up_usage() {
+            tracing::warn!(%error,"usage projection catch-up failed");
+        }
+        handle
+            .reader()
+            .and_then(|r| r.usage_report(400, event_cap))
+            .unwrap_or_else(|e| {
+                tracing::warn!(%e,"usage report failed");
+                UsageStatsReport::default()
+            })
     }
-    pub fn prune_old_days(&self)->usize { 0 }
-    #[cfg(test)]
-    fn list_days(&self)->Vec<String> { self.handle().reader().unwrap().usage_days(400).unwrap() }
+    pub fn prune_old_days(&self) -> usize {
+        0
+    }
 }
-pub fn day_key(at:u64)->String {day_key_from_epoch_ms(at)}
-pub fn same_attempt(a:&RequestUsageKey,b:&RequestUsageKey)->bool {a==b}
+pub fn day_key(at: u64) -> String {
+    day_key_from_epoch_ms(at)
+}
+pub fn same_attempt(a: &RequestUsageKey, b: &RequestUsageKey) -> bool {
+    a == b
+}
 impl muta_contracts::UsageStatSink for UsageStatsStore {
-    fn persist_usage<'a>(&'a self, at:u64, project:&'a str, record:RequestUsageRecord) -> futures::future::BoxFuture<'a,Result<(),String>> {
-        Box::pin(self.persist_attempt(at,project,record))
+    fn persist_usage<'a>(
+        &'a self,
+        at: u64,
+        project: &'a str,
+        record: RequestUsageRecord,
+    ) -> futures::future::BoxFuture<'a, Result<(), String>> {
+        Box::pin(self.persist_attempt(at, project, record))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::{RequestUsageKey, RequestUsageStatus, RequestUsageSource};
+    use muta_contracts::{RequestUsageKey, RequestUsageSource, RequestUsageStatus};
 
     fn sample_record(session: &str, attempt: u32, total: i64) -> RequestUsageRecord {
         RequestUsageRecord {
@@ -210,12 +269,6 @@ mod tests {
         assert_eq!(report.grand_total.requests, 3);
     }
 
-
-
-
-
-
-
     /// End-to-end: a `TokenSourceLedger` with this store installed as its
     /// `UsageStatSink` mirrors terminal settles into the day files, and the
     /// aggregate matches what the ledger itself would report — the same
@@ -286,5 +339,4 @@ mod tests {
         );
         assert_eq!(reread.report(10).grand_total.requests, 2);
     }
-
 }

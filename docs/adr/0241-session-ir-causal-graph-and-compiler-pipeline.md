@@ -232,5 +232,5 @@ Converting `SessionIR` into an outbound LLM HTTP request is formalized as an on-
 - Supersedes: [ADR-0040 (Session state & context projection)](0040-session-state-and-context-projection.md)
 - Amends: [ADR-0186 (Single transcript persistence)](0186-single-transcript-projection-directives-persistence.md)
 - Amends: [ADR-0187 (Persistence v2 incremental append)](0187-persistence-v2-incremental-append-and-blob-reference-ledger.md)
-- Related: [ADR-0217 (Cache prefix stability)](0217-context-compaction-resilience.md), [ADR-0218 (Request projection archive)](0218-durable-request-projection-archive.md)
+- Related: [ADR-0217 (Cache prefix stability)](0217-request-components-and-derived-cache-plan.md), [ADR-0218 (Request projection archive)](0218-durable-request-projection-archive.md)
 - Architecture Blueprint: [`docs/architecture/session-ir.md`](../architecture/session-ir.md)

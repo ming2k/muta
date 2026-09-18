@@ -205,7 +205,10 @@ admit_mcp = ["security-scan"]
     // "unknown role 'sec-auditor'". With ADR-0245, it resumes seamlessly with 100% byte fidelity!
     let boot = assemble_for(&project, &session_id).await;
     let resumed_manifest = boot.session.role_manifest().await;
-    assert!(resumed_manifest.is_some(), "manifest must be preserved on resume");
+    assert!(
+        resumed_manifest.is_some(),
+        "manifest must be preserved on resume"
+    );
     let rm = resumed_manifest.unwrap();
     assert_eq!(rm.role_id, "sec-auditor");
     assert_eq!(

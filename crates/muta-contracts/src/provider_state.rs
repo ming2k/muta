@@ -184,7 +184,6 @@ pub fn request_prefix_fingerprint(
     format!("sha256:{:x}", digest.finalize())
 }
 
-
 #[allow(clippy::expect_used)] // Tool declarations contain no fallible custom serializers.
 pub fn request_envelope_fingerprint(
     instructions: &crate::InstructionBundle,

@@ -292,7 +292,9 @@ impl Provider for OpenAiChatCompletionsProvider {
         );
 
         let label = self.label();
-        let resp = self.send_request(&body, false, &transport_telemetry).await?;
+        let resp = self
+            .send_request(&body, false, &transport_telemetry)
+            .await?;
         let response_json: serde_json::Value = decode_response_json(resp, label).await?;
 
         if let Some(err) = response_json.get("error") {

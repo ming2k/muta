@@ -389,7 +389,10 @@ impl ListRow {
         let mut spans: Vec<Span> = Vec::new();
 
         if self.gutter > 0 {
-            spans.push(Span::styled(" ".repeat(self.gutter), Style::default().bg(bg)));
+            spans.push(Span::styled(
+                " ".repeat(self.gutter),
+                Style::default().bg(bg),
+            ));
         }
 
         let mut col = self.gutter;

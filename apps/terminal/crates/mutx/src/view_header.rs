@@ -385,8 +385,7 @@ pub(crate) fn draw_view_header_hints(
     if let Some(crumbs) = hints.breadcrumbs {
         let left = Span::styled(format!("   {crumbs}"), Style::default().fg(theme.fg()));
         let key = hints.back_key.unwrap_or(crate::keymap::Key::ESC);
-        let affordance =
-            crate::components::keycap::KeyAffordance::from_key(key, "back");
+        let affordance = crate::components::keycap::KeyAffordance::from_key(key, "back");
         let [key_span, label_span] = affordance.render_spans(theme, bg);
         let right_pad = Span::styled("   ", fill);
 
@@ -440,7 +439,9 @@ pub(crate) fn draw_view_header_hints(
         }
         ViewKind::Settings => {
             let key = hints.back_key.unwrap_or(crate::keymap::Key::ESC);
-            vec![crate::components::keycap::KeyAffordance::from_key(key, "back")]
+            vec![crate::components::keycap::KeyAffordance::from_key(
+                key, "back",
+            )]
         }
         // Unreachable — a crumb-less aside/subagent page is a caller bug,
         // asserted above. Rendering nothing keeps a malformed hint set from

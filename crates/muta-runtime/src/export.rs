@@ -377,30 +377,30 @@ fn parse_shell_output(output: &str) -> (String, Vec<String>) {
         return ("status: Completed · exit 0".to_string(), Vec::new());
     }
 
-    if let Some(rest) = trimmed.strip_prefix("Exit ") {
-        if let Some((exit_code_str, streams)) = rest.split_once('\n') {
-            let code = exit_code_str.trim();
-            let status = format!("status: Failed · exit {code}");
-            let mut lines = Vec::new();
-            if let Some((stdout_part, stderr_part)) = streams.split_once("\nSTDERR:\n") {
-                let stdout_clean = stdout_part.strip_prefix("STDOUT:\n").unwrap_or(stdout_part);
-                for line in stdout_clean.lines() {
-                    if !line.is_empty() {
-                        lines.push(line.to_string());
-                    }
-                }
-                for line in stderr_part.lines() {
-                    if !line.is_empty() {
-                        lines.push(line.to_string());
-                    }
-                }
-            } else {
-                for line in streams.lines() {
+    if let Some(rest) = trimmed.strip_prefix("Exit ")
+        && let Some((exit_code_str, streams)) = rest.split_once('\n')
+    {
+        let code = exit_code_str.trim();
+        let status = format!("status: Failed · exit {code}");
+        let mut lines = Vec::new();
+        if let Some((stdout_part, stderr_part)) = streams.split_once("\nSTDERR:\n") {
+            let stdout_clean = stdout_part.strip_prefix("STDOUT:\n").unwrap_or(stdout_part);
+            for line in stdout_clean.lines() {
+                if !line.is_empty() {
                     lines.push(line.to_string());
                 }
             }
-            return (status, lines);
+            for line in stderr_part.lines() {
+                if !line.is_empty() {
+                    lines.push(line.to_string());
+                }
+            }
+        } else {
+            for line in streams.lines() {
+                lines.push(line.to_string());
+            }
         }
+        return (status, lines);
     }
 
     if let Some(stderr) = trimmed.strip_prefix("(success, stderr):\n") {
@@ -559,7 +559,9 @@ mod tests {
             &messages,
             &[],
         );
-        assert!(out.contains("## Activity\n\n    $ ls\n    status: Completed · exit 0\n      file1\n      file2\n"));
+        assert!(out.contains(
+            "## Activity\n\n    $ ls\n    status: Completed · exit 0\n      file1\n      file2\n"
+        ));
         // Assistant header should not be emitted when its content was empty
         assert!(!out.contains("## Assistant"));
     }
@@ -590,7 +592,10 @@ mod tests {
         };
         let messages = vec![
             assistant_with_call("", call),
-            tool_result("run_command", "Exit 101\nSTDOUT:\ntest failed\nSTDERR:\nassertion failed"),
+            tool_result(
+                "run_command",
+                "Exit 101\nSTDOUT:\ntest failed\nSTDERR:\nassertion failed",
+            ),
         ];
         let out = format_export_markdown(
             ExportContext {

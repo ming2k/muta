@@ -247,7 +247,7 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buffer = [0u8; 4096];
-                socket.read(&mut buffer).await.unwrap();
+                let _bytes_read = socket.read(&mut buffer).await.unwrap();
                 if send_headers {
                     socket
                         .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nx")

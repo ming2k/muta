@@ -23,9 +23,8 @@ pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
         let mut sorted_entries: Vec<_> = data.tree.entries.values().collect();
         sorted_entries.sort_by_key(|e| e.timestamp);
 
-        let mut seq = 0u64;
-        for entry in sorted_entries {
-            seq += 1;
+        for (idx, entry) in sorted_entries.into_iter().enumerate() {
+            let seq = (idx + 1) as u64;
             let (kind, payload) = match &entry.kind {
                 muta_contracts::SessionEntryKind::Message { message } => (
                     NodeKind::Dialogue,
@@ -90,9 +89,8 @@ pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
     } else {
         // Fallback: build linear causal graph from transcript
         let mut parent_id = None;
-        let mut seq = 0u64;
-        for entry in &data.transcript.entries {
-            seq += 1;
+        for (idx, entry) in data.transcript.entries.iter().enumerate() {
+            let seq = (idx + 1) as u64;
             let node_id = entry.id.clone();
             let timestamp_ms = entry.created_at_ms;
 
@@ -187,7 +185,10 @@ pub fn session_data_to_ir(data: &SessionData) -> SessionIR {
         capabilities: muta_contracts::CapabilityPolicy {
             enabled_tools: Vec::new(),
             disabled_tools: data.disabled_tools.iter().cloned().collect(),
-            provider_pin: data.provider_selection.as_ref().map(|ps| ps.connection.clone()),
+            provider_pin: data
+                .provider_selection
+                .as_ref()
+                .map(|ps| ps.connection.clone()),
         },
         guardrails: muta_contracts::GuardrailPolicy {
             unattended: data.unattended,
@@ -216,7 +217,13 @@ pub fn apply_ir_to_session_data(ir: &SessionIR, data: &mut SessionData) {
     data.updated_at = ir.updated_at_s;
     data.round_counter = ir.state.round_counter;
     data.unattended = ir.policy.guardrails.unattended;
-    data.disabled_tools = ir.policy.capabilities.disabled_tools.iter().cloned().collect();
+    data.disabled_tools = ir
+        .policy
+        .capabilities
+        .disabled_tools
+        .iter()
+        .cloned()
+        .collect();
     if let Some(ref pin) = ir.policy.capabilities.provider_pin {
         data.provider_selection = Some(super::ProviderSelection {
             connection: pin.clone(),
@@ -273,8 +280,8 @@ pub fn apply_ir_to_session_data(ir: &SessionIR, data: &mut SessionData) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::message::{Message, Role};
     use muta_contracts::SessionTree;
+    use muta_contracts::message::{Message, Role};
 
     #[test]
     #[allow(deprecated)]
@@ -298,13 +305,20 @@ mod tests {
         assert_eq!(ir.history.nodes.len(), 1);
         assert_eq!(ir.state.active_leaf, Some(entry_id.clone()));
         assert_eq!(ir.state.round_counter, 5);
-        assert_eq!(ir.policy.rules.system_persona.as_deref(), Some("Rust Senior Architect"));
+        assert_eq!(
+            ir.policy.rules.system_persona.as_deref(),
+            Some("Rust Senior Architect")
+        );
         assert!(ir.policy.guardrails.unattended);
 
         // 2. Modify SessionIR
         let mut modified_ir = ir;
         modified_ir.state.round_counter = 6;
-        let id2 = modified_ir.append_message("node-reply", 1001_000, Message::new(Role::Assistant, "Audit completed"));
+        let id2 = modified_ir.append_message(
+            "node-reply",
+            1_001_000,
+            Message::new(Role::Assistant, "Audit completed"),
+        );
 
         // 3. Apply back to SessionData
         apply_ir_to_session_data(&modified_ir, &mut data);

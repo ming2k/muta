@@ -1308,8 +1308,10 @@ fn role_anchored_partition_and_switch_candidates_exclude_active() {
             updated_at: time,
             ..Default::default()
         };
-        let msg = muta_contracts::Message::new(muta_contracts::Role::User, format!("hello from {id}"));
-        data.transcript.push(muta_contracts::TranscriptEntry::from_message(0, &msg));
+        let msg =
+            muta_contracts::Message::new(muta_contracts::Role::User, format!("hello from {id}"));
+        data.transcript
+            .push(muta_contracts::TranscriptEntry::from_message(0, &msg));
         data
     };
 
@@ -1328,17 +1330,23 @@ fn role_anchored_partition_and_switch_candidates_exclude_active() {
 
     let phil_partition = SessionPartition::Role("philosophist".into());
     // Active is phil-2: candidates must return phil-1 ONLY, excluding phil-2, trans-1, and dev-1
-    let candidates = engine.list_switch_candidates(&phil_partition, "phil-2").unwrap();
+    let candidates = engine
+        .list_switch_candidates(&phil_partition, "phil-2")
+        .unwrap();
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].id, "phil-1");
 
     // Active is phil-1: candidates must return phil-2 ONLY
-    let candidates = engine.list_switch_candidates(&phil_partition, "phil-1").unwrap();
+    let candidates = engine
+        .list_switch_candidates(&phil_partition, "phil-1")
+        .unwrap();
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].id, "phil-2");
 
     // Active is unknown: candidates return both phil-2 and phil-1
-    let candidates = engine.list_switch_candidates(&phil_partition, "none").unwrap();
+    let candidates = engine
+        .list_switch_candidates(&phil_partition, "none")
+        .unwrap();
     assert_eq!(candidates.len(), 2);
     assert_eq!(candidates[0].id, "phil-2");
     assert_eq!(candidates[1].id, "phil-1");
@@ -1351,7 +1359,9 @@ fn role_anchored_partition_and_switch_candidates_exclude_active() {
 
     // Workspace partition
     let ws_partition = SessionPartition::Workspace("/repo/a".into());
-    let candidates = engine.list_switch_candidates(&ws_partition, "dev-1").unwrap();
+    let candidates = engine
+        .list_switch_candidates(&ws_partition, "dev-1")
+        .unwrap();
     assert!(candidates.is_empty()); // Excluded itself, no other candidates
 }
 

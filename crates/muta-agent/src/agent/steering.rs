@@ -270,8 +270,7 @@ impl Agent {
                     .extensions
                     .push(Arc::new(crate::extension::CodeIntelligenceExtension::new()));
             }
-            muta_contracts::MainAgentRole::Philosophist
-            | muta_contracts::MainAgentRole::Ops => {}
+            muta_contracts::MainAgentRole::Philosophist | muta_contracts::MainAgentRole::Ops => {}
         }
     }
 
@@ -286,8 +285,10 @@ impl Agent {
         );
         if let Some(user_role) = roles_config.get(trimmed) {
             let identity = user_role.identity();
-            let mut profile =
-                muta_contracts::AgentRoleProfile::with_identity(trimmed.to_string(), identity.clone());
+            let mut profile = muta_contracts::AgentRoleProfile::with_identity(
+                trimmed.to_string(),
+                identity.clone(),
+            );
             profile.tools = muta_contracts::ToolSelection::from_allowlist(&user_role.tools);
             profile.admit_mcp = user_role.admit_mcp.clone();
             if user_role.resolved_workspace().requires_binding() {
@@ -887,7 +888,9 @@ tools = ["ask_user"]
         );
         agent.set_project_root(Some(temp.path().to_path_buf()));
 
-        let switched = agent.apply_role("sec-auditor").expect("custom role resolves");
+        let switched = agent
+            .apply_role("sec-auditor")
+            .expect("custom role resolves");
         assert_eq!(switched.id, "sec-auditor");
         assert_eq!(switched.name, "Security Auditor");
         // Crucial invariant: active_role must be "sec-auditor", never hardcoded "role"

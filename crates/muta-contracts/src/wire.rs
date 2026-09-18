@@ -368,7 +368,10 @@ mod tests {
 
         let picker_opts = AttachAction::Picker(Some(SessionInitOptions::new(true, false)));
         let ser_opts = serde_json::to_string(&picker_opts).unwrap();
-        assert_eq!(ser_opts, r#"{"picker":{"unattended":true,"confined":false}}"#);
+        assert_eq!(
+            ser_opts,
+            r#"{"picker":{"unattended":true,"confined":false}}"#
+        );
         let back_opts: AttachAction = serde_json::from_str(&ser_opts).unwrap();
         assert_eq!(back_opts, picker_opts);
     }

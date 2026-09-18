@@ -247,11 +247,24 @@ fn init_dev_toast() -> (
         .filter(|s| !s.is_empty());
 
     let Some(val) = raw else {
-        return (None, String::new(), false, None, String::new(), NoticeSeverity::Info, false);
+        return (
+            None,
+            String::new(),
+            false,
+            None,
+            String::new(),
+            NoticeSeverity::Info,
+            false,
+        );
     };
 
     let pinned = std::env::var("MUTX_DEV_TOAST_PINNED")
-        .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"))
+        .map(|v| {
+            !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
         .unwrap_or(true);
 
     let duration = std::time::Duration::from_secs(3600);
@@ -259,30 +272,78 @@ fn init_dev_toast() -> (
 
     if val == "1" || val.eq_ignore_ascii_case("demo") {
         let msg = "Workspace roots updated\nSkipped roots: `../opencode`".to_string();
-        return (None, String::new(), false, until, msg, NoticeSeverity::Warning, pinned);
+        return (
+            None,
+            String::new(),
+            false,
+            until,
+            msg,
+            NoticeSeverity::Warning,
+            pinned,
+        );
     }
 
     if let Some((kind, rest)) = val.split_once(':') {
         let trimmed_rest = rest.trim().to_string();
         match kind.trim().to_ascii_lowercase().as_str() {
             "ok" | "copy" | "success" => {
-                return (until, trimmed_rest, false, None, String::new(), NoticeSeverity::Info, pinned);
+                return (
+                    until,
+                    trimmed_rest,
+                    false,
+                    None,
+                    String::new(),
+                    NoticeSeverity::Info,
+                    pinned,
+                );
             }
             "fail" | "failed" | "error" | "err" => {
-                return (until, trimmed_rest, true, None, String::new(), NoticeSeverity::Error, pinned);
+                return (
+                    until,
+                    trimmed_rest,
+                    true,
+                    None,
+                    String::new(),
+                    NoticeSeverity::Error,
+                    pinned,
+                );
             }
             "warn" | "warning" | "armed" => {
-                return (None, String::new(), false, until, trimmed_rest, NoticeSeverity::Warning, pinned);
+                return (
+                    None,
+                    String::new(),
+                    false,
+                    until,
+                    trimmed_rest,
+                    NoticeSeverity::Warning,
+                    pinned,
+                );
             }
             "info" => {
-                return (None, String::new(), false, until, trimmed_rest, NoticeSeverity::Info, pinned);
+                return (
+                    None,
+                    String::new(),
+                    false,
+                    until,
+                    trimmed_rest,
+                    NoticeSeverity::Info,
+                    pinned,
+                );
             }
             _ => {}
         }
     }
 
     // Default without prefix: show as Info notice toast
-    (None, String::new(), false, until, val, NoticeSeverity::Info, pinned)
+    (
+        None,
+        String::new(),
+        false,
+        until,
+        val,
+        NoticeSeverity::Info,
+        pinned,
+    )
 }
 
 fn pre_attach_initial() -> Option<PreAttachState> {

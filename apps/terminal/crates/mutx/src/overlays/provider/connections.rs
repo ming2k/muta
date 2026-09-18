@@ -444,13 +444,18 @@ pub(crate) fn connection_detail_body(
     if let Some(active) = &detail.active_model {
         let mut segments = vec![RowSegment::styled(active.clone(), value)];
         if let Some(effort) = &detail.active_model_effort {
-            segments.push(RowSegment::styled(format!("  ·  reasoning: {effort}"), muted));
+            segments.push(RowSegment::styled(
+                format!("  ·  reasoning: {effort}"),
+                muted,
+            ));
         } else if detail.active_model_thinking == Some(true) {
             segments.push(RowSegment::styled("  ·  thinking: enabled", muted));
         }
         rows.push(
-            SelectableRow::from_segments(segments)
-                .with_prefix(RowSegment::styled(format!("{:<16}", "Default Active"), label)),
+            SelectableRow::from_segments(segments).with_prefix(RowSegment::styled(
+                format!("{:<16}", "Default Active"),
+                label,
+            )),
         );
     }
 
@@ -506,7 +511,8 @@ pub(crate) fn connection_detail_body(
 
     // Provider Usage & Quota
     rows.push(SelectableRow::empty());
-    let mut quota_header_segments = vec![RowSegment::styled("Provider Usage & Quota", header_style)];
+    let mut quota_header_segments =
+        vec![RowSegment::styled("Provider Usage & Quota", header_style)];
     if let muta_contracts::ConnectionUsageState::Available(usage) = &detail.usage
         && let Some(plan) = &usage.plan
         && plan.len() <= 40
@@ -544,7 +550,12 @@ pub(crate) fn connection_detail_body(
                     muta_contracts::ProviderQuotaData::Balance(balance) => {
                         rendered_quota = true;
                         render_balance_quota_block(
-                            balance, &mut quota_lines, label, value, highlight, theme,
+                            balance,
+                            &mut quota_lines,
+                            label,
+                            value,
+                            highlight,
+                            theme,
                         );
                     }
                     muta_contracts::ProviderQuotaData::Composite {
@@ -555,7 +566,12 @@ pub(crate) fn connection_detail_body(
                         rendered_quota = true;
                         if let Some(bal) = balance {
                             render_balance_quota_block(
-                                bal, &mut quota_lines, label, value, highlight, theme,
+                                bal,
+                                &mut quota_lines,
+                                label,
+                                value,
+                                highlight,
+                                theme,
                             );
                         }
                         if let Some(per) = periodic {
@@ -588,7 +604,10 @@ pub(crate) fn connection_detail_body(
                 if let Some(bal) = &usage.primary_balance {
                     rows.push(
                         SelectableRow::styled(bal.clone(), highlight.add_modifier(Modifier::BOLD))
-                            .with_prefix(RowSegment::styled(format!("  {:<16}", "Primary Balance"), label)),
+                            .with_prefix(RowSegment::styled(
+                                format!("  {:<16}", "Primary Balance"),
+                                label,
+                            )),
                     );
                 }
                 for metric in &usage.metrics {
@@ -597,8 +616,10 @@ pub(crate) fn connection_detail_body(
                         None => metric.value.clone(),
                     };
                     rows.push(
-                        SelectableRow::styled(val, value)
-                            .with_prefix(RowSegment::styled(format!("  {:<16}", metric.label), label)),
+                        SelectableRow::styled(val, value).with_prefix(RowSegment::styled(
+                            format!("  {:<16}", metric.label),
+                            label,
+                        )),
                     );
                 }
             }

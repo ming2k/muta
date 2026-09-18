@@ -141,8 +141,7 @@ pub(crate) type TurnPersistFn =
 /// record to the session's forensic archive. It is synchronous and infallible
 /// by design: forensic persistence must never block or fail request dispatch.
 /// It is `None` on subagents, the review diagnostic, and tests.
-pub(crate) type RequestProjectionFn =
-    Arc<dyn Fn(muta_contracts::RequestProjection) + Send + Sync>;
+pub(crate) type RequestProjectionFn = Arc<dyn Fn(muta_contracts::RequestProjection) + Send + Sync>;
 
 /// Title-established observer fired by the background session titler
 /// (ADR-0022).
@@ -241,7 +240,7 @@ pub struct Agent {
     /// Optional mid-turn model-context projection gate.
     context_projection_gate: Arc<std::sync::Mutex<Option<Arc<dyn ContextProjectionGate>>>>,
     /// Learned per-route image-input suppression (ADR-0230): the
-    /// [`RouteFingerprint`](muta_contracts::RouteFingerprint) of the route on
+    /// [`RouteFingerprint`] of the route on
     /// which a provider rejected image input, once the harness has seen that
     /// rejection.
     ///
@@ -937,11 +936,11 @@ impl RequestAccountingGuard {
                 .map(|delta| delta.as_micros() as u64),
             _ => None,
         };
-        let anchored = |transport_offset_us: Option<u64>| match (anchor_shift_us, transport_offset_us)
-        {
-            (Some(shift), Some(offset)) => Some(shift.saturating_add(offset)),
-            _ => None,
-        };
+        let anchored =
+            |transport_offset_us: Option<u64>| match (anchor_shift_us, transport_offset_us) {
+                (Some(shift), Some(offset)) => Some(shift.saturating_add(offset)),
+                _ => None,
+            };
         muta_contracts::RequestPerformance {
             dns_us: transport.dns_us,
             tcp_us: transport.tcp_us,

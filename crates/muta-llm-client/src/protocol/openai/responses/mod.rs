@@ -371,11 +371,7 @@ impl OpenAiResponsesProvider {
                 ));
             }
             let mut retry_req = self
-                .build_request_for_auth(
-                    body,
-                    &refreshed_auth,
-                    turn_state.get().map(String::as_str),
-                )
+                .build_request_for_auth(body, &refreshed_auth, turn_state.get().map(String::as_str))
                 .with_telemetry(telemetry.clone());
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
@@ -556,7 +552,9 @@ impl Provider for OpenAiResponsesProvider {
         let transport_telemetry = request.transport_telemetry.clone();
         let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, false)?;
-        let resp = self.send_request(&body, false, &turn_context, &transport_telemetry).await?;
+        let resp = self
+            .send_request(&body, false, &turn_context, &transport_telemetry)
+            .await?;
         let value: serde_json::Value = decode_response_json(resp, label).await?;
         if let Some(err) = value.get("error") {
             return Err(ProviderError::new(
@@ -609,7 +607,9 @@ impl Provider for OpenAiResponsesProvider {
         let transport_telemetry = request.transport_telemetry.clone();
         let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, true)?;
-        let resp = self.send_request(&body, true, &turn_context, &transport_telemetry).await?;
+        let resp = self
+            .send_request(&body, true, &turn_context, &transport_telemetry)
+            .await?;
         let stream = crate::sse::data_payloads(resp, label).map(|item| {
             let data = item?;
             let value = decode_stream_payload(&data, label)?;
@@ -636,7 +636,9 @@ impl Provider for OpenAiResponsesProvider {
         let transport_telemetry = request.transport_telemetry.clone();
         let turn_context = Arc::clone(&request.turn_context);
         let body = self.build_body(request, true)?;
-        let resp = self.send_request(&body, true, &turn_context, &transport_telemetry).await?;
+        let resp = self
+            .send_request(&body, true, &turn_context, &transport_telemetry)
+            .await?;
         let model_catalog_etag = models_etag(&resp.headers);
 
         // One stateful parser threads the function-call item state across the
@@ -723,7 +725,10 @@ mod stream_protocol_tests {
                 .with_header("x-codex-turn-state", response_token)
                 .create_async()
                 .await;
-            provider.send_request(&body, true, &round, &telemetry()).await.unwrap();
+            provider
+                .send_request(&body, true, &round, &telemetry())
+                .await
+                .unwrap();
             mock.assert_async().await;
             mock.remove_async().await;
         }
@@ -778,7 +783,9 @@ mod stream_protocol_tests {
                 .with_header("x-codex-turn-state", "route-a")
                 .create_async()
                 .await;
-            let response = provider.send_request(&body, true, &round, &telemetry()).await;
+            let response = provider
+                .send_request(&body, true, &round, &telemetry())
+                .await;
             assert_eq!(response.is_ok(), status == 200);
             mock.assert_async().await;
             mock.remove_async().await;
@@ -818,7 +825,10 @@ mod stream_protocol_tests {
                 .with_header("x-codex-turn-state", "route-a")
                 .create_async()
                 .await;
-            provider.send_request(&body, true, &round, &telemetry()).await.unwrap();
+            provider
+                .send_request(&body, true, &round, &telemetry())
+                .await
+                .unwrap();
             warmup.assert_async().await;
             warmup.remove_async().await;
             let rejected = server
@@ -843,7 +853,10 @@ mod stream_protocol_tests {
                 .with_status(200)
                 .create_async()
                 .await;
-            provider.send_request(&body, true, &round, &telemetry()).await.unwrap();
+            provider
+                .send_request(&body, true, &round, &telemetry())
+                .await
+                .unwrap();
             rejected.assert_async().await;
             retried.assert_async().await;
         }

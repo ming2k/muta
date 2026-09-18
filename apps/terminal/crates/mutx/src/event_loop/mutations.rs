@@ -215,7 +215,7 @@ pub(crate) enum ChromeEdit {
     ///
     /// There is no clear counterpart, and that is the point (ADR-0235): the
     /// clause is retired by the *next phase write* for this session
-    /// ([`SessionChrome::set_phase`]), so the producer states the fact and
+    /// ([`crate::app::SessionChrome::set_phase`]), so the producer states the fact and
     /// forgets it. A producer that could clear it would reintroduce the
     /// hand-maintained "events that mean the retry is over" list that let the
     /// clause outlive its setback.

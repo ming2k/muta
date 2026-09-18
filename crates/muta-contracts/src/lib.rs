@@ -39,7 +39,9 @@ pub use error::{
 };
 
 pub mod message;
-pub use message::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, SubagentMeta, ToolCall, ToolResult};
+pub use message::{
+    ImagePart, InjectionKind, InjectionOrigin, Message, Role, SubagentMeta, ToolCall, ToolResult,
+};
 
 pub mod transcript;
 pub use transcript::{
@@ -140,20 +142,19 @@ pub use token_ledger::{
     PerformanceTimingSource, RequestPerformance, RequestUsageKey, RequestUsageRecord,
     RequestUsageSource, RequestUsageStatus, StreamTokenSource, TokenSourceLedger,
     TokenSourceReport, TokenSourceRow, TokenSourceTotals, TokenTurn, TransportObservation,
-    TransportTelemetry,
-    TransportTimings,
-    TurnPerformanceSnapshot, UsageStatSink, latest_turn_performance,
+    TransportTelemetry, TransportTimings, TurnPerformanceSnapshot, UsageStatSink,
+    latest_turn_performance,
 };
 pub mod usage_stats;
 pub use usage_stats::{
     UsageDayTotals, UsageModelRow, UsageModelTotals, UsageStatRecord, UsageStatsReport,
     aggregate_usage_records, day_key_from_epoch_ms,
 };
-pub mod trajectory_guard_config;
 pub mod execution;
 pub mod secret;
 pub mod security;
 pub mod shared_roots;
+pub mod trajectory_guard_config;
 pub use execution::{
     DirEntry, ExecutionEnvironment, FsError, FsMetadata, FsProvider, ProcessOutput, ProcessRunner,
     ShellIsolation, ToolMiddleware,
@@ -171,11 +172,11 @@ pub mod session_title;
 
 pub mod session_ir;
 pub use session_ir::{
-    compile_session_request, BudgetPolicy, CacheBoundary, CapabilityPolicy, CausalGraph,
-    CausalNode, CompilationArtifact, CompilationStats, CompilerError, CompilerOptions,
-    ExecutionStatus, GuardrailPolicy, NodeId, NodeKind, NodePayload, RuleSet, SessionDelta,
-    SessionIR, SessionPolicy, SessionState, StateUpdate, SuspensionReason, SystemNoticePayload,
-    TerminationReason, TimelineCursor, TimelineKind,
+    BudgetPolicy, CacheBoundary, CapabilityPolicy, CausalGraph, CausalNode, CompilationArtifact,
+    CompilationStats, CompilerError, CompilerOptions, ExecutionStatus, GuardrailPolicy, NodeId,
+    NodeKind, NodePayload, RuleSet, SessionDelta, SessionIR, SessionPolicy, SessionState,
+    StateUpdate, SuspensionReason, SystemNoticePayload, TerminationReason, TimelineCursor,
+    TimelineKind, compile_session_request,
 };
 
 pub mod session_tree;
@@ -200,7 +201,6 @@ pub use connection_detail::{
     BalanceQuota, ConnectionDetail, ConnectionUsageState, PeriodicQuota, ProviderQuotaData,
     ProviderUsage, QuotaWindowBucket, QuotaWindowKind, RateLimitSpec, UsageMetric,
 };
-pub use trajectory_guard_config::TrajectoryGuardConfig;
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary, ConnectStatus,
@@ -227,6 +227,7 @@ pub use subagent::{
     SUBAGENT_CODE, SUBAGENT_EXPLORE, SUBAGENT_SKILL, SUBAGENT_TITLE, SubagentPreset,
     SubagentPresetPool, ToolPolicy,
 };
+pub use trajectory_guard_config::TrajectoryGuardConfig;
 pub mod monitor;
 pub use hooks::{
     Hook, HookContext, HookEvent, HookEventKind, HookOutcome, RestorePoint, SessionSource,

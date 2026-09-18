@@ -170,13 +170,12 @@ impl RolesConfig {
         if let Some(root) = workspace_root {
             for candidate in &["roles.toml", "config.toml"] {
                 let project_cfg_path = root.join(".muta").join(candidate);
-                if project_cfg_path.exists() {
-                    if let Ok(raw) = std::fs::read_to_string(&project_cfg_path) {
-                        if let Ok(override_cfg) = Self::from_toml_str(&raw) {
-                            for (id, role) in override_cfg.roles {
-                                config.roles.insert(id, role);
-                            }
-                        }
+                if project_cfg_path.exists()
+                    && let Ok(raw) = std::fs::read_to_string(&project_cfg_path)
+                    && let Ok(override_cfg) = Self::from_toml_str(&raw)
+                {
+                    for (id, role) in override_cfg.roles {
+                        config.roles.insert(id, role);
                     }
                 }
             }

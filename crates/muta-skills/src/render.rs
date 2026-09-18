@@ -63,7 +63,10 @@ pub fn format_skill_injection(skill: &Skill, content: &str) -> String {
     let files_desc = if files.is_empty() {
         String::new()
     } else {
-        format!("\nAuxiliary files (relative to root):\n{}", files.join("\n"))
+        format!(
+            "\nAuxiliary files (relative to root):\n{}",
+            files.join("\n")
+        )
     };
 
     format!(

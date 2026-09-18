@@ -186,12 +186,12 @@ impl QuestionModel {
 
     /// Pre-select all options for question `q` (used for multi-select defaults).
     pub fn select_all(&mut self, q: usize) {
-        if let Some(question) = self.request.questions.get(q) {
-            if let Some(sel) = self.selected.get_mut(q) {
-                sel.clear();
-                for i in 0..question.options.len() {
-                    sel.push(i);
-                }
+        if let Some(question) = self.request.questions.get(q)
+            && let Some(sel) = self.selected.get_mut(q)
+        {
+            sel.clear();
+            for i in 0..question.options.len() {
+                sel.push(i);
             }
         }
     }

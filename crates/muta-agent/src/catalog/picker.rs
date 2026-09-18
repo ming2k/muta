@@ -249,7 +249,10 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
     // Bottom-up and presentation-only: it comes straight from the remote
     // catalog, the client never invents or curates it, and an absent label
     // leaves the surfaces on the wire id.
-    let name = channel.remote.as_ref().and_then(|remote| remote.name.clone());
+    let name = channel
+        .remote
+        .as_ref()
+        .and_then(|remote| remote.name.clone());
     let effort_levels: Vec<String> = caps
         .effort_levels
         .iter()
@@ -455,7 +458,8 @@ mod tests {
     }
 
     #[test]
-    fn channel_model_info_surfaces_route_context_window_from_remote_metadata() {        // ADR-0182: Discovered models (like glm-5.3 on opencode-go) carry their
+    fn channel_model_info_surfaces_route_context_window_from_remote_metadata() {
+        // ADR-0182: Discovered models (like glm-5.3 on opencode-go) carry their
         // remote context_window via ADR-0149 resolution into the picker snapshot.
         let remote = muta_contracts::RemoteModelMetadata {
             context_window: Some(1_000_000),

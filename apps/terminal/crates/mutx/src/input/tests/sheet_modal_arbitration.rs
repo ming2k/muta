@@ -142,7 +142,10 @@ fn sheet_verbs_suspend_while_a_modal_is_open() {
     // (they fall through to the shared layers, which no-op them here).
     for code in [KeyCode::Left, KeyCode::Right, KeyCode::Tab] {
         assert_eq!(
-            route(overlaid(SurfaceFixture::UsageStats, SheetKind::Permission), code),
+            route(
+                overlaid(SurfaceFixture::UsageStats, SheetKind::Permission),
+                code
+            ),
             InputAction::None,
             "sheet verb {code:?} must not fire through a coexisting modal"
         );

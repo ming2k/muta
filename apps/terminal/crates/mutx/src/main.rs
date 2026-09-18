@@ -21,7 +21,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn ensure_dev_environment() {
     let is_debug_build = cfg!(debug_assertions);
-    let dev_opt_out = std::env::var("MUTX_NO_DEV").map(|v| v != "0").unwrap_or(false);
+    let dev_opt_out = std::env::var("MUTX_NO_DEV")
+        .map(|v| v != "0")
+        .unwrap_or(false);
     let dev_mode = (is_debug_build && !dev_opt_out)
         || std::env::var("MUTX_DEV").map(|v| v != "0").unwrap_or(false)
         || std::env::var("MUTA_DEV").map(|v| v != "0").unwrap_or(false)
@@ -52,22 +54,27 @@ fn ensure_dev_environment() {
     }
 
     // 2. Point MUTA_BIN to local source-built muta, building it if not yet present
-    if std::env::var_os("MUTA_BIN").is_none() {
-        if let Ok(current) = std::env::current_exe() {
-            let sibling = current.with_file_name(format!("muta{}", std::env::consts::EXE_SUFFIX));
-            if !sibling.is_file() {
-                eprintln!("[mutx-dev] Local muta binary not found at {}. Compiling via cargo...", sibling.display());
-                let status = std::process::Command::new("cargo")
-                    .args(["build", "-p", "muta"])
-                    .status();
-                if let Ok(status) = status && !status.success() {
-                    eprintln!("[mutx-dev] Warning: Failed to build local muta from source.");
-                }
+    if std::env::var_os("MUTA_BIN").is_none()
+        && let Ok(current) = std::env::current_exe()
+    {
+        let sibling = current.with_file_name(format!("muta{}", std::env::consts::EXE_SUFFIX));
+        if !sibling.is_file() {
+            eprintln!(
+                "[mutx-dev] Local muta binary not found at {}. Compiling via cargo...",
+                sibling.display()
+            );
+            let status = std::process::Command::new("cargo")
+                .args(["build", "-p", "muta"])
+                .status();
+            if let Ok(status) = status
+                && !status.success()
+            {
+                eprintln!("[mutx-dev] Warning: Failed to build local muta from source.");
             }
-            if sibling.is_file() {
-                unsafe {
-                    std::env::set_var("MUTA_BIN", &sibling);
-                }
+        }
+        if sibling.is_file() {
+            unsafe {
+                std::env::set_var("MUTA_BIN", &sibling);
             }
         }
     }
@@ -320,6 +327,7 @@ async fn run_dashboard(
 /// the ordinary TUI. This process is only a client — the server owns the
 /// session lifecycle (and fires SessionEnd hooks on its own shutdown), so
 /// none of that runs here.
+#[allow(clippy::too_many_arguments)]
 async fn run_attached(
     session_id: Option<String>,
     fresh: bool,

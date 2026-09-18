@@ -80,7 +80,12 @@ impl SessionIR {
     }
 
     /// Append a dialogue message node to the active branch.
-    pub fn append_message(&mut self, node_id: impl Into<String>, timestamp_ms: u64, message: Message) -> NodeId {
+    pub fn append_message(
+        &mut self,
+        node_id: impl Into<String>,
+        timestamp_ms: u64,
+        message: Message,
+    ) -> NodeId {
         let node_id = node_id.into();
         let parent_id = self.state.active_leaf.clone();
         let seq = self.history.next_seq();
@@ -362,6 +367,7 @@ pub enum NodeKind {
 /// Detailed payload of a causal graph node.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum NodePayload {
     Message {
         message: Message,
@@ -494,14 +500,9 @@ pub enum SuspensionReason {
         action: String,
     },
     /// Waiting for required user clarification or input.
-    NeedsInput {
-        prompt: String,
-    },
+    NeedsInput { prompt: String },
     /// Waiting for automated transient retry with backoff.
-    RetryPending {
-        retry_token: String,
-        attempts: u32,
-    },
+    RetryPending { retry_token: String, attempts: u32 },
 }
 
 /// Payload for pending notifications held in the state mailbox.
@@ -594,14 +595,14 @@ mod tests {
         assert!(ir.state.active_leaf.is_none());
 
         let msg1 = Message::new(Role::User, "Hello muta");
-        let id1 = ir.append_message("node-1", 1000_000, msg1);
+        let id1 = ir.append_message("node-1", 1_000_000, msg1);
 
         assert_eq!(ir.state.active_leaf, Some(id1.clone()));
         assert_eq!(ir.history.nodes.len(), 1);
         assert_eq!(ir.history.max_seq, 1);
 
         let msg2 = Message::new(Role::Assistant, "Hello! How can I help?");
-        let id2 = ir.append_message("node-2", 1001_000, msg2);
+        let id2 = ir.append_message("node-2", 1_001_000, msg2);
 
         assert_eq!(ir.state.active_leaf, Some(id2.clone()));
         assert_eq!(ir.history.nodes.len(), 2);
@@ -624,8 +625,12 @@ mod tests {
     #[test]
     fn test_session_ir_timelines() {
         let mut ir = SessionIR::new("session-timeline-test", SessionPolicy::default(), 1000);
-        let n1 = ir.append_message("n1", 1000_000, Message::new(Role::User, "Main 1"));
-        let n2 = ir.append_message("n2", 1001_000, Message::new(Role::Assistant, "Main response 1"));
+        let n1 = ir.append_message("n1", 1_000_000, Message::new(Role::User, "Main 1"));
+        let n2 = ir.append_message(
+            "n2",
+            1_001_000,
+            Message::new(Role::Assistant, "Main response 1"),
+        );
 
         // Create an aside timeline branching off n2
         let aside_id = ir.create_timeline("aside-1", "Explain this detail", TimelineKind::Aside);
@@ -633,8 +638,12 @@ mod tests {
         assert_eq!(ir.state.active_leaf, Some(n2.clone()));
 
         // Append to aside timeline
-        let a1 = ir.append_message("a1", 1002_000, Message::new(Role::User, "Aside question"));
-        let a2 = ir.append_message("a2", 1003_000, Message::new(Role::Assistant, "Aside answer"));
+        let a1 = ir.append_message("a1", 1_002_000, Message::new(Role::User, "Aside question"));
+        let a2 = ir.append_message(
+            "a2",
+            1_003_000,
+            Message::new(Role::Assistant, "Aside answer"),
+        );
 
         let aside_path = ir.resolve_timeline_branch(&aside_id);
         assert_eq!(aside_path.len(), 4);
@@ -648,7 +657,7 @@ mod tests {
         assert_eq!(ir.state.active_leaf, Some(n2.clone()));
 
         // Append to main timeline
-        let n3 = ir.append_message("n3", 1004_000, Message::new(Role::User, "Main 2"));
+        let n3 = ir.append_message("n3", 1_004_000, Message::new(Role::User, "Main 2"));
         let main_path = ir.resolve_timeline_branch("main");
         assert_eq!(main_path.len(), 3);
         assert_eq!(main_path[0].id, n1);
@@ -661,16 +670,16 @@ mod tests {
         let mut ir = SessionIR::new("session-2", SessionPolicy::default(), 1000);
         ir.state.status = ExecutionStatus::Running {
             turn: 1,
-            started_at_ms: 1000_000,
+            started_at_ms: 1_000_000,
         };
 
         let user_msg = Message::new(Role::User, "Run long test");
-        ir.append_message("node-1", 1000_000, user_msg);
+        ir.append_message("node-1", 1_000_000, user_msg);
 
         // User hits Ctrl+C
         let term_id = ir.record_termination(
             "node-term",
-            1005_000,
+            1_005_000,
             TerminationReason::UserInterrupt,
             Some("Compiling...".to_string()),
             Some("call_123".to_string()),

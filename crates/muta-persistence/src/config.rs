@@ -9,8 +9,8 @@
 use crate::fsutil;
 use crate::paths;
 use muta_contracts::{
-    CompactionPolicy, HookEventKind, McpServerConfig, RemoteModelMetadata,
-    SecretString, SkillsConfig, TrajectoryGuardConfig, VariantSelection, WebConfig, WebProviderAxis,
+    CompactionPolicy, HookEventKind, McpServerConfig, RemoteModelMetadata, SecretString,
+    SkillsConfig, TrajectoryGuardConfig, VariantSelection, WebConfig, WebProviderAxis,
 };
 
 /// Re-export so server/TUI can use the config-layer path without depending on

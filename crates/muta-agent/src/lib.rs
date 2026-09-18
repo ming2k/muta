@@ -117,12 +117,12 @@ pub mod catalog;
 pub mod compaction;
 pub mod context_projection;
 mod conversation_context;
-pub mod trajectory_guard;
 pub mod dynamic;
 mod dynamic_tools;
 pub mod hooks;
 pub mod interaction;
 pub mod mesh;
+pub mod trajectory_guard;
 pub use interaction::{InteractionConfig, InteractionController};
 
 pub mod human_broker;
@@ -133,8 +133,8 @@ pub mod agent_slot;
 mod dispatch_pipeline;
 pub mod subagent_tool;
 pub use agent_slot::AgentSlot;
-mod hook_runner;
 pub mod guard;
+mod hook_runner;
 pub use guard::{GuardAction, RoundGuardState};
 mod model_request;
 pub mod no_provider;
@@ -161,8 +161,8 @@ mod tool_scheduler;
 pub mod tools;
 
 pub mod extension;
-pub mod syntax;
 pub(crate) mod sync;
+pub mod syntax;
 pub use extension::CodeIntelligenceExtension;
 
 pub use context_projection::ContextProjectionGate;

@@ -172,31 +172,49 @@ impl SessionStore {
 
     /// The optional workspace binding this store carries.
     pub fn workspace(&self) -> Option<muta_contracts::WorkspaceBinding> {
-        self.workspace.read().unwrap().clone()
+        self.workspace
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// The history filter for this store's sessions: its workspace path, or
     /// unbound when there is no workspace.
     pub fn workspace_filter(&self) -> muta_contracts::WorkspaceFilter {
-        muta_contracts::WorkspaceFilter::from_binding(self.workspace.read().unwrap().as_ref())
+        muta_contracts::WorkspaceFilter::from_binding(
+            self.workspace
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref(),
+        )
     }
 
     /// Canonical domain partition for this session (ADR-0250).
     pub fn partition(&self) -> muta_contracts::SessionPartition {
         muta_contracts::SessionPartition::from_binding(
-            self.workspace.read().unwrap().as_ref(),
-            self.role.read().unwrap().as_deref(),
+            self.workspace
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref(),
+            self.role
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_deref(),
         )
     }
 
     /// The staffing role recorded on fresh sessions, if any.
     pub fn role(&self) -> Option<String> {
-        self.role.read().unwrap().clone()
+        self.role.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// The workspace root, when one is bound. `None` for the unbound set.
     pub fn workspace_root(&self) -> Option<PathBuf> {
-        self.workspace.read().unwrap().as_ref().map(|w| w.root.clone())
+        self.workspace
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|w| w.root.clone())
     }
 
     pub async fn id(&self) -> String {
@@ -238,7 +256,11 @@ impl SessionStore {
     pub async fn reset(&self) -> Result<String, String> {
         let mut state = self.state.lock().await;
         let workspace = state.data.workspace.clone();
-        let role = state.data.role.clone().or_else(|| Some("developer".to_string()));
+        let role = state
+            .data
+            .role
+            .clone()
+            .or_else(|| Some("developer".to_string()));
         let role_manifest = state.data.role_manifest.clone().or_else(|| {
             Some(crate::roles::resolve_role_manifest(
                 workspace.as_ref().map(|w| w.root.as_path()),
@@ -255,8 +277,8 @@ impl SessionStore {
             role_manifest,
             ..Default::default()
         };
-        *self.workspace.write().unwrap() = workspace;
-        *self.role.write().unwrap() = role;
+        *self.workspace.write().unwrap_or_else(|e| e.into_inner()) = workspace;
+        *self.role.write().unwrap_or_else(|e| e.into_inner()) = role;
         state.path = path;
         state.data = data;
         // Same staleness hazard as `open`: a fresh session must not inherit
@@ -289,8 +311,8 @@ impl SessionStore {
             role_manifest,
             ..Default::default()
         };
-        *self.workspace.write().unwrap() = workspace;
-        *self.role.write().unwrap() = role;
+        *self.workspace.write().unwrap_or_else(|e| e.into_inner()) = workspace;
+        *self.role.write().unwrap_or_else(|e| e.into_inner()) = role;
         state.path = path;
         state.data = data;
         state.invalidate_projection_cache();
@@ -326,8 +348,12 @@ impl SessionStore {
         if state.data.id == resolved {
             return Ok(());
         }
-        let workspace = self.workspace.read().unwrap().clone();
-        let role = self.role.read().unwrap().clone();
+        let workspace = self
+            .workspace
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let role = self.role.read().unwrap_or_else(|e| e.into_inner()).clone();
         let blob_store = self.blob_store.clone();
         let writer = self.writer.clone();
         let load_path = path.clone();
@@ -345,8 +371,8 @@ impl SessionStore {
         })
         .await
         .map_err(|e| format!("session open task failed: {e}"))?;
-        *self.workspace.write().unwrap() = data.workspace.clone();
-        *self.role.write().unwrap() = data.role.clone();
+        *self.workspace.write().unwrap_or_else(|e| e.into_inner()) = data.workspace.clone();
+        *self.role.write().unwrap_or_else(|e| e.into_inner()) = data.role.clone();
         state.path = path;
         state.data = data;
         // ADR-0189: the projection cache belongs to the session being left.
@@ -496,9 +522,14 @@ impl SessionStore {
         data: SessionData,
         usage_upserts: Vec<muta_contracts::RequestUsageRecord>,
     ) -> Result<(), String> {
-        self.persist_with_usage_guarded(path, data, usage_upserts, crate::db::CommitGuard::default())
-            .await
-            .map(|_| ())
+        self.persist_with_usage_guarded(
+            path,
+            data,
+            usage_upserts,
+            crate::db::CommitGuard::default(),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// [`Self::persist_with_usage`] that carries an ADR-0236 D3 commit guard

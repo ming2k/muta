@@ -410,6 +410,7 @@ pub fn draw_model_editor(
 }
 
 /// Focused one-field editor used by singleton web provider setup.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_web_value_editor(
     frame: &mut Frame,
     title: &str,

@@ -28,7 +28,10 @@ pub struct StatusOptions {
     pub diagnostic: bool,
 }
 
-pub async fn run(project_root: &Path, opts: StatusOptions) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    project_root: &Path,
+    opts: StatusOptions,
+) -> Result<(), Box<dyn std::error::Error>> {
     if opts.diagnostic {
         let diag = client::diagnose_daemon();
         render_diagnostics(&diag, opts.json);

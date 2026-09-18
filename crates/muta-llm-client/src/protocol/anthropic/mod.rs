@@ -312,7 +312,9 @@ impl Provider for AnthropicMessagesProvider {
             &self.capabilities,
         );
 
-        let resp = self.send_request(&body, false, &transport_telemetry).await?;
+        let resp = self
+            .send_request(&body, false, &transport_telemetry)
+            .await?;
         let response_json: serde_json::Value = decode_response_json(resp, "Anthropic").await?;
 
         let assembled = response::assemble_message(&response_json)

@@ -155,14 +155,7 @@ pub fn draw_dialog_keys(
     modal_header_parts(frame, f.header, &breadcrumbs, theme);
 
     render_selectable_body(
-        frame,
-        f.body,
-        &rows,
-        scroll,
-        None,
-        theme,
-        selection,
-        layout_map,
+        frame, f.body, &rows, scroll, None, theme, selection, layout_map,
     );
 
     if let Some(footer) = f.footer {

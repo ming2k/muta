@@ -7,10 +7,10 @@
 //! - `sessions_v2`: stores session working cursor, execution status, and timestamps.
 
 use muta_contracts::{
-    CausalNode, ExecutionStatus, NodeKind, NodePayload, SessionDelta, SessionIR,
-    SessionPolicy, SessionState, SuspensionReason, SystemNoticePayload,
+    CausalNode, ExecutionStatus, NodeKind, NodePayload, SessionDelta, SessionIR, SessionPolicy,
+    SessionState, SuspensionReason, SystemNoticePayload,
 };
-use rusqlite::{params, Connection, OptionalExtension, Result};
+use rusqlite::{Connection, OptionalExtension, Result, params};
 
 /// Schema initialization for Session IR tables (Migration 17 / v15 schema).
 pub fn initialize_session_ir_schema(conn: &Connection) -> Result<()> {
@@ -69,7 +69,10 @@ pub fn save_session_delta(conn: &Connection, delta: &SessionDelta) -> Result<()>
             ExecutionStatus::Running { .. } => ("running", None),
             ExecutionStatus::Suspended { reason } => (
                 "suspended",
-                Some(serde_json::to_string(reason).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?),
+                Some(
+                    serde_json::to_string(reason)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?,
+                ),
             ),
         };
 
@@ -284,14 +287,34 @@ pub fn load_session_ir(conn: &Connection, session_id: &str) -> Result<Option<Ses
                 let guard_json: String = row.get(2)?;
                 let budget_json: String = row.get(3)?;
 
-                let rules = serde_json::from_str(&rules_json)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
-                let capabilities = serde_json::from_str(&caps_json)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e)))?;
-                let guardrails = serde_json::from_str(&guard_json)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?;
-                let budget = serde_json::from_str(&budget_json)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?;
+                let rules = serde_json::from_str(&rules_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
+                let capabilities = serde_json::from_str(&caps_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
+                let guardrails = serde_json::from_str(&guard_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
+                let budget = serde_json::from_str(&budget_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        3,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
                 Ok(SessionPolicy {
                     rules,
@@ -338,8 +361,9 @@ pub fn load_session_ir(conn: &Connection, session_id: &str) -> Result<Option<Ses
             _ => NodeKind::Dialogue,
         };
 
-        let payload: NodePayload = serde_json::from_str(&payload_json)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?;
+        let payload: NodePayload = serde_json::from_str(&payload_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+        })?;
 
         Ok(CausalNode {
             id: node_id,
@@ -362,13 +386,13 @@ pub fn load_session_ir(conn: &Connection, session_id: &str) -> Result<Option<Ses
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::message::{Message, Role};
     use muta_contracts::TerminationReason;
+    use muta_contracts::message::{Message, Role};
     use rusqlite::Connection;
 
     #[test]
     fn test_session_ir_persistence_roundtrip() {
-        let mut conn = Connection::open_in_memory().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
         initialize_session_ir_schema(&conn).unwrap();
 
         // 1. Create SessionIR and append events
@@ -378,11 +402,19 @@ mod tests {
 
         let mut ir = SessionIR::new("session-roundtrip-test", policy.clone(), 1000);
 
-        let id1 = ir.append_message("node-1", 1000_000, Message::new(Role::User, "Build project"));
-        let id2 = ir.append_message("node-2", 1001_000, Message::new(Role::Assistant, "Building..."));
+        let id1 = ir.append_message(
+            "node-1",
+            1_000_000,
+            Message::new(Role::User, "Build project"),
+        );
+        let id2 = ir.append_message(
+            "node-2",
+            1_001_000,
+            Message::new(Role::Assistant, "Building..."),
+        );
         let id3 = ir.record_termination(
             "node-term",
-            1002_000,
+            1_002_000,
             TerminationReason::UserInterrupt,
             Some("Compiling target...".into()),
             Some("run_1".into()),
@@ -400,7 +432,7 @@ mod tests {
         // 2. Drain delta and save
         let mut delta = ir.drain_delta(0);
         delta.policy_update = Some(policy.clone());
-        save_session_delta(&mut conn, &delta).unwrap();
+        save_session_delta(&conn, &delta).unwrap();
 
         // 3. Hydrate from database
         let hydrated_ir = load_session_ir(&conn, "session-roundtrip-test")
@@ -411,11 +443,17 @@ mod tests {
         assert_eq!(hydrated_ir.session_id, "session-roundtrip-test");
         assert_eq!(hydrated_ir.history.nodes.len(), 3);
         assert_eq!(hydrated_ir.state.active_leaf, Some(id3));
-        assert_eq!(hydrated_ir.policy.rules.system_persona.as_deref(), Some("Rust Core Engineer"));
+        assert_eq!(
+            hydrated_ir.policy.rules.system_persona.as_deref(),
+            Some("Rust Core Engineer")
+        );
 
         match &hydrated_ir.state.status {
             ExecutionStatus::Suspended { reason } => match reason {
-                SuspensionReason::NeedsApproval { tool_call_id, action } => {
+                SuspensionReason::NeedsApproval {
+                    tool_call_id,
+                    action,
+                } => {
                     assert_eq!(tool_call_id, "call_run_deploy");
                     assert_eq!(action, "deploy to production");
                 }
@@ -429,16 +467,19 @@ mod tests {
         assert_eq!(n1.seq, 1);
         let n2 = hydrated_ir.history.get_node(&id2).unwrap();
         assert_eq!(n2.seq, 2);
-        let n3 = hydrated_ir.history.get_node(&hydrated_ir.state.active_leaf.unwrap()).unwrap();
+        let n3 = hydrated_ir
+            .history
+            .get_node(&hydrated_ir.state.active_leaf.unwrap())
+            .unwrap();
         assert_eq!(n3.kind, NodeKind::Termination);
 
         // Verify incremental delta save: append 1 more node
-        let id4 = ir.append_message("node-4", 1003_000, Message::new(Role::User, "Resume work"));
+        let id4 = ir.append_message("node-4", 1_003_000, Message::new(Role::User, "Resume work"));
         let delta2 = ir.drain_delta(3);
         assert_eq!(delta2.new_nodes.len(), 1);
         assert_eq!(delta2.new_nodes[0].id, id4);
 
-        save_session_delta(&mut conn, &delta2).unwrap();
+        save_session_delta(&conn, &delta2).unwrap();
         let hydrated2 = load_session_ir(&conn, "session-roundtrip-test")
             .unwrap()
             .expect("session must exist");

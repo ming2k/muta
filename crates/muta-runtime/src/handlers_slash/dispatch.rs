@@ -9,7 +9,8 @@ use super::record::{
 use super::security_ops::{TrustRoute, reload_trusted_assets, trust_route};
 use super::session_ops::{
     fork_current_session, restore_session_runtime, start_fresh_session,
-    switch_or_start_session_with_role, supersede_for_session_switch, teardown_sides_for_session_switch,
+    supersede_for_session_switch, switch_or_start_session_with_role,
+    teardown_sides_for_session_switch,
 };
 use super::session_route::{
     SessionRoute, parse_confinement_arg, parse_unattended_arg, session_route,
@@ -396,8 +397,15 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                     };
 
                     let force_new = parts.iter().any(|&p| p == "--new" || p == "-n");
-                    switch_or_start_session_with_role(&mut env, role_id, target_workspace, force_new, name, args)
-                        .await;
+                    switch_or_start_session_with_role(
+                        &mut env,
+                        role_id,
+                        target_workspace,
+                        force_new,
+                        name,
+                        args,
+                    )
+                    .await;
                 }
             }
         }
@@ -743,13 +751,15 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             // and lands before the first aside round starts streaming.
             let side_for_titler = Arc::clone(side);
             let resp_tx_for_titler = (*resp_tx).clone();
-            side_session.agent.set_title_established(std::sync::Arc::new(move |_title| {
-                let side_registry = Arc::clone(&side_for_titler);
-                let resp_tx = resp_tx_for_titler.clone();
-                Box::pin(async move {
-                    publish_btw_list(&side_registry, &resp_tx).await;
-                }) as futures::future::BoxFuture<'static, ()>
-            }));
+            side_session
+                .agent
+                .set_title_established(std::sync::Arc::new(move |_title| {
+                    let side_registry = Arc::clone(&side_for_titler);
+                    let resp_tx = resp_tx_for_titler.clone();
+                    Box::pin(async move {
+                        publish_btw_list(&side_registry, &resp_tx).await;
+                    }) as futures::future::BoxFuture<'static, ()>
+                }));
 
             side.write().await.open(side_session);
             crate::handlers_session::emit_side_view_opened(side, session, resp_tx, &side_id).await;
@@ -1018,8 +1028,7 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
             let Some(project_root_for_side) = project_root_for_side else {
                 match route {
                     TrustRoute::GrantAll | TrustRoute::Grant(TrustDomain::UserAssets) => {
-                        let user_granted =
-                            crate::handlers_slash::security_ops::trust_user_assets();
+                        let user_granted = crate::handlers_slash::security_ops::trust_user_assets();
                         let effective = muta_persistence::config::Config::load();
                         let mcp_report = mcp_runtime.reconfigure(effective.mcp.clone()).await;
                         let mut snap =
@@ -1074,7 +1083,8 @@ pub async fn dispatch(cmd: String, mut env: SlashEnv<'_>) {
                             resp_tx,
                             name,
                             args,
-                            "project asset trust is unavailable in a workspace-free session".to_string(),
+                            "project asset trust is unavailable in a workspace-free session"
+                                .to_string(),
                         )
                         .await;
                     }

@@ -16,9 +16,8 @@ impl PersistenceCommand {
                 guard,
                 ack,
             } => {
-                let res = guarded_save(|| {
-                    engine.save_session_inner(&data, full, &usage_upserts, &guard)
-                });
+                let res =
+                    guarded_save(|| engine.save_session_inner(&data, full, &usage_upserts, &guard));
                 let _ = ack.send(res);
             }
             Self::UpsertSession { record, ack } => {
@@ -50,14 +49,11 @@ impl PersistenceCommand {
                 let res = guarded(|| engine.insert_request_projection(&session_id, &record));
                 let _ = ack.send(res);
             }
-            Self::ProjectUsage { ack } => { let _ = ack.send(guarded(|| engine.project_usage_batch(64))); }
-            Self::RecordUsageStats {
-                entries,
-                ack,
-            } => {
-                let res = guarded(|| {
-                    persist_usage_records(&engine.conn, entries)
-                });
+            Self::ProjectUsage { ack } => {
+                let _ = ack.send(guarded(|| engine.project_usage_batch(64)));
+            }
+            Self::RecordUsageStats { entries, ack } => {
+                let res = guarded(|| persist_usage_records(&engine.conn, entries));
                 if let Some(ack) = ack {
                     let _ = ack.send(res);
                 } else if let Err(error) = res {
@@ -109,9 +105,8 @@ impl PersistenceCommand {
                 }
             }
             Self::SaveSessionDelta { delta, ack } => {
-                let res = guarded(|| {
-                    crate::db::session_ir::save_session_delta(&engine.conn, &delta)
-                });
+                let res =
+                    guarded(|| crate::db::session_ir::save_session_delta(&engine.conn, &delta));
                 let _ = ack.send(res);
             }
             #[cfg(test)]
@@ -126,9 +121,8 @@ impl PersistenceCommand {
                 usage_upserts,
                 guard,
             } => {
-                let _ = guarded_save(|| {
-                    engine.save_session_inner(&data, full, &usage_upserts, &guard)
-                });
+                let _ =
+                    guarded_save(|| engine.save_session_inner(&data, full, &usage_upserts, &guard));
                 // Die without acknowledging: the commit is durable, its ack is
                 // gone. Recovery must resolve the outcome by operation identity.
                 return false;
@@ -143,7 +137,9 @@ impl PersistenceCommand {
     /// otherwise would convert a visible failure into silent data loss.
     pub(super) fn fail(self, error: PersistenceError) {
         match self {
-            Self::ProjectUsage { ack } => { let _ = ack.send(Err(error)); }
+            Self::ProjectUsage { ack } => {
+                let _ = ack.send(Err(error));
+            }
             Self::SaveSession { ack, .. } => {
                 let _ = ack.send(Err(error));
             }
@@ -253,7 +249,16 @@ pub(super) async fn run_supervisor(
                     }
                 }
             } else if Instant::now() >= next_try {
-                match spawn_writer(&db_path, blob_store.as_ref(), &health, lease.clone(), initial_engine.take(), reader_ages.clone()).await {
+                match spawn_writer(
+                    &db_path,
+                    blob_store.as_ref(),
+                    &health,
+                    lease.clone(),
+                    initial_engine.take(),
+                    reader_ages.clone(),
+                )
+                .await
+                {
                     Ok(tx) => {
                         writer = Some(tx);
                         attempt = 0;
@@ -318,9 +323,11 @@ fn log_storage_metrics(db_path: &Path, engine: &DatabaseEngine, reader_ages: &Re
     let main_bytes = std::fs::metadata(db_path).map(|m| m.len()).unwrap_or(0);
     let (backlog, oldest_revision): (i64, Option<i64>) = engine
         .conn
-        .query_row("SELECT COUNT(*), MIN(revision) FROM usage_dirty", [], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })
+        .query_row(
+            "SELECT COUNT(*), MIN(revision) FROM usage_dirty",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
         .unwrap_or((0, None));
     let revision: i64 = engine
         .conn
@@ -373,8 +380,7 @@ fn maintain_storage_pressure(
     {
         warn!(
             oldest_reader_ms = age_ms,
-            active_readers,
-            "a long-lived reader snapshot is pinning the WAL"
+            active_readers, "a long-lived reader snapshot is pinning the WAL"
         );
     }
     let wal_path = PathBuf::from(format!("{}-wal", db_path.display()));
@@ -396,16 +402,13 @@ fn maintain_storage_pressure(
         "PRAGMA wal_checkpoint(PASSIVE)"
     };
 
-    match engine
-        .conn
-        .query_row(checkpoint_sql, [], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-            ))
-        })
-    {
+    match engine.conn.query_row(checkpoint_sql, [], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    }) {
         Ok((0, log_frames, checkpointed)) => {
             info!(
                 wal_bytes,
@@ -439,12 +442,12 @@ async fn spawn_writer(
         Some(engine) => Ok(engine),
         None => DatabaseEngine::open(&path, blobs),
     })
-        .await
-        .map_err(|join| {
-            rusqlite::Error::ToSqlConversionFailure(
-                format!("persistence writer spawn task failed: {join}").into(),
-            )
-        })??;
+    .await
+    .map_err(|join| {
+        rusqlite::Error::ToSqlConversionFailure(
+            format!("persistence writer spawn task failed: {join}").into(),
+        )
+    })??;
 
     let (tx, mut rx) = mpsc::channel::<PersistenceCommand>(1024);
     let health = health.clone();
@@ -481,7 +484,9 @@ async fn spawn_writer(
                         _ => {}
                     }
                 }
-                let Some(command) = rx.blocking_recv() else { break; };
+                let Some(command) = rx.blocking_recv() else {
+                    break;
+                };
                 foreground += 1;
                 if !command.execute(&engine) {
                     break;
@@ -505,7 +510,6 @@ async fn spawn_writer(
         })?;
     Ok(tx)
 }
-
 
 #[cfg(test)]
 mod tests {

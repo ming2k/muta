@@ -403,34 +403,35 @@ async fn run_inner(
         crate::task_ledger::rehost_all(
             &muta_persistence::db::get_persistence_handle(),
             move |row| {
-            let JobSpec::Process {
-                command,
-                restart: Some(_policy),
-                ..
-            } = &row.spec
-            else {
-                return;
-            };
-            let registry = Arc::clone(&registry_for_rehost);
-            let command = command.clone();
-            tokio::spawn(async move {
-                match registry
-                    .spawn_daemon_task(
-                        command,
-                        Some(format!("rehost:{}", row.job_id)),
-                        muta_contracts::JobKind::Service,
-                    )
-                    .await
-                {
-                    Ok(info) => {
-                        tracing::info!(job = %info.id.0, "rehosted service started");
+                let JobSpec::Process {
+                    command,
+                    restart: Some(_policy),
+                    ..
+                } = &row.spec
+                else {
+                    return;
+                };
+                let registry = Arc::clone(&registry_for_rehost);
+                let command = command.clone();
+                tokio::spawn(async move {
+                    match registry
+                        .spawn_daemon_task(
+                            command,
+                            Some(format!("rehost:{}", row.job_id)),
+                            muta_contracts::JobKind::Service,
+                        )
+                        .await
+                    {
+                        Ok(info) => {
+                            tracing::info!(job = %info.id.0, "rehosted service started");
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "rehosted service failed to start");
+                        }
                     }
-                    Err(error) => {
-                        tracing::warn!(%error, "rehosted service failed to start");
-                    }
-                }
-            });
-        });
+                });
+            },
+        );
     }
 
     // Serving

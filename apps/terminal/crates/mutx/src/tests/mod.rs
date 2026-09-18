@@ -13,7 +13,9 @@ use tokio::sync::mpsc;
 
 use crate::app::{App, CaretOwner, QueuedDispatch, QueuedDispatchState, RecallQueued};
 use crate::completion::CompletionKind;
-use crate::completion::{completion_anchor, completion_anchor_x, mention_range_at, resolved_slash_command_len};
+use crate::completion::{
+    completion_anchor, completion_anchor_x, mention_range_at, resolved_slash_command_len,
+};
 use crate::config;
 use crate::event_loop::{display_status, focused_messages_mut};
 use crate::model::layout::InteractiveTarget;
@@ -477,20 +479,26 @@ fn test_dev_toast_env_parsing() {
     assert!(res.0.is_none());
     assert!(res.3.is_none());
 
-    unsafe { std::env::set_var("MUTX_DEV_TOAST", "ok:copied to clipboard"); }
+    unsafe {
+        std::env::set_var("MUTX_DEV_TOAST", "ok:copied to clipboard");
+    }
     let res = crate::init_dev_toast();
     assert!(res.0.is_some());
     assert_eq!(res.1, "copied to clipboard");
     assert!(!res.2);
     assert!(res.6);
 
-    unsafe { std::env::set_var("MUTX_DEV_TOAST", "err:paste dropped"); }
+    unsafe {
+        std::env::set_var("MUTX_DEV_TOAST", "err:paste dropped");
+    }
     let res = crate::init_dev_toast();
     assert!(res.0.is_some());
     assert_eq!(res.1, "paste dropped");
     assert!(res.2);
 
-    unsafe { std::env::set_var("MUTX_DEV_TOAST", "warn:Esc again interrupts"); }
+    unsafe {
+        std::env::set_var("MUTX_DEV_TOAST", "warn:Esc again interrupts");
+    }
     let res = crate::init_dev_toast();
     assert!(res.3.is_some());
     assert_eq!(res.4, "Esc again interrupts");

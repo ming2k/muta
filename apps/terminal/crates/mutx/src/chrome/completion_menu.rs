@@ -62,7 +62,9 @@ pub fn draw_completion_menu(
     let place_below = space_above < menu_height && space_below > space_above;
 
     let y = if place_below {
-        anchor.bottom().min(viewport.bottom().saturating_sub(menu_height))
+        anchor
+            .bottom()
+            .min(viewport.bottom().saturating_sub(menu_height))
     } else {
         anchor.y.saturating_sub(menu_height).max(viewport.y)
     };
@@ -271,9 +273,14 @@ pub fn draw_completion_menu(
             };
             let doc_height = (insp_lines.len() as u16).max(menu_height).min(max_flyout_h);
             let doc_y = if place_below {
-                menu_area.y.min(viewport.bottom().saturating_sub(doc_height))
+                menu_area
+                    .y
+                    .min(viewport.bottom().saturating_sub(doc_height))
             } else {
-                menu_area.bottom().saturating_sub(doc_height).max(viewport.y)
+                menu_area
+                    .bottom()
+                    .saturating_sub(doc_height)
+                    .max(viewport.y)
             };
 
             let doc_area = Rect::new(doc_x, doc_y, doc_width, doc_height);

@@ -35,17 +35,17 @@ pub use muta_paths::fsutil;
 pub use muta_paths::lock;
 pub use muta_paths::paths;
 
+pub mod asset_attestation;
 pub mod instances;
 pub mod model_providers;
 pub mod provider_usage;
+pub mod role_memory;
 pub mod roles;
 pub mod route_settings;
 pub mod session;
 pub mod usage_stats;
 mod web_migration;
 pub mod workspace_security;
-pub mod asset_attestation;
-pub mod role_memory;
 
 pub use asset_attestation::AssetAttestationLedger;
 pub use role_memory::{RecalledMemory, RoleMemoryEntry, RoleMemoryStore, get_role_memory_store};

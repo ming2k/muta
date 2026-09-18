@@ -839,21 +839,39 @@ fn models_modal_search_bar_renders_at_bottom_without_shifting_list() {
     let search_text = render_models_modal(0, "", true);
 
     // Header "Models" remains on the same row for both
-    let browse_header_line = browse_text.lines().position(|l| l.contains("Models")).unwrap();
-    let search_header_line = search_text.lines().position(|l| l.contains("Models")).unwrap();
+    let browse_header_line = browse_text
+        .lines()
+        .position(|l| l.contains("Models"))
+        .unwrap();
+    let search_header_line = search_text
+        .lines()
+        .position(|l| l.contains("Models"))
+        .unwrap();
     assert_eq!(browse_header_line, search_header_line);
 
     // The first section in search ("FAVORITES") is at the exact same row as in browse mode
-    let browse_fav_line = browse_text.lines().position(|l| l.contains("FAVORITES")).unwrap();
-    let search_fav_line = search_text.lines().position(|l| l.contains("FAVORITES")).unwrap();
+    let browse_fav_line = browse_text
+        .lines()
+        .position(|l| l.contains("FAVORITES"))
+        .unwrap();
+    let search_fav_line = search_text
+        .lines()
+        .position(|l| l.contains("FAVORITES"))
+        .unwrap();
     assert_eq!(
         browse_fav_line, search_fav_line,
         "list top did not shift when search opened"
     );
 
     // Search prompt renders near the bottom of search mode
-    let search_row = search_text.lines().position(|l| l.contains("Search")).expect("search prompt present");
-    assert!(search_row > search_fav_line, "search prompt is at the bottom");
+    let search_row = search_text
+        .lines()
+        .position(|l| l.contains("Search"))
+        .expect("search prompt present");
+    assert!(
+        search_row > search_fav_line,
+        "search prompt is at the bottom"
+    );
 }
 
 #[test]
@@ -872,15 +890,27 @@ fn models_modal_search_matches_id_name_and_connection() {
 
     // 1. Match by model ID
     let by_id = crate::providers::models_flat_filtered_from(&picker, "", "", "gpt-5.5");
-    assert!(by_id.iter().any(|m| m.model == "gpt-5.5" && m.match_id.is_some()));
+    assert!(
+        by_id
+            .iter()
+            .any(|m| m.model == "gpt-5.5" && m.match_id.is_some())
+    );
 
     // 2. Match by model display name
     let by_name = crate::providers::models_flat_filtered_from(&picker, "", "", "Turbo");
-    assert!(by_name.iter().any(|m| m.model == "gpt-5.5" && m.match_name.is_some()));
+    assert!(
+        by_name
+            .iter()
+            .any(|m| m.model == "gpt-5.5" && m.match_name.is_some())
+    );
 
     // 3. Match by connection/provider name
     let by_conn = crate::providers::models_flat_filtered_from(&picker, "", "", "Official");
-    assert!(by_conn.iter().any(|m| m.provider_label == "OpenAI Official" && m.match_connection.is_some()));
+    assert!(
+        by_conn
+            .iter()
+            .any(|m| m.provider_label == "OpenAI Official" && m.match_connection.is_some())
+    );
 }
 
 #[test]
@@ -1723,7 +1753,10 @@ fn connections_modal_detail_wraps_second_column_with_indent() {
 
     let text = buffer_text(&terminal);
     let lines: Vec<&str> = text.lines().collect();
-    let base_url_idx = lines.iter().position(|l| l.contains("Base URL")).expect("Base URL line");
+    let base_url_idx = lines
+        .iter()
+        .position(|l| l.contains("Base URL"))
+        .expect("Base URL line");
     let base_line = lines[base_url_idx];
     let next_line = lines[base_url_idx + 1];
     assert!(base_line.contains("https://"), "base_line: {base_line:?}");

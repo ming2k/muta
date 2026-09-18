@@ -148,8 +148,7 @@ pub fn trajectory_signature(name: &str, args: &str) -> String {
     format!("{name}|{}", args.trim())
 }
 
-/// Canonical signature of a single watched tool call.
-
+/// Canonical signature normalizer for a shell command locator.
 fn normalize_command_locator(raw: &str) -> String {
     let mut meaningful: Vec<String> = Vec::new();
     for segment in raw.split([';', '\n']) {
@@ -280,7 +279,10 @@ impl TrajectoryLoopGuard {
 
     /// Current threshold tier for `signature`.
     pub fn current_tier(&self, signature: &str) -> usize {
-        *self.ladder_tiers.get(signature).unwrap_or(&self.base_tier())
+        *self
+            .ladder_tiers
+            .get(signature)
+            .unwrap_or(&self.base_tier())
     }
 
     /// Escalate the threshold tier along the backoff ladder (4 -> 8 -> 12) upon cognitive acquittal.
@@ -432,7 +434,10 @@ mod tests {
     #[test]
     fn first_occurrence_is_allowed() {
         let mut g = TrajectoryLoopGuard::new(enabled());
-        let action = g.check_ahead(&[trajectory_signature("execute_command", r#"{"command":"ls"}"#)]);
+        let action = g.check_ahead(&[trajectory_signature(
+            "execute_command",
+            r#"{"command":"ls"}"#,
+        )]);
         assert_eq!(action, GuardAction::Continue);
     }
 
@@ -454,7 +459,10 @@ mod tests {
         );
         let blocked = g.check_ahead(std::slice::from_ref(&s));
         match blocked {
-            GuardAction::Block { signatures, message } => {
+            GuardAction::Block {
+                signatures,
+                message,
+            } => {
                 assert_eq!(signatures, vec![s]);
                 assert!(message.contains("make test"));
                 assert!(message.contains("**blocked** for the rest of the turn"));
@@ -483,8 +491,11 @@ mod tests {
     fn strict_threshold_two_blocks_on_first_repeat() {
         let mut g = TrajectoryLoopGuard::new(strict());
         let s = trajectory_signature("execute_command", r#"{"command":"ls"}"#);
-        assert_eq!(g.check_ahead(&[s.clone()]), GuardAction::Continue);
-        match g.check_ahead(&[s.clone()]) {
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&s)),
+            GuardAction::Continue
+        );
+        match g.check_ahead(std::slice::from_ref(&s)) {
             GuardAction::Block { signatures, .. } => assert_eq!(signatures, vec![s]),
             other => panic!("expected Block on second call, got {other:?}"),
         }
@@ -495,7 +506,10 @@ mod tests {
         let mut g = TrajectoryLoopGuard::new(TrajectoryGuardConfig::disabled());
         let s = trajectory_signature("execute_command", r#"{"command":"ls"}"#);
         for _ in 0..10 {
-            assert_eq!(g.check_ahead(&[s.clone()]), GuardAction::Continue);
+            assert_eq!(
+                g.check_ahead(std::slice::from_ref(&s)),
+                GuardAction::Continue
+            );
         }
     }
 
@@ -504,7 +518,10 @@ mod tests {
         let mut g = TrajectoryLoopGuard::new(enabled());
         let s1 = trajectory_signature("execute_command", r#"{"command":"cargo test"}"#);
         let s2 = trajectory_signature("execute_command", r#"{"command":"cargo build"}"#);
-        assert_eq!(g.check_ahead(&[s1.clone()]), GuardAction::Continue);
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&s1)),
+            GuardAction::Continue
+        );
         assert_eq!(g.check_ahead(&[s2]), GuardAction::Continue);
         assert_eq!(g.check_ahead(&[s1]), GuardAction::Continue);
     }
@@ -520,7 +537,10 @@ mod tests {
     fn sleep_noise_variants_collide() {
         let s1 = trajectory_signature("execute_command", r#"{"command":"sleep 5; make test"}"#);
         let s2 = trajectory_signature("execute_command", r#"{"command":"sleep 9; make test"}"#);
-        assert_eq!(s1, s2, "sleep noise prefix must be stripped so variants collide");
+        assert_eq!(
+            s1, s2,
+            "sleep noise prefix must be stripped so variants collide"
+        );
     }
 
     #[test]
@@ -612,8 +632,14 @@ mod tests {
     fn unwatched_tool_signatures_do_not_block() {
         let mut g = TrajectoryLoopGuard::new(strict());
         let s = trajectory_signature("ask_user", r#"{"question":"ready?"}"#);
-        assert_eq!(g.check_ahead(&[s.clone()]), GuardAction::Continue);
-        assert_eq!(g.check_ahead(&[s.clone()]), GuardAction::Continue);
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&s)),
+            GuardAction::Continue
+        );
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&s)),
+            GuardAction::Continue
+        );
     }
 
     #[test]
@@ -629,11 +655,23 @@ mod tests {
         let b = trajectory_signature("execute_command", r#"{"command":"cmd_b"}"#);
         let c = trajectory_signature("execute_command", r#"{"command":"cmd_c"}"#);
 
-        assert_eq!(g.check_ahead(&[a.clone()]), GuardAction::Continue);
-        assert_eq!(g.check_ahead(&[b.clone()]), GuardAction::Continue);
-        assert_eq!(g.check_ahead(&[c.clone()]), GuardAction::Continue);
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&a)),
+            GuardAction::Continue
+        );
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&b)),
+            GuardAction::Continue
+        );
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&c)),
+            GuardAction::Continue
+        );
         // `a` has aged out of window of size 2
-        assert_eq!(g.check_ahead(&[a.clone()]), GuardAction::Continue);
+        assert_eq!(
+            g.check_ahead(std::slice::from_ref(&a)),
+            GuardAction::Continue
+        );
     }
 
     #[test]

@@ -149,10 +149,8 @@ pub(crate) async fn switch_or_start_session_with_role(
     name: &str,
     args: &str,
 ) {
-    let partition = muta_contracts::SessionPartition::from_binding(
-        target_workspace.as_ref(),
-        Some(role_id),
-    );
+    let partition =
+        muta_contracts::SessionPartition::from_binding(target_workspace.as_ref(), Some(role_id));
     let latest_existing_id = if !force_new {
         muta_persistence::db::get_persistence_handle()
             .reader()
@@ -197,7 +195,9 @@ pub(crate) async fn switch_or_start_session_with_role(
                 let sec_snapshot = workspace_security.snapshot(&ws.root);
                 agent.set_workspace_security(sec_snapshot);
             } else {
-                agent.set_workspace_security(muta_contracts::WorkspaceSecuritySnapshot::new("workspace-free"));
+                agent.set_workspace_security(muta_contracts::WorkspaceSecuritySnapshot::new(
+                    "workspace-free",
+                ));
             }
 
             match session.open(&target_id).await {
@@ -345,14 +345,18 @@ pub(crate) async fn start_fresh_session_with_role(
                     RoundEvent::UnattendedChanged(fresh_posture),
                 ));
             }
-            let default_confined = if let Some(builtin) = muta_contracts::MainAgentRole::parse(role_id) {
-                builtin.default_confined()
-            } else {
-                true
-            };
+            let default_confined =
+                if let Some(builtin) = muta_contracts::MainAgentRole::parse(role_id) {
+                    builtin.default_confined()
+                } else {
+                    true
+                };
             if shared_confinement.is_confined() != default_confined {
                 shared_confinement.set_confined(default_confined);
-                let _ = resp_tx.send(round_response(&id, RoundEvent::ConfinementChanged(default_confined)));
+                let _ = resp_tx.send(round_response(
+                    &id,
+                    RoundEvent::ConfinementChanged(default_confined),
+                ));
             }
             agent.restore_round_count(session.round_counter().await);
             crate::handlers_provider::reapply_session_selection(
@@ -420,8 +424,10 @@ pub(crate) async fn restore_session_runtime(
     // Restore role and identity from the session's manifest (ADR-0245, ADR-0246) or role metadata
     if let Some(manifest) = session.role_manifest().await {
         let role_identity = manifest.identity.clone();
-        let mut role =
-            muta_contracts::AgentRoleProfile::with_identity(manifest.role_id.clone(), role_identity.clone());
+        let mut role = muta_contracts::AgentRoleProfile::with_identity(
+            manifest.role_id.clone(),
+            role_identity.clone(),
+        );
         role.tools = muta_contracts::ToolSelection::from_allowlist(&manifest.tools);
         role.admit_mcp = manifest.admit_mcp.clone();
         if session.workspace_root().is_some() {
@@ -506,10 +512,10 @@ pub(crate) async fn restore_session_runtime(
     let mut messages = session.model_window().await;
     let before_len = messages.len();
     agent.fire_session_start(source, &mut messages).await;
-    if messages.len() > before_len {
-        if let Err(err) = session.append_turn(&messages).await {
-            tracing::warn!(error = %err, "failed to persist SessionStart hook context");
-        }
+    if messages.len() > before_len
+        && let Err(err) = session.append_turn(&messages).await
+    {
+        tracing::warn!(error = %err, "failed to persist SessionStart hook context");
     }
 
     send_harness_state_for_session(

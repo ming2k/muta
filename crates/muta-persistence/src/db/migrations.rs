@@ -440,8 +440,14 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 14,
         sql: "",
     },
-    Migration { version: 15, sql: "" },
-    Migration { version: 16, sql: "" },
+    Migration {
+        version: 15,
+        sql: "",
+    },
+    Migration {
+        version: 16,
+        sql: "",
+    },
     Migration {
         // Session IR clean break (ADR-0241): initialize pure headless
         // `sessions_v2`, `session_policies`, `causal_nodes` schema and create
@@ -1169,17 +1175,41 @@ pub fn apply_causal_nodes_composite_pk_schema(tx: &rusqlite::Transaction) -> Res
     Ok(())
 }
 
-pub fn insert_usage_record_tx(conn: &Connection, session_id: &str, record: &muta_contracts::RequestUsageRecord) -> Result<()> {
+pub fn insert_usage_record_tx(
+    conn: &Connection,
+    session_id: &str,
+    record: &muta_contracts::RequestUsageRecord,
+) -> Result<()> {
     if record.key.session_id != session_id {
-        return Err(rusqlite::Error::InvalidParameterName("usage belongs to another session".into()));
+        return Err(rusqlite::Error::InvalidParameterName(
+            "usage belongs to another session".into(),
+        ));
     }
-    let root: Option<String> = conn.query_row("SELECT workspace_root FROM sessions WHERE id=?1", [session_id], |r| r.get(0)).optional()?.flatten();
-    let project = root.map(|p| crate::paths::project_bucket_name(Path::new(&p))).unwrap_or_default();
-    let at = if record.started_at_ms > 0 { record.started_at_ms } else { unix_ms() };
-    upsert_attempt(conn, &muta_contracts::usage_stats::UsageStatRecord {
-        day: muta_contracts::usage_stats::day_key_from_epoch_ms(at), recorded_at_ms: at,
-        project, record: record.clone(),
-    })?;
+    let root: Option<String> = conn
+        .query_row(
+            "SELECT workspace_root FROM sessions WHERE id=?1",
+            [session_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    let project = root
+        .map(|p| crate::paths::project_bucket_name(Path::new(&p)))
+        .unwrap_or_default();
+    let at = if record.started_at_ms > 0 {
+        record.started_at_ms
+    } else {
+        unix_ms()
+    };
+    upsert_attempt(
+        conn,
+        &muta_contracts::usage_stats::UsageStatRecord {
+            day: muta_contracts::usage_stats::day_key_from_epoch_ms(at),
+            recorded_at_ms: at,
+            project,
+            record: record.clone(),
+        },
+    )?;
     Ok(())
 }
 

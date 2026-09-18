@@ -2438,7 +2438,10 @@ async fn trajectory_guard_cognitive_arbitration_confirms_loop_and_blocks_surgica
         .iter()
         .filter(|m| m.role == Role::Tool && m.content.contains("[loop guard]"))
         .collect();
-    assert!(!blocked.is_empty(), "blocked call must receive loop guard notice");
+    assert!(
+        !blocked.is_empty(),
+        "blocked call must receive loop guard notice"
+    );
 }
 
 /// ADR-0247: Trajectory Loop Guard with Cognitive Arbitration acquits and escalates ladder.
@@ -2484,7 +2487,10 @@ async fn trajectory_guard_cognitive_arbitration_acquits_and_escalates_ladder() {
         .iter()
         .filter(|m| m.role == Role::Tool && m.content.contains("[loop guard]"))
         .collect();
-    assert!(blocked.is_empty(), "no call should be blocked when acquitted");
+    assert!(
+        blocked.is_empty(),
+        "no call should be blocked when acquitted"
+    );
 }
 
 /// ADR-0247: Trajectory Loop Guard fails open on provider error [INV-LOOP-02] and escalates ladder.

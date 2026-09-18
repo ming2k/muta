@@ -26,9 +26,7 @@ fn list() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load();
     if config.mcp.is_empty() {
         println!("No MCP servers configured in config.toml.");
-        println!(
-            "Tip: configure MCP servers declaratively in config.toml under [mcp.<name>]."
-        );
+        println!("Tip: configure MCP servers declaratively in config.toml under [mcp.<name>].");
         return Ok(());
     }
 

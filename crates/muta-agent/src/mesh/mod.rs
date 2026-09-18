@@ -179,7 +179,10 @@ impl MeshTracker {
     /// Every live address, sorted.
     pub fn live_addresses(&self) -> Vec<MeshAddress> {
         self.reap_cancelled();
-        poison_lock(&self.entries).keys().cloned().collect::<Vec<_>>()
+        poison_lock(&self.entries)
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
     }
 
     /// Addresses at one station, in one session (peer discovery).

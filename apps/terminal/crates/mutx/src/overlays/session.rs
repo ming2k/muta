@@ -90,21 +90,22 @@ pub fn project_session_rows<'a>(
     use muta_contracts::SessionForkKind;
 
     let mut trunks: Vec<&'a muta_contracts::SessionOverview> = Vec::new();
-    let mut children_by_parent: std::collections::HashMap<&str, Vec<&'a muta_contracts::SessionOverview>> =
-        std::collections::HashMap::new();
+    let mut children_by_parent: std::collections::HashMap<
+        &str,
+        Vec<&'a muta_contracts::SessionOverview>,
+    > = std::collections::HashMap::new();
 
     let all_ids: std::collections::HashSet<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
 
     for s in sessions {
         let is_branch = s.fork_kind == SessionForkKind::Aside
             || (s.parent_id.is_some() && s.fork_kind != SessionForkKind::Trunk);
-        if is_branch {
-            if let Some(ref pid) = s.parent_id {
-                if all_ids.contains(pid.as_str()) {
-                    children_by_parent.entry(pid.as_str()).or_default().push(s);
-                    continue;
-                }
-            }
+        if is_branch
+            && let Some(ref pid) = s.parent_id
+            && all_ids.contains(pid.as_str())
+        {
+            children_by_parent.entry(pid.as_str()).or_default().push(s);
+            continue;
         }
         trunks.push(s);
     }
@@ -114,7 +115,9 @@ pub fn project_session_rows<'a>(
         let children = children_by_parent.get(trunk.id.as_str());
         let child_count = children.as_ref().map(|c| c.len()).unwrap_or(0);
         let is_expanded = child_count > 0
-            && expanded_set.map(|set| set.contains(&trunk.id)).unwrap_or(false);
+            && expanded_set
+                .map(|set| set.contains(&trunk.id))
+                .unwrap_or(false);
 
         rows.push(SessionPickerItem::Trunk {
             session: trunk,
@@ -122,15 +125,13 @@ pub fn project_session_rows<'a>(
             expanded: is_expanded,
         });
 
-        if is_expanded {
-            if let Some(child_list) = children {
-                for (idx, child) in child_list.iter().enumerate() {
-                    let is_last = idx + 1 == child_list.len();
-                    rows.push(SessionPickerItem::Branch {
-                        session: child,
-                        is_last,
-                    });
-                }
+        if is_expanded && let Some(child_list) = children {
+            for (idx, child) in child_list.iter().enumerate() {
+                let is_last = idx + 1 == child_list.len();
+                rows.push(SessionPickerItem::Branch {
+                    session: child,
+                    is_last,
+                });
             }
         }
     }
@@ -317,7 +318,11 @@ pub fn draw_sessions_modal(
                 body.push(Line::from(spans));
             }
             SessionPickerItem::Branch { is_last, .. } => {
-                let prefix = if *is_last { "  └─ ⑂ " } else { "  ├─ ⑂ " };
+                let prefix = if *is_last {
+                    "  └─ ⑂ "
+                } else {
+                    "  ├─ ⑂ "
+                };
                 let prefix_w = prefix.width();
                 let col1_budget = body_width.saturating_sub(meta_w + prefix_w + COL_GUTTER);
                 let overview = truncate_ellipsis(&one_line(&session.overview), col1_budget);

@@ -257,11 +257,7 @@ fn render_footer_impl(
 /// 2. Drop the lowest-priority hint(s) one at a time (still full labels).
 /// 3. Compact remaining (keys only), same drop ladder.
 /// 4. Last resort: the always-keep keys compact, truncated to fit.
-fn layout_footer(
-    hints: &[FooterHint],
-    extra: &[FooterHintWithBand],
-    width: usize,
-) -> FooterLayout {
+fn layout_footer(hints: &[FooterHint], extra: &[FooterHintWithBand], width: usize) -> FooterLayout {
     if width == 0 || hints.is_empty() && extra.is_empty() {
         return FooterLayout {
             text: String::new(),
