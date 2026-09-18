@@ -16,10 +16,8 @@ impl fmt::Debug for PersistenceHandle {
 pub fn get_persistence_handle() -> PersistenceHandle {
     let dirs = crate::paths::get();
     let db_path = dirs.db_file();
-    if let Some(handle) = GLOBAL_HANDLE.get() {
-        if handle.db_path == db_path {
-            return handle.clone();
-        }
+    if let Some(handle) = GLOBAL_HANDLE.get().filter(|h| h.db_path == db_path) {
+        return handle.clone();
     }
     let blobs = Some(BlobStore::new(dirs.blobs_dir()));
     let handle = PersistenceHandle::spawn(db_path, blobs);
