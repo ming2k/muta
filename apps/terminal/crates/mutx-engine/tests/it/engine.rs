@@ -27,7 +27,13 @@ fn render_cycle(back: &mut Grid, front: &mut Grid, bce: Bce) -> String {
     let cmd = diff::diff(back, front);
     let mut buf = Vec::new();
     {
-        let mut be = Backend::with_bce(&mut buf, bce);
+        let mut be = Backend::with_bce_and_driver(
+            &mut buf,
+            bce,
+            mutx_engine::driver::TerminalDriver::for_profile(
+                &mutx_engine::profile::TerminalProfile::direct_color(),
+            ),
+        );
         be.render(&cmd).unwrap();
     }
     diff::promote_scrolled(back, front, &cmd);
