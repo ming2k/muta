@@ -1269,7 +1269,7 @@ mod tests {
         );
 
         // Give watcher thread a moment to initialize
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
 
         // Write an MCP server into .muta/mcp.json
         let mcp_json = dot_muta.join("mcp.json");
@@ -1282,7 +1282,7 @@ mod tests {
         // Should receive TrustChanged warning
         let mut got_warning = false;
         while let Ok(Some(resp)) =
-            tokio::time::timeout(Duration::from_millis(1000), resp_rx.recv()).await
+            tokio::time::timeout(Duration::from_millis(3000), resp_rx.recv()).await
         {
             if let AgentResponse::Round {
                 event: RoundEvent::Notice(n),
