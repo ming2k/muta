@@ -842,13 +842,11 @@ mod tests {
     fn test_path_view_tilde_under_base_dir() {
         // A `~/...` path that lives under the workspace root (which itself is
         // under `$HOME`) must be made workspace-relative, not left as `~/...`.
-        if let Some(home) =
-            dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        if let Some(home) = dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         {
             let base = home.join("projects/muta");
-            let view =
-                PathView::from_str("~/projects/muta/crates/muta-llm-client/src/lib.rs")
-                    .base_dir(&base);
+            let view = PathView::from_str("~/projects/muta/crates/muta-llm-client/src/lib.rs")
+                .base_dir(&base);
             assert_eq!(view.format_text(), "crates/muta-llm-client/src/lib.rs");
         }
     }
