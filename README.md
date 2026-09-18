@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  A high-performance, controllable AI Harness for software engineering — featuring a semantic TUI, layered execution control, background session daemon, and autonomous tool orchestration.
+  A universal, security-first AI agent harness — featuring flexible in-framework extensibility, multi-model interfaces with comprehensive mainstream capabilities, and extensible frontends across terminal, web, and headless runtimes.
 </p>
 
 <p align="center">
@@ -19,13 +19,12 @@
 
 ## Highlights
 
-- **AI Harness & Controllability** — A robust control plane around LLM execution with strict deterministic boundaries, guardrails, non-interactive discipline, and context lifecycle management.
-- **Semantic TUI** — Custom high-performance terminal UI with live progress indicators, collapsible tool steps, and syntax-aware diffs.
-- **Autonomous Tool Orchestration** — ReAct execution loop with PTY shell control, file operations, codebase indexing, web search, and MCP (Model Context Protocol) integration.
-- **Session Daemon** — Background user-level daemon manages long-running sessions across projects. Detach, close the terminal, or switch between tasks without interrupting work.
-- **Scheduled Prompts & Automation** — Automate recurring tasks with cron-style schedules or one-shot countdown timers via `/schedule`.
-- **Durable Sessions & Compaction** — Persistent conversation history with atomic storage, split context compaction, branching, and instant resume.
-- **Skills & Extensibility** — Load domain-specific instructions, workflows, and tools on demand or automatically by mention.
+- **Universal Agent Purpose** — Beyond a simple code editor; a general-purpose agent harness supporting cognitive research, software engineering, and custom personas with hermetic, symmetric role definitions.
+- **Flexible In-Framework Extensibility** — Modular capability expansion through self-contained role bundles, on-demand skills, lifecycle hooks, and Model Context Protocol (MCP) integrations.
+- **Multi-Model Provider Support** — Native, first-class adapters for Anthropic, OpenAI, Gemini, DeepSeek, and custom OpenAI-compatible endpoints with dynamic, role-level model routing.
+- **Comprehensive Model Capabilities** — Complete frontier capability coverage: structured tool calling, reasoning/thinking tiers, multimodal vision, live streaming, and deterministic prompt caching.
+- **Extensible Frontends** — High-performance semantic terminal TUI (`mutx`), reactive Web interface, and background session daemon decoupled through strongly-typed contracts.
+- **Security-First & Trust Architecture** — Three orthogonal security planes: cryptographic file asset attestation with 30-day bounded leases, strict user-owned spatial boundaries, and a four-tier runtime hazard mesh guarding against indirect prompt injection.
 
 ## Quick Start
 
@@ -59,7 +58,7 @@ cargo build --release -p muta -p mutx
    ```
 2. Configure your model provider:
    Type `/models` in the prompt box to pick a provider and enter your API key.
-3. Start coding. Press `Ctrl+P` (or type `/`) at any time inside the TUI to discover commands and shortcuts.
+3. Start interacting. Press `Ctrl+P` (or type `/`) at any time inside the TUI to discover commands and shortcuts.
 
 ## Documentation
 
@@ -81,4 +80,3 @@ cargo build --release -p muta -p mutx
 - In Chinese, *muta* sounds like **沐獭** (*Mù Tǎ*, literally "bathing otter"), which inspired our mascot: an otter taking a bath 🦦🛁.
 
 </details>
-
