@@ -221,7 +221,6 @@ impl QuestionModel {
     /// any future caller that needs to know whether to advertise a `Space`
     /// toggle) reads this; `false` for single-select, whose selection is the
     /// live highlight.
-    #[cfg(debug_assertions)]
     pub fn active_multi_select(&self) -> bool {
         self.active_question().is_some_and(|q| q.multi_select)
     }
