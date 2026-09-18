@@ -381,7 +381,11 @@ mod tests {
         crossterm::style::force_color_output(true);
         let mut buf = Vec::new();
         {
-            let mut be = Backend::with_bce(&mut buf, bce);
+            let mut be = Backend::with_bce_and_driver(
+                &mut buf,
+                bce,
+                TerminalDriver::for_profile(&crate::profile::TerminalProfile::direct_color()),
+            );
             be.render(cmd).unwrap();
         }
         String::from_utf8(buf).unwrap()
@@ -395,6 +399,7 @@ mod tests {
 
     #[test]
     fn single_run_emits_move_sgr_and_text() {
+        crossterm::style::force_color_output(true);
         let mut back = Grid::new(4, 1);
         back.put(
             0,
@@ -413,6 +418,7 @@ mod tests {
 
     #[test]
     fn repeated_style_emits_no_duplicate_sgr() {
+        crossterm::style::force_color_output(true);
         // Two adjacent runs with the same style should emit the SGR once.
         let mut back = Grid::new(4, 1);
         let style = Style::default().fg(Color::Rgb(9, 9, 9));
