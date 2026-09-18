@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.3] - 2026-09-18
+
+### Added
+
+- **Epistemic Observation Lifecycle & Ingestion Folding (ADR-0254):**
+  - Integrated command-pipe test suite output folding for pure-green test executions in `execute_command`.
+  - Added companion `ToolImage` eviction and attachment stripping in message pressure pruning to bound visual multimodal memory overhead.
+- **Session IR Native Causal Compaction (ADR-0255):**
+  - Introduced `CausalCompactor` engine for in-place DAG node compaction and persistent horizon advancement without invalidating upstream KV prompt caching.
+  - Spliced deterministic causal excerpts and dual-horizon compilation into `SessionIR` runtime compiler and state models.
+
 ## [0.49.2] - 2026-09-18
 
 ### Fixed
@@ -7350,7 +7361,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.49.2...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.49.3...HEAD
+[0.49.3]: https://github.com/ming2k/muta/compare/v0.49.2...v0.49.3
 [0.49.2]: https://github.com/ming2k/muta/compare/v0.49.1...v0.49.2
 [0.49.1]: https://github.com/ming2k/muta/compare/v0.49.0...v0.49.1
 [0.49.0]: https://github.com/ming2k/muta/compare/v0.48.5...v0.49.0
