@@ -722,7 +722,11 @@ fn resolve_matches_the_pre_migration_registry_for_every_model() {
             expected.id
         );
         assert_eq!(m.vision, expected.vision, "{}: vision", expected.id);
-        assert_eq!(m.protocol, expected.protocol, "{}: format", expected.id);
+        // `protocol` is provider-scoped (ADR-0260): the global baseline union
+        // is a capability source, and provider routers resolve protocol through
+        // `ModelProviderSpec::model_protocol` (covered by the registry tests).
+        // Protocol is therefore intentionally not part of this capability
+        // fidelity proof.
         assert_eq!(
             m.model_guidance, expected.model_guidance,
             "{}: model_guidance",

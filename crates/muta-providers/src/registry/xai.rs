@@ -64,15 +64,17 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: super::unsupported_prompt_cache,
-    id: "xai",
+    dialect: muta_contracts::ProviderDialect::Standard,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
+    id: std::borrow::Cow::Borrowed("xai"),
     baselines: MODELS,
-    base_url: "https://api.x.ai/v1/chat/completions",
+    root_url: std::borrow::Cow::Borrowed("https://api.x.ai/v1"),
     user_agent: None,
     protocol: WireProtocol::ChatCompletions,
     models: XAI_BUILTIN_MODELS,
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
-    wire_overrides: &[],
 };

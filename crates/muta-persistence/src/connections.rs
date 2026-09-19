@@ -162,7 +162,7 @@ impl RawConnection {
     /// unambiguous legacy marker: migrate that connection to the official
     /// remote-catalog policy and discard the materialized snapshot. Explicit
     /// `extra_models` remain user-owned injections and are restored afterward.
-    fn migrate(self) -> Result<Connection, String> {
+    fn migrate(self, store: &mut crate::model_providers::ModelProviders) -> Result<Connection, String> {
         let name = self
             .name
             .or(self.id)
@@ -171,7 +171,7 @@ impl RawConnection {
             .ok_or_else(|| "connection has neither `name` nor a legacy `id`".to_string())?;
 
         let declared = self.provider.or(self.preset_id);
-        let provider = match declared {
+        let mut provider = match declared {
             None => {
                 if name.starts_with("custom-") {
                     name.to_lowercase().replace(' ', "-")
@@ -190,7 +190,6 @@ impl RawConnection {
                 } else if let Some(canonical) = canonical_provider_id(trimmed) {
                     canonical
                 } else {
-                    let store = crate::model_providers::ModelProviders::load();
                     if store.get_provider(trimmed).is_some() {
                         trimmed.to_string()
                     } else {
@@ -200,24 +199,38 @@ impl RawConnection {
             }
         };
 
-        // ADR-0258 Auto-hoist legacy transport properties into model_providers.toml
-        if let Some(base_url) = self.base_url {
-            let mut store = crate::model_providers::ModelProviders::load();
-            if store.get_provider(&provider).is_none() {
-                store.set_provider(
-                    &provider,
-                    crate::model_providers::UserDeclaredProvider {
-                        label: Some(name.clone()),
-                        root_url: base_url,
-                        default_protocol: self.protocol,
-                        client_profile: None,
-                        user_agent: self.user_agent,
-                        catalog_format: None,
-                        dialect: None,
-                    },
-                );
-                let _ = store.save();
+        if self.base_url.is_some() || store.get_provider(&provider).is_none() && !is_known_model_provider(&provider) {
+            // Preserve a legacy connection-specific endpoint as its own service;
+            // never shadow an immutable built-in provider ID.
+            if is_known_model_provider(&provider) {
+                provider = format!("custom-{}", name.to_lowercase().replace(' ', "-"));
             }
+            let dialect = match self.auth {
+                ConnectionAuth::AntigravityOAuth => muta_contracts::ProviderDialect::Antigravity,
+                ConnectionAuth::ChatGptOAuth => muta_contracts::ProviderDialect::ChatGpt,
+                ConnectionAuth::CopilotOAuth => muta_contracts::ProviderDialect::Copilot,
+                ConnectionAuth::QoderOAuth => muta_contracts::ProviderDialect::Qoder,
+                _ => muta_contracts::ProviderDialect::Standard,
+            };
+            let protocol = self.protocol.unwrap_or(match dialect {
+                muta_contracts::ProviderDialect::Antigravity => WireProtocol::GoogleGemini,
+                muta_contracts::ProviderDialect::ChatGpt => WireProtocol::Responses,
+                _ => WireProtocol::ChatCompletions,
+            });
+            let root = self.base_url.as_deref().unwrap_or("http://localhost:8080/v1");
+            let definition = crate::model_providers::UserDeclaredProvider {
+                label: Some(name.clone()),
+                root_url: crate::model_providers::migrate_endpoint_root(root),
+                default_protocol: Some(protocol), client_profile: None,
+                user_agent: self.user_agent, catalog: None, dialect: Some(dialect),
+                protocol_roots: vec![], catalog_root_url: None,
+            prompt_cache: None, client_profile_sensitive: false,
+            };
+            if let Some(existing) = store.get_provider(&provider) {
+                if existing.root_url != definition.root_url || existing.default_protocol != definition.default_protocol || existing.dialect != definition.dialect {
+                    return Err(format!("legacy connection `{name}` conflicts with provider `{provider}`"));
+                }
+            } else { store.set_provider(&provider, definition); }
         }
 
         let mut models = self.models;
@@ -298,12 +311,17 @@ impl Connections {
                 return Self::default();
             }
         };
+        let mut provider_store = match crate::model_providers::ModelProviders::try_load() {
+            Ok(store) => store,
+            Err(error) => { tracing::error!(%error, "cannot migrate connections with invalid providers"); return Self::default(); }
+        };
+        let original_providers = provider_store.clone();
         let mut connections: Vec<Connection> = Vec::with_capacity(raw.connections.len());
         let mut catalog_policy_migrated = false;
         let mut lossless = true;
         for raw in raw.connections {
             catalog_policy_migrated |= raw.needs_catalog_policy_migration();
-            match raw.migrate() {
+            match raw.migrate(&mut provider_store) {
                 Ok(conn) => {
                     if connections
                         .iter()
@@ -329,15 +347,18 @@ impl Connections {
             }
         }
         let migrated = Self { connections };
-        if catalog_policy_migrated
-            && lossless
-            && let Err(error) = migrated.save()
-        {
-            tracing::warn!(
-                path = %path.display(),
-                error = %error,
-                "could not persist remote-catalog connection migration",
-            );
+        if !lossless { return migrated; }
+        let providers_changed = original_providers != provider_store;
+        if providers_changed {
+            if let Err(error) = provider_store.save() {
+                tracing::error!(%error, "could not persist provider migration; connections left unchanged");
+                return Self::default();
+            }
+        }
+        let canonical = toml::to_string_pretty(&migrated).unwrap_or_default();
+        if (providers_changed || catalog_policy_migrated || canonical != content)
+            && let Err(error) = migrated.save() {
+            tracing::warn!(%error, "could not persist connection migration");
         }
         migrated
     }
@@ -464,6 +485,7 @@ mod tests {
             models: ModelScopeConfig {
                 filter: None,
                 include: vec![DeclaredModel {
+                    protocol: None,
                     id: "deepseek-v4-pro-preview-0912".into(),
                     context_window: Some(1_000_000),
                     max_output_tokens: Some(8_192),
@@ -518,7 +540,7 @@ context_window = 500000
             .into_iter()
             .next()
             .unwrap()
-            .migrate()
+            .migrate(&mut crate::model_providers::ModelProviders::default())
             .unwrap();
         assert_eq!(conn.name, "ds");
         assert_eq!(conn.provider, "deepseek");
@@ -551,7 +573,7 @@ context_window = 500000
             .into_iter()
             .next()
             .unwrap()
-            .migrate()
+            .migrate(&mut crate::model_providers::ModelProviders::default())
             .unwrap();
 
         assert_eq!(
@@ -583,7 +605,7 @@ id = "deepseek-v4-preview"
             .into_iter()
             .next()
             .unwrap()
-            .migrate()
+            .migrate(&mut crate::model_providers::ModelProviders::default())
             .unwrap();
 
         assert_eq!(conn.models.include.len(), 1);
@@ -635,7 +657,7 @@ models = ["llama3:latest", "mistral:latest"]
             .into_iter()
             .next()
             .unwrap()
-            .migrate()
+            .migrate(&mut crate::model_providers::ModelProviders::default())
             .unwrap();
         assert_eq!(conn.name, "custom-ollama");
         assert_eq!(conn.provider, "custom-ollama");
@@ -662,7 +684,7 @@ models = ["llama3:latest", "mistral:latest"]
                 .into_iter()
                 .next()
                 .unwrap()
-                .migrate()
+                .migrate(&mut crate::model_providers::ModelProviders::default())
                 .unwrap();
             assert_eq!(conn.provider, canonical, "{legacy} → {canonical}");
         }
@@ -677,7 +699,7 @@ models = ["llama3:latest", "mistral:latest"]
             .into_iter()
             .next()
             .unwrap()
-            .migrate()
+            .migrate(&mut crate::model_providers::ModelProviders::default())
             .unwrap_err();
         assert!(err.contains("unknown model provider 'nope'"), "{err}");
     }

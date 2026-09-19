@@ -355,11 +355,10 @@ fn clarify_message(err: String, model: &str, base_url: &str) -> String {
     if err.contains("HTTP 404") || err.contains("\"status\": \"NOT_FOUND\"") {
         format!(
             "{err}\n\n\
-             Google returned 404 for model `{model}`. The upstream at {base_url} does \
-             not serve this model — it may advertise it in /v1beta/models but still \
-             reject it, or the id may be deprecated/preview-only. Switch to a model the \
-             relay actually serves (e.g. gemini-2.5-flash / gemini-2.5-pro), or pick a \
-             different provider."
+             Google returned 404 for model `{model}` at {base_url}. \
+             The requested endpoint or model was not found. Check the provider's \
+             endpoint and protocol dialect, then its model availability; HTTP 404 \
+             alone does not establish that the model is unsupported."
         )
     } else if err.contains("HTTP 429") || err.contains("RESOURCE_EXHAUSTED") {
         let quota_reset = google_quota_reset_hint(&err);
@@ -809,7 +808,12 @@ mod tests {
         .with_status(404);
         let clarified = super::clarify_error(raw, "m", "https://x");
         assert!(clarified.message().starts_with("Google HTTP 404"));
-        assert!(clarified.message().contains("does not serve this model"));
+        assert!(
+            clarified
+                .message()
+                .contains("endpoint and protocol dialect")
+        );
+        assert!(!clarified.message().contains("Switch to a model"));
         assert_eq!(
             clarified.retry_disposition(),
             muta_contracts::RetryDisposition::Never

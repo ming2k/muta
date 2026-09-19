@@ -38,6 +38,9 @@ pub struct Stores {
 impl Stores {
     pub fn load() -> Self {
         let connections = Connections::load();
+        if let Err(error) = muta_providers::sync_user_declared_providers_from_disk() {
+            tracing::warn!(%error, "could not refresh provider registry");
+        }
         Self {
             instances: connections.clone(),
             connections,

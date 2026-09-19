@@ -9,14 +9,14 @@
 //! structurally valid empty result is authoritative and clears the connection.
 
 use super::Stores;
-use super::derive::{resolve_credential, route_models};
+use super::derive::{resolve_credential};
 use futures::stream::{self, StreamExt};
 use muta_contracts::WireProtocol;
 use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
 use muta_persistence::connections::Connections;
 use muta_providers::{
     DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest, ModelDiscoveryUpdate,
-    ModelProviderSpec, RemoteCatalogSource, model_provider_spec, route_for_model,
+    ModelProviderSpec, RemoteCatalogSource, model_provider_spec,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
@@ -212,7 +212,7 @@ pub async fn refresh_connection_models_for_etag(
     let Some(spec) = model_provider_spec(&connection.provider) else {
         return DiscoveryOutcome::default();
     };
-    let Some(source) = discovery_source(connection, &cached, spec) else {
+    let Some(source) = discovery_source(connection, &cached, &spec) else {
         return DiscoveryOutcome::default();
     };
     let expected_source_identity = source.identity();
@@ -275,7 +275,7 @@ async fn discover_models_matching(
         let Some(spec) = model_provider_spec(&connection.provider) else {
             continue;
         };
-        let Some(mut source) = discovery_source(connection, &stores.cache, spec) else {
+        let Some(mut source) = discovery_source(connection, &stores.cache, &spec) else {
             continue;
         };
         let source_identity = source.identity();
@@ -438,7 +438,7 @@ fn emit(
 fn discovery_source(
     connection: &muta_persistence::connections::Connection,
     cache: &DiscoveryCache,
-    spec: &'static ModelProviderSpec,
+    spec: &ModelProviderSpec,
 ) -> Option<DiscoverySource> {
     match spec.catalog_source {
         RemoteCatalogSource::Endpoint(protocol) => {
@@ -454,7 +454,7 @@ pub(super) fn source_identity_for_connection(
     cache: &DiscoveryCache,
 ) -> Option<String> {
     let spec = model_provider_spec(&connection.provider)?;
-    discovery_source(connection, cache, spec).map(|source| source.identity())
+    discovery_source(connection, cache, &spec).map(|source| source.identity())
 }
 
 /// Build the [`DiscoverySource::FirstParty`] variant for a connection,
@@ -467,20 +467,15 @@ pub(super) fn source_identity_for_connection(
 fn build_first_party_source(
     connection: &muta_persistence::connections::Connection,
     cache: &DiscoveryCache,
-    spec: &'static ModelProviderSpec,
+    spec: &ModelProviderSpec,
     protocol: DiscoveryProtocol,
 ) -> Option<DiscoverySource> {
-    let first_model = route_models(connection, cache)
-        .into_iter()
-        .next()
-        .unwrap_or_default();
-    let (_wire, provider_base, provider_ua) = route_for_model(&connection.provider, &first_model)?;
-    let base_url = provider_base.to_string();
+    let base_url = spec.catalog_root().to_string();
     let client_profile = if connection.client_identity != muta_contracts::ClientIdentity::Native {
         connection.client_identity.clone()
     } else if spec.default_client_profile != muta_contracts::ClientPreset::Native {
         muta_contracts::ClientProfile::from(spec.default_client_profile)
-    } else if let Some(user_agent) = provider_ua {
+    } else if let Some(user_agent) = spec.user_agent.as_deref() {
         muta_contracts::ClientProfile::from_user_agent(user_agent)
     } else {
         muta_contracts::ClientProfile::Native

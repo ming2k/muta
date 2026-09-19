@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore Antigravity inference after the provider refactor by inheriting typed
+  provider dialects independently of model protocol and authentication. Built-in
+  and declarative providers now share the same dialect path (ADR-0260).
+- Resolve protocol endpoints after remote model protocol selection and use
+  provider-scoped baselines. Correct ChatGPT and DeepSeek baselines to Responses.
+  Incompatible service protocols return route errors instead of panicking.
+- Google HTTP 404 guidance now distinguishes endpoint and model lookup failures
+  without asserting that the model is unsupported.
+
 ## [0.50.0] - 2026-09-19
 
 ### Added

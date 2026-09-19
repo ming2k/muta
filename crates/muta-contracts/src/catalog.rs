@@ -64,6 +64,87 @@ pub enum GoogleGenerateContentDialect {
     Antigravity,
 }
 
+/// Service-specific behavior inherited independently of a model's wire protocol.
+/// Models select the protocol family; the provider supplies its implementation
+/// of that family. Uncustomized families retain their standard wire behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderDialect {
+    #[default]
+    Standard,
+    Antigravity,
+    ChatGpt,
+    Copilot,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+    #[serde(rename = "openrouter")]
+    OpenRouter,
+    Qoder,
+}
+
+impl std::str::FromStr for ProviderDialect {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "standard" => Ok(Self::Standard),
+            "antigravity" => Ok(Self::Antigravity),
+            "chat-gpt" => Ok(Self::ChatGpt),
+            "copilot" => Ok(Self::Copilot),
+            "deepseek" => Ok(Self::DeepSeek),
+            "openrouter" => Ok(Self::OpenRouter),
+            "qoder" => Ok(Self::Qoder),
+            _ => Err(format!("unsupported provider dialect `{value}`")),
+        }
+    }
+}
+
+impl ProviderDialect {
+    /// Reject protocol families that cannot use this service's required envelope.
+    pub fn supports(self, protocol: crate::WireProtocol) -> bool {
+        use crate::WireProtocol;
+        match self {
+            Self::Antigravity => protocol == WireProtocol::GoogleGemini,
+            Self::ChatGpt => protocol == WireProtocol::Responses,
+            Self::Qoder => protocol == WireProtocol::ChatCompletions,
+            Self::Copilot => protocol != WireProtocol::GoogleGemini,
+            Self::Standard | Self::DeepSeek | Self::OpenRouter => true,
+        }
+    }
+
+    pub fn google(self) -> GoogleGenerateContentDialect {
+        match self {
+            Self::Antigravity => GoogleGenerateContentDialect::Antigravity,
+            _ => GoogleGenerateContentDialect::GenerativeLanguage,
+        }
+    }
+
+    pub fn openai_chat(self) -> OpenAiChatDialect {
+        match self {
+            Self::Copilot => OpenAiChatDialect::Copilot,
+            Self::OpenRouter => OpenAiChatDialect::OpenRouter,
+            Self::Qoder => OpenAiChatDialect::Qoder,
+            _ => OpenAiChatDialect::Standard,
+        }
+    }
+
+    pub fn openai_responses(self) -> OpenAiResponsesDialect {
+        match self {
+            Self::ChatGpt => OpenAiResponsesDialect::ChatGpt,
+            Self::Copilot => OpenAiResponsesDialect::Copilot,
+            Self::DeepSeek => OpenAiResponsesDialect::DeepSeek,
+            _ => OpenAiResponsesDialect::Standard,
+        }
+    }
+
+    pub fn anthropic(self) -> AnthropicMessagesDialect {
+        match self {
+            Self::Copilot => AnthropicMessagesDialect::Copilot,
+            _ => AnthropicMessagesDialect::Standard,
+        }
+    }
+}
+
 /// Canonical alias for the Google Gemini dialect enum.
 pub type GoogleGeminiDialect = GoogleGenerateContentDialect;
 

@@ -166,15 +166,17 @@ fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
 }
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: prompt_cache_for_model,
-    id: "google",
+    dialect: muta_contracts::ProviderDialect::Standard,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(prompt_cache_for_model),
+    id: std::borrow::Cow::Borrowed("google"),
     baselines: MODELS,
-    base_url: "https://generativelanguage.googleapis.com/v1beta",
+    root_url: std::borrow::Cow::Borrowed("https://generativelanguage.googleapis.com/v1beta"),
     user_agent: None,
     protocol: WireProtocol::GoogleGemini,
     models: GOOGLE_BUILTIN_MODELS,
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Google),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
-    wire_overrides: &[],
 };

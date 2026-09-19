@@ -71,7 +71,9 @@ pub mod tool_access;
 pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};
 
 pub mod auth;
-pub use auth::{CredentialSource, QoderRequestIdentity, ResolvedAuth, StaticCredentialSource, static_credential};
+pub use auth::{
+    CredentialSource, QoderRequestIdentity, ResolvedAuth, StaticCredentialSource, static_credential,
+};
 
 pub mod tool_validation;
 
@@ -194,7 +196,7 @@ pub use capability::{
 };
 pub use catalog::{
     AnthropicMessagesDialect, Channel, GoogleGeminiDialect, GoogleGenerateContentDialect,
-    OpenAiChatDialect, OpenAiResponsesDialect, ProviderEntry, Transport,
+    OpenAiChatDialect, OpenAiResponsesDialect, ProviderDialect, ProviderEntry, Transport,
 };
 pub use connection_auth::{ChannelAuth, ConnectionAuth, LoginMethod};
 pub use connection_detail::{
@@ -238,9 +240,8 @@ pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
     BaselineModels, CapabilityOverrides, ConnectionFilterPolicy, DeclaredModel, FittedModel, Model,
     ModelCapabilities, ModelCapabilityPatch, ModelScopeConfig, ModelTargetScope, NamedFilterPolicy,
-    RemoteModelMetadata, RouteCapabilities,
-    WireProtocol, baseline_models, model_by_id, register_fitted_models, resolve as resolve_model,
-    sanitize_model_id, simple_glob_matches,
+    RemoteModelMetadata, RouteCapabilities, WireProtocol, baseline_models, model_by_id,
+    register_fitted_models, resolve as resolve_model, sanitize_model_id, simple_glob_matches,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, MonitoredTask, SessionHosting,
@@ -279,3 +280,6 @@ pub use wire::{
     AttachAction, ControlRequest, ERR_PROTOCOL_MISMATCH, ERR_VERSION_MISMATCH,
     MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, SessionInitOptions, Wire, protocol_accepts,
 };
+
+pub mod provider_surface;
+pub use provider_surface::{ApiRoot, DiscoveryProtocol, RemoteCatalogSource};

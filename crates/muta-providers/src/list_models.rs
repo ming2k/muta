@@ -48,41 +48,7 @@ use std::collections::HashSet;
 use muta_contracts::{ReasoningSupport, RemoteModelMetadata, SecretString, WireProtocol};
 use serde_json::Value;
 
-/// The protocol a discovery request speaks. Model-catalog APIs are related to,
-/// but distinct from, inference protocols (for example both OpenAI inference
-/// protocols discover models through the same `/models` shape).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DiscoveryProtocol {
-    /// OpenAI-compatible chat completions → `GET /v1/models`.
-    OpenAi,
-    /// Anthropic `/messages` → `GET /v1/models` with `x-api-key`.
-    Anthropic,
-    /// Google native → `GET /v1beta/models?key=`.
-    Google,
-    /// Google Antigravity (cloudcode) → `POST …/v1internal:fetchAvailableModels`.
-    GoogleCloudCode,
-    /// ChatGPT Subscription Codex backend → `GET /backend-api/codex/models`.
-    Codex,
-    /// OpenCode Go relay catalog → `GET https://models.opencode.ai/api.json`.
-    OpencodeGo,
-}
-
-impl DiscoveryProtocol {
-    /// Map an inference protocol to its model-catalog discovery surface.
-    ///
-    /// The standard one-to-one mapping for a single-format endpoint. A preset
-    /// whose catalog endpoint deviates (ChatGPT's Codex backend, Google's
-    /// Antigravity cloudcode surface) declares its own scheme explicitly via
-    /// [`crate::registry::RemoteCatalogSource`] rather than being sniffed here.
-    pub fn from_wire_protocol(protocol: muta_contracts::WireProtocol) -> Self {
-        match protocol {
-            muta_contracts::WireProtocol::AnthropicMessages => Self::Anthropic,
-            muta_contracts::WireProtocol::GoogleGemini => Self::Google,
-            muta_contracts::WireProtocol::ChatCompletions
-            | muta_contracts::WireProtocol::Responses => Self::OpenAi,
-        }
-    }
-}
+pub use muta_contracts::DiscoveryProtocol;
 
 /// Everything a live discovery request needs, borrowed from the instance's
 /// first channel. Fields mirror what a chat request would use so the auth
@@ -275,72 +241,20 @@ fn append_query(url: &str, params: &[(&str, &str)]) -> String {
     out
 }
 
-/// Derive the `GET /models` endpoint from a chat endpoint base URL.
-///
-/// Normalize an arbitrary base or chat endpoint URL to an API root URL (ADR-0259).
+/// Derive the `GET /models` endpoint from an API root URL.
 ///
 /// Under ADR-0259 (Deterministic Root URL Algebra), discovery paths are derived
-/// directly from the API root. For backward-compatibility with URLs that still carry
-/// legacy inference paths like `/chat/completions` or `/messages`, those paths are
-/// stripped during root normalization.
-pub fn normalize_root_url(protocol: DiscoveryProtocol, url: &str) -> String {
-    let trimmed = url.trim().trim_end_matches('/');
-    let stripped = match protocol {
-        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => {
-            trimmed
-                .strip_suffix("/chat/completions")
-                .or_else(|| trimmed.strip_suffix("/responses"))
-                .unwrap_or(trimmed)
-        }
-        DiscoveryProtocol::Anthropic => {
-            trimmed.strip_suffix("/messages").unwrap_or(trimmed)
-        }
-        DiscoveryProtocol::GoogleCloudCode => {
-            trimmed.strip_suffix("/v1internal").unwrap_or(trimmed)
-        }
-        DiscoveryProtocol::Google | DiscoveryProtocol::OpencodeGo => trimmed,
-    };
-    stripped.trim_end_matches('/').to_string()
-}
-
-/// The chat endpoint is the authority (it is what the channel actually calls),
-/// so discovery reuses its host and scheme rather than guessing a separate
-/// models host.
+/// directly from the API root: `models_url = root_url + relative_discovery_path`.
+/// Callers pass the provider's API root (never a full inference path); suffix
+/// stripping is forbidden by `[INV-ROUTE-01]`.
 ///
-/// Derived via deterministic Root URL Algebra (ADR-0259):
-/// `models_url = root_url + relative_discovery_path(protocol)`
-///
-/// Returns [`ModelListError::BadEndpoint`] only for an empty/whitespace base.
+/// Returns [`ModelListError::BadEndpoint`] only for an invalid base.
 pub fn models_endpoint_for(
     protocol: DiscoveryProtocol,
     base_url: &str,
 ) -> Result<String, ModelListError> {
-    let trimmed = base_url.trim();
-    if trimmed.is_empty() {
-        return Err(ModelListError::BadEndpoint("base URL is empty".to_string()));
-    }
-
-    if protocol == DiscoveryProtocol::OpencodeGo {
-        return Ok(if trimmed.ends_with("/api.json") {
-            trimmed.to_string()
-        } else if trimmed.starts_with("http://") {
-            let root = trimmed.trim_end_matches('/');
-            format!("{root}/api.json")
-        } else {
-            "https://models.opencode.ai/api.json".to_string()
-        });
-    }
-
-    let root = normalize_root_url(protocol, trimmed);
-    let path = match protocol {
-        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => "models",
-        DiscoveryProtocol::Anthropic => "models",
-        DiscoveryProtocol::Google => "models",
-        DiscoveryProtocol::GoogleCloudCode => "v1internal:fetchAvailableModels",
-        DiscoveryProtocol::OpencodeGo => unreachable!(),
-    };
-
-    Ok(format!("{root}/{path}"))
+    let root = muta_contracts::ApiRoot::parse(base_url).map_err(ModelListError::BadEndpoint)?;
+    Ok(root.append(protocol.path()))
 }
 
 /// Fetch the live model list for `req`. Pure network + parse; the fallback
@@ -1046,129 +960,22 @@ mod tests {
     }
 
     #[test]
-    fn derives_opencode_go_models_endpoint() {
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::OpencodeGo,
-                "https://opencode.ai/zen/go/v1/chat/completions"
-            )
-            .unwrap(),
-            "https://models.opencode.ai/api.json"
-        );
-        assert_eq!(
-            models_endpoint_for(DiscoveryProtocol::OpencodeGo, "http://127.0.0.1:8080").unwrap(),
-            "http://127.0.0.1:8080/api.json"
-        );
-    }
-
-    #[test]
-    fn derives_openai_models_endpoint_from_chat_url() {
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::OpenAi,
-                "https://api.openai.com/v1/chat/completions"
-            )
-            .unwrap(),
-            "https://api.openai.com/v1/models"
-        );
-        // A bare API root (no chat suffix) is accepted as-is.
-        assert_eq!(
-            models_endpoint_for(DiscoveryProtocol::OpenAi, "https://api.openai.com/v1").unwrap(),
-            "https://api.openai.com/v1/models"
-        );
-        // A relay that uses a non-standard path keeps its host/root.
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::OpenAi,
-                "https://relay.example.com/v1/chat/completions"
-            )
-            .unwrap(),
-            "https://relay.example.com/v1/models"
-        );
-        // A Responses-API endpoint (DeepSeek V4) resolves to the same root.
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::OpenAi,
-                "https://api.deepseek.com/v1/responses"
-            )
-            .unwrap(),
-            "https://api.deepseek.com/v1/models"
-        );
-    }
-
-    #[test]
-    fn derives_codex_models_endpoint_from_responses_url() {
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::Codex,
-                "https://chatgpt.com/backend-api/codex/responses"
-            )
-            .unwrap(),
-            "https://chatgpt.com/backend-api/codex/models"
-        );
-    }
-
-    #[test]
-    fn derives_anthropic_models_endpoint_from_messages_url() {
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::Anthropic,
-                "https://api.anthropic.com/v1/messages"
-            )
-            .unwrap(),
-            "https://api.anthropic.com/v1/models"
-        );
-        // A relay messages URL keeps its host.
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::Anthropic,
-                "https://relay.example.com/v1/messages"
-            )
-            .unwrap(),
-            "https://relay.example.com/v1/models"
-        );
-    }
-
-    #[test]
-    fn derives_google_models_endpoint_from_root() {
-        // Google channels carry the API root (…/v1beta), not a method URL.
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::Google,
-                "https://generativelanguage.googleapis.com/v1beta"
-            )
-            .unwrap(),
-            "https://generativelanguage.googleapis.com/v1beta/models"
-        );
-        // A trailing slash is normalized away.
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::Google,
-                "https://generativelanguage.googleapis.com/v1beta/"
-            )
-            .unwrap(),
-            "https://generativelanguage.googleapis.com/v1beta/models"
-        );
-    }
-
-    #[test]
-    fn antigravity_endpoint_derives_fetch_available_models_endpoint() {
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::GoogleCloudCode,
-                "https://cloudcode-pa.googleapis.com"
-            )
-            .unwrap(),
-            "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-        );
-        assert_eq!(
-            models_endpoint_for(
-                DiscoveryProtocol::GoogleCloudCode,
-                "https://daily-cloudcode-pa.googleapis.com/v1internal"
-            )
-            .unwrap(),
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
-        );
+    fn catalog_endpoints_append_to_explicit_roots() {
+        for (format, root, expected) in [
+            (DiscoveryProtocol::OpenAi, "https://relay.example/team/v1", "https://relay.example/team/v1/models"),
+            (DiscoveryProtocol::Anthropic, "https://relay.example/team/v1/", "https://relay.example/team/v1/models"),
+            (DiscoveryProtocol::Codex, "https://chatgpt.com/backend-api/codex", "https://chatgpt.com/backend-api/codex/models"),
+            (DiscoveryProtocol::Google, "https://relay.example/team/v1beta", "https://relay.example/team/v1beta/models"),
+            (DiscoveryProtocol::GoogleCloudCode, "https://relay.example/team", "https://relay.example/team/v1internal:fetchAvailableModels"),
+            (DiscoveryProtocol::OpencodeGo, "https://models.opencode.ai", "https://models.opencode.ai/api.json"),
+            // A path that happens to resemble an inference endpoint is still a root.
+            (DiscoveryProtocol::OpenAi, "https://relay.example/chat/completions", "https://relay.example/chat/completions/models"),
+        ] {
+            assert_eq!(models_endpoint_for(format, root).unwrap(), expected);
+        }
+        for invalid in ["", "relative/path", "https://relay.example/v1?key=secret", "https://user:pass@relay.example/v1", "file:///tmp/models"] {
+            assert!(models_endpoint_for(DiscoveryProtocol::OpenAi, invalid).is_err());
+        }
     }
 
     #[test]

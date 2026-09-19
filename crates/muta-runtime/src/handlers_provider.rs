@@ -71,7 +71,12 @@ pub(crate) fn register_provider(
     catalog_format: Option<String>,
     dialect: Option<String>,
 ) -> Result<(), String> {
-    let mut store = ModelProviders::load();
+    let mut store = ModelProviders::try_load()?;
+    let existing = store.get_provider(&id).cloned();
+    let protocol_roots = store
+        .get_provider(&id)
+        .map(|provider| provider.protocol_roots.clone())
+        .unwrap_or_default();
     store.set_provider(
         &id,
         muta_persistence::model_providers::UserDeclaredProvider {
@@ -80,12 +85,19 @@ pub(crate) fn register_provider(
             default_protocol: protocol,
             client_profile,
             user_agent,
-            catalog_format,
-            dialect,
+            catalog: catalog_format.map(|format| {
+                if matches!(format.as_str(), "none" | "static") { Ok(muta_contracts::RemoteCatalogSource::None) }
+                else { serde_json::from_value(serde_json::Value::String(format)).map(muta_contracts::RemoteCatalogSource::Endpoint).map_err(|e| e.to_string()) }
+            }).transpose()?,
+            dialect: dialect.map(|value| value.parse()).transpose()?,
+            protocol_roots,
+            catalog_root_url: existing.as_ref().and_then(|p| p.catalog_root_url.clone()),
+            prompt_cache: existing.as_ref().and_then(|p| p.prompt_cache.clone()),
+            client_profile_sensitive: existing.as_ref().is_some_and(|p| p.client_profile_sensitive),
         },
     );
     store.save().map_err(|e| e.to_string())?;
-    muta_providers::sync_user_declared_providers_from_disk();
+    muta_providers::sync_user_declared_providers_from_disk()?;
     Ok(())
 }
 
@@ -149,8 +161,10 @@ pub(crate) async fn switch(
         let mut store = ModelProviders::load();
         if let Some(prov) = store.providers.get_mut(&connection.provider) {
             prov.root_url = url.trim().to_string();
-            let _ = store.save();
-            muta_providers::sync_user_declared_providers_from_disk();
+            if let Err(error) = store.save().map_err(|e| e.to_string()).and_then(|_| muta_providers::sync_user_declared_providers_from_disk()) {
+                let _ = resp_tx.send(AgentResponse::Error(error));
+                return;
+            }
         }
     }
 
@@ -236,7 +250,8 @@ pub(crate) async fn add(
         );
         return;
     };
-    let is_open_universe = spec.baselines.is_empty() && spec.catalog_source == muta_providers::RemoteCatalogSource::None;
+    let is_open_universe = spec.baselines.is_empty()
+        && spec.catalog_source == muta_providers::RemoteCatalogSource::None;
     let trimmed_key = api_key.expose_secret().trim();
     // Pasted API key on an OAuth provider → ordinary ApiKey auth.
     let auth = match (auth, !trimmed_key.is_empty()) {
@@ -269,7 +284,7 @@ pub(crate) async fn add(
         if auth == muta_contracts::ConnectionAuth::AntigravityOAuth {
             ClientIdentity::Antigravity
         } else {
-            spec.user_agent
+            spec.user_agent.as_deref()
                 .map(ClientIdentity::from_user_agent)
                 .unwrap_or_default()
         }
@@ -907,9 +922,15 @@ pub(crate) async fn edit_model(
     let Some(conn) = stores.connections.get(&connection) else {
         return;
     };
-    let transport =
-        catalog::derive_channel(conn, &model, &stores.cache, &stores.routes, &stores.creds)
-            .transport;
+    let channel =
+        match catalog::derive_channel(conn, &model, &stores.cache, &stores.routes, &stores.creds) {
+            Ok(channel) => channel,
+            Err(error) => {
+                let _ = resp_tx.send(AgentResponse::Error(error.to_string()));
+                return;
+            }
+        };
+    let transport = channel.transport;
 
     let mut routes = RouteSettingsStore::load();
     let entry = routes.settings_for_mut(&connection, &model);
@@ -1779,8 +1800,10 @@ pub(crate) async fn query_connection_detail(
         })
         .unwrap_or_else(|| {
             let spec = muta_providers::model_provider_spec(&connection.provider);
-            let p = spec.map(|s| s.protocol).unwrap_or(WireProtocol::ChatCompletions);
-            let url = spec.map(|s| s.base_url.to_string()).unwrap_or_default();
+            let p = spec.as_ref()
+                .map(|s| s.protocol)
+                .unwrap_or(WireProtocol::ChatCompletions);
+            let url = spec.map(|s| s.root_url.to_string()).unwrap_or_default();
             (p.to_string(), url)
         });
 
@@ -2111,12 +2134,15 @@ mod tests {
                 default_protocol: Some(WireProtocol::ChatCompletions),
                 client_profile: None,
                 user_agent: None,
-                catalog_format: None,
+                catalog: None,
                 dialect: None,
+                protocol_roots: vec![],
+            catalog_root_url: None,
+            prompt_cache: None, client_profile_sensitive: false,
             },
         );
         store.save().unwrap();
-        muta_providers::sync_user_declared_providers_from_disk();
+        muta_providers::sync_user_declared_providers_from_disk().unwrap();
 
         let mut conns = Connections::default();
         conns.connections.push(Connection {

@@ -90,24 +90,239 @@ fn register_mock_provider(
             default_protocol: Some(protocol),
             client_profile: None,
             user_agent: None,
-            catalog_format: None,
+            catalog: Some(muta_providers::RemoteCatalogSource::Endpoint(catalog_protocol)),
             dialect: None,
+            protocol_roots: vec![],
+            catalog_root_url: None,
+            prompt_cache: None, client_profile_sensitive: false,
         },
     );
+    store.get_or_create_mut(id).include = models.iter().map(|id| muta_contracts::DeclaredModel {
+        id: id.to_string(), ..Default::default()
+    }).collect();
     store.save().unwrap();
-    muta_providers::register_user_declared_provider(muta_providers::ModelProviderSpec {
-        prompt_cache: muta_providers::unsupported_prompt_cache,
-        id,
-        baselines: &[],
-        base_url: Box::leak(base_url.to_string().into_boxed_str()),
-        user_agent: None,
-        protocol,
-        models,
-        catalog_source: muta_providers::RemoteCatalogSource::Endpoint(catalog_protocol),
-        default_client_profile: muta_contracts::ClientPreset::Native,
-        client_profile_sensitive: false,
-        wire_overrides: &[],
-    });
+    muta_providers::sync_user_declared_providers_from_disk().unwrap();
+}
+
+#[test]
+fn provider_dialect_is_inherited_independently_of_auth_and_remote_protocol() {
+    use muta_contracts::{GoogleGenerateContentDialect, ProviderDialect};
+    let _sandbox = sandboxed_paths();
+    for auth in [ConnectionAuth::ApiKey, ConnectionAuth::AntigravityOAuth] {
+        for remote_protocol in [None, Some(WireProtocol::GoogleGemini)] {
+            let mut conn = instance("dialect-inheritance", Some("google-antigravity"));
+            conn.auth = auth;
+            // An unknown generation must inherit without a baseline entry.
+            let model = "gemini-future-flash-tiered";
+            let mut cache = DiscoveryCache::default();
+            cache
+                .remote_metadata
+                .entry(conn.name.clone())
+                .or_default()
+                .insert(
+                    model.into(),
+                    muta_contracts::RemoteModelMetadata {
+                        protocol: remote_protocol,
+                        ..Default::default()
+                    },
+                );
+            let channel = derive_channel(
+                &conn,
+                model,
+                &cache,
+                &RouteSettingsStore::default(),
+                &Credentials::default(),
+            )
+            .unwrap();
+            assert!(matches!(
+                channel.transport,
+                Transport::Google {
+                    dialect: GoogleGenerateContentDialect::Antigravity,
+                    ..
+                }
+            ));
+            assert_eq!(channel.model, model);
+        }
+    }
+    // Credential type cannot turn an ordinary Google service into Antigravity.
+    let mut conn = instance("native-google", Some("google"));
+    conn.auth = ConnectionAuth::AntigravityOAuth;
+    let channel = derive_channel(
+        &conn,
+        "gemini-3.8-flash",
+        &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap();
+    assert!(matches!(
+        channel.transport,
+        Transport::Google {
+            dialect: GoogleGenerateContentDialect::GenerativeLanguage,
+            ..
+        }
+    ));
+    assert_eq!(
+        muta_providers::model_provider_spec("google-antigravity")
+            .unwrap()
+            .dialect,
+        ProviderDialect::Antigravity
+    );
+}
+
+#[test]
+fn provider_dialect_follows_model_protocol_across_service_families() {
+    let _sandbox = sandboxed_paths();
+    for (provider, wire, expected) in [
+        ("github-copilot", WireProtocol::Responses, "Copilot"),
+        ("github-copilot", WireProtocol::AnthropicMessages, "Copilot"),
+        ("github-copilot", WireProtocol::ChatCompletions, "Copilot"),
+        ("openai-subscription", WireProtocol::Responses, "ChatGpt"),
+        ("qoder", WireProtocol::ChatCompletions, "Qoder"),
+        ("deepseek", WireProtocol::Responses, "DeepSeek"),
+        ("openrouter", WireProtocol::ChatCompletions, "OpenRouter"),
+    ] {
+        // Deliberately use API-key auth to prove dialect is service-owned.
+        let conn = instance("dialect-family", Some(provider));
+        let mut cache = DiscoveryCache::default();
+        cache
+            .remote_metadata
+            .entry(conn.name.clone())
+            .or_default()
+            .insert(
+                "remote-model".into(),
+                muta_contracts::RemoteModelMetadata {
+                    protocol: Some(wire),
+                    ..Default::default()
+                },
+            );
+        let channel = derive_channel(
+            &conn,
+            "remote-model",
+            &cache,
+            &RouteSettingsStore::default(),
+            &Credentials::default(),
+        )
+        .unwrap();
+        let (dialect, endpoint) = match channel.transport {
+            Transport::OpenAi {
+                dialect, base_url, ..
+            } => (format!("{dialect:?}"), base_url),
+            Transport::OpenAiResponses {
+                dialect, base_url, ..
+            } => (format!("{dialect:?}"), base_url),
+            Transport::Anthropic {
+                dialect, base_url, ..
+            } => (format!("{dialect:?}"), base_url),
+            other => panic!("unexpected transport {other:?}"),
+        };
+        assert_eq!(dialect, expected, "{provider}/{wire:?}");
+        if provider == "github-copilot" {
+            let suffix = match wire {
+                WireProtocol::Responses => "/responses",
+                WireProtocol::AnthropicMessages => "/v1/messages",
+                _ => "/chat/completions",
+            };
+            assert_eq!(endpoint, format!("https://api.githubcopilot.com{suffix}"));
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn declared_antigravity_provider_sends_internal_requests_from_derived_channel() {
+    use muta_contracts::{ModelRequest, ProviderDialect};
+    let _sandbox = sandboxed_paths();
+    let mut server = mockito::Server::new_async().await;
+    let model = "gemini-3.8-flash-tiered";
+    // Exercise persisted provider definition, OAuth resolution, catalog derivation,
+    // factory and HTTP adapter together. No manually constructed Transport.
+    let mut providers = muta_persistence::model_providers::ModelProviders::default();
+    providers.set_provider(
+        "test-antigravity-wire",
+        muta_persistence::model_providers::UserDeclaredProvider {
+            label: None,
+            root_url: format!("{}/proxy/team", server.url()),
+            default_protocol: Some(WireProtocol::GoogleGemini),
+            dialect: Some(ProviderDialect::Antigravity),
+            client_profile: None,
+            user_agent: None,
+            catalog: Some(muta_contracts::RemoteCatalogSource::None),
+            protocol_roots: vec![],
+            catalog_root_url: None,
+            prompt_cache: None, client_profile_sensitive: false,
+        },
+    );
+    providers.save().unwrap();
+    muta_providers::sync_user_declared_providers_from_disk().unwrap();
+    let mut conn = instance("test-agy-wire", Some("test-antigravity-wire"));
+    conn.auth = ConnectionAuth::AntigravityOAuth;
+    {
+        let mut auth = AuthStore::lock().await.unwrap();
+        auth.set(
+            &conn.name,
+            TokenSet {
+                access: "test-token".into(),
+                refresh: "test-refresh".into(),
+                expires_ms: i64::MAX,
+                account_id: Some("test-project".into()),
+                project_id: Some("test-project".into()),
+                id_token: None,
+                token_type: Some("Bearer".into()),
+                scope: None,
+                user_email: None,
+                qoder: None,
+            },
+        );
+        auth.save().unwrap();
+    }
+    let channel = derive_channel(
+        &conn,
+        model,
+        &DiscoveryCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap();
+    let provider = muta_providers::build_provider_for_channel(&channel, &conn.name, None);
+    for streaming in [false, true] {
+        let action = if streaming {
+            "streamGenerateContent"
+        } else {
+            "generateContent"
+        };
+        let path = format!("/proxy/team/v1internal:{action}");
+        let mut mock = server
+            .mock("POST", path.as_str())
+            .match_header("authorization", "Bearer test-token")
+            .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+                "project": "test-project", "model": model, "request": {"contents": []}
+            })));
+        mock = if streaming {
+            mock.match_query(mockito::Matcher::UrlEncoded("alt".into(), "sse".into()))
+                .with_header("content-type", "text/event-stream")
+                .with_body("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n")
+        } else {
+            mock.match_query(mockito::Matcher::Missing)
+                .with_header("content-type", "application/json")
+                .with_body(r#"{"response":{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}}"#)
+        };
+        let mock = mock.create_async().await;
+        if streaming {
+            use futures::StreamExt;
+            let mut stream = provider
+                .stream_chat(ModelRequest::new(vec![]))
+                .await
+                .unwrap();
+            let mut output = String::new();
+            while let Some(chunk) = stream.next().await {
+                output.push_str(&chunk.unwrap());
+            }
+            assert_eq!(output, "ok");
+        } else {
+            provider.chat(ModelRequest::new(vec![])).await.unwrap();
+        }
+        mock.assert_async().await;
+    }
 }
 
 // derivation
@@ -135,7 +350,8 @@ fn openrouter_connection_derives_gateway_dialect_and_nex_seed() {
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     assert!(matches!(
         channel.transport,
         Transport::OpenAi {
@@ -221,7 +437,8 @@ fn declared_extra_model_rides_the_preset_route_with_declared_capabilities() {
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     // Routing falls through to the preset's derived route (DeepSeek Responses).
     match &channel.transport {
         Transport::OpenAiResponses {
@@ -243,9 +460,10 @@ fn declared_extra_model_rides_the_preset_route_with_declared_capabilities() {
 
 #[test]
 fn custom_instance_serves_its_declared_models() {
+    let _sandbox = sandboxed_paths();
     register_mock_provider(
         "test-relay-declared",
-        "https://relay.example.com/v1/chat/completions",
+        "https://relay.example.com/v1",
         WireProtocol::ChatCompletions,
         &[],
         muta_providers::DiscoveryProtocol::OpenAi,
@@ -390,7 +608,8 @@ fn deepseek_route_is_the_responses_transport() {
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     match &channel.transport {
         Transport::OpenAiResponses {
             base_url, dialect, ..
@@ -413,7 +632,8 @@ fn opencode_go_routes_models_by_wire_format() {
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     assert!(
         matches!(&glm.transport, Transport::OpenAi { base_url, client_profile, .. } if base_url == "https://opencode.ai/zen/go/v1/chat/completions" && *client_profile == muta_contracts::ClientProfile::OpenCode),
         "glm-5.2 must route to OpenAI chat-completions with OpenCode client profile"
@@ -424,7 +644,8 @@ fn opencode_go_routes_models_by_wire_format() {
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     assert!(
         matches!(&minimax.transport, Transport::Anthropic { base_url, .. } if base_url == "https://opencode.ai/zen/go/v1/messages"),
         "minimax-m3 must route to Anthropic /messages"
@@ -434,7 +655,7 @@ fn opencode_go_routes_models_by_wire_format() {
         route_for_model("opencode-go", "minimax-m3").map(|(p, b, _)| (p, b)),
         Some((
             WireProtocol::AnthropicMessages,
-            "https://opencode.ai/zen/go/v1/messages"
+            "https://opencode.ai/zen/go/v1/messages".to_string()
         ))
     );
 }
@@ -456,7 +677,8 @@ fn openai_route_uses_official_api_not_opencode_go_relay() {
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     match &channel.transport {
         Transport::OpenAi { base_url, .. } => {
             assert_eq!(base_url, "https://api.openai.com/v1/chat/completions");
@@ -474,7 +696,8 @@ fn connection_uses_provider_transport_endpoint() {
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     match &channel.transport {
         Transport::OpenAi { base_url, .. } => {
             assert_eq!(base_url, "https://api.openai.com/v1/chat/completions");
@@ -492,7 +715,8 @@ fn preset_instance_always_uses_the_hardcoded_template_endpoint() {
         &DiscoveryCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     match &channel.transport {
         Transport::OpenAiResponses { base_url, .. } => {
             assert_eq!(base_url, "https://api.deepseek.com/v1/responses");
@@ -557,7 +781,8 @@ fn reasoning_route_settings_apply_to_anthropic_routes() {
         &cache,
         &routes,
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     match &channel.transport {
         Transport::Anthropic {
             effort, thinking, ..
@@ -574,7 +799,8 @@ fn reasoning_route_settings_apply_to_anthropic_routes() {
         &cache,
         &routes,
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     match &sonnet.transport {
         Transport::Anthropic {
             effort, thinking, ..
@@ -612,7 +838,8 @@ fn copilot_route_uses_remote_endpoint_metadata() {
         &cache,
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     assert!(
         matches!(
             &channel.transport,
@@ -627,6 +854,7 @@ fn copilot_route_uses_remote_endpoint_metadata() {
 
 #[test]
 fn model_level_protocol_cascade_resolution() {
+    let _sandbox = sandboxed_paths();
     let mut cache = DiscoveryCache::default();
     // Advertise that a model on an OpenAI-compatible connection wants Anthropic wire format
     cache.remote_metadata.insert("corp-relay".to_string(), {
@@ -642,7 +870,7 @@ fn model_level_protocol_cascade_resolution() {
     });
     register_mock_provider(
         "corp-relay-test-prov",
-        "https://relay.example.com/v1/chat/completions",
+        "https://relay.example.com/v1",
         WireProtocol::ChatCompletions,
         &[],
         muta_providers::DiscoveryProtocol::OpenAi,
@@ -658,7 +886,8 @@ fn model_level_protocol_cascade_resolution() {
         &cache,
         &RouteSettingsStore::default(),
         &Credentials::default(),
-    );
+    )
+    .unwrap();
     assert!(
         matches!(
             &channel.transport,
@@ -745,7 +974,7 @@ async fn live_discovery_writes_the_per_instance_cache() {
     let provider_id = "test-mock-deepseek";
     register_mock_provider(
         provider_id,
-        &format!("{}/v1/responses", server.url()),
+        &format!("{}/v1", server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-lite"],
         muta_providers::DiscoveryProtocol::OpenAi,
@@ -813,7 +1042,7 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
     let provider_id = "test-mock-agy";
     register_mock_provider(
         provider_id,
-        &format!("{}/v1internal", server.url()),
+        &format!("{}", server.url()),
         WireProtocol::GoogleGemini,
         &[],
         muta_providers::DiscoveryProtocol::GoogleCloudCode,
@@ -1009,14 +1238,14 @@ async fn connection_discovery_never_touches_unrelated_connections() {
     let unrel_id = "test-mock-unrelated";
     register_mock_provider(
         sel_id,
-        &format!("{}/v1/responses", selected_server.url()),
+        &format!("{}/v1", selected_server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-flash"],
         muta_providers::DiscoveryProtocol::OpenAi,
     );
     register_mock_provider(
         unrel_id,
-        &format!("{}/v1/responses", unrelated_server.url()),
+        &format!("{}/v1", unrelated_server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-pro"],
         muta_providers::DiscoveryProtocol::OpenAi,
@@ -1074,7 +1303,7 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
     let provider_id = "test-mock-deepseek-fail";
     register_mock_provider(
         provider_id,
-        &format!("{}/v1/responses", server.url()),
+        &format!("{}/v1", server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-flash"],
         muta_providers::DiscoveryProtocol::OpenAi,
@@ -1111,11 +1340,17 @@ async fn successful_empty_remote_catalog_clears_previous_models() {
     let provider_id = "test-mock-deepseek-empty";
     register_mock_provider(
         provider_id,
-        &format!("{}/v1/responses", server.url()),
+        &format!("{}/v1", server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-flash"],
         muta_providers::DiscoveryProtocol::OpenAi,
     );
+    // This connection is populated only by the remote catalog; drop the
+    // helper's declared seed so an authoritative empty catalog is observable.
+    let mut providers = muta_persistence::model_providers::ModelProviders::load();
+    providers.get_or_create_mut(provider_id).include.clear();
+    providers.save().unwrap();
+    muta_providers::sync_user_declared_providers_from_disk().unwrap();
     let mut connection = Connection {
         name: "deepseek".to_string(),
         provider: provider_id.to_string(),
@@ -1508,4 +1743,78 @@ fn adr0199_preset_scope_and_instance_scope_cascade() {
     assert!(models2.contains(&"deepseek-preset-preview".to_string()));
     assert!(!models2.contains(&"deepseek-chat".to_string()));
     assert!(!models2.contains(&"deepseek-instance-private".to_string()));
+}
+
+#[test]
+fn provider_dialect_rejects_incompatible_remote_protocol_without_panicking() {
+    let _sandbox = sandboxed_paths();
+    for (provider, protocol) in [
+        ("google-antigravity", WireProtocol::ChatCompletions),
+        ("github-copilot", WireProtocol::GoogleGemini),
+        ("openai-subscription", WireProtocol::ChatCompletions),
+        ("qoder", WireProtocol::Responses),
+    ] {
+        let conn = instance("invalid-wire", Some(provider));
+        let mut cache = DiscoveryCache::default();
+        cache
+            .remote_metadata
+            .entry(conn.name.clone())
+            .or_default()
+            .insert(
+                "remote-model".into(),
+                muta_contracts::RemoteModelMetadata {
+                    protocol: Some(protocol),
+                    ..Default::default()
+                },
+            );
+        let error = derive_channel(
+            &conn,
+            "remote-model",
+            &cache,
+            &RouteSettingsStore::default(),
+            &Credentials::default(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .message()
+                .contains("incompatible with provider dialect")
+        );
+    }
+}
+
+#[test]
+fn provider_dialect_selects_endpoint_after_remote_protocol_override() {
+    let _sandbox = sandboxed_paths();
+    assert_eq!(
+        muta_providers::model_provider_spec("opencode-go")
+            .unwrap()
+            .model_protocol("glm-5.3"),
+        WireProtocol::ChatCompletions
+    );
+    let conn = instance("endpoint-order", Some("opencode-go"));
+    let mut cache = DiscoveryCache::default();
+    cache
+        .remote_metadata
+        .entry(conn.name.clone())
+        .or_default()
+        .insert(
+            "glm-5.3".into(),
+            muta_contracts::RemoteModelMetadata {
+                protocol: Some(WireProtocol::AnthropicMessages),
+                ..Default::default()
+            },
+        );
+    let channel = derive_channel(
+        &conn,
+        "glm-5.3",
+        &cache,
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap();
+    assert!(
+        matches!(channel.transport, Transport::Anthropic { ref base_url, .. }
+        if base_url == "https://opencode.ai/zen/go/v1/messages")
+    );
 }

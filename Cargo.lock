@@ -1692,6 +1692,7 @@ dependencies = [
  "sha2",
  "toml",
  "ts-rs",
+ "url",
  "uuid",
 ]
 

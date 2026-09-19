@@ -582,7 +582,6 @@ impl GoogleProvider {
                 "generateContent"
             };
             let base = self.endpoint.base_url.trim_end_matches('/');
-            let base = base.strip_suffix("/v1internal").unwrap_or(base);
             let url = if is_stream {
                 format!("{base}/v1internal:{action}?alt=sse")
             } else {
@@ -841,7 +840,7 @@ mod tests {
             let p = GoogleProvider::with_base_url_and_user_agent(
                 "k".to_string(),
                 id.to_string(),
-                "https://daily-cloudcode-pa.googleapis.com/v1internal",
+                "https://daily-cloudcode-pa.googleapis.com",
                 "ua",
             )
             .with_dialect(muta_contracts::GoogleGenerateContentDialect::Antigravity)

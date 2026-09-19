@@ -17,18 +17,15 @@
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::model::CapabilityOverrides;
 use muta_contracts::{
-    AnthropicMessagesDialect, ClientProfile, ConnectionAuth, ConnectionFilterPolicy, Effort,
-    GoogleGenerateContentDialect, NamedFilterPolicy, OpenAiChatDialect, OpenAiResponsesDialect,
-    ReasoningMode, SecretString, WireProtocol,
+    ClientProfile, ConnectionAuth, ConnectionFilterPolicy, Effort, NamedFilterPolicy,
+    ProviderDialect, ReasoningMode, SecretString, WireProtocol,
 };
 use muta_persistence::config::{Credentials, DiscoveryCache};
 use muta_persistence::connections::Connection;
 use muta_persistence::connections::Connections;
 use muta_persistence::model_providers::ModelProviders;
 use muta_persistence::route_settings::RouteSettingsStore;
-use muta_providers::{RemoteCatalogSource, model_provider_spec, route_for_model as provider_route};
-
-pub(super) const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+use muta_providers::{RemoteCatalogSource, model_provider_spec};
 
 /// Derive every entry from the connections store, in declaration order.
 pub fn derive_entries(
@@ -54,7 +51,11 @@ pub fn derive_entry(
     let models = route_models(connection, cache);
     let channels = models
         .iter()
-        .map(|model| derive_channel(connection, model, cache, routes, creds))
+        .filter_map(|model| {
+            derive_channel(connection, model, cache, routes, creds).map_err(|error| {
+                tracing::warn!(connection = %connection.name, model, %error, "invalid model route");
+            }).ok()
+        })
         .collect();
     ProviderEntry {
         id: connection.name.clone(),
@@ -145,7 +146,7 @@ pub fn derive_channel(
     cache: &DiscoveryCache,
     routes: &RouteSettingsStore,
     creds: &Credentials,
-) -> Channel {
+) -> Result<Channel, muta_contracts::ProviderError> {
     // 4-layer descending capability cascade (ADR-0199):
     // Connection Overrides > Provider Overrides > Discovery Advertised Metadata > Baseline Registry Spec
     let providers = ModelProviders::load();
@@ -154,6 +155,7 @@ pub fn derive_channel(
     let mut remote = cache.remote_metadata_for(&connection.name, model).cloned();
     if let Some(provider_declared) = provider_scope.and_then(|p| p.find_included(model)) {
         let r = remote.get_or_insert_with(Default::default);
+        r.protocol = provider_declared.protocol.or(r.protocol);
         r.context_window = provider_declared.context_window.or(r.context_window);
         r.max_output_tokens = provider_declared.max_output_tokens.or(r.max_output_tokens);
         r.thinking = provider_declared.thinking.or(r.thinking);
@@ -162,6 +164,7 @@ pub fn derive_channel(
     }
     if let Some(declared) = connection.models.find_included(model) {
         let r = remote.get_or_insert_with(Default::default);
+        r.protocol = declared.protocol.or(r.protocol);
         r.context_window = declared.context_window.or(r.context_window);
         r.max_output_tokens = declared.max_output_tokens.or(r.max_output_tokens);
         r.thinking = declared.thinking.or(r.thinking);
@@ -181,9 +184,12 @@ pub fn derive_channel(
     if let Some(ro) = route_settings.and_then(|r| r.capability_overrides.as_ref()) {
         effective_overrides = effective_overrides.merge_with(ro);
     }
+    if let Some(protocol) = effective_overrides.protocol {
+        remote.get_or_insert_with(Default::default).protocol = Some(protocol);
+    }
     let user_overrides = (!effective_overrides.is_empty()).then_some(effective_overrides);
     let prompt_cache = model_provider_spec(&connection.provider)
-        .map(|provider| (provider.prompt_cache)(model).materialize())
+        .map(|provider| provider.prompt_cache.resolve(model))
         .unwrap_or_else(muta_contracts::PromptCacheCapabilities::unsupported);
     let prompt_cache_preference = route_settings
         .and_then(|settings| settings.prompt_cache)
@@ -211,90 +217,48 @@ pub fn derive_channel(
             // typed material: a stable per-device AES key persisted next to
             // the credentials (regenerating it per process would look like
             // device churn), and the uid from the PAT-exchange userinfo.
-            std::sync::Arc::new(muta_providers::oauth::qoder::QoderApiKeyCredentialSource::new(
-                &connection.name,
-                resolve_credential(connection, creds),
-            ))
+            std::sync::Arc::new(
+                muta_providers::oauth::qoder::QoderApiKeyCredentialSource::new(
+                    &connection.name,
+                    resolve_credential(connection, creds),
+                ),
+            )
         } else {
             let api_key = resolve_credential(connection, creds);
             muta_contracts::static_credential(api_key)
         };
 
-    let transport = match connection.auth {
-        ConnectionAuth::ChatGptOAuth => {
-            let client_profile = effective_client_profile(connection);
-            let base_url = model_provider_spec(&connection.provider)
-                .map(|s| s.base_url.to_string())
-                .unwrap_or_else(|| CHATGPT_RESPONSES_URL.to_string());
-            Transport::OpenAiResponses {
-                base_url,
-                client_profile,
-                effort,
-                dialect: OpenAiResponsesDialect::ChatGpt,
-            }
-        }
-        ConnectionAuth::QoderOAuth => {
-            let base_url = model_provider_spec(&connection.provider)
-                .map(|s| s.base_url.to_string())
-                .unwrap_or_else(|| "https://api2.qoder.sh".to_string());
-            Transport::OpenAi {
-                base_url,
-                client_profile: effective_client_profile(connection),
-                effort,
-                dialect: OpenAiChatDialect::Qoder,
-            }
-        }
-        _ => {
-            let (protocol, base_url, client_profile) = base_route(connection, model, remote.as_ref());
-            let is_copilot = connection.provider == "github-copilot"
-                || matches!(connection.auth, ConnectionAuth::CopilotOAuth);
-            match protocol {
-                WireProtocol::GoogleGemini => Transport::Google {
-                    base_url,
-                    client_profile,
-                    effort,
-                    dialect: GoogleGenerateContentDialect::GenerativeLanguage,
-                },
-                WireProtocol::AnthropicMessages => Transport::Anthropic {
-                    base_url,
-                    client_profile,
-                    effort,
-                    thinking,
-                    dialect: if is_copilot {
-                        AnthropicMessagesDialect::Copilot
-                    } else {
-                        AnthropicMessagesDialect::Standard
-                    },
-                },
-                WireProtocol::Responses => Transport::OpenAiResponses {
-                    base_url,
-                    client_profile,
-                    effort,
-                    dialect: if is_copilot {
-                        OpenAiResponsesDialect::Copilot
-                    } else if connection.provider == "deepseek" {
-                        OpenAiResponsesDialect::DeepSeek
-                    } else {
-                        OpenAiResponsesDialect::Standard
-                    },
-                },
-                WireProtocol::ChatCompletions => Transport::OpenAi {
-                    base_url,
-                    client_profile,
-                    effort,
-                    dialect: if is_copilot {
-                        OpenAiChatDialect::Copilot
-                    } else if connection.provider == "openrouter" {
-                        OpenAiChatDialect::OpenRouter
-                    } else {
-                        OpenAiChatDialect::Standard
-                    },
-                },
-            }
-        }
+    let (protocol, base_url, client_profile, dialect) =
+        base_route(connection, model, remote.as_ref())?;
+    let transport = match protocol {
+        WireProtocol::GoogleGemini => Transport::Google {
+            base_url,
+            client_profile,
+            effort,
+            dialect: dialect.google(),
+        },
+        WireProtocol::AnthropicMessages => Transport::Anthropic {
+            base_url,
+            client_profile,
+            effort,
+            thinking,
+            dialect: dialect.anthropic(),
+        },
+        WireProtocol::Responses => Transport::OpenAiResponses {
+            base_url,
+            client_profile,
+            effort,
+            dialect: dialect.openai_responses(),
+        },
+        WireProtocol::ChatCompletions => Transport::OpenAi {
+            base_url,
+            client_profile,
+            effort,
+            dialect: dialect.openai_chat(),
+        },
     };
 
-    Channel {
+    Ok(Channel {
         id: model.to_string(),
         label: model.to_string(),
         transport,
@@ -304,54 +268,51 @@ pub fn derive_channel(
         user_overrides,
         prompt_cache,
         prompt_cache_preference,
-    }
+    })
 }
 
-/// The base transport for a non-OAuth connection: the model provider's route
-/// (derived from its hardcoded spec), with the connection's optional
-/// `protocol` / `base_url` / `user_agent` overrides applied on top.
-///
-/// Implements ADR-0259 Model-Level Wire Protocol Cascading:
-/// `Connection override ≺ Remote advertised protocol ≺ Provider route / default`
-#[allow(clippy::expect_used)] // `provider` is validated at load (ADR-0201 INV-2).
+/// Model protocol metadata overrides the provider-scoped baseline and default.
+/// Endpoint and dialect belong to the provider, independently of credentials.
 fn base_route(
     connection: &Connection,
     model: &str,
     remote: Option<&muta_contracts::RemoteModelMetadata>,
-) -> (WireProtocol, String, ClientProfile) {
-    let spec = model_provider_spec(&connection.provider)
-        .expect("connection provider is validated at load (ADR-0201 INV-2)");
-    let (provider_protocol, provider_base_url, provider_ua) =
-        provider_route(&connection.provider, model).unwrap_or((spec.protocol, spec.base_url, spec.user_agent));
+) -> Result<(WireProtocol, String, ClientProfile, ProviderDialect), muta_contracts::ProviderError> {
+    let spec = model_provider_spec(&connection.provider).ok_or_else(|| {
+        muta_contracts::ProviderError::invalid_request(
+            &connection.provider,
+            "unknown model provider",
+        )
+    })?;
+    let protocol = remote
+        .and_then(|r| r.protocol)
+        .unwrap_or_else(|| spec.model_protocol(model));
 
-    // ADR-0259: Model-level protocol resolution
-    let protocol = remote.and_then(|r| r.protocol).unwrap_or(provider_protocol);
-
+    if !spec.dialect.supports(protocol) {
+        return Err(muta_contracts::ProviderError::invalid_request(
+            &connection.provider,
+            format!(
+                "model `{model}` selects {protocol}, which is incompatible with provider dialect {:?}",
+                spec.dialect
+            ),
+        ));
+    }
     let client_profile = if connection.client_identity != ClientProfile::Native
         || spec.default_client_profile != muta_contracts::ClientPreset::Native
     {
         effective_client_profile(connection)
-    } else if let Some(pua) = provider_ua {
+    } else if let Some(pua) = spec.user_agent.as_deref() {
         ClientProfile::from_user_agent(pua)
     } else {
         ClientProfile::Native
     };
 
-    let is_copilot = connection.provider == "github-copilot"
-        || matches!(connection.auth, ConnectionAuth::CopilotOAuth);
-    let base_url = if is_copilot {
-        match protocol {
-            WireProtocol::Responses => "https://api.githubcopilot.com/responses".to_string(),
-            WireProtocol::AnthropicMessages => "https://api.githubcopilot.com/v1/messages".to_string(),
-            WireProtocol::ChatCompletions => "https://api.githubcopilot.com/chat/completions".to_string(),
-            WireProtocol::GoogleGemini => panic!("Copilot advertised unsupported Google generateContent protocol"),
-        }
-    } else if provider_base_url.is_empty() {
-        default_endpoint(protocol)
-    } else {
-        provider_base_url.to_string()
-    };
-    (protocol, base_url, client_profile)
+    Ok((
+        protocol,
+        spec.endpoint(protocol).map_err(|error| muta_contracts::ProviderError::invalid_request(&connection.provider, error))?,
+        client_profile,
+        spec.dialect,
+    ))
 }
 
 /// Resolve the sparse connection override over the provider's recommended
@@ -363,16 +324,6 @@ fn effective_client_profile(connection: &Connection) -> ClientProfile {
     model_provider_spec(&connection.provider)
         .map(|spec| ClientProfile::from(spec.default_client_profile))
         .unwrap_or(ClientProfile::Native)
-}
-
-/// A transport's default endpoint when a `custom` connection omits one.
-pub fn default_endpoint(protocol: WireProtocol) -> String {
-    match protocol {
-        WireProtocol::GoogleGemini => "http://localhost:8080/v1beta".to_string(),
-        WireProtocol::AnthropicMessages => "http://localhost:8080/v1/messages".to_string(),
-        WireProtocol::Responses => "http://localhost:8080/v1/responses".to_string(),
-        WireProtocol::ChatCompletions => "http://localhost:8080/v1/chat/completions".to_string(),
-    }
 }
 
 /// The resolved credential for a connection: env var (`api_key_env`) →

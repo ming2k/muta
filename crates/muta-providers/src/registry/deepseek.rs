@@ -5,7 +5,7 @@
 //! DeepSeek V4 (Flash + Pro) is served as one multi-model `deepseek` provider
 //! built in the catalog layer (both models share one `DEEPSEEK_API_KEY`), not
 //! as two single-model registry presets — so it has no entry in
-//! [`OPENAI_PROVIDER_SPECS`](super::OPENAI_PROVIDER_SPECS).
+//! the provider-scoped catalog.
 //!
 //! Both V4 models natively speak the OpenAI **Responses API**
 //! (`https://api.deepseek.com/v1/responses`), so this preset's channels use
@@ -35,7 +35,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
@@ -46,7 +46,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
@@ -57,7 +57,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: EFFORT_LOW_HIGH_MAX,
     },
@@ -82,34 +82,24 @@ fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
 }
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: prompt_cache_for_model,
-    id: "deepseek",
+    dialect: muta_contracts::ProviderDialect::DeepSeek,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(prompt_cache_for_model),
+    id: std::borrow::Cow::Borrowed("deepseek"),
     baselines: MODELS,
-    base_url: "https://api.deepseek.com/v1/responses",
+    root_url: std::borrow::Cow::Borrowed("https://api.deepseek.com/v1"),
     user_agent: None,
     protocol: WireProtocol::Responses,
     models: DEEPSEEK_BUILTIN_MODELS,
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
-    wire_overrides: &[],
 };
 
 #[cfg(test)]
 mod tests {
     use super::{DEEPSEEK_BUILTIN_MODELS, MODELS};
-    use crate::openai_provider_spec;
-
-    #[test]
-    fn deepseek_is_not_a_registry_preset() {
-        // DeepSeek is now a multi-model catalog entry, not a single-model registry
-        // preset: neither the merged id nor the old split ids resolve here.
-        assert!(openai_provider_spec("deepseek").is_none());
-        assert!(openai_provider_spec("deepseek-v4-flash").is_none());
-        assert!(openai_provider_spec("deepseek-v4-pro").is_none());
-        // Qwen was removed from the registry and must not resolve.
-        assert!(openai_provider_spec("qwen").is_none());
-    }
 
     #[test]
     fn vision_model_is_seeded_with_image_input_support() {

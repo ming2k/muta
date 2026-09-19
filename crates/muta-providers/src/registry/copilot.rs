@@ -33,10 +33,13 @@ pub const MODELS: &[Model] = &[Model {
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: super::unsupported_prompt_cache,
-    id: "github-copilot",
+    dialect: muta_contracts::ProviderDialect::Copilot,
+    protocol_roots: std::borrow::Cow::Borrowed(&[(WireProtocol::AnthropicMessages, std::borrow::Cow::Borrowed("https://api.githubcopilot.com/v1"))]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
+    id: std::borrow::Cow::Borrowed("github-copilot"),
     baselines: MODELS,
-    base_url: "https://api.githubcopilot.com/chat/completions",
+    root_url: std::borrow::Cow::Borrowed("https://api.githubcopilot.com"),
     user_agent: None,
     // Copilot speaks the OpenAI chat-completions wire family against
     // api.githubcopilot.com. The endpoint is the preset's remote-catalog
@@ -49,7 +52,6 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Copilot,
     client_profile_sensitive: true,
-    wire_overrides: &[],
     // Minimal seed: the id a fresh Copilot instance activates before the
     // first live discovery completes. `gpt-4o-mini` is universally
     // available across every Copilot plan, so the seed never 400s.

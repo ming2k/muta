@@ -18,6 +18,12 @@ pub use muta_contracts::model_providers::CHATGPT_BUILTIN_MODELS;
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
+///
+/// These entries record the subscription's Responses protocol per model
+/// (ADR-0260: protocol is provider-scoped). The global baseline registry is a
+/// capability union, so the same ids may carry a different protocol in another
+/// provider table; provider routers resolve protocol through
+/// [`ModelProviderSpec::model_protocol`], never through the global union.
 pub const MODELS: &[Model] = &[
     Model {
         id: "gpt-6-astra",
@@ -26,7 +32,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_6,
     },
@@ -37,7 +43,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -48,7 +54,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -59,7 +65,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
     },
@@ -72,7 +78,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: true,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -83,7 +89,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningSummary,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::Responses,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
     },
@@ -115,11 +121,14 @@ const fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
 }
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: prompt_cache_for_model,
-    id: "openai-subscription",
+    dialect: muta_contracts::ProviderDialect::ChatGpt,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(prompt_cache_for_model),
+    id: std::borrow::Cow::Borrowed("openai-subscription"),
     baselines: MODELS,
-    base_url: "https://chatgpt.com/backend-api/codex/responses",
-    user_agent: Some(muta_contracts::client_identity::CODEX_USER_AGENT),
+    root_url: std::borrow::Cow::Borrowed("https://chatgpt.com/backend-api/codex"),
+    user_agent: Some(std::borrow::Cow::Borrowed(muta_contracts::client_identity::CODEX_USER_AGENT)),
     // The Responses transport is the OpenAI wire family. Discovery uses the
     // subscription-only `/backend-api/codex/models` catalog rather than the
     // public OpenAI `{data:[...]}` shape; the remote catalog is authoritative
@@ -129,7 +138,6 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Codex),
     default_client_profile: muta_contracts::ClientPreset::Codex,
     client_profile_sensitive: true,
-    wire_overrides: &[],
 };
 
 #[cfg(test)]
@@ -148,7 +156,7 @@ mod tests {
 
     #[test]
     fn chatgpt_uses_affinity_without_platform_cache_options() {
-        let capabilities = (MODEL_PROVIDER_SPEC.prompt_cache)("gpt-5.6-sol").materialize();
+        let capabilities = MODEL_PROVIDER_SPEC.prompt_cache.resolve("gpt-5.6-sol");
         assert_eq!(capabilities.modes, vec![PromptCacheMode::Implicit]);
         assert_eq!(capabilities.default_mode, Some(PromptCacheMode::Implicit));
         assert!(capabilities.supported_retentions.is_empty());

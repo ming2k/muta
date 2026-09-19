@@ -221,15 +221,17 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: super::unsupported_prompt_cache,
-    id: "google-antigravity",
+    dialect: muta_contracts::ProviderDialect::Antigravity,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
+    id: std::borrow::Cow::Borrowed("google-antigravity"),
     baselines: MODELS,
-    base_url: "https://daily-cloudcode-pa.googleapis.com",
-    user_agent: Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
+    root_url: std::borrow::Cow::Borrowed("https://daily-cloudcode-pa.googleapis.com"),
+    user_agent: Some(std::borrow::Cow::Borrowed(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT)),
     protocol: WireProtocol::GoogleGemini,
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::GoogleCloudCode),
     default_client_profile: muta_contracts::ClientPreset::Antigravity,
     client_profile_sensitive: true,
-    wire_overrides: &[],
     models: ANTIGRAVITY_OAUTH_MODELS,
 };

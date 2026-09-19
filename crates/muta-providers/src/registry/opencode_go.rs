@@ -16,16 +16,6 @@ use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 /// client has never heard of).
 pub use muta_contracts::model_providers::OPENCODE_GO_MODELS;
 
-/// Wire-format exceptions for the opencode-go relay. The relay's default route
-/// is OpenAI chat-completions, but the `minimax-*` family is served over
-/// Anthropic `/messages`. Declared here as data so `route_for_model` can route
-/// them correctly even when the model is fitted from models.opencode.ai.
-pub const WIRE_OVERRIDES: &[(&str, WireProtocol)] = &[
-    ("minimax-m2.5", WireProtocol::AnthropicMessages),
-    ("minimax-m2.7", WireProtocol::AnthropicMessages),
-    ("minimax-m3", WireProtocol::AnthropicMessages),
-];
-
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
 /// [`muta_contracts::model::BaselineModels`]).
@@ -263,13 +253,16 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: super::unsupported_prompt_cache,
-    id: "opencode-go",
+    dialect: muta_contracts::ProviderDialect::Standard,
+    protocol_roots: std::borrow::Cow::Borrowed(&[(WireProtocol::GoogleGemini, std::borrow::Cow::Borrowed("https://opencode.ai/zen/go/v1beta"))]),
+    catalog_root_url: Some(std::borrow::Cow::Borrowed("https://models.opencode.ai")),
+    prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
+    id: std::borrow::Cow::Borrowed("opencode-go"),
     baselines: MODELS,
     // Endpoints are per-model by wire format (see `route_for_model`); the
     // instance-level default is the OpenAI chat-completions surface.
-    base_url: "https://opencode.ai/zen/go/v1/chat/completions",
-    user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
+    root_url: std::borrow::Cow::Borrowed("https://opencode.ai/zen/go/v1"),
+    user_agent: Some(std::borrow::Cow::Borrowed(muta_contracts::client_identity::OPENCODE_USER_AGENT)),
     protocol: WireProtocol::ChatCompletions,
     // The served set comes from the relay's private models.opencode.ai catalog.
     // Every advertised id is materialized with its catalog metadata, so a newly
@@ -277,7 +270,6 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpencodeGo),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
-    wire_overrides: WIRE_OVERRIDES,
     models: OPENCODE_GO_MODELS,
 };
 

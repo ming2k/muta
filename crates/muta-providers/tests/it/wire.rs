@@ -834,7 +834,8 @@ use muta_providers::{
 #[tokio::test]
 async fn opencode_go_list_models_parses_private_catalog() {
     let mut server = Server::new_async().await;
-    let base_url = format!("{}/api.json", server.url());
+    // The catalog root is the API root; discovery appends the protocol path.
+    let base_url = server.url();
     let _mock = server
         .mock("GET", "/api.json")
         .with_status(200)
@@ -879,7 +880,7 @@ async fn opencode_go_list_models_parses_private_catalog() {
 #[tokio::test]
 async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
     let mut server = Server::new_async().await;
-    let chat_url = format!("{}/v1/chat/completions", server.url());
+    let root_url = format!("{}/v1", server.url());
     // The mock must be on the derived /v1/models path.
     let _mock = server
         .mock("GET", "/v1/models")
@@ -901,7 +902,7 @@ async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
     let key = SecretString::from("sk-live");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::OpenAi,
-        base_url: &chat_url,
+        base_url: &root_url,
         api_key: &key,
         account_id: None,
         user_agent: None,
@@ -930,7 +931,7 @@ async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
     let key = SecretString::default();
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::OpenAi,
-        base_url: &format!("{}/v1/chat/completions", server.url()),
+        base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
@@ -968,7 +969,7 @@ async fn codex_list_models_sends_subscription_headers_and_preserves_priority() {
     let key = SecretString::from("chatgpt-access");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::Codex,
-        base_url: &format!("{}/backend-api/codex/responses", server.url()),
+        base_url: &format!("{}/backend-api/codex", server.url()),
         api_key: &key,
         account_id: Some("acct-test"),
         user_agent: None,
@@ -1007,7 +1008,7 @@ async fn codex_list_models_supports_etag_revalidation() {
     let key = SecretString::from("chatgpt-access");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::Codex,
-        base_url: &format!("{}/backend-api/codex/responses", server.url()),
+        base_url: &format!("{}/backend-api/codex", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
@@ -1054,7 +1055,7 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
     let key = SecretString::from("sk-ant");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::Anthropic,
-        base_url: &format!("{}/v1/messages", server.url()),
+        base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
@@ -1121,7 +1122,7 @@ async fn list_models_returns_status_error_on_non_2xx() {
     let key = SecretString::from("bad");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::OpenAi,
-        base_url: &format!("{}/v1/chat/completions", server.url()),
+        base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
@@ -1152,7 +1153,7 @@ async fn list_models_accepts_authoritative_empty_data_array() {
     let key = SecretString::from("k");
     let req = ModelDiscoveryRequest {
         protocol: DiscoveryProtocol::OpenAi,
-        base_url: &format!("{}/v1/chat/completions", server.url()),
+        base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,

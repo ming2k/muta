@@ -17,7 +17,7 @@ use crate::reasoning::ReasoningSupport;
 /// The exact inference wire protocol used by a route. Provider dialects alter
 /// authentication and envelopes without changing this protocol identity.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
 )]
 pub enum WireProtocol {
     #[default]
@@ -298,6 +298,9 @@ impl ModelCapabilities {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(default)]
 pub struct CapabilityOverrides {
+    /// Explicit model route protocol; resolved independently from capabilities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<WireProtocol>,
     /// Force the family tag used for family-scoped wire behavior (cache
     /// policy, effort mapping). `None` -> inherit from the layers below.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -324,7 +327,8 @@ impl CapabilityOverrides {
     /// Whether any knob is set. An all-`None` record is a no-op and should
     /// not be persisted.
     pub fn is_empty(&self) -> bool {
-        self.family.is_none()
+        self.protocol.is_none()
+            && self.family.is_none()
             && self.context_window.is_none()
             && self.max_output_tokens.is_none()
             && self.thinking.is_none()
@@ -336,6 +340,7 @@ impl CapabilityOverrides {
     /// takes precedence over `self`.
     pub fn merge_with(&self, over: &CapabilityOverrides) -> CapabilityOverrides {
         CapabilityOverrides {
+            protocol: over.protocol.or(self.protocol),
             family: over.family.clone().or_else(|| self.family.clone()),
             context_window: over.context_window.or(self.context_window),
             max_output_tokens: over.max_output_tokens.or(self.max_output_tokens),
@@ -351,6 +356,9 @@ impl CapabilityOverrides {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(default)]
 pub struct DeclaredModel {
+    /// Explicit wire protocol for this model within its provider or connection scope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<WireProtocol>,
     /// Exact model id sent on the wire and shown in the picker.
     pub id: String,
     /// Context window in tokens, when the user knows it.
@@ -385,6 +393,7 @@ impl DeclaredModel {
     /// Convert declared capability facts into a [`CapabilityOverrides`] record.
     pub fn to_overrides(&self) -> CapabilityOverrides {
         CapabilityOverrides {
+            protocol: self.protocol,
             family: None,
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
@@ -1005,6 +1014,7 @@ mod tests {
             family: Some("user-family".to_string()),
             thinking: None,
             max_output_tokens: Some(4_096),
+            protocol: None,
         };
         let caps =
             ModelCapabilities::for_channel("fixture-alpha", Some(&remote)).apply_overrides(&user);

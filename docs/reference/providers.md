@@ -42,12 +42,54 @@ adapter name.
 | Protocol | Dialects | Difference from the standard dialect |
 |----------|----------|--------------------------------------|
 | Chat Completions | standard, Copilot, OpenRouter, Qoder | Copilot bearer/client headers; OpenRouter unified reasoning controls, app attribution, and reasoning-detail replay; Qoder QoderEncoding body codec, COSY-signed header set, and envelope-wrapped SSE |
-| Responses | standard, ChatGPT, Copilot | Subscription authentication, account/client headers, and non-persistent response state |
+| Responses | standard, ChatGPT, Copilot, DeepSeek | Subscription authentication, account/client headers, and non-persistent response state |
 | Anthropic Messages | standard, Copilot | Copilot bearer and client headers instead of Anthropic API-key headers |
 | Google Gemini | Generative Language, Antigravity | Antigravity `v1internal` envelope, project identity, and response normalization |
 
 Dialects are mutually exclusive typed values. For example, one Responses route
 cannot accidentally be both ChatGPT and Copilot.
+
+### Declarative dialect inheritance
+
+A provider's `default_protocol` supplies the protocol when remote model metadata
+and its provider-local baseline omit it. Remote model protocol metadata takes
+precedence; the provider's dialect is inherited independently. Authentication
+only supplies credentials and associated account metadata.
+
+`dialect` accepts `standard` (the default), `antigravity`, `chat-gpt`, `copilot`,
+`deepseek`, `openrouter`, or `qoder`. Unknown names are rejected. Antigravity
+requires `google-gemini`, ChatGPT requires `responses`, Qoder requires
+`chat-completions`, and Copilot supports all protocol families except Google.
+
+```toml
+[providers.google-internal-relay]
+root_url = "https://relay.example.com/team"
+default_protocol = "google-gemini"
+dialect = "antigravity"
+catalog_format = "google-cloud-code"
+```
+
+Every remote model without a protocol inherits Google Gemini and retains the
+Antigravity dialect. No per-model protocol entry is necessary. When catalog
+format is omitted, Antigravity defaults to `google-cloud-code` and ChatGPT to
+`codex`; other dialects derive the catalog format from the default protocol.
+
+Services whose protocols use different transport endpoints can declare
+`protocol_endpoints` as pairs of protocol and endpoint. The selected model
+protocol chooses a matching entry; otherwise the provider's base endpoint is
+used. These values follow the adapter's endpoint convention: full inference URLs
+for Chat Completions, Responses and Anthropic; an API base for Google.
+
+```toml
+[providers.multi-wire-relay]
+root_url = "https://relay.example.com/v1"
+protocol_endpoints = [
+  ["chat-completions", "https://relay.example.com/v1/chat/completions"],
+  ["anthropic-messages", "https://relay.example.com/v1/messages"],
+]
+```
+
+See [ADR-0260](../adr/0260-provider-dialect-inheritance.md) for the route contract.
 
 ## Model provider routes
 
@@ -66,7 +108,7 @@ a wire protocol and never an authentication mode. The closed id set lives in
 | `google-antigravity` | `google-gemini` | Antigravity | Google OAuth |
 | `github-copilot` | Advertised per model: `chat-completions`, `responses`, or `anthropic-messages` | matching Copilot dialect | GitHub device OAuth |
 | `xai` | `chat-completions` | standard | xAI OAuth or `XAI_API_KEY` |
-| `deepseek` | `responses` | standard | API key |
+| `deepseek` | `responses` | DeepSeek | API key |
 | `glm-cn` | `chat-completions` | standard plus ZCode identity | coding-plan key |
 | `kimi-code` | `chat-completions` | standard | coding-plan key |
 | `qoder` | `chat-completions` | Qoder | Qoder OAuth (device flow) or pasted `pt-` personal-access token |

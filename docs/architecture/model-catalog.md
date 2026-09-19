@@ -1,7 +1,7 @@
 # Model catalog architecture
 
 - Status: Living Blueprint
-- Last Updated: 2026-09-11
+- Last Updated: 2026-09-19
 - Scope: `muta-providers`, `muta-contracts`, `muta-persistence`, `muta-agent`, `muta-runtime`, `mutx`
 - Governing records: [ADR-0203](../adr/0203-remote-catalog-overlay-and-connection-gated-pipeline.md),
   [ADR-0227](../adr/0227-connection-scoped-catalog-refresh-and-in-memory-source-cache.md),
@@ -31,6 +31,20 @@ route, prompt caching, token accounting, and effort ladder resolution. Those
 read the catalog but do not define it; see
 [Reasoning effort](../reference/effort.md) and
 [Model metadata](../reference/model-metadata.md).
+
+### Route derivation boundary
+
+[ADR-0260](../adr/0260-provider-dialect-inheritance.md) separates model protocol
+selection from provider dialect inheritance. A remote model protocol overrides
+the provider-scoped baseline and default. Provider dialect, endpoint selection,
+and credential acquisition remain separate inputs. The final model protocol
+selects any provider-declared protocol endpoint before constructing the adapter.
+
+For Antigravity, remote models can omit their protocol and inherit Google Gemini;
+the provider's Antigravity dialect supplies the internal request envelope and
+path. Credential type does not affect that choice. Invalid protocol/dialect
+combinations produce route errors; catalog construction retains the other valid
+channels. Global model identity does not determine a provider's wire route.
 
 ## 2. The three layers
 

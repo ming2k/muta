@@ -2,16 +2,16 @@
 //! factory consumed by the orchestration layer.
 //!
 //! The registry is split one file per provider: each module holds the
-//! provider's model constants, its [`ModelProviderSpec`] entry, and (for
-//! the two legacy OpenAI-compatible presets) its [`OpenAiProviderSpec`] entry.
+//! provider's model constants and its [`ModelProviderSpec`] entry.
 //! This file keeps the shared types, the aggregate tables, and the factory.
 
 use muta_contracts::Provider;
 use muta_contracts::catalog::{Channel, Transport};
 use std::sync::Arc;
+use std::borrow::Cow;
 
 use crate::{
-    AnthropicMessagesProvider, DiscoveryProtocol, GoogleProvider, MUTA_USER_AGENT,
+    AnthropicMessagesProvider, DiscoveryProtocol, GoogleProvider,
     OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ThinkingConfig,
 };
 
@@ -38,7 +38,7 @@ pub use deepseek::DEEPSEEK_BUILTIN_MODELS;
 pub use google::GOOGLE_BUILTIN_MODELS;
 pub use kimi::KIMI_CODE_MODELS;
 pub use openai::OPENAI_BUILTIN_MODELS;
-pub use opencode_go::{OPENCODE_GO_MODELS, WIRE_OVERRIDES};
+pub use opencode_go::OPENCODE_GO_MODELS;
 pub use openrouter::OPENROUTER_BUILTIN_MODELS;
 pub use xai::XAI_BUILTIN_MODELS;
 pub use zai::ZAI_CODE_MODELS;
@@ -49,66 +49,7 @@ use anthropic::anthropic_model_max_tokens;
 // OpenAI-compatible provider wrappers for popular Chinese & global services
 // ═════════════════════════════════════════════════════════════════════════════
 
-/// Whether, and from which source, a preset connection refreshes its live
-/// model catalog over the network.
-///
-/// A provider's compiled-in baseline ([`ModelProviderSpec::baselines`] /
-/// [`ModelProviderSpec::models`]) is always the offline floor. When a
-/// The single remote model-catalog source for a provider (ADR-0203).
-///
-/// Ingested as an overlay on top of the provider's compiled baseline.
-/// `None` means no network synchronization — the provider uses the
-/// compiled baseline directly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteCatalogSource {
-    /// The provider's own model-catalog endpoint.
-    Endpoint(DiscoveryProtocol),
-    /// No remote network sync; compiled baseline is authoritative.
-    None,
-}
-
-/// Specification for an OpenAI-compatible provider.
-///
-/// Every provider in [`OPENAI_PROVIDER_SPECS`] speaks the OpenAI
-/// chat-completions wire format and differs only in endpoint, default model,
-/// the environment variables consulted, and (rarely) a pinned model or a
-/// required user agent. Modelling them as *data* rather than one delegating
-/// newtype per vendor means adding a provider is a single table entry instead
-/// of ~30 lines of boilerplate trait delegation.
-pub struct OpenAiProviderSpec {
-    /// Stable identifier used in config (`default_provider`) and the TUI.
-    pub id: &'static str,
-    /// Full chat-completions endpoint URL.
-    pub base_url: &'static str,
-    /// Model used when neither config nor environment specifies one.
-    pub default_model: &'static str,
-    /// Environment variable consulted for the API key.
-    pub env_api_key: &'static str,
-    /// Environment variable consulted for a model override.
-    pub env_model: &'static str,
-    /// When set, the endpoint pins this model and ignores any override
-    /// (e.g. the Kimi coding endpoint).
-    pub fixed_model: Option<&'static str>,
-    /// When set, the endpoint requires this user agent unless overridden.
-    pub default_user_agent: Option<&'static str>,
-}
-
-/// The single registry of OpenAI-compatible providers — the source of truth for
-/// their endpoints, default models, and environment variables. The entries
-/// live beside their provider's other data (`kimi`, `zai`).
-pub const OPENAI_PROVIDER_SPECS: &[OpenAiProviderSpec] = &[
-    kimi::PROVIDER_SPEC,
-    // DeepSeek V4 (Flash + Pro) is served as one multi-model `deepseek` provider
-    // built in the catalog layer (both models share one DEEPSEEK_API_KEY), not as
-    // two single-model registry presets.
-    zai::PROVIDER_SPEC,
-];
-
-/// Look up an OpenAI-compatible provider spec by its identifier. Exact match
-/// only; preset ids are unique and do not have alias mappings.
-pub fn openai_provider_spec(id: &str) -> Option<&'static OpenAiProviderSpec> {
-    OPENAI_PROVIDER_SPECS.iter().find(|spec| spec.id == id)
-}
+pub use muta_contracts::RemoteCatalogSource;
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Model providers — the definition of one upstream service surface
@@ -123,17 +64,18 @@ pub fn openai_provider_spec(id: &str) -> Option<&'static OpenAiProviderSpec> {
 /// constants live) so the reconciliation layer in `muta-agent` and the UI in
 /// `mutx` both read one table. The UI-only fields (label / description /
 /// placeholders) are **not** duplicated here.
+#[derive(Clone)]
 pub struct ModelProviderSpec {
     /// Stable identifier of this service surface (ADR-0201). Never reused and
     /// never renamed once shipped — it is the durable join key between a
     /// connection and its model provider.
-    pub id: &'static str,
+    pub id: Cow<'static, str>,
     /// The connection-level default endpoint this preset's routes reach.
-    pub base_url: &'static str,
+    pub root_url: Cow<'static, str>,
     /// The `User-Agent` header this preset's routes must send, when the
     /// provider requires a specific one (the coding-plan endpoints validate
     /// this header). `None` → the shared [`crate::MUTA_USER_AGENT`].
-    pub user_agent: Option<&'static str>,
+    pub user_agent: Option<Cow<'static, str>>,
     /// Baseline capability metadata for the models this provider serves.
     /// Lives beside the preset (one table per provider) and is submitted to
     /// `muta_contracts`'s baseline registry at link time; the reconciliation
@@ -141,6 +83,11 @@ pub struct ModelProviderSpec {
     pub baselines: &'static [muta_contracts::Model],
     /// Exact inference protocol spoken by the preset's default route.
     pub protocol: muta_contracts::WireProtocol,
+    /// Service behavior inherited independently of model protocol selection.
+    pub dialect: muta_contracts::ProviderDialect,
+    /// Explicit transport endpoints for services whose protocol families use different paths.
+    pub protocol_roots: Cow<'static, [(muta_contracts::WireProtocol, Cow<'static, str>)]>,
+    pub catalog_root_url: Option<Cow<'static, str>>,
     /// The model ids the preset initially seeds, in display/activation order.
     /// Fixed connections continue to mirror this list.
     pub models: &'static [&'static str],
@@ -151,19 +98,24 @@ pub struct ModelProviderSpec {
     /// Whether this provider strictly requires its recommended client profile
     /// to avoid 403 / anti-bot WAF rejections (e.g. Codex, Copilot, Antigravity).
     pub client_profile_sensitive: bool,
-    /// Per-model wire-format overrides for a multi-transport preset. A preset
-    /// whose default route is OpenAI chat-completions but serves some models
-    /// over another wire (opencode-go's `minimax-*` over Anthropic
-    /// `/messages`) declares those exceptions here — data, not a
-    /// `route_for_model` special case. Consulted before the model registry's
-    /// protocol, so a fitted/remote advertisement can never re-route a family
-    /// the preset pins to a non-default wire. Empty for single-protocol
-    /// presets.
-    pub wire_overrides: &'static [(&'static str, muta_contracts::WireProtocol)],
     /// Resolve prompt-cache behavior for one exact preset route and model.
     /// Protocol compatibility and provider identity alone never grant cache
     /// controls; model generations may expose different wire fields.
-    pub prompt_cache: fn(&str) -> muta_contracts::PromptCacheSpec,
+    pub prompt_cache: PromptCachePolicy,
+}
+
+#[derive(Clone)]
+pub enum PromptCachePolicy {
+    Compiled(fn(&str) -> muta_contracts::PromptCacheSpec),
+    Declared(muta_contracts::provider_surface::ProviderPromptCache),
+}
+impl PromptCachePolicy {
+    pub fn resolve(&self, model: &str) -> muta_contracts::PromptCacheCapabilities {
+        match self {
+            Self::Compiled(resolve) => resolve(model).materialize(),
+            Self::Declared(declaration) => declaration.resolve(model),
+        }
+    }
 }
 
 pub const fn unsupported_prompt_cache(_: &str) -> muta_contracts::PromptCacheSpec {
@@ -193,75 +145,62 @@ pub const MODEL_PROVIDER_SPECS: &[ModelProviderSpec] = &[
     antigravity_oauth::MODEL_PROVIDER_SPEC,
 ];
 
-static USER_DECLARED_SPECS: std::sync::RwLock<std::collections::BTreeMap<String, &'static ModelProviderSpec>> =
+static USER_DECLARED_SPECS: std::sync::RwLock<std::collections::BTreeMap<String, Arc<ModelProviderSpec>>> =
     std::sync::RwLock::new(std::collections::BTreeMap::new());
 
-/// Look up a user-declared model provider spec registered dynamically (ADR-0258).
-pub fn user_declared_provider_spec(id: &str) -> Option<&'static ModelProviderSpec> {
-    let guard = USER_DECLARED_SPECS.read().ok()?;
-    guard.get(id).copied()
+pub fn user_declared_provider_spec(id: &str) -> Option<Arc<ModelProviderSpec>> {
+    USER_DECLARED_SPECS.read().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
 }
 
-/// Register a user-declared model provider spec dynamically in the process (ADR-0258).
-///
-/// Leaks the spec into `'static` storage so it can be referenced identically to
-/// compiled-in `ModelProviderSpec` constants with zero lifetime friction.
-pub fn register_user_declared_provider(spec: ModelProviderSpec) -> &'static ModelProviderSpec {
-    let id = spec.id.to_string();
-    let leaked: &'static ModelProviderSpec = Box::leak(Box::new(spec));
-    if let Ok(mut guard) = USER_DECLARED_SPECS.write() {
-        guard.insert(id, leaked);
+pub fn register_user_declared_provider(spec: ModelProviderSpec) -> Result<Arc<ModelProviderSpec>, String> {
+    if MODEL_PROVIDER_SPECS.iter().any(|builtin| builtin.id == spec.id) {
+        return Err(format!("provider `{}` collides with a built-in provider", spec.id));
     }
-    leaked
+    spec.validate()?;
+    let spec = Arc::new(spec);
+    USER_DECLARED_SPECS.write().unwrap_or_else(|e| e.into_inner()).insert(spec.id.to_string(), spec.clone());
+    Ok(spec)
 }
 
-/// Synchronize and register all user-declared model providers from `model_providers.toml` (ADR-0258).
-pub fn sync_user_declared_providers_from_disk() {
-    let store = muta_persistence::model_providers::ModelProviders::load();
-    for (id, user_prov) in store.providers {
-        let wire = user_prov.default_protocol.unwrap_or(muta_contracts::WireProtocol::ChatCompletions);
-        let catalog_source = match user_prov.catalog_format.as_deref() {
-            Some("none") | Some("static") => RemoteCatalogSource::None,
-            Some("anthropic") => RemoteCatalogSource::Endpoint(DiscoveryProtocol::Anthropic),
-            Some("google") => RemoteCatalogSource::Endpoint(DiscoveryProtocol::Google),
-            Some("opencode-go") => RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpencodeGo),
-            Some("openai") => RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
-            _ => RemoteCatalogSource::Endpoint(DiscoveryProtocol::from_wire_protocol(wire)),
-        };
-        let leaked_id: &'static str = Box::leak(id.into_boxed_str());
-        let leaked_url: &'static str = Box::leak(user_prov.root_url.into_boxed_str());
-        let leaked_ua: Option<&'static str> =
-            user_prov.user_agent.map(|ua| Box::leak(ua.into_boxed_str()) as &'static str);
+/// Replace the dynamic snapshot atomically; removed entries are released once readers finish.
+/// Invalid input preserves the last valid snapshot and propagates the error.
+pub fn sync_user_declared_providers_from_disk() -> Result<(), String> {
+    let store = muta_persistence::model_providers::ModelProviders::try_load()?;
+    let mut next = std::collections::BTreeMap::new();
+    for (id, provider) in store.providers {
+        let wire = provider.default_protocol.unwrap_or(muta_contracts::WireProtocol::ChatCompletions);
+        let dialect = provider.dialect.unwrap_or_default();
+        let catalog_source = provider.catalog.unwrap_or_else(|| RemoteCatalogSource::Endpoint(match dialect {
+            muta_contracts::ProviderDialect::Antigravity => DiscoveryProtocol::GoogleCloudCode,
+            muta_contracts::ProviderDialect::ChatGpt => DiscoveryProtocol::Codex,
+            _ => DiscoveryProtocol::from_wire_protocol(wire),
+        }));
         let spec = ModelProviderSpec {
-            id: leaked_id,
-            baselines: &[],
-            base_url: leaked_url,
-            user_agent: leaked_ua,
-            protocol: wire,
-            models: &[],
-            catalog_source,
-            default_client_profile: user_prov
-                .client_profile
-                .unwrap_or(muta_contracts::ClientPreset::Native),
-            client_profile_sensitive: false,
-            wire_overrides: &[],
-            prompt_cache: unsupported_prompt_cache,
+            id: Cow::Owned(id.clone()), baselines: &[], root_url: Cow::Owned(provider.root_url),
+            user_agent: provider.user_agent.map(Cow::Owned), protocol: wire, dialect,
+            protocol_roots: Cow::Owned(provider.protocol_roots.into_iter().map(|(wire, root)| (wire, Cow::Owned(root))).collect()),
+            catalog_root_url: provider.catalog_root_url.map(Cow::Owned),
+            models: &[], catalog_source,
+            default_client_profile: provider.client_profile.unwrap_or(muta_contracts::ClientPreset::Native),
+            client_profile_sensitive: provider.client_profile_sensitive, prompt_cache: PromptCachePolicy::Declared(provider.prompt_cache.unwrap_or_default()),
         };
-        register_user_declared_provider(spec);
+        spec.validate()?;
+        next.insert(id, Arc::new(spec));
     }
+    *USER_DECLARED_SPECS.write().unwrap_or_else(|e| e.into_inner()) = next;
+    Ok(())
 }
 
-/// Look up a model provider spec by its stable id. Checks built-in specs first,
-/// then user-declared provider specs (ADR-0258). Exact match only.
-pub fn model_provider_spec(id: &str) -> Option<&'static ModelProviderSpec> {
+pub fn model_provider_spec(id: &str) -> Option<Arc<ModelProviderSpec>> {
     if let Some(spec) = MODEL_PROVIDER_SPECS.iter().find(|spec| spec.id == id) {
-        return Some(spec);
+        return Some(Arc::new(spec.clone()));
     }
-    if let Some(spec) = user_declared_provider_spec(id) {
-        return Some(spec);
-    }
-    sync_user_declared_providers_from_disk();
-    user_declared_provider_spec(id)
+    user_declared_provider_spec(id).or_else(|| {
+        if let Err(error) = sync_user_declared_providers_from_disk() {
+            tracing::warn!(%error, "could not refresh provider registry");
+        }
+        user_declared_provider_spec(id)
+    })
 }
 
 /// Resolve the transport endpoint for **one model** of a model provider — the
@@ -274,83 +213,47 @@ pub fn model_provider_spec(id: &str) -> Option<&'static ModelProviderSpec> {
 /// `opencode-go` relay routes models by their registered wire format (OpenAI
 /// chat / Anthropic `/messages` / Google `/v1beta`), so its base URL and
 /// protocol vary per model. `None` means the provider id is unknown.
-pub fn route_for_model(
-    provider_id: &str,
-    model_id: &str,
-) -> Option<(
-    muta_contracts::WireProtocol,
-    &'static str,
-    Option<&'static str>,
-)> {
+pub fn route_for_model(provider_id: &str, model_id: &str) -> Option<(muta_contracts::WireProtocol, String, Option<Cow<'static, str>>)> {
     let spec = model_provider_spec(provider_id)?;
-    // A preset may pin some families to a non-default wire (opencode-go's
-    // minimax over Anthropic /messages). Consulted before the model registry,
-    // so a fitted/remote advertisement can never re-route a pinned family.
-    if let Some((_, protocol)) = spec.wire_overrides.iter().find(|(id, _)| *id == model_id) {
-        let base_url = match protocol {
-            muta_contracts::WireProtocol::AnthropicMessages => {
-                "https://opencode.ai/zen/go/v1/messages"
-            }
-            muta_contracts::WireProtocol::GoogleGemini => "https://opencode.ai/zen/go/v1beta",
-            muta_contracts::WireProtocol::Responses => "https://opencode.ai/zen/go/v1/responses",
-            muta_contracts::WireProtocol::ChatCompletions => {
-                "https://opencode.ai/zen/go/v1/chat/completions"
-            }
-        };
-        return Some((*protocol, base_url, spec.user_agent));
-    }
-    // OpenCode Go relay has the provider-specific multi-wire endpoint family.
-    if provider_id == "opencode-go"
-        && matches!(
-            spec.catalog_source,
-            RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpencodeGo)
-        )
-    {
-        let protocol = muta_contracts::model::resolve(model_id).protocol;
-        let base_url = match protocol {
-            muta_contracts::WireProtocol::AnthropicMessages => {
-                "https://opencode.ai/zen/go/v1/messages"
-            }
-            muta_contracts::WireProtocol::GoogleGemini => "https://opencode.ai/zen/go/v1beta",
-            muta_contracts::WireProtocol::Responses => "https://opencode.ai/zen/go/v1/responses",
-            muta_contracts::WireProtocol::ChatCompletions => {
-                "https://opencode.ai/zen/go/v1/chat/completions"
-            }
-        };
-        return Some((protocol, base_url, spec.user_agent));
-    }
-    Some((spec.protocol, spec.base_url, spec.user_agent))
+    let protocol = spec.model_protocol(model_id);
+    Some((protocol, spec.endpoint(protocol).ok()?, spec.user_agent.clone()))
 }
 
-impl OpenAiProviderSpec {
-    /// Resolve the model to use: a pinned `fixed_model` always wins, otherwise
-    /// the caller's override, otherwise the provider default.
-    pub fn resolve_model(&self, override_model: Option<String>) -> String {
-        if let Some(fixed) = self.fixed_model {
-            return fixed.to_string();
+impl ModelProviderSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        muta_contracts::ApiRoot::parse(&self.root_url)?;
+        if !self.dialect.supports(self.protocol) {
+            return Err(format!("provider `{}` has an incompatible default protocol", self.id));
         }
-        override_model.unwrap_or_else(|| self.default_model.to_string())
+        let mut seen = std::collections::HashSet::new();
+        for (wire, root) in self.protocol_roots.iter() {
+            if !seen.insert(*wire) { return Err(format!("duplicate protocol root for {wire}")); }
+            muta_contracts::ApiRoot::parse(root)?;
+        }
+        if let Some(root) = &self.catalog_root_url { muta_contracts::ApiRoot::parse(root)?; }
+        Ok(())
     }
 
-    /// Build a concrete [`OpenAiChatCompletionsProvider`] for this spec. `user_agent` overrides
-    /// the spec default (used by the Kimi coding endpoint).
-    pub fn build(
-        &self,
-        api_key: String,
-        override_model: Option<String>,
-        user_agent: Option<String>,
-    ) -> OpenAiChatCompletionsProvider {
-        let model = self.resolve_model(override_model);
-        let agent = user_agent
-            .or_else(|| self.default_user_agent.map(str::to_string))
-            .unwrap_or_else(|| MUTA_USER_AGENT.to_string());
-        OpenAiChatCompletionsProvider::with_base_url_and_user_agent(
-            api_key,
-            model,
-            self.base_url,
-            &agent,
-        )
-        .with_id(self.id.to_string())
+    pub fn model_protocol(&self, model_id: &str) -> muta_contracts::WireProtocol {
+        self.baselines.iter().find(|model| model.id == model_id).map(|model| model.protocol).unwrap_or(self.protocol)
+    }
+
+    /// Convert a provider root to the exact endpoint representation required by the wire adapter.
+    pub fn endpoint(&self, protocol: muta_contracts::WireProtocol) -> Result<String, String> {
+        use muta_contracts::{ApiRoot, ProviderDialect, WireProtocol};
+        let root = self.protocol_roots.iter().find(|(wire, _)| *wire == protocol)
+            .map(|(_, root)| root.as_ref()).unwrap_or(&self.root_url);
+        let root = ApiRoot::parse(root)?;
+        Ok(match (protocol, self.dialect) {
+            (WireProtocol::GoogleGemini, _) | (_, ProviderDialect::Qoder) => root.as_str().to_string(),
+            (WireProtocol::ChatCompletions, _) => root.append("chat/completions"),
+            (WireProtocol::Responses, _) => root.append("responses"),
+            (WireProtocol::AnthropicMessages, _) => root.append("messages"),
+        })
+    }
+
+    pub fn catalog_root(&self) -> &str {
+        self.catalog_root_url.as_deref().unwrap_or(&self.root_url)
     }
 }
 
@@ -541,7 +444,7 @@ mod spec_tests {
     fn model_provider_specs_have_unique_nonempty_ids() {
         // Provider ids are the durable join key between a connection and its
         // model provider, so they must be unique and non-empty.
-        let mut ids: Vec<&str> = MODEL_PROVIDER_SPECS.iter().map(|spec| spec.id).collect();
+        let mut ids: Vec<&str> = MODEL_PROVIDER_SPECS.iter().map(|spec| spec.id.as_ref()).collect();
         ids.sort_unstable();
         assert!(
             ids.iter().all(|id| !id.is_empty()),
@@ -556,7 +459,7 @@ mod spec_tests {
         // The reconciliation layer resolves a connection's provider back to a
         // spec here; every id in the table must round-trip.
         for spec in MODEL_PROVIDER_SPECS {
-            let resolved = model_provider_spec(spec.id).expect("id resolves");
+            let resolved = model_provider_spec(&spec.id).expect("id resolves");
             assert_eq!(resolved.id, spec.id);
         }
         // Unknown ids resolve to None; the loader rejects them (ADR-0201 INV-2).
@@ -567,23 +470,28 @@ mod spec_tests {
     fn user_declared_provider_can_be_registered_and_resolved() {
         let test_id = "test-corp-relay";
         let custom_spec = ModelProviderSpec {
-            prompt_cache: unsupported_prompt_cache,
-            id: test_id,
+            dialect: muta_contracts::ProviderDialect::Standard,
+            protocol_roots: Cow::Borrowed(&[]),
+            catalog_root_url: None,
+            prompt_cache: PromptCachePolicy::Compiled(unsupported_prompt_cache),
+            id: Cow::Borrowed(test_id),
             baselines: &[],
-            base_url: "https://relay.example.com/v1",
+            root_url: Cow::Borrowed("https://relay.example.com/v1"),
             user_agent: None,
             protocol: muta_contracts::WireProtocol::ChatCompletions,
             models: &[],
             catalog_source: RemoteCatalogSource::None,
             default_client_profile: muta_contracts::ClientPreset::Cursor,
             client_profile_sensitive: false,
-            wire_overrides: &[],
         };
-        register_user_declared_provider(custom_spec);
+        register_user_declared_provider(custom_spec).unwrap();
         let resolved = model_provider_spec(test_id).expect("dynamic spec resolves");
         assert_eq!(resolved.id, test_id);
-        assert_eq!(resolved.base_url, "https://relay.example.com/v1");
-        assert_eq!(resolved.default_client_profile, muta_contracts::ClientPreset::Cursor);
+        assert_eq!(resolved.root_url, "https://relay.example.com/v1");
+        assert_eq!(
+            resolved.default_client_profile,
+            muta_contracts::ClientPreset::Cursor
+        );
     }
 
     #[test]
@@ -591,7 +499,7 @@ mod spec_tests {
         // The persisted provider vocabulary is contract data (ADR-0201); the
         // registry must cover it exactly, or a stored connection could name a
         // provider this build cannot drive.
-        let mut registry: Vec<&str> = MODEL_PROVIDER_SPECS.iter().map(|spec| spec.id).collect();
+        let mut registry: Vec<&str> = MODEL_PROVIDER_SPECS.iter().map(|spec| spec.id.as_ref()).collect();
         let mut contract: Vec<&str> = muta_contracts::model_providers::MODEL_PROVIDER_IDS.to_vec();
         registry.sort_unstable();
         contract.sort_unstable();
@@ -605,17 +513,21 @@ mod spec_tests {
         // (zai/opencode-go both list glm-5.2; kimi/opencode-go both list
         // kimi-k2.7-code) the copies MUST be field-identical -- otherwise which
         // copy wins depends on link order, an invisible behavior change.
+        // Protocol is intentionally excluded: it is provider-scoped (ADR-0260),
+        // so the same id legitimately speaks different wires on different
+        // service surfaces (deepseek Responses vs. opencode-go ChatCompletions).
+        // Provider routing resolves protocol through `ModelProviderSpec`, never
+        // through this global capability union.
         // `Model` is not `PartialEq`, so compare a derived signature instead.
         use std::collections::HashMap;
 
         fn signature(m: &muta_contracts::Model) -> String {
             format!(
-                "{:?}|{:?}|{}|{}|{:?}|{:?}|{:?}",
+                "{:?}|{:?}|{}|{}|{:?}|{:?}",
                 m.context_window,
                 m.thinking,
                 m.tool_call,
                 m.vision,
-                m.protocol,
                 m.model_guidance,
                 m.effort_levels,
             )
@@ -625,7 +537,7 @@ mod spec_tests {
         for spec in MODEL_PROVIDER_SPECS {
             for m in spec.baselines {
                 let sig = signature(m);
-                if let Some((first_provider, first_sig)) = seen.insert(m.id, (spec.id, sig)) {
+                if let Some((first_provider, first_sig)) = seen.insert(m.id, (spec.id.as_ref(), sig)) {
                     assert_eq!(
                         first_sig,
                         seen[&m.id].1,
@@ -658,31 +570,45 @@ mod spec_tests {
     }
 
     #[test]
-    fn opencode_go_wire_overrides_cover_pinned_families() {
-        // The wire-override table pins families the relay serves over a
-        // non-default wire. Every override id must resolve (so routing never
-        // depends on an unregistered model) and the pin must be consistent
-        // with route_for_model.
-        let spec = model_provider_spec("opencode-go").expect("opencode-go provider");
-        assert!(
-            !spec.wire_overrides.is_empty(),
-            "go preset must pin families"
+    fn provider_dialect_protocol_baselines_are_service_scoped() {
+        let google = model_provider_spec("google-antigravity").unwrap();
+        // Another provider's known model ID cannot inject a protocol here.
+        assert_eq!(
+            google.model_protocol("claude-sonnet-4-6"),
+            muta_contracts::WireProtocol::GoogleGemini
         );
-        for (id, wire) in spec.wire_overrides {
-            let (route_wire, base_url, _) =
-                route_for_model("opencode-go", id).expect("override id routes");
-            assert_eq!(*wire, route_wire, "{id} wire override must route");
+        for (id, model) in [
+            ("deepseek", "deepseek-v4-pro"),
+            ("openai-subscription", "gpt-5.6-sol"),
+        ] {
+            let spec = model_provider_spec(id).unwrap();
             assert_eq!(
-                *wire,
-                muta_contracts::WireProtocol::AnthropicMessages,
-                "{id}"
-            );
-            assert!(
-                base_url.contains("/v1/messages"),
-                "{id} must reach the Anthropic /messages surface"
+                spec.model_protocol(model),
+                muta_contracts::WireProtocol::Responses
             );
         }
+        for spec in MODEL_PROVIDER_SPECS {
+            assert!(spec.dialect.supports(spec.protocol), "{} default", spec.id);
+            for model in spec.baselines {
+                assert!(
+                    spec.dialect.supports(spec.model_protocol(model.id)),
+                    "{}/{}",
+                    spec.id,
+                    model.id
+                );
+            }
+        }
     }
+
+    #[test]
+    fn opencode_go_baselines_route_anthropic_models() {
+        for id in ["minimax-m2.5", "minimax-m2.7", "minimax-m3"] {
+            let (wire, endpoint, _) = route_for_model("opencode-go", id).unwrap();
+            assert_eq!(wire, muta_contracts::WireProtocol::AnthropicMessages);
+            assert_eq!(endpoint, "https://opencode.ai/zen/go/v1/messages");
+        }
+    }
+
 }
 
 #[cfg(test)]
@@ -804,70 +730,79 @@ mod build_tests {
     fn builtin_provider_models_resolve_with_expected_wire_formats() {
         use muta_contracts::WireProtocol;
         // Every model a multi-model built-in serves must exist in the model
-        // registry (so metadata resolves) and carry the wire format its provider
-        // speaks.
-        for (&id, expected) in crate::ANTHROPIC_BUILTIN_MODELS
-            .iter()
-            .map(|id| (id, WireProtocol::AnthropicMessages))
-            .chain(
-                crate::GOOGLE_BUILTIN_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::GoogleGemini)),
-            )
-            .chain(
-                crate::DEEPSEEK_BUILTIN_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::OPENAI_BUILTIN_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::OPENROUTER_BUILTIN_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::XAI_BUILTIN_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::CHATGPT_BUILTIN_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::COPILOT_SEED_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::KIMI_CODE_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::ZAI_CODE_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::OPENCODE_GO_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::ChatCompletions)),
-            )
-            .chain(
-                crate::ANTIGRAVITY_OAUTH_MODELS
-                    .iter()
-                    .map(|id| (id, WireProtocol::GoogleGemini)),
-            )
-        {
-            let model = muta_contracts::model::resolve(id);
-            assert_eq!(model.id, id, "model {id} must be registered");
-            assert_eq!(model.protocol, expected, "{id} wire format");
+        // registry (so metadata resolves) and carry the wire format its own
+        // provider speaks. ADR-0260: protocol selection is provider-scoped, so
+        // the same id may legitimately resolve to different protocols on
+        // different service surfaces.
+        let cases: &[(&str, &[&str], WireProtocol)] = &[
+            (
+                "anthropic",
+                crate::ANTHROPIC_BUILTIN_MODELS,
+                WireProtocol::AnthropicMessages,
+            ),
+            (
+                "google",
+                crate::GOOGLE_BUILTIN_MODELS,
+                WireProtocol::GoogleGemini,
+            ),
+            (
+                "deepseek",
+                crate::DEEPSEEK_BUILTIN_MODELS,
+                WireProtocol::Responses,
+            ),
+            (
+                "openai",
+                crate::OPENAI_BUILTIN_MODELS,
+                WireProtocol::ChatCompletions,
+            ),
+            (
+                "openrouter",
+                crate::OPENROUTER_BUILTIN_MODELS,
+                WireProtocol::ChatCompletions,
+            ),
+            ("xai", crate::XAI_BUILTIN_MODELS, WireProtocol::ChatCompletions),
+            (
+                "openai-subscription",
+                crate::CHATGPT_BUILTIN_MODELS,
+                WireProtocol::Responses,
+            ),
+            (
+                "github-copilot",
+                crate::COPILOT_SEED_MODELS,
+                WireProtocol::ChatCompletions,
+            ),
+            (
+                "kimi-code",
+                crate::KIMI_CODE_MODELS,
+                WireProtocol::ChatCompletions,
+            ),
+            (
+                "glm-cn",
+                crate::ZAI_CODE_MODELS,
+                WireProtocol::ChatCompletions,
+            ),
+            (
+                "opencode-go",
+                crate::OPENCODE_GO_MODELS,
+                WireProtocol::ChatCompletions,
+            ),
+            (
+                "google-antigravity",
+                crate::ANTIGRAVITY_OAUTH_MODELS,
+                WireProtocol::GoogleGemini,
+            ),
+        ];
+        for (provider_id, ids, expected) in cases {
+            let spec = model_provider_spec(provider_id).expect("provider resolves");
+            for id in ids.iter() {
+                let model = muta_contracts::model::resolve(id);
+                assert_eq!(model.id, *id, "model {id} must be registered");
+                assert_eq!(
+                    spec.model_protocol(id),
+                    *expected,
+                    "{provider_id}/{id} wire format"
+                );
+            }
         }
     }
 }

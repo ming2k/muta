@@ -158,17 +158,19 @@ fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
 }
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: prompt_cache_for_model,
-    id: "anthropic",
+    dialect: muta_contracts::ProviderDialect::Standard,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(prompt_cache_for_model),
+    id: std::borrow::Cow::Borrowed("anthropic"),
     baselines: MODELS,
-    base_url: "https://api.anthropic.com/v1/messages",
+    root_url: std::borrow::Cow::Borrowed("https://api.anthropic.com/v1"),
     user_agent: None,
     protocol: WireProtocol::AnthropicMessages,
     models: ANTHROPIC_BUILTIN_MODELS,
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Anthropic),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
-    wire_overrides: &[],
 };
 
 #[cfg(test)]

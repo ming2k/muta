@@ -5,7 +5,7 @@ use muta_contracts::effort::EFFORT_GLM_5;
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, OpenAiProviderSpec, RemoteCatalogSource};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Z.AI's coding-plan endpoint, in display/activation
 /// order — the first entry is the initial active channel. `glm-5.3-flash`
@@ -19,15 +19,7 @@ pub use muta_contracts::model_providers::ZAI_CODE_MODELS;
 // Code platform, it expects a recognized coding-agent User-Agent. Shares
 // the ZHIPU_API_KEY legacy name for key compatibility with the broader
 // Zhipu ecosystem, while ZAI_API_KEY is the preferred alias.
-pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
-    id: "glm-cn",
-    base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
-    default_model: "glm-5.3",
-    env_api_key: "ZAI_API_KEY",
-    env_model: "ZAI_MODEL",
-    fixed_model: None,
-    default_user_agent: Some(muta_llm_client::ZCODE_USER_AGENT),
-};
+
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -133,11 +125,14 @@ pub const MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: super::unsupported_prompt_cache,
-    id: "glm-cn",
+    dialect: muta_contracts::ProviderDialect::Standard,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
+    id: std::borrow::Cow::Borrowed("glm-cn"),
     baselines: MODELS,
-    base_url: "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
-    user_agent: Some(crate::ZCODE_USER_AGENT),
+    root_url: std::borrow::Cow::Borrowed("https://open.bigmodel.cn/api/coding/paas/v4"),
+    user_agent: Some(std::borrow::Cow::Borrowed(crate::ZCODE_USER_AGENT)),
     protocol: WireProtocol::ChatCompletions,
     // Live-verified (2026-08): the coding endpoint serves GET /models and
     // returns the plan's current model ids (OpenAI list shape, ids only — no
@@ -149,53 +144,5 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::ZCode,
     client_profile_sensitive: false,
-    wire_overrides: &[],
     models: ZAI_CODE_MODELS,
 };
-
-#[cfg(test)]
-mod tests {
-    use crate::openai_provider_spec;
-
-    #[test]
-    fn openai_compat_spec_resolves_model_override_and_default() {
-        let spec = openai_provider_spec("glm-cn").expect("glm-cn spec");
-        assert_eq!(spec.resolve_model(None), "glm-5.3");
-        assert_eq!(spec.resolve_model(Some("glm-5.1".to_string())), "glm-5.1");
-    }
-
-    #[test]
-    fn zai_code_uses_zcode_user_agent_and_identity() {
-        let spec = openai_provider_spec("glm-cn").expect("glm-cn spec");
-        let provider = spec.build("test-key".to_string(), None, None);
-        assert_eq!(provider.endpoint.user_agent(), crate::ZCODE_USER_AGENT);
-        let identity = provider.endpoint.client_identity();
-        assert_eq!(*identity, crate::ClientIdentity::ZCode);
-        assert!(
-            identity
-                .headers()
-                .iter()
-                .any(|(k, v)| *k == "X-Title" && *v == "Z Code")
-        );
-        assert!(
-            identity
-                .headers()
-                .iter()
-                .any(|(k, v)| *k == "X-ZCode-Agent" && *v == "glm")
-        );
-    }
-
-    #[test]
-    fn flash_baseline_is_registered_multimodal() {
-        // The plan now serves glm-5.3-flash (native multimodal, 1M context);
-        // prove the offering list and the capability baseline stay in sync.
-        let offered: Vec<&str> = crate::ZAI_CODE_MODELS.to_vec();
-        assert!(offered.contains(&"glm-5.3-flash"), "flash is offered");
-        let m = muta_contracts::resolve_model("glm-5.3-flash");
-        assert_eq!(m.family, "glm");
-        assert_eq!(m.context_window, 1_000_000);
-        assert!(m.vision, "GLM-5.3-Flash is natively multimodal");
-        assert!(m.tool_call);
-        assert_eq!(m.effort_levels, muta_contracts::effort::EFFORT_GLM_5);
-    }
-}

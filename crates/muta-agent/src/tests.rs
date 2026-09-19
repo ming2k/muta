@@ -456,6 +456,7 @@ fn system_prompt_registry_reproduces_legacy_layout() {
      - Shell Syntax: Standard POSIX shell pipelines and syntax.\n\
      - Temp Access: read/write to the platform temp directory (`$TMPDIR`, `/tmp` on Unix) is always admitted for scratch files — spill files, staging, probes — no additional roots required.\n\
      - Tool Guidance: ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_text`, `search_text`, `find_files`, `list_dir`) over executing shell commands like `cat`, `grep`, `find`, `sed`, `echo >`.\n\
+     - Finite Foreground Execution Axiom: You operate in a headless, non-interactive shell without an interactive terminal (TTY). Foreground commands MUST be finite and self-terminating. NEVER execute unbounded continuous monitoring or streaming tools (such as `top`, `htop`, `intel_gpu_top`, `tail -f`, `ping`, `watch`) without bounds (e.g. `timeout 2s <cmd>`, `ping -c 3`, `top -b -n 1`, or `<cmd> | head -n 30`). Continuous streaming without exit in the foreground triggers StreamGuard early cutoff. For long-running background tasks or persistent daemons, you MUST use `run_command` with `background: true` or `service: true`.\n\
      \n\
      See the task through to a real result in this round. Don't stop at analysis \
      or a partial fix — carry the work through implementation and verification. \

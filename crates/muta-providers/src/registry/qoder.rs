@@ -66,22 +66,24 @@ pub const QODER_MODELS: &[Model] = &[
 inventory::submit!(muta_contracts::model::BaselineModels(QODER_MODELS));
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: super::unsupported_prompt_cache,
-    id: "qoder",
+    dialect: muta_contracts::ProviderDialect::Qoder,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
+    id: std::borrow::Cow::Borrowed("qoder"),
     baselines: QODER_MODELS,
     // Base URL host only — the executor appends Qoder's fixed
     // `/algo/api/v2/service/pro/sse/agent_chat_generation?…` inference path
     // (see `muta_llm_client::...::qoder::inference_url`). The `.sh` host is
     // the international CLI line; CN accounts route through
     // `https://gateway.qoder.com.cn` (the OAuth preset tracks the issuer).
-    base_url: "https://api2.qoder.sh",
+    root_url: std::borrow::Cow::Borrowed("https://api2.qoder.sh"),
     user_agent: None,
     protocol: WireProtocol::ChatCompletions,
     // No live /models endpoint: the baseline above is the whole universe.
     catalog_source: RemoteCatalogSource::None,
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
-    wire_overrides: &[],
     models: &["qoder3", "qoder3-max", "qoder3-base", "qwen3-coder-plus"],
 };
 
@@ -95,7 +97,7 @@ mod tests {
     fn spec_resolves_and_serves_the_chat_wire() {
         assert_eq!(SPEC.id, "qoder");
         assert_eq!(SPEC.protocol, WireProtocol::ChatCompletions);
-        assert_eq!(SPEC.base_url, "https://api2.qoder.sh");
+        assert_eq!(SPEC.root_url.as_ref(), "https://api2.qoder.sh");
         // First model is the activation default.
         assert_eq!(SPEC.models[0], "qoder3");
         // Qoder serves the model list statically.

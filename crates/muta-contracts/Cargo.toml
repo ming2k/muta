@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+url = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 futures = { workspace = true }

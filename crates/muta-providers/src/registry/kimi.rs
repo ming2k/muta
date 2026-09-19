@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, OpenAiProviderSpec, RemoteCatalogSource};
+use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Moonshot's Kimi Code endpoint, in display/activation
 /// order — the first entry is the initial active channel. `k3` is the
@@ -22,15 +22,7 @@ pub use muta_contracts::model_providers::KIMI_CODE_MODELS;
 // accept any UA — including none — under OAuth auth, but whether the
 // API-key path gates on a recognized coding-agent UA is unknown, so the
 // recognized default stays as the zero-risk choice.
-pub(crate) const PROVIDER_SPEC: OpenAiProviderSpec = OpenAiProviderSpec {
-    id: "kimi-code",
-    base_url: "https://api.kimi.com/coding/v1/chat/completions",
-    default_model: "k3",
-    env_api_key: "MOONSHOT_API_KEY",
-    env_model: "MOONSHOT_MODEL",
-    fixed_model: Some("k3"),
-    default_user_agent: Some(muta_llm_client::OPENCODE_USER_AGENT),
-};
+
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -111,45 +103,19 @@ fn prompt_cache_for_model(_: &str) -> muta_contracts::PromptCacheSpec {
 }
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
-    prompt_cache: prompt_cache_for_model,
-    id: "kimi-code",
+    dialect: muta_contracts::ProviderDialect::Standard,
+    protocol_roots: std::borrow::Cow::Borrowed(&[]),
+    catalog_root_url: None,
+    prompt_cache: super::PromptCachePolicy::Compiled(prompt_cache_for_model),
+    id: std::borrow::Cow::Borrowed("kimi-code"),
     baselines: MODELS,
-    base_url: "https://api.kimi.com/coding/v1/chat/completions",
-    user_agent: Some(crate::OPENCODE_USER_AGENT),
+    root_url: std::borrow::Cow::Borrowed("https://api.kimi.com/coding/v1"),
+    user_agent: Some(std::borrow::Cow::Borrowed(crate::OPENCODE_USER_AGENT)),
     protocol: WireProtocol::ChatCompletions,
     // The Kimi Code platform exposes a live /models endpoint, so instances
     // created from this preset track the platform's actual model list.
     catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
-    wire_overrides: &[],
     models: KIMI_CODE_MODELS,
 };
-
-#[cfg(test)]
-mod tests {
-    use crate::openai_provider_spec;
-    use muta_contracts::Provider;
-
-    #[test]
-    fn kimi_code_uses_kimi_code_platform() {
-        let spec = openai_provider_spec("kimi-code").expect("kimi-code spec");
-        // The Kimi Code platform pins the model id — overrides are ignored.
-        assert_eq!(spec.resolve_model(None), "k3");
-        assert_eq!(spec.resolve_model(Some("kimi-k2.7-code".to_string())), "k3");
-
-        let provider = spec.build("test-key".to_string(), None, None);
-        assert_eq!(
-            provider.endpoint.base_url(),
-            "https://api.kimi.com/coding/v1/chat/completions"
-        );
-        assert_eq!(provider.endpoint.model_id(), "k3");
-        // The Kimi Code platform requires a recognized coding-agent UA.
-        assert_eq!(provider.endpoint.user_agent(), crate::OPENCODE_USER_AGENT);
-        // The registry stamps the preset id onto the concrete provider so
-        // assistant responses can be attributed to "kimi-code".
-        assert_eq!(provider.endpoint.id(), "kimi-code");
-        assert_eq!(provider.provider_id(), "kimi-code");
-        assert_eq!(provider.model(), "k3");
-    }
-}
