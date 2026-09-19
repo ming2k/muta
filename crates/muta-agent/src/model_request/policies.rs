@@ -1,9 +1,27 @@
-//! System-prompt sections and policy registries (ADR-0056 / ADR-0160).
+//! System-prompt sections and policy registries (ADR-0056 / ADR-0160 / ADR-0261).
 //!
 //! The system prompt is a [`SystemPromptRegistry`] of declarative
 //! [`SystemPromptSection`]s registered on the [`Agent`](crate::Agent) at
 //! construction. The `model_request` assembler rebuilds a structured,
 //! cache-tiered `InstructionBundle` from live agent state before every provider request.
+//!
+//! # Architecture & Design Principles (ADR-0261)
+//!
+//! 1. **Attention Frugality & Signal Maximization**: Every token in the system
+//!    prompt must justify its presence as an indispensable structural identity or
+//!    security boundary. We reject "nanny prompting" — verbose lectures instructing
+//!    the model how to behave, what tools to prefer, or to persist through tasks.
+//! 2. **Mechanisms over Exhortation**: Execution bounds (such as ADR-0257 StreamGuard,
+//!    idle watchdogs, and sandbox confinements) are physically enforced by runtime
+//!    mechanisms, not by upfront prompt preaching. Failures emit targeted self-healing
+//!    advisories directly in tool output.
+//! 3. **Tool Autonomy & Locality**: Guidelines for tool parameters and usage belong
+//!    in tool descriptions and parameter schemas, evaluated locally by the model
+//!    at call sites rather than broadcast globally across the system prompt.
+//! 4. **Pure Structural & Security Boundaries**: The default registry admits only
+//!    role identities, user project rules, admitted multi-workspace roots, and
+//!    untrusted web boundaries. In the default configuration with no identity or
+//!    rules, zero system prompt tokens are emitted.
 
 use muta_contracts::InstructionTier;
 
