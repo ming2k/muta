@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.5] - 2026-09-19
+
+### Fixed
+
+- **Pre-Attach Trust Gate Lifecycle & Negative Attestation (ADR-0175, ADR-0253):**
+  - Resolved permanent submission spinner deadlock in `mutx` by tying PreAttach unmount strictly and symmetrically to `gate_request(&snapshot).is_none()` instead of demanding `aggregate == Trusted || Absent`.
+  - Added fail-safe rehydration in `mutx` to reset `submitting` if a post-submission snapshot still requires gating, preventing UI freeze upon attestation errors.
+  - Corrected backend negative attestation diff calculation in `session_driver` to strictly deny $D \setminus S$ (unselected candidate assets), preventing already-trusted assets or unreviewed user configuration from spurious auto-denial.
+  - Broadened asset attestation scanning in `workspace_security` to skip standard VCS and virtualenv/build directories (`.git`, `node_modules`, `.venv`, `venv`, `target`, `__pycache__`, `.pytest_cache`), preventing symlink attestation aborts and blocking I/O freezes.
+  - Spliced `Space` toggle into `mutx` router and action dispatchers (`InputAction::PreAttachToggle`) for fluent multi-select navigation without accidental exit.
+  - Completely purged legacy domain names and compatibility shims (`roots`/`rules`), automatically normalizing persistent store records upon load.
+
 ## [0.49.4] - 2026-09-19
 
 ### Added
@@ -7377,7 +7389,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.49.4...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.49.5...HEAD
+[0.49.5]: https://github.com/ming2k/muta/compare/v0.49.4...v0.49.5
 [0.49.4]: https://github.com/ming2k/muta/compare/v0.49.3...v0.49.4
 [0.49.3]: https://github.com/ming2k/muta/compare/v0.49.2...v0.49.3
 [0.49.2]: https://github.com/ming2k/muta/compare/v0.49.1...v0.49.2
