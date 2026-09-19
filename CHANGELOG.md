@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.2] - 2026-09-19
+
+### Changed
+
+- **Clean Agent System Prompt Architecture**: Purged all legacy nanny promptings
+  (`HostEnvironmentGuidance`, `PersistenceGuidance`, `DelegationGuidance`,
+  `FileEditingGuidance`) from the default system prompt registry. Default agent
+  now starts with zero prompt clutter, preserving context window and attention
+  fully for user tasks and letting runtime mechanisms (sandboxes, StreamGuard, tool schemas)
+  enforce execution boundaries.
+
+### Fixed
+
+- Updated Qoder OAuth client ID to the shared production constant and supported
+  custom `authorize_url` for device authorization flow.
+
 ## [0.50.1] - 2026-09-19
 
 ### Fixed
@@ -7424,7 +7440,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.1...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.2...HEAD
+[0.50.2]: https://github.com/ming2k/muta/compare/v0.50.1...v0.50.2
 [0.50.1]: https://github.com/ming2k/muta/compare/v0.50.0...v0.50.1
 [0.50.0]: https://github.com/ming2k/muta/compare/v0.49.5...v0.50.0
 [0.49.5]: https://github.com/ming2k/muta/compare/v0.49.4...v0.49.5
