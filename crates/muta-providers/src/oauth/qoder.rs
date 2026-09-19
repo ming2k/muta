@@ -46,6 +46,11 @@ pub struct QoderDeviceSession {
     pub machine_id: String,
     pub client_id: String,
     pub authorize_url: String,
+    /// Alibaba UMID device token carried by qodercli ≥1.1.57. Optional: the
+    /// official client omits the parameter when the token is not ready, and
+    /// the server accepts authorize URLs without it. Never fabricate or
+    /// reuse one across devices — it anchors the risk layer's fingerprint.
+    pub machine_token: Option<String>,
 }
 
 impl QoderDeviceSession {
@@ -62,6 +67,18 @@ impl QoderDeviceSession {
 
     /// Generate a fresh session with a custom authorize URL (e.g. CN line).
     pub fn with_authorize_url(machine_id: &str, client_id: &str, authorize_url: &str) -> Self {
+        Self::with_machine_token(machine_id, client_id, authorize_url, None)
+    }
+
+    /// Generate a fresh session carrying the client's UMID machine token
+    /// (qodercli ≥1.1.57 appends `machine_token` to the authorize URL when
+    /// it has one). `None` keeps the 1.1.34 wire shape.
+    pub fn with_machine_token(
+        machine_id: &str,
+        client_id: &str,
+        authorize_url: &str,
+        machine_token: Option<String>,
+    ) -> Self {
         let verifier = new_verifier();
         let challenge = base64_url_no_pad(&sha2::Sha256::digest(verifier.as_bytes()));
         Self {
@@ -71,17 +88,29 @@ impl QoderDeviceSession {
             machine_id: machine_id.to_string(),
             client_id: client_id.to_string(),
             authorize_url: authorize_url.to_string(),
+            machine_token,
         }
     }
 
     /// The browser URL the user opens to approve. This doubles as the
-    /// "device code" prompt (no separate user_code exists).
+    /// "device code" prompt (no separate user_code exists). Mirrors the
+    /// official client: `machine_token` is appended only when present.
     pub fn user_url(&self) -> String {
-        format!(
+        let mut url = format!(
             "{}?challenge={}&challenge_method=S256\
 &nonce={}&machine_id={}&client_id={}",
             self.authorize_url, self.challenge, self.nonce, self.machine_id, self.client_id
-        )
+        );
+        if let Some(token) = self
+            .machine_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            url.push_str("&machine_token=");
+            url.push_str(&percent(token));
+        }
+        url
     }
 }
 
@@ -110,9 +139,13 @@ fn base64_url_no_pad(bytes: &[u8]) -> String {
 }
 
 /// The device-token poll response (`dt-` access, `jrt-` refresh).
+///
+/// Field-name drift (qodercli 1.1.57): the poll endpoint now returns the
+/// access token under `token`; 1.1.34-era clients used
+/// `accessToken`/`device_token`. All three spellings are accepted.
 #[derive(Debug, Deserialize)]
 pub struct QoderDeviceToken {
-    #[serde(alias = "accessToken", alias = "device_token")]
+    #[serde(alias = "accessToken", alias = "device_token", alias = "token")]
     pub access_token: SecretString,
     #[serde(default, alias = "refreshToken")]
     pub refresh_token: Option<SecretString>,
@@ -155,6 +188,8 @@ where
     Fut: std::future::Future<Output = ()> + Send,
 {
     let start = std::time::Instant::now();
+    // Consecutive-429 counter for backoff (reset on any non-429 response).
+    let mut attempts: u32 = 0;
     loop {
         if start.elapsed().as_millis() as u64 >= deadline_ms {
             return Err(crate::oauth::AuthError::Timeout);
@@ -179,6 +214,17 @@ where
             return Ok(token);
         }
         let code = status.as_u16();
+        if code == 429 {
+            // Rate-limited (the /device/selectAccounts page renders 429 from
+            // /device/redirect as the same "Parameter invalid" dialog, which
+            // invites retry storms — break the loop with backoff instead of
+            // failing fast). Exponential backoff, capped well under the flow
+            // deadline so repeated 429s still end in AuthError::Timeout.
+            attempts = attempts.saturating_add(1);
+            let backoff = QODER_POLL_INTERVAL_MS.saturating_mul(1 << attempts.min(3));
+            sleep(backoff + POLLING_SAFETY_MARGIN_MS).await;
+            continue;
+        }
         if code != 404 {
             return Err(crate::oauth::AuthError::TokenEndpoint { status: code, body: text });
         }
@@ -481,6 +527,71 @@ mod tests {
         assert_eq!(token.uid.as_deref(), Some("u1"));
         // One pending poll + one success.
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn poll_treats_429_as_rate_limit_with_backoff() {
+        // Two 429s then success: the flow must retry with backoff instead of
+        // surfacing TokenEndpoint (the web page renders 429 from
+        // /device/redirect as "Parameter invalid", which invites retry
+        // storms — the poller breaks that loop itself).
+        let (addr, hits, _keep) = spawn_scripted_server(vec![
+            (429, "slow down".to_string()),
+            (429, "slow down".to_string()),
+            (
+                200,
+                r#"{"token":"dt-abc","refresh_token":"jrt-x"}"#.to_string(),
+            ),
+        ])
+        .await;
+        let session = QoderDeviceSession::new("m", "c");
+        let client = crate::http::Http::control_plane().unwrap();
+        let url = format!("http://{addr}/api/v1/deviceToken/poll");
+        let result = poll_device_token_at(&client, &url, &session, |_| async {}, 60_000).await;
+        let token = result.unwrap();
+        assert_eq!(token.access_token.expose_secret(), "dt-abc");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn poll_accepts_1_1_57_token_field_name() {
+        // qodercli 1.1.57 renamed the poll response field to `token`; the
+        // 1.1.34 spellings must keep decoding too.
+        for body in [
+            r#"{"token":"dt-abc"}"#,
+            r#"{"accessToken":"dt-abc"}"#,
+            r#"{"device_token":"dt-abc"}"#,
+        ] {
+            let parsed: QoderDeviceToken = serde_json::from_str(body).unwrap();
+            assert_eq!(parsed.access_token.expose_secret(), "dt-abc");
+        }
+    }
+
+    #[test]
+    fn user_url_appends_machine_token_only_when_present() {
+        let session = QoderDeviceSession::with_machine_token(
+            "mid",
+            "cid",
+            "https://qoder.com/device/selectAccounts",
+            Some("mt-1".to_string()),
+        );
+        assert!(session.user_url().ends_with("&machine_token=mt-1"));
+
+        // Absent / blank tokens keep the 1.1.34 wire shape.
+        let plain = QoderDeviceSession::with_machine_token(
+            "mid",
+            "cid",
+            "https://qoder.com/device/selectAccounts",
+            None,
+        );
+        assert!(!plain.user_url().contains("machine_token"));
+        let blank = QoderDeviceSession::with_machine_token(
+            "mid",
+            "cid",
+            "https://qoder.com/device/selectAccounts",
+            Some("   ".to_string()),
+        );
+        assert!(!blank.user_url().contains("machine_token"));
     }
 
     #[tokio::test]

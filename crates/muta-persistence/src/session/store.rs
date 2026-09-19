@@ -221,6 +221,11 @@ impl SessionStore {
         self.state.lock().await.data.id.clone()
     }
 
+    /// The content-addressed blob store for this session.
+    pub fn blob_store(&self) -> &crate::blobs::BlobStore {
+        &self.blob_store
+    }
+
     /// Test-only: lock the session state (same crate sibling module access).
     #[cfg(test)]
     pub(crate) async fn state_lock_for_test(&self) -> tokio::sync::MutexGuard<'_, SessionState> {

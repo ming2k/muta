@@ -187,8 +187,11 @@ fn pass2_context_budgeting(
                 modified_files,
                 ..
             } => {
-                // Compaction nodes inject a system-role compaction summary into dialogue view
-                let mut content = format!("[Conversation Summary Checkpoint]:\n{summary}");
+                // Compaction nodes inject a system-role compaction summary into dialogue view (ADR-0262)
+                let mut content = format!(
+                    "[Conversation Summary Checkpoint — inspect with handle \"fold:{}\"]:\n{summary}",
+                    node.id
+                );
                 if !read_files.is_empty() || !modified_files.is_empty() {
                     content.push_str("\n\n### Tracked Files:\n");
                     if !modified_files.is_empty() {

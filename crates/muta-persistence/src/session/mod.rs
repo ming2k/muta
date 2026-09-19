@@ -179,6 +179,11 @@ pub struct SessionData {
 }
 
 impl SessionData {
+    /// Borrow the underlying transcript entries and directives (ADR-0186, ADR-0262).
+    pub fn transcript(&self) -> &muta_contracts::Transcript {
+        &self.transcript
+    }
+
     /// Clone working state and metadata while omitting the factual transcript history.
     ///
     /// Hot-path incremental turn commits use this to send only new delta rows to

@@ -220,9 +220,8 @@ pub const DEBUG_TOOLS: &[&str] = &[
     "code_query",
     "read_url",
     "search_web",
-    // Execution and process observation for builds, tests, gdb, sanitizers.
+    // Execution observation for builds, tests, gdb, sanitizers.
     "run_command",
-    "process",
 ];
 
 impl SubAgentProfile {
@@ -551,7 +550,6 @@ mod tests {
         assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("search_text")));
         assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("code_query")));
         assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("run_command")));
-        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("process")));
 
         assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("edit_text")));
         assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("write_file")));

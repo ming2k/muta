@@ -181,6 +181,20 @@ impl DatabaseEngine {
         Ok(sessions)
     }
 
+    /// List subagent sessions spawned by a given parent session (ADR-0262).
+    pub(crate) fn list_subagent_sessions(&self, parent_id: &str) -> Result<Vec<SessionRecord>> {
+        const COLS: &str = "id, parent_id, fork_kind, title, created_at_s, updated_at_s, \
+                            workspace_root, persona, msg_count, last_user_prompt, digest";
+        let sql = format!("SELECT {COLS} FROM sessions WHERE parent_id = ?1 AND fork_kind = 'subagent' ORDER BY created_at_s ASC");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![parent_id], map_session_row)?;
+        let mut sessions = Vec::new();
+        for session in rows {
+            sessions.push(session?);
+        }
+        Ok(sessions)
+    }
+
     /// Delete a session and cascade all its events, messages, and command records.
     pub(crate) fn delete_session(&self, session_id: &str) -> Result<bool> {
         let affected = self

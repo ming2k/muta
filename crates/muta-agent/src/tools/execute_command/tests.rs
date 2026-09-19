@@ -373,12 +373,12 @@ async fn test_background_spawn_via_service() {
         "run_persistent must be deleted from the tool surface (M6)"
     );
     assert!(
-        props.get("service").is_some(),
-        "service flag must be exposed (ADR-0190)"
+        props.get("service").is_none(),
+        "service flag must be deleted from the tool surface (ADR-0263)"
     );
     assert!(
-        props.get("background").is_some(),
-        "background flag must be exposed (ADR-0190)"
+        props.get("background").is_none(),
+        "background flag must be deleted from the tool surface (ADR-0263)"
     );
     // ADR-0234: the timer is a wake-prompt arm whose consumer (autonomous
     // wake) is disabled by ADR-0212, so `run_command` must not advertise
@@ -393,144 +393,19 @@ async fn test_background_spawn_via_service() {
 #[cfg(unix)]
 mod background_mode_selection {
     use super::*;
-    use async_trait::async_trait;
-    use muta_contracts::{BackgroundJobService, JobKind};
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Default)]
-    struct RecordingService {
-        calls: Mutex<Vec<JobKind>>,
-    }
-
-    impl RecordingService {
-        fn kinds(&self) -> Vec<JobKind> {
-            self.calls.lock().expect("lock").clone()
-        }
-
-        fn info(&self, kind: JobKind) -> muta_contracts::BackgroundJobInfo {
-            let now = 0u64;
-            muta_contracts::BackgroundJobInfo {
-                id: muta_contracts::JobId::new("job"),
-                spec: muta_contracts::JobSpec::Process {
-                    command: "true".to_string(),
-                    label: None,
-                    cwd: None,
-                    detached: false,
-                    task_kind: kind,
-                    readiness: None,
-                    restart: None,
-                },
-                state: muta_contracts::JobState::Running {
-                    started_at_ms: now,
-                    pid: None,
-                },
-                created_at_ms: now,
-                completed_at_ms: None,
-                latest_output: None,
-            }
-        }
-    }
-
-    #[async_trait]
-    impl BackgroundJobService for RecordingService {
-        async fn spawn_process(
-            &self,
-            _command: String,
-            _label: Option<String>,
-            _cwd: Option<PathBuf>,
-            _detached: bool,
-            _timeout: Option<std::time::Duration>,
-        ) -> Result<muta_contracts::BackgroundJobInfo, String> {
-            self.spawn_process_ex(
-                String::new(),
-                None,
-                None,
-                false,
-                None,
-                JobKind::Interactive,
-                None,
-                None,
-            )
-            .await
-        }
-
-        async fn spawn_process_ex(
-            &self,
-            _command: String,
-            _label: Option<String>,
-            _cwd: Option<PathBuf>,
-            _detached: bool,
-            _timeout: Option<std::time::Duration>,
-            kind: JobKind,
-            _readiness: Option<muta_contracts::Readiness>,
-            _restart: Option<muta_contracts::RestartPolicy>,
-        ) -> Result<muta_contracts::BackgroundJobInfo, String> {
-            self.calls.lock().expect("lock").push(kind);
-            Ok(self.info(kind))
-        }
-
-        fn list_jobs(&self) -> Vec<muta_contracts::BackgroundJobInfo> {
-            Vec::new()
-        }
-
-        fn get_job(
-            &self,
-            _id: &muta_contracts::JobId,
-        ) -> Option<muta_contracts::BackgroundJobInfo> {
-            None
-        }
-
-        fn get_logs(&self, _id: &muta_contracts::JobId, _tail: usize) -> Option<Vec<String>> {
-            None
-        }
-
-        fn kill_job(&self, _id: &muta_contracts::JobId) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn abort_all(&self) {}
-    }
-
-    fn tool_with(service: Arc<RecordingService>) -> ExecuteCommandTool {
-        let service: Arc<dyn BackgroundJobService> = service;
-        ExecuteCommandTool::new(None).with_job_service(Some(service))
-    }
 
     #[tokio::test]
-    async fn service_mode_wins_over_background() {
-        // ADR-0234: `service` is the stronger mode; `background: true` beside
-        // it must not silently downgrade the job to a 1800s bounded task.
-        let service = Arc::new(RecordingService::default());
-        let tool = tool_with(Arc::clone(&service));
+    async fn background_and_service_flags_are_ignored_in_favor_of_finite_execution() {
+        // ADR-0263: background and service execution paths are eliminated.
+        // All commands execute as finite synchronous commands.
+        let tool = ExecuteCommandTool::new(None);
         let output = tool
             .call_structured(&arguments_flags(&["background", "service"]))
             .await
             .expect("structured output");
-        assert_eq!(service.kinds(), vec![JobKind::Service]);
         let text = output.to_text();
-        assert!(text.contains("spawned_service"), "{text}");
-        assert!(
-            !text.contains("automatic"),
-            "no automatic-notification promise may survive ADR-0212: {text}"
-        );
-    }
-
-    #[tokio::test]
-    async fn background_mode_reports_how_to_collect_the_result() {
-        let service = Arc::new(RecordingService::default());
-        let tool = tool_with(Arc::clone(&service));
-        let output = tool
-            .call_structured(&arguments_flags(&["background"]))
-            .await
-            .expect("structured output");
-        assert_eq!(service.kinds(), vec![JobKind::Interactive]);
-        let text = output.to_text();
-        assert!(text.contains("spawned_in_background"), "{text}");
-        assert!(
-            text.contains("process") && !text.contains("automatic"),
-            "the result must be described as collected through the process tool: {text}"
-        );
+        assert!(!text.contains("spawned_service"));
+        assert!(!text.contains("spawned_in_background"));
     }
 
     fn arguments_flags(flags: &[&str]) -> String {

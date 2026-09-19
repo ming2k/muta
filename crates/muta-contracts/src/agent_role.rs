@@ -434,7 +434,6 @@ impl MainAgentRole {
     /// subagents (`explore`/`debug`) to maintain a lean, clean context window.
     pub const DEVELOPER_TOOLS: &'static [&'static str] = &[
         "run_command",
-        "process",
         "read_text",
         "edit_text",
         "write_file",
@@ -461,7 +460,6 @@ impl MainAgentRole {
     /// Built-in tools admitted for ops sessions.
     pub const OPS_TOOLS: &'static [&'static str] = &[
         "run_command",
-        "process",
         "read_text",
         "edit_text",
         "write_file",
@@ -737,7 +735,6 @@ mod tests {
             panic!("developer must be scoped with explicit tools");
         };
         assert!(names.contains("run_command"));
-        assert!(names.contains("process"));
         assert!(names.contains("read_text"));
         assert!(names.contains("edit_text"));
         assert!(names.contains("write_file"));
@@ -810,7 +807,6 @@ mod tests {
         let ops_manifest = SessionRoleManifest::ops();
         assert_eq!(ops_manifest.role_id, "ops");
         assert!(ops_manifest.tools.contains(&"run_command".to_string()));
-        assert!(ops_manifest.tools.contains(&"process".to_string()));
         assert!(ops_manifest.tools.contains(&"ask_user".to_string()));
         assert!(!ops_manifest.tools.contains(&"code_query".to_string()));
         assert!(ops_manifest.identity.preamble().starts_with("Role: ops."));
@@ -843,7 +839,6 @@ mod tests {
         };
         // System and remote operational capabilities admitted:
         assert!(names.contains("run_command"));
-        assert!(names.contains("process"));
         assert!(names.contains("read_text"));
         assert!(names.contains("edit_text"));
         assert!(names.contains("write_file"));

@@ -166,6 +166,11 @@ impl DbReader {
         self.engine.list_sessions(filter)
     }
 
+    /// Subagent sessions spawned by `parent_id` (ADR-0262).
+    pub fn list_subagent_sessions(&self, parent_id: &str) -> Result<Vec<SessionRecord>> {
+        self.engine.list_subagent_sessions(parent_id)
+    }
+
     /// Candidate sessions for switching, strictly excluding the active session (ADR-0250).
     pub fn list_switch_candidates(
         &self,
@@ -247,7 +252,7 @@ impl DbReader {
     }
 
     /// One session's raw durable data (the load path of `SessionStore`).
-    pub(crate) fn load_session_full(
+    pub fn load_session_full(
         &self,
         session_id: &str,
     ) -> Result<Option<crate::session::SessionData>> {

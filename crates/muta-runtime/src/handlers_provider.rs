@@ -1417,7 +1417,7 @@ async fn run_oauth(
             let _ = resp_tx.send(AgentResponse::ConnectStatus(
                 muta_contracts::ConnectStatus::Failed {
                     provider: label.to_string(),
-                    message: error.to_string(),
+                    message: qoder_login_error_message(&cfg, &error),
                 },
             ));
             return None;
@@ -1506,10 +1506,37 @@ async fn run_oauth(
     })
 }
 
+/// Human-facing message for a failed OAuth login. Qoder-specific: the
+/// `/device/selectAccounts` web page maps both a 400 and a 429 from its
+/// `/device/redirect` call to the same "Parameter invalid" dialog, so a raw
+/// error dump misleads the user — reframe rate limits and expired links
+/// with the action that actually fixes them.
+fn qoder_login_error_message(
+    cfg: &muta_providers::oauth::OAuthConfig,
+    error: &muta_providers::oauth::AuthError,
+) -> String {
+    if !cfg.is_qoder() {
+        return error.to_string();
+    }
+    match error {
+        muta_providers::oauth::AuthError::TokenEndpoint { status: 429, .. } => {
+            "Qoder rate-limited this login (shown by the web page as \"Parameter invalid\"). \
+             Wait 1–2 minutes without retrying, then start a new login — repeated attempts \
+             extend the cooldown."
+                .to_string()
+        }
+        muta_providers::oauth::AuthError::Timeout => {
+            "Login timed out. Qoder authorize links expire within minutes: start a new login \
+             and finish the browser step (open → sign in → approve) in one pass."
+                .to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
 /// Read the persisted Qoder identity for a connection, if any, so re-login
 /// keeps the same machine key instead of generating device churn.
-fn stored_qoder_identity(connection_id: &str) -> Option<String> {
-    let store = muta_providers::oauth::AuthStore::load().ok()?;
+fn stored_qoder_identity(connection_id: &str) -> Option<String> {    let store = muta_providers::oauth::AuthStore::load().ok()?;
     store
         .tokens
         .get(connection_id)

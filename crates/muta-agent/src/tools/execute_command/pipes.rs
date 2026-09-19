@@ -261,6 +261,7 @@ impl OutputCollector {
     /// True when at least one output line was captured. A child that has
     /// produced output and then gone silent is the ADR-0190 detach signature
     /// (service banner, then listen-loop quiet); silence-from-birth is not.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
     }
@@ -284,6 +285,7 @@ impl OutputCollector {
     }
 
     /// The captured lines in arrival order (for adoption replay).
+    #[allow(dead_code)]
     pub fn lines(&self) -> &[ShellLine] {
         &self.lines
     }

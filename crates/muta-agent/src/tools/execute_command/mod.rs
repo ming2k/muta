@@ -17,25 +17,13 @@ use crate::tools::helpers::{
 #[derive(ToolSchema, Deserialize)]
 struct ExecuteCommandArgs {
     #[tool(
-        desc = "The shell command to execute. Foreground commands must be finite and self-terminating."
+        desc = "The shell command to execute. Commands MUST be finite and self-terminating."
     )]
     command: String,
     #[tool(
-        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is detached or killed as a blocked-command guard. Continuous unbounded streaming is terminated early by StreamGuard (ADR-0257)."
+        desc = "Overall timeout in seconds (default 1800 = 30 minutes). Enforced by StreamGuard (ADR-0257/0263)."
     )]
     timeout: Option<u64>,
-    #[tool(
-        desc = "Set to true to run this bounded command asynchronously in the background. The call returns immediately with a job id; collect the outcome later with the process tool."
-    )]
-    background: Option<bool>,
-    #[tool(
-        desc = "Set to true to start a long-running service (dev server, watcher, daemon). Readiness is reported and an unexpected exit is reported as a task event; do not wait for a service to exit. Takes precedence over `background` when both are set."
-    )]
-    service: Option<bool>,
-    #[tool(
-        desc = "Optional human-readable label for the background job (e.g. 'cargo-test', 'dev-server')."
-    )]
-    label: Option<String>,
     #[tool(
         desc = "Set to true to bypass semantic folding and output raw unabridged command stream (default false)."
     )]
@@ -89,7 +77,6 @@ struct WorkspaceExecuteCommandArgs {
 pub struct ExecuteCommandTool {
     pub(crate) root: WorkspaceBase,
     pub(crate) env: Option<std::sync::Arc<dyn muta_contracts::ExecutionEnvironment>>,
-    pub(crate) job_service: Option<std::sync::Arc<dyn muta_contracts::BackgroundJobService>>,
     workspace_sandbox: bool,
 }
 
@@ -102,7 +89,6 @@ impl ExecuteCommandTool {
         Self {
             root,
             env: None,
-            job_service: None,
             workspace_sandbox: false,
         }
     }
@@ -113,18 +99,8 @@ impl ExecuteCommandTool {
         Self {
             root,
             env: Some(env),
-            job_service: None,
             workspace_sandbox: false,
         }
-    }
-
-    /// Attach a background job service to allow asynchronous command dispatch.
-    pub fn with_job_service(
-        mut self,
-        job_service: Option<std::sync::Arc<dyn muta_contracts::BackgroundJobService>>,
-    ) -> Self {
-        self.job_service = job_service;
-        self
     }
 
     /// Build the workspace-contained variant. It shares the same
@@ -136,7 +112,6 @@ impl ExecuteCommandTool {
         Self {
             root,
             env: Some(env),
-            job_service: None,
             workspace_sandbox: true,
         }
     }
@@ -177,7 +152,7 @@ impl Tool for ExecuteCommandTool {
         if self.workspace_sandbox {
             "Execute a shell command inside the isolated workspace. Foreground commands must be finite and self-terminating; continuous unbounded streaming is terminated early by StreamGuard. Host files outside admitted roots and network access are unavailable."
         } else {
-            "Execute a shell command in a headless non-interactive environment. Foreground commands MUST be finite and self-terminating. Never execute unbounded continuous monitoring or streaming tools (e.g. top, intel_gpu_top, tail -f, ping) without bounds (e.g. `timeout 2s`, `| head`, or one-shot flags). Continuous streaming in foreground is terminated early by StreamGuard (ADR-0257). For bounded work that should run while you do something else, set background: true; for a long-lived service, watcher, or daemon, set service: true and do not wait for it to exit."
+            "Execute a shell command in a headless non-interactive environment. Foreground commands MUST be finite and self-terminating. Never execute unbounded continuous monitoring or streaming tools (e.g. top, intel_gpu_top, tail -f, ping) without bounds (e.g. `timeout 2s`, `| head`, or one-shot flags). Continuous streaming in foreground is terminated early by StreamGuard (ADR-0257/0263)."
         }
     }
     fn parameters(&self) -> serde_json::Value {
@@ -265,75 +240,6 @@ impl Tool for ExecuteCommandTool {
         let timeout_secs = args.timeout.unwrap_or(1800);
         let timeout_duration = Duration::from_secs(timeout_secs);
 
-        // ADR-0234: mode selection is normalized, not raced. `service` is the
-        // strictly stronger mode (long-lived, readiness-reported), so it wins
-        // when both flags are set; a bounded background task is the fallback.
-        if args.service == Some(true) {
-            // ADR-0190 Service kind: spawn as a service task — readiness is
-            // reported, running is the success state, and an unsolicited
-            // death settles `Failed` (ADR-0234: that settle is recorded as a
-            // task event; it does not resume this turn).
-            if let Some(ref service) = self.job_service {
-                let info = service
-                    .spawn_process_ex(
-                        args.command,
-                        args.label,
-                        None,
-                        false,
-                        None,
-                        muta_contracts::JobKind::Service,
-                        Some(muta_contracts::Readiness::FirstOutput),
-                        None,
-                    )
-                    .await?;
-                let output = serde_json::json!({
-                    "status": "spawned_service",
-                    "job_id": info.id.0,
-                    "state": info.state,
-                    "message": "Service started and keeps running independently of this call. Readiness and an unexpected exit are recorded as task events in the client's task list; do not wait for it to exit — it is not supposed to. Inspect it with the process tool (action: 'status' or 'logs').",
-                });
-                return Ok(muta_contracts::ToolOutput::text(
-                    serde_json::to_string_pretty(&output).unwrap_or_default(),
-                ));
-            } else {
-                return Err(
-                    "Background job service is unavailable in this environment.".to_string()
-                );
-            }
-        }
-
-        // Bounded background work (ADR-0190 Interactive kind). Reached only
-        // after the `service` mode above has been ruled out (ADR-0234).
-        if args.background == Some(true) {
-            if let Some(ref service) = self.job_service {
-                let info = service
-                    .spawn_process_ex(
-                        args.command,
-                        args.label,
-                        None,
-                        false,
-                        Some(timeout_duration),
-                        muta_contracts::JobKind::Interactive,
-                        None,
-                        None,
-                    )
-                    .await?;
-                let output = serde_json::json!({
-                    "status": "spawned_in_background",
-                    "job_id": info.id.0,
-                    "state": info.state,
-                    "message": "Command started asynchronously and keeps running independently of this call. Nothing resumes your turn when it finishes — collect the outcome with the process tool (action: 'wait' to block until it finishes, 'status' for the current state, 'logs' for recent output).",
-                });
-                return Ok(muta_contracts::ToolOutput::text(
-                    serde_json::to_string_pretty(&output).unwrap_or_default(),
-                ));
-            } else {
-                return Err(
-                    "Background job service is unavailable in this environment.".to_string()
-                );
-            }
-        }
-
         let env = self
             .env
             .clone()
@@ -346,7 +252,6 @@ impl Tool for ExecuteCommandTool {
             env,
             stdin_policy,
             on_stream,
-            self.job_service.clone(),
             raw,
         )
         .await
@@ -355,17 +260,14 @@ impl Tool for ExecuteCommandTool {
 
 muta_contracts::register_tool!(ExecuteCommandFactory => |ctx| {
     let env = Some(execution_environment(ctx));
-    let job_service = ctx.get::<std::sync::Arc<dyn muta_contracts::BackgroundJobService>>().cloned();
     ExecuteCommandTool {
         root: workspace_base(ctx),
         env,
-        job_service,
         workspace_sandbox: false,
     }
 });
 
 muta_contracts::register_tool!(WorkspaceExecuteCommandFactory => |ctx| {
     let env = execution_environment(ctx);
-    let job_service = ctx.get::<std::sync::Arc<dyn muta_contracts::BackgroundJobService>>().cloned();
-    ExecuteCommandTool::workspace_with_env(env).with_job_service(job_service)
+    ExecuteCommandTool::workspace_with_env(env)
 });

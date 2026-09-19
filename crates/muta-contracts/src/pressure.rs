@@ -306,6 +306,8 @@ struct ToolMeta {
     mutates: bool,
     /// Salient command string for shell/command tools (ADR-0254).
     command_str: Option<String>,
+    /// Tool call ID correlating this result with its invocation (ADR-0262).
+    call_id: Option<String>,
 }
 
 impl ToolMeta {
@@ -528,6 +530,7 @@ fn collect_tool_meta(messages: &[Message]) -> HashMap<usize, ToolMeta> {
         if m.role != Role::Tool {
             continue;
         }
+        let call_id = m.tool_call_id.clone();
         let meta = m
             .tool_call_id
             .as_deref()
@@ -555,9 +558,13 @@ fn collect_tool_meta(messages: &[Message]) -> HashMap<usize, ToolMeta> {
                     read_range,
                     mutates,
                     command_str,
+                    call_id: call_id.clone(),
                 }
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| ToolMeta {
+                call_id,
+                ..Default::default()
+            });
         out.insert(i, meta);
     }
     out
@@ -692,10 +699,12 @@ fn cleared_placeholder(meta: &ToolMeta, content: &str) -> String {
         meta.label.as_str()
     };
     let lines = content.lines().count().max(1);
-    format!(
-        "{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {} tokens)]",
-        tokenizer::count_tokens(content)
-    )
+    let tokens = tokenizer::count_tokens(content);
+    if let Some(call_id) = &meta.call_id {
+        format!("{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens) — inspect with handle \"call:{call_id}\"]")
+    } else {
+        format!("{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens)]")
+    }
 }
 
 /// Keep head + tail, eliding the middle with a recognisable marker. Returns the

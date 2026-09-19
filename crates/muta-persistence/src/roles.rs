@@ -365,6 +365,5 @@ admit_mcp = ["internal_pg"]
         let manifest = resolve_role_manifest(None, Some("ops"));
         assert_eq!(manifest.role_id, "ops");
         assert!(manifest.tools.contains(&"run_command".to_string()));
-        assert!(manifest.tools.contains(&"process".to_string()));
     }
 }

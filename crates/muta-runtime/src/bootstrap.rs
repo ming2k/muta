@@ -442,14 +442,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         }
     };
     let background_jobs = crate::background_jobs::BackgroundJobManager::new();
-    let session_job_service = crate::background_jobs::SessionJobService::new(
-        background_jobs.clone(),
-        execution_env.clone(),
-    );
-    // ADR-0190 D5: bind the owning session so every task this service
-    // spawns is stamped with it (snapshots + ledger rows).
-    session_job_service.bind_owner(session.id().await);
-    let job_service: Arc<dyn muta_contracts::BackgroundJobService> = Arc::new(session_job_service);
 
     let tool_ctx = {
         let mut builder = ToolContextBuilder::new();
@@ -458,7 +450,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         builder.provide(skills_registry.clone());
         builder.provide(session.clone());
         builder.provide(execution_env.clone());
-        builder.provide(job_service);
         // The session's workspace root: every workspace-relative tool
         // operation (bash cwd, relative path resolution, search bases)
         // anchors here instead of the daemon process's cwd. Under the
@@ -518,6 +509,20 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // underlying `Arc<SubagentTool>` is what gets layered into the toolset.
     let subagent_tool_handle = subagent_tool.clone();
     toolset.insert(subagent_tool);
+
+    // Demand-paged epistemic memory (ADR-0262): provide the `inspect` tool to the
+    // master agent for recalling subagent sessions, pruned tool outputs, and compacted history.
+    let current_session_id = session.id().await;
+    let offstream_reg = crate::offstream::build_offstream_registry(
+        &current_session_id,
+        session.blob_store().clone(),
+    );
+    let inspect_tool = Arc::new(muta_agent::tools::InspectTool::new(
+        offstream_reg,
+        current_session_id,
+    ));
+    toolset.insert(inspect_tool);
+
     let mut agent = Agent::builder_from_toolset(agent_provider, toolset, identity)
         .with_skills((*skills_registry).clone())
         .build();
@@ -907,84 +912,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         agent.round_counter_handle(),
     );
 
-    // Forward background job lifecycle events directly into the frontend response stream
-    {
-        let mut job_rx = background_jobs.subscribe();
-        let resp_tx_jobs = resp_tx.clone();
-        let session_for_jobs = session.clone();
-        let jobs_for_reconcile = background_jobs.clone();
-        tokio::spawn(async move {
-            let session_id = session_for_jobs.id().await;
-            loop {
-                let event = match job_rx.recv().await {
-                    Ok(event) => event,
-                    // ADR-0234: a lagged subscriber used to end this task,
-                    // which silently stopped every later task-bar update for
-                    // the session. Skip the gap and rebuild the rows from the
-                    // job snapshots instead — the manager is the source of
-                    // truth, the event stream is only a hint.
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!(
-                            session = %session_id,
-                            skipped,
-                            "background job event stream lagged; rebuilding task rows from snapshots"
-                        );
-                        for info in jobs_for_reconcile.list_jobs() {
-                            let _ = resp_tx_jobs.send(round_response(
-                                &session_id,
-                                RoundEvent::BackgroundJobStarted(info),
-                            ));
-                        }
-                        continue;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                };
-                let round_evt = match event {
-                    crate::background_jobs::BackgroundJobEvent::Started(info) => {
-                        RoundEvent::BackgroundJobStarted(info)
-                    }
-                    crate::background_jobs::BackgroundJobEvent::Progress { job_id, line } => {
-                        RoundEvent::BackgroundJobProgress { job_id, line }
-                    }
-                    crate::background_jobs::BackgroundJobEvent::Ready { job_id } => {
-                        RoundEvent::BackgroundJobReady { job_id }
-                    }
-                    crate::background_jobs::BackgroundJobEvent::Completed(outcome) => {
-                        RoundEvent::BackgroundJobCompleted(outcome)
-                    }
-                };
-                let _ = resp_tx_jobs.send(round_response(&session_id, round_evt));
-            }
-        });
-    }
-
-    // ADR-0190 mailbox: fabric completion events wake the session. The
-    // driver's round machinery decides queue-vs-start via `RoundLifecycle`;
-    // this task is the select-arm body running outside the request loop so
-    // wake requests contend with user input on equal terms.
-    //
-    // ADR-0234: wakes ride their own channel. Whether one becomes a round is the
-    // driver's decision (authorization, budget, human precedence); the mailbox
-    // only classifies and offers.
-    let (system_wake_tx, system_wake_rx) = tokio::sync::mpsc::channel(16);
-    {
-        let mailbox_rx = background_jobs.subscribe();
-        let mailbox_env = crate::task_mailbox::MailboxEnv {
-            side: side.clone(),
-            agent: agent.clone(),
-            session: session.clone(),
-            lifecycle: lifecycle.clone(),
-            tx: resp_tx.clone(),
-            req_tx: req_tx.clone(),
-            wake_tx: system_wake_tx,
-            config: config.clone(),
-        };
-        let mailbox_id = session.id().await;
-        tokio::spawn(async move {
-            crate::task_mailbox::run_mailbox(mailbox_rx, mailbox_env, mailbox_id).await;
-        });
-    }
-
     let driver = SessionDriver {
         req_rx,
         tx: resp_tx,
@@ -1012,7 +939,6 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
         extra_commands: Arc::new(crate::slash_handler::SlashCommandRegistry::new()),
         websearch_shared,
         background_jobs,
-        system_wake_rx,
     };
 
     Ok(Bootstrap {

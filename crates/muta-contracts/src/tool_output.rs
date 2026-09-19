@@ -825,17 +825,13 @@ pub fn termination_model_note(termination: ShellTermination) -> Option<&'static 
         }
         ShellTermination::StreamGuard => Some(
             "[killed by harness: stream budget reached — the command produced continuous \
-             streaming output without self-terminating. Headless foreground commands must be \
+             streaming output without self-terminating. Commands must be \
              finite. If you need an instantaneous snapshot, bound the command (e.g. `timeout 2s <cmd>`, \
-             `<cmd> | head -n 30`, or one-shot flags like `top -b -n 1`). If you need continuous monitoring, \
-             run with `background: true` or `service: true`.]",
+             `<cmd> | head -n 30`, or one-shot flags like `top -b -n 1`). Long-running daemons \
+             must be executed by the operator outside the agent loop.]",
         ),
         ShellTermination::Detached => Some(
-            "[running: the sync budget expired but the command is still alive. \
-             It was NOT killed — it continues as a background job, independent \
-             of this turn, and nothing resumes your turn when it finishes. \
-             Collect its outcome with the process tool (action: 'wait' to block \
-             until it finishes, 'status' or 'logs' to inspect it now).]",
+            "[legacy: detached job state. Commands must be finite.]",
         ),
     }
 }

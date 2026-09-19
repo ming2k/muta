@@ -136,6 +136,10 @@ pub mod history;
 pub mod human_request;
 pub use history::{HISTORY_CAP, HistoryEntry, HistorySearchHit, merge_history};
 pub mod identity;
+pub mod offstream;
+pub use offstream::{
+    OffstreamEntry, OffstreamRegistry, OffstreamSource, OffstreamStatus, PagedOffstreamContent,
+};
 pub mod pressure;
 pub mod token_ledger;
 pub mod tokenizer;

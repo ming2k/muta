@@ -14,7 +14,7 @@
 use crate::handlers_slash::SlashEnv;
 use crate::side::{SideEnv, resolve_turn_target};
 use muta_agent::catalog;
-use muta_agent::orchestration::{RoundInput, round_response, send_harness_state_for_session};
+use muta_agent::orchestration::{round_response, send_harness_state_for_session};
 use muta_agent::{Agent, RoundLifecycle, SubagentRegistry};
 use muta_contracts::{AgentRequest, AgentResponse, LoopStatus, Provider, Tool};
 use muta_mcp::McpRuntime;
@@ -221,10 +221,6 @@ pub struct SessionDriver {
     pub websearch_shared: muta_contracts::SharedWebConfig,
     /// Background job manager for asynchronous processes and sub-subagents.
     pub background_jobs: crate::background_jobs::BackgroundJobManager,
-    /// Authorized continuation requests from the task fabric (ADR-0234). A
-    /// dedicated channel, not `req_rx`: a settled machine result is not a human
-    /// request and must not contend as one.
-    pub system_wake_rx: mpsc::Receiver<crate::task_continuation::SystemWake>,
 }
 
 impl SessionDriver {
@@ -265,7 +261,6 @@ impl SessionDriver {
             extra_commands,
             websearch_shared,
             background_jobs,
-            mut system_wake_rx,
         } = self;
         // Hand the shared token-source ledger to the agent so each turn's token
         // usage (reported vs. estimated) is booked into it for the report modal.
@@ -483,15 +478,7 @@ impl SessionDriver {
         enum Incoming {
             Request(AgentRequest),
             Wake(String),
-            /// A settled background result offered for a possible continuation
-            /// round (ADR-0234).
-            SystemWake(crate::task_continuation::SystemWake),
         }
-        // ADR-0234: the wake budget for the current originating request. It is
-        // re-armed by request-channel activity (a human or client is driving)
-        // and spent by wake rounds; a wake round never re-arms it, which is what
-        // makes an unbounded autonomous chain impossible.
-        let mut wake_budget = crate::task_continuation::WakeBudget::new(agent.unattended());
         loop {
             let incoming = tokio::select! {
                 res_opt = req_rx.recv() => {
@@ -501,12 +488,6 @@ impl SessionDriver {
                 wake_res = followup_wake_rx.recv() => {
                     match wake_res {
                         Some(target) => Incoming::Wake(target),
-                        None => break,
-                    }
-                }
-                wake = system_wake_rx.recv() => {
-                    match wake {
-                        Some(wake) => Incoming::SystemWake(wake),
                         None => break,
                     }
                 }
@@ -588,87 +569,7 @@ impl SessionDriver {
                 }
             };
             let req = match incoming {
-                Incoming::Request(req) => {
-                    // Request-channel activity means a human or client is
-                    // driving this session again, so the originating request's
-                    // continuation grant is renewed here — and *only* here
-                    // (ADR-0234). A wake round never takes this path, which is
-                    // what makes an unbounded autonomous chain impossible.
-                    wake_budget.on_originating_request();
-                    req
-                }
-                Incoming::SystemWake(wake) => {
-                    // ADR-0234 admission. Each gate below is a refusal that
-                    // leaves the settled result retained and collectable through
-                    // the `process` tool; none of them lose it.
-                    let this_session = session.id().await;
-                    if wake.session_id != this_session {
-                        // Only the session that dispatched the work may be woken
-                        // by it (INV-BG-05).
-                        continue;
-                    }
-                    // Human precedence (INV-BG-04): queued human work goes
-                    // first, always. The human's own round re-arms the budget,
-                    // and the still-unclaimed result can be delivered after it.
-                    if followup_queue.has_items_for(&this_session) {
-                        continue;
-                    }
-                    // A round is already in flight. Starting a concurrent one
-                    // would supersede the live round; the result reaches the
-                    // model at the next safe boundary through the ordinary tool
-                    // path instead.
-                    if lifecycle.is_running().await {
-                        continue;
-                    }
-                    let pending = background_jobs
-                        .pending_outcomes_for_session(&this_session)
-                        .into_iter()
-                        .filter(|entry| !entry.claimed)
-                        .collect::<Vec<_>>();
-                    if pending.is_empty() {
-                        // Already collected (e.g. by `process wait`), or nothing
-                        // settled — there is nothing to report, so no round and
-                        // no inference is spent.
-                        continue;
-                    }
-                    // Spend before starting: a failure after this point loses
-                    // the round rather than repeating it.
-                    if !wake_budget.try_claim() {
-                        continue;
-                    }
-                    let outcomes = background_jobs
-                        .claim_outcomes_for_session(&this_session)
-                        .into_iter()
-                        .map(|entry| entry.outcome)
-                        .collect::<Vec<_>>();
-                    let digest = crate::task_continuation::continuation_digest(&outcomes);
-                    let config = shared_config.read().await;
-                    crate::side::start_active_turn(
-                        SideEnv {
-                            side: &side,
-                            agent: &agent,
-                            primary_session: &session,
-                            primary_lifecycle: &lifecycle,
-                            tx: &resp_tx,
-                            config: &config,
-                        },
-                        RoundInput {
-                            // Harness-authored context: `hidden` keeps it out of
-                            // the visible user text while still reaching the
-                            // model — the same vehicle the file-mention notes
-                            // use. The digest states outright that it is not a
-                            // user message.
-                            prompt: digest,
-                            hidden: true,
-                            display_prompt: None,
-                            sent_at_ms: None,
-                            images: Vec::new(),
-                            driver: muta_agent::orchestration::RoundDriver::Fresh,
-                        },
-                    )
-                    .await;
-                    continue;
-                }
+                Incoming::Request(req) => req,
                 Incoming::Wake(wake_target) => {
                     // Round-boundary wake (ADR-0197 M4): a target round ended.
                     // A round the operator interrupted parks its queue — the
