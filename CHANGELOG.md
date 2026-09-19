@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-09-19
+
+### Added
+
+- **First-Class Declarative Model Providers & Pure Connection Pipes (ADR-0258, ADR-0259):**
+  - Introduced first-class support for declarative model providers with deterministic root URL algebra and wire protocol inheritance.
+  - Added native Qoder provider integration with client-side COSY signing (canonical MD5, PKCS#1 RSA wrapped session key, AES-128-CBC payload) and OAuth credential management.
+  - Dynamic connection route derivation without ad-hoc custom endpoint workarounds.
+- **Finite Foreground Execution & StreamGuard (ADR-0257):**
+  - Enforced finite foreground execution contracts to prevent unbounded streaming tools (`top`, `tail -f`, `ping`, etc.) from hanging or stalling headless AI agent sessions.
+  - Added `StreamGuard` monitor for early cutoff and structured diagnostic interruption when an unbounded command runs in foreground.
+
+### Changed
+
+- **Consolidated Integration Test Topology:**
+  - Unified integration test suites across `muta`, `muta-contracts`, `muta-llm-client`, `muta-mcp`, `muta-persistence`, and `muta-providers` into single-binary entry points (`tests/integration.rs`), dramatically reducing link-time overhead and compilation churn.
+
+### Fixed
+
+- **Connection Details Quota & Served Models Presentation:**
+  - Optimized presentation of connection quota and active served models in the `mutx` TUI connections modal.
+
 ## [0.49.5] - 2026-09-19
 
 ### Fixed
@@ -7389,7 +7411,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.49.5...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/ming2k/muta/compare/v0.49.5...v0.50.0
 [0.49.5]: https://github.com/ming2k/muta/compare/v0.49.4...v0.49.5
 [0.49.4]: https://github.com/ming2k/muta/compare/v0.49.3...v0.49.4
 [0.49.3]: https://github.com/ming2k/muta/compare/v0.49.2...v0.49.3
