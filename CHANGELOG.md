@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.3] - 2026-09-19
+
+### Added
+
+- **Demand-Paged Epistemic Memory (ADR-0262)**: Unified `inspect` tool providing on-demand,
+  attention-bounded pagination for historical off-stream cognitive artifacts. Supports:
+  - `sub:<session_id>`: Subagent execution transcript inspect with status, turn count, and step pagination.
+  - `call:<tool_call_id>`: Pruned tool call execution result retrieval from content-addressed blob storage.
+  - `fold:<checkpoint_id>`: Compaction fold summary and original horizon span inspection.
+  Replaces epistemic amnesia and information hoarding with deterministic on-demand paging.
+
+### Changed
+
+- **Axiom of Linear Causality & Pure Execution Primitives (ADR-0263)**: Completely eradicated
+  the legacy background task fabric, task mailbox, machine wakes, and the `process` tool.
+  `run_command` now operates strictly with pure synchronous, finite execution. Unbounded streaming
+  and silent non-terminating commands are immediately terminated by StreamGuard with zero orphan processes.
+
+### Fixed
+
+- Enhanced Qoder OAuth integration with support for Alibaba UMID `machine_token`,
+  exponential backoff on HTTP 429 rate limit responses during device token polling, and
+  tolerance for qodercli 1.1.57 `token` field aliasing.
+
 ## [0.50.2] - 2026-09-19
 
 ### Changed
@@ -7440,7 +7464,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.2...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.3...HEAD
+[0.50.3]: https://github.com/ming2k/muta/compare/v0.50.2...v0.50.3
 [0.50.2]: https://github.com/ming2k/muta/compare/v0.50.1...v0.50.2
 [0.50.1]: https://github.com/ming2k/muta/compare/v0.50.0...v0.50.1
 [0.50.0]: https://github.com/ming2k/muta/compare/v0.49.5...v0.50.0
