@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.49.4] - 2026-09-19
+
+### Added
+
+- **Unified Entity Mentions and Lexical Escaping (ADR-0256):**
+  - Standardized prompt entity references on canonical `@{namespace}:{target}` grammar (`@file:{path}`, `@skill:{name}`, `@session:{id}`).
+  - Introduced lexical escaping (`\@file:...`), word boundary guards, and markdown code-span masking to avoid spurious filesystem context injection during technical discussions.
+  - Implemented two-tier composer completion engine with synchronous catalog lookups and cached asynchronous workspace queries.
+
+### Changed
+
+- **Subagent Role Architecture & Diagnostic Delegation:**
+  - Symmetrized subagent contracts from `SubagentPreset` to `SubAgentProfile`.
+  - Replaced mutating `code` and `mcp` subagent roles with read-only diagnostic `debug` subagent for isolated root-cause analysis and test reproduction without file mutation authority.
+  - Adjusted built-in tool surface budget to 1983 tokens.
+
 ## [0.49.3] - 2026-09-18
 
 ### Added
@@ -7361,7 +7377,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.49.3...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.49.4...HEAD
+[0.49.4]: https://github.com/ming2k/muta/compare/v0.49.3...v0.49.4
 [0.49.3]: https://github.com/ming2k/muta/compare/v0.49.2...v0.49.3
 [0.49.2]: https://github.com/ming2k/muta/compare/v0.49.1...v0.49.2
 [0.49.1]: https://github.com/ming2k/muta/compare/v0.49.0...v0.49.1
