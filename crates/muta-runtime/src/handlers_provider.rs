@@ -1756,7 +1756,8 @@ pub(crate) async fn query_connection_detail(
             )
         });
 
-    let provider_label = connection.provider.clone();
+    let provider_label =
+        muta_contracts::model_providers::model_provider_label(&connection.provider).to_string();
 
     let raw_key = catalog::resolve_credential(connection, &stores.creds);
     let api_key_masked = mask_api_key(raw_key.expose_secret());
@@ -1791,9 +1792,17 @@ pub(crate) async fn query_connection_detail(
         .iter()
         .map(muta_agent::catalog::channel_model_info)
         .collect::<Vec<_>>();
-    let default_channel = entry.default_channel();
-    let active_model = default_channel.map(|c| c.model.clone());
-    let active_channel_info = default_channel.map(muta_agent::catalog::channel_model_info);
+    let usage_store = muta_persistence::connection_usage::ConnectionUsage::load();
+    let active_model = usage_store
+        .last_model_for(&connection.name)
+        .filter(|m| entry.offers_model(m))
+        .map(|m| m.to_string())
+        .or_else(|| entry.default_channel().map(|c| c.model.clone()));
+    let active_channel = active_model
+        .as_deref()
+        .and_then(|m| entry.channel_for_model(m))
+        .or_else(|| entry.default_channel());
+    let active_channel_info = active_channel.map(muta_agent::catalog::channel_model_info);
     let active_model_effort = active_channel_info.as_ref().and_then(|info| {
         let show = match info.protocol.as_str() {
             "anthropic" => info.thinking == Some(true),

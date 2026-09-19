@@ -146,7 +146,7 @@ pub(crate) fn resolve_modal_key(
                     OverlaySurface::Dialog(DialogKind::Connections)
                         if keys.connection_info_detail =>
                     {
-                        return None;
+                        InputAction::ToggleConnectionModelsExpanded
                     }
                     OverlaySurface::Dialog(DialogKind::Connections) => {
                         InputAction::OpenConnectionDetail
@@ -418,7 +418,15 @@ pub(crate) fn resolve_modal_key(
                 _ => None,
             },
             OverlaySurface::Dialog(DialogKind::Models) => resolve_picker_key(c, true, keys),
-            OverlaySurface::Dialog(DialogKind::Connections) if !keys.connection_info_detail => {
+            OverlaySurface::Dialog(DialogKind::Connections) if keys.connection_info_detail => {
+                match c {
+                    ' ' | 'm' | 'M' => Some(InputAction::ToggleConnectionModelsExpanded),
+                    'r' | 'R' => Some(InputAction::RefreshProviderModels),
+                    'e' => Some(InputAction::OpenModelEditor),
+                    _ => None,
+                }
+            }
+            OverlaySurface::Dialog(DialogKind::Connections) => {
                 resolve_picker_key(c, false, keys)
             }
             OverlaySurface::Dialog(DialogKind::Sessions) if !keys.session_info_detail => match c {
@@ -800,11 +808,31 @@ mod tests {
     }
 
     #[test]
-    fn connections_detail_readout_is_inert() {
+    fn connections_detail_keys_toggle_expansion_and_refresh() {
         let c = keys(|k| k.connection_info_detail = true);
         assert_eq!(resolve_dialog(DialogKind::Connections, key('a'), &c), None);
         assert_eq!(resolve_dialog(DialogKind::Connections, key('c'), &c), None);
         assert_eq!(resolve_dialog(DialogKind::Connections, key('D'), &c), None);
+        assert_eq!(
+            resolve_dialog(DialogKind::Connections, key(' '), &c),
+            Some(InputAction::ToggleConnectionModelsExpanded)
+        );
+        assert_eq!(
+            resolve_dialog(DialogKind::Connections, key('m'), &c),
+            Some(InputAction::ToggleConnectionModelsExpanded)
+        );
+        assert_eq!(
+            resolve_dialog(DialogKind::Connections, key('r'), &c),
+            Some(InputAction::RefreshProviderModels)
+        );
+        assert_eq!(
+            resolve_dialog(DialogKind::Connections, key('e'), &c),
+            Some(InputAction::OpenModelEditor)
+        );
+        assert_eq!(
+            resolve_dialog(DialogKind::Connections, crate::keymap::Key::ENTER, &c),
+            Some(InputAction::ToggleConnectionModelsExpanded)
+        );
     }
 
     #[test]

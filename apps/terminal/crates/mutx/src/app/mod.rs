@@ -606,6 +606,8 @@ pub struct App {
     pub connection_detail: Option<muta_contracts::ConnectionDetail>,
     /// Body scroll offset of the connection detail sub-view.
     pub connection_info_scroll: usize,
+    /// Whether the served models list is expanded in the connection detail sub-view.
+    pub connection_models_expanded: bool,
     /// Body scroll offset of the permissions manager modal. Reset to 0 each
     /// time the modal opens; clamped and auto-followed to the selection by the
     /// renderer each frame.

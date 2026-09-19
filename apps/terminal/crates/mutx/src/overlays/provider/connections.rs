@@ -43,6 +43,7 @@ pub struct ConnectionsModalProps<'a> {
     pub spinner_phase: usize,
     pub connection_info_standalone: bool,
     pub refreshing: bool,
+    pub connection_models_expanded: bool,
 }
 
 /// Draw the **Connections** modal — the provider-instance management surface (`/connections`).
@@ -69,6 +70,7 @@ pub fn draw_connections_modal(
         spinner_phase,
         connection_info_standalone,
         refreshing,
+        connection_models_expanded,
     } = props;
     let area = modal_area(frame, FixedModalSpec::PROVIDER);
     let f = modal_frame(frame, area, theme, true, true);
@@ -120,19 +122,31 @@ pub fn draw_connections_modal(
             let header = breadcrumb_parts("Connections", &conn_title);
             modal_header_parts(frame, f.header, &header, theme);
         }
-        let detail_footer: [FooterHint; 3] = if connection_info_standalone {
-            [
+        let mut detail_footer: Vec<FooterHint> = if connection_info_standalone {
+            vec![
                 FooterHint::key_always(crate::keymap::Key::ESC, "close"),
                 FooterHint::secondary("r", "refresh"),
                 FooterHint::secondary("e", "edit"),
             ]
         } else {
-            [
+            vec![
                 FooterHint::key_always(crate::keymap::Key::ESC, "list"),
                 FooterHint::secondary("r", "refresh"),
                 FooterHint::secondary("e", "edit"),
             ]
         };
+        if let Some(detail) = connection_detail
+            && detail.models.len() > 1
+        {
+            detail_footer.push(FooterHint::secondary(
+                "Enter",
+                if connection_models_expanded {
+                    "collapse models"
+                } else {
+                    "expand models"
+                },
+            ));
+        }
         let rows = match connection_detail {
             None => {
                 let spin = theme.glyphs.spinner_frame(spinner_phase);
@@ -148,7 +162,9 @@ pub fn draw_connections_modal(
                     )),
                 ]
             }
-            Some(detail) => connection_detail_body(detail, spinner_phase, theme),
+            Some(detail) => {
+                connection_detail_body(detail, connection_models_expanded, spinner_phase, theme)
+            }
         };
         render_selectable_body(
             frame,
@@ -404,6 +420,7 @@ pub(crate) fn render_progress_bar_spans(
 /// Render the detail body rows for one connection (configuration + caller identity + models + provider usage).
 pub(crate) fn connection_detail_body(
     detail: &muta_contracts::ConnectionDetail,
+    models_expanded: bool,
     spinner_phase: usize,
     theme: &Theme,
 ) -> Vec<SelectableRow> {
@@ -421,11 +438,16 @@ pub(crate) fn connection_detail_body(
             .with_prefix(RowSegment::styled(format!("{k:<16}"), label))
     };
 
+    let provider_display = if !detail.provider_label.is_empty() {
+        detail.provider_label.as_str()
+    } else {
+        muta_contracts::model_providers::model_provider_label(&detail.provider)
+    };
+
     let mut rows: Vec<SelectableRow> = vec![
         SelectableRow::styled("Configuration", header_style),
         kv("Name", &detail.name),
-        kv("Provider", &detail.provider_label),
-        kv("Provider ID", &detail.provider),
+        kv("Provider", provider_display),
         kv("Protocol", &detail.protocol),
         kv("Base URL", &detail.base_url),
         kv("Auth Type", &detail.auth_type),
@@ -494,6 +516,32 @@ pub(crate) fn connection_detail_body(
             SelectableRow::styled("(no models configured)", muted)
                 .with_prefix(RowSegment::styled("  ", muted)),
         );
+    } else if !models_expanded {
+        let primary_model = detail
+            .active_model
+            .as_deref()
+            .or_else(|| detail.models.first().map(|s| s.as_str()));
+        if let Some(model) = primary_model {
+            rows.push(
+                SelectableRow::styled(model.to_string(), value.add_modifier(Modifier::BOLD))
+                    .with_prefix(RowSegment::styled("  - ", label)),
+            );
+        }
+        if detail.models.len() > 1 {
+            rows.push(
+                SelectableRow::from_segments(vec![
+                    RowSegment::styled("▸ ", Style::default().fg(theme.primary)),
+                    RowSegment::styled(
+                        format!(
+                            "show all {} models (press Enter to expand)",
+                            detail.models.len()
+                        ),
+                        muted,
+                    ),
+                ])
+                .with_prefix(RowSegment::styled("  ", label)),
+            );
+        }
     } else {
         for model in &detail.models {
             let is_active = detail.active_model.as_deref() == Some(model.as_str());
@@ -505,6 +553,15 @@ pub(crate) fn connection_detail_body(
             rows.push(
                 SelectableRow::styled(model.clone(), model_style)
                     .with_prefix(RowSegment::styled("  - ", label)),
+            );
+        }
+        if detail.models.len() > 1 {
+            rows.push(
+                SelectableRow::from_segments(vec![
+                    RowSegment::styled("▾ ", Style::default().fg(theme.primary)),
+                    RowSegment::styled("collapse models (press Enter)", muted),
+                ])
+                .with_prefix(RowSegment::styled("  ", label)),
             );
         }
     }
@@ -798,18 +855,18 @@ pub(crate) fn render_periodic_quota_buckets(
         ]));
 
         let pct_used = (bucket.used_fraction * 100.0).round() as u32;
-        let pct_rem = 100u32.saturating_sub(pct_used);
         let mut bar_spans = vec![Span::raw(bar_indent)];
         bar_spans.extend(render_progress_bar_spans(bucket.used_fraction, 20, theme));
-        bar_spans.push(Span::styled(
-            format!("  {pct_used}% used ({pct_rem}% remaining)"),
-            value,
-        ));
+        bar_spans.push(Span::styled(format!("  {pct_used}% used"), value));
+        lines.push(Line::from(bar_spans));
+
         if let Some(reset_str) =
             format_reset_countdown(bucket.reset_at_ms, bucket.reset_time_str.as_deref())
         {
-            bar_spans.push(Span::styled(format!("  ·  {reset_str}"), muted));
+            lines.push(Line::from(vec![
+                Span::raw(bar_indent),
+                Span::styled(reset_str, muted),
+            ]));
         }
-        lines.push(Line::from(bar_spans));
     }
 }

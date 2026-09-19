@@ -130,6 +130,26 @@ pub fn canonical_provider_id(id: &str) -> Option<String> {
     is_known_model_provider(canonical).then(|| canonical.to_string())
 }
 
+/// Canonical human-readable display label for a model provider ID.
+pub fn model_provider_label(id: &str) -> &'static str {
+    match id {
+        "anthropic" => "Anthropic",
+        "openai-subscription" => "ChatGPT Subscription",
+        "deepseek" => "DeepSeek",
+        "github-copilot" => "GitHub Copilot",
+        "google" => "Google AI Studio",
+        "google-antigravity" => "Google Antigravity",
+        "kimi-code" => "Kimi Code",
+        "openai" => "OpenAI Platform",
+        "opencode-go" => "OpenCode Go",
+        "openrouter" => "OpenRouter",
+        "glm-cn" => "ZAI Code (CN)",
+        "xai" => "xAI",
+        "custom" => "Custom connection",
+        _ => "Custom connection",
+    }
+}
+
 #[cfg(test)]
 mod provider_id_tests {
     use super::*;
@@ -165,5 +185,15 @@ mod provider_id_tests {
         assert_eq!(canonical_provider_id("zai-code").as_deref(), Some("glm-cn"));
         assert!(canonical_provider_id("does-not-exist").is_none());
         assert!(canonical_provider_id("").is_none());
+    }
+
+    #[test]
+    fn known_providers_have_labels() {
+        for id in MODEL_PROVIDER_IDS {
+            let label = model_provider_label(id);
+            assert!(!label.is_empty(), "provider {id} has empty label");
+        }
+        assert_eq!(model_provider_label("google-antigravity"), "Google Antigravity");
+        assert_eq!(model_provider_label("openai-subscription"), "ChatGPT Subscription");
     }
 }

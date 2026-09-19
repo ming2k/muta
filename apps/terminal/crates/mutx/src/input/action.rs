@@ -36,6 +36,8 @@ pub enum InputAction {
     OpenConnectionDetail,
     /// Open the connection detail modal directly for the active connection (via click or Ctrl+N).
     OpenActiveConnectionDetail,
+    /// Toggle expansion of the served models list in the connection detail modal.
+    ToggleConnectionModelsExpanded,
     /// Toggle the favorite flag on the highlighted Models row (model-level,
     /// ADR-0046). The Connections list has no favorite concept.
     ProviderPickerToggleFavorite,

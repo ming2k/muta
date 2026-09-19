@@ -130,6 +130,7 @@ fn redesigned_components_render_without_panicking() {
                 spinner_phase: 0,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &crate::model::selection::SelectionState::None,

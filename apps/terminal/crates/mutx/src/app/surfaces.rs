@@ -333,6 +333,7 @@ impl App {
             self.connection_info_standalone = false;
             self.connection_detail = None;
             self.connection_info_scroll = 0;
+            self.connection_models_expanded = false;
         }
         if id == DialogKind::Telemetry {
             self.telemetry_tab = crate::overlays::telemetry::TelemetryTab::Overview;
@@ -502,6 +503,7 @@ impl App {
                     self.connection_info_standalone = false;
                     self.connection_detail = None;
                     self.connection_info_scroll = 0;
+                    self.connection_models_expanded = false;
                     return !standalone;
                 }
                 _ => {}

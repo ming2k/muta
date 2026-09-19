@@ -1354,6 +1354,7 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.connection_info_standalone = false;
                 app.connection_detail = None;
                 app.connection_info_scroll = 0;
+                app.connection_models_expanded = false;
                 app.send_intent(AgentRequest::QueryConnectionDetail {
                     id: ranked.id.clone(),
                 });
@@ -1361,6 +1362,11 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::OpenActiveConnectionDetail => {
             open_active_connection_detail(app, runtime, viewed_session_id);
+        }
+        input::InputAction::ToggleConnectionModelsExpanded => {
+            if app.active_dialog() == Some(DialogKind::Connections) && app.connection_info_detail {
+                app.connection_models_expanded = !app.connection_models_expanded;
+            }
         }
         input::InputAction::CloseModal => {
             modals::handle_close_modal(app, viewed_session_id);
@@ -2320,6 +2326,7 @@ pub(crate) fn open_active_connection_detail(
     app.connection_info_standalone = true;
     app.connection_detail = None;
     app.connection_info_scroll = 0;
+    app.connection_models_expanded = false;
     if !target_id.is_empty() {
         app.send_intent(AgentRequest::QueryConnectionDetail { id: target_id });
     }

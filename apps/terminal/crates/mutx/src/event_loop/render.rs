@@ -939,6 +939,7 @@ fn compose_frame(
                             spinner_phase,
                             connection_info_standalone: app.connection_info_standalone,
                             refreshing: app.models_refreshing,
+                            connection_models_expanded: app.connection_models_expanded,
                         },
                         &app.theme,
                         &app.selection,

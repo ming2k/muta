@@ -1062,6 +1062,7 @@ fn connections_modal_empty_state_centered_copy_and_footer() {
                 spinner_phase: 0,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &selection,
@@ -1102,6 +1103,7 @@ fn connections_modal_search_empty_state() {
                 spinner_phase: 0,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &selection,
@@ -1181,6 +1183,7 @@ fn connections_modal_detail_view_renders_info_and_usage() {
                 spinner_phase: 0,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &selection,
@@ -1197,7 +1200,7 @@ fn connections_modal_detail_view_renders_info_and_usage() {
     assert!(text.contains("Client Profile"));
     assert!(text.contains("Served Models (2)"));
     assert!(text.contains("- deepseek-chat"));
-    assert!(text.contains("- deepseek-reasoner"));
+    assert!(text.contains("show all 2 models"));
 
     // Scroll to view usage section
     terminal.draw(|f| {
@@ -1223,6 +1226,7 @@ fn connections_modal_detail_view_renders_info_and_usage() {
                 spinner_phase: 0,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &selection,
@@ -1318,6 +1322,7 @@ fn connections_modal_detail_view_renders_periodic_quota_with_progress_bar() {
                 spinner_phase: 0,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &selection,
@@ -1328,9 +1333,9 @@ fn connections_modal_detail_view_renders_periodic_quota_with_progress_bar() {
     assert!(text.contains("Provider Usage & Quota"));
     assert!(text.contains("Google One AI Premium"));
     assert!(text.contains("Gemini 3.7 Flash · Daily"));
-    assert!(text.contains("15% used (85% remaining)"));
+    assert!(text.contains("15% used"));
     assert!(text.contains("Gemini 3.1 Pro · 5h Window"));
-    assert!(text.contains("40% used (60% remaining)"));
+    assert!(text.contains("40% used"));
 }
 
 #[test]
@@ -1379,6 +1384,7 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
                 spinner_phase: 2,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &selection,
@@ -1413,6 +1419,7 @@ fn connections_modal_detail_view_renders_inline_fetching_spinner() {
                 spinner_phase: 2,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &selection,
@@ -1575,6 +1582,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 spinner_phase: 0,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: true,
             },
             &theme,
             &selection,
@@ -1617,6 +1625,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 spinner_phase: 0,
                 connection_info_standalone: false,
                 refreshing: false,
+                connection_models_expanded: true,
             },
             &theme,
             &selection,
@@ -1627,11 +1636,11 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
     assert!(scrolled_text.contains("Provider Usage & Quota"));
     assert!(scrolled_text.contains("▸ Claude Models"));
     assert!(scrolled_text.contains("Weekly Limit Remaining · Weekly"));
-    assert!(scrolled_text.contains("99% used (1% remaining)"));
+    assert!(scrolled_text.contains("99% used"));
     assert!(scrolled_text.contains("Five Hour Limit Remaining · 5h Window"));
-    assert!(scrolled_text.contains("46% used (54% remaining)"));
+    assert!(scrolled_text.contains("46% used"));
     assert!(scrolled_text.contains("▸ Chat Models (Gemini)"));
-    assert!(scrolled_text.contains("0% used (100% remaining)"));
+    assert!(scrolled_text.contains("0% used"));
     assert!(scrolled_text.contains("Within each group, models share a weekly limit"));
 }
 
@@ -1681,6 +1690,7 @@ fn connections_modal_standalone_detail_renders_single_level_header() {
                 spinner_phase: 0,
                 connection_info_standalone: true, // standalone = true
                 refreshing: false,
+                connection_models_expanded: false,
             },
             &theme,
             &selection,
@@ -1745,6 +1755,7 @@ fn connections_modal_detail_wraps_second_column_with_indent() {
                 spinner_phase: 0,
                 connection_info_standalone: true,
                 refreshing: false,
+                connection_models_expanded: true,
             },
             &theme,
             &selection,
@@ -1830,4 +1841,195 @@ fn oauth_pending_records_selectable_regions_in_layout_map() {
     assert!(selection.is_active());
     let extracted = extract_selection_text(&selection, &[], "", &layout_map, None);
     assert!(extracted.is_some());
+}
+
+#[test]
+fn connections_modal_detail_served_models_collapsed_by_default_and_expands() {
+    let theme = Theme::default();
+    let mut terminal = mutx_engine::TestTerminal::new(80, 50);
+    let models: Vec<String> = (1..=17).map(|i| format!("model-{i:02}")).collect();
+    let detail = muta_contracts::ConnectionDetail {
+        name: "google-antigravity".to_string(),
+        provider: "google-antigravity".to_string(),
+        provider_label: "Google Antigravity".to_string(),
+        protocol: "google".to_string(),
+        base_url: "https://daily-cloudcode-pa.googleapis.com".to_string(),
+        auth_type: "OAuth".to_string(),
+        api_key_masked: None,
+        api_key_source: "OAuth".to_string(),
+        client_identity: muta_contracts::ClientIdentity::Native,
+        user_agent: "antigravity/1.0.0".to_string(),
+        models: models.clone(),
+        model_info: Vec::new(),
+        active_model: Some("model-05".to_string()),
+        active_model_effort: None,
+        active_model_thinking: None,
+        usage: muta_contracts::ConnectionUsageState::Unsupported,
+    };
+
+    // 1. Collapsed mode (default)
+    terminal.draw(|f| {
+        let mut lm = crate::model::layout::LayoutMap::new();
+        let mut scroll = 0;
+        let selection = crate::model::selection::SelectionState::None;
+        draw_connections_modal(
+            f,
+            &mut lm,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                show_caret: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: true,
+                refreshing: false,
+                connection_models_expanded: false,
+            },
+            &theme,
+            &selection,
+        );
+    });
+
+    let collapsed_text = buffer_text(&terminal);
+    assert!(collapsed_text.contains("Served Models (17)"));
+    assert!(collapsed_text.contains("- model-05"));
+    assert!(collapsed_text.contains("show all 17 models (press Enter to expand)"));
+    assert!(!collapsed_text.contains("- model-01"));
+    assert!(!collapsed_text.contains("- model-17"));
+    assert!(collapsed_text.contains("expand models"));
+    // Configuration has Provider and no redundant Provider ID
+    assert!(collapsed_text.contains("Provider        Google Antigravity"));
+    assert!(!collapsed_text.contains("Provider ID"));
+
+    // 2. Expanded mode
+    terminal.draw(|f| {
+        let mut lm = crate::model::layout::LayoutMap::new();
+        let mut scroll = 0;
+        let selection = crate::model::selection::SelectionState::None;
+        draw_connections_modal(
+            f,
+            &mut lm,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                show_caret: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: true,
+                refreshing: false,
+                connection_models_expanded: true,
+            },
+            &theme,
+            &selection,
+        );
+    });
+
+    let expanded_text = buffer_text(&terminal);
+    assert!(expanded_text.contains("Served Models (17)"));
+    assert!(expanded_text.contains("- model-01"));
+    assert!(expanded_text.contains("- model-05"));
+    assert!(expanded_text.contains("- model-17"));
+    assert!(expanded_text.contains("collapse models (press Enter)"));
+    assert!(expanded_text.contains("collapse models"));
+}
+
+#[test]
+fn connections_modal_quota_bucket_used_percentage_and_separate_reset_line() {
+    let theme = Theme::default();
+    let mut terminal = mutx_engine::TestTerminal::new(80, 40);
+    let detail = muta_contracts::ConnectionDetail {
+        name: "google-antigravity".to_string(),
+        provider: "google-antigravity".to_string(),
+        provider_label: "Google Antigravity".to_string(),
+        protocol: "google".to_string(),
+        base_url: "https://daily-cloudcode-pa.googleapis.com".to_string(),
+        auth_type: "OAuth".to_string(),
+        api_key_masked: None,
+        api_key_source: "OAuth".to_string(),
+        client_identity: muta_contracts::ClientIdentity::Native,
+        user_agent: "antigravity/1.0.0".to_string(),
+        models: vec!["gemini-2.5-pro".to_string()],
+        model_info: Vec::new(),
+        active_model: Some("gemini-2.5-pro".to_string()),
+        active_model_effort: None,
+        active_model_thinking: None,
+        usage: muta_contracts::ConnectionUsageState::Available(Box::new(
+            muta_contracts::ProviderUsage {
+                plan: Some("Google One AI Premium".to_string()),
+                description: None,
+                quota: Some(muta_contracts::ProviderQuotaData::Periodic(
+                    muta_contracts::PeriodicQuota {
+                        buckets: vec![
+                            muta_contracts::QuotaWindowBucket {
+                                label: "Gemini Pro Agent".to_string(),
+                                used_fraction: 0.72,
+                                used_amount: None,
+                                total_limit: None,
+                                unit: None,
+                                window: Some(muta_contracts::QuotaWindowKind::Daily),
+                                reset_at_ms: None,
+                                reset_time_str: Some("in 3h 25m".to_string()),
+                                group: None,
+                            },
+                        ],
+                    },
+                )),
+                primary_balance: None,
+                metrics: Vec::new(),
+                updated_at_ms: None,
+            },
+        )),
+    };
+
+    terminal.draw(|f| {
+        let mut lm = crate::model::layout::LayoutMap::new();
+        let mut scroll = 0;
+        let selection = crate::model::selection::SelectionState::None;
+        draw_connections_modal(
+            f,
+            &mut lm,
+            crate::overlays::provider::connections::ConnectionsModalProps {
+                providers: &[],
+                current_provider: "",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: false,
+                search: false,
+                connection_info_detail: true,
+                show_caret: true,
+                connection_detail: Some(&detail),
+                connection_info_scroll: &mut 0,
+                spinner_phase: 0,
+                connection_info_standalone: true,
+                refreshing: false,
+                connection_models_expanded: false,
+            },
+            &theme,
+            &selection,
+        );
+    });
+
+    let text = buffer_text(&terminal);
+    assert!(text.contains("72% used"));
+    assert!(!text.contains("remaining"));
+    assert!(!text.contains(" ·  resets"));
+    assert!(text.contains("resets: in 3h 25m"));
 }

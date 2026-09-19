@@ -159,6 +159,7 @@ fn app_in_tempdir(files: &[&str], dirs: &[&str]) -> (App, tempfile::TempDir) {
         connection_info_standalone: false,
         connection_detail: None,
         connection_info_scroll: 0,
+        connection_models_expanded: false,
         permissions_scroll: 0,
         config_scroll: 0,
         config_focus: crate::overlays::ConfigFocus::Categories,
