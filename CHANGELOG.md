@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.1] - 2026-09-19
+
 ### Fixed
 
 - Restore Antigravity inference after the provider refactor by inheriting typed
@@ -7422,7 +7424,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.0...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.1...HEAD
+[0.50.1]: https://github.com/ming2k/muta/compare/v0.50.0...v0.50.1
 [0.50.0]: https://github.com/ming2k/muta/compare/v0.49.5...v0.50.0
 [0.49.5]: https://github.com/ming2k/muta/compare/v0.49.4...v0.49.5
 [0.49.4]: https://github.com/ming2k/muta/compare/v0.49.3...v0.49.4
