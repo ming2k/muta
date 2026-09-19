@@ -176,6 +176,7 @@ pub async fn run_episodic_command(
     let mut collector = OutputCollector::new();
     let mut idle_blocked = false;
     let mut timed_out = false;
+    let mut stream_guarded = false;
 
     loop {
         let idle = tokio::time::sleep(idle_budget);
@@ -197,6 +198,11 @@ pub async fn run_episodic_command(
                 match msg {
                     Some((stream, text)) => {
                         collector.push_line(stream, text, on_stream);
+                        // ADR-0257: Detect continuous streaming flood early in foreground execution.
+                        if collector.is_stream_flooded(raw) {
+                            stream_guarded = true;
+                            break;
+                        }
                     }
                     None => break, // channel closed -> normal completion
                 }
@@ -276,7 +282,7 @@ pub async fn run_episodic_command(
         }
     }
 
-    if timed_out || idle_blocked {
+    if timed_out || idle_blocked || stream_guarded {
         let _ = process_tree.terminate();
         readers.stdout_task.abort();
         readers.stderr_task.abort();
@@ -288,7 +294,7 @@ pub async fn run_episodic_command(
     }
     collector.flush_stream(on_stream);
 
-    let exit = if timed_out || idle_blocked {
+    let exit = if timed_out || idle_blocked || stream_guarded {
         None
     } else {
         child.wait().await.ok().and_then(|s| s.code())
@@ -298,6 +304,8 @@ pub async fn run_episodic_command(
         muta_contracts::tool_output::ShellTermination::Timeout
     } else if idle_blocked {
         muta_contracts::tool_output::ShellTermination::IdleBlocked
+    } else if stream_guarded {
+        muta_contracts::tool_output::ShellTermination::StreamGuard
     } else {
         muta_contracts::tool_output::ShellTermination::Exited
     };

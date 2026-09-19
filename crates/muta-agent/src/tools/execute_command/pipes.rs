@@ -9,6 +9,76 @@ use tokio::task::JoinHandle;
 pub const SHELL_COLLECT_MAX_CHARS: usize = muta_contracts::tool_output::SHELL_MAX_OUTPUT_CHARS * 8;
 pub const SHELL_COLLECT_MAX_LINES: usize = 5_000;
 
+/// Maximum lines a foreground synchronous command may produce before StreamGuard terminates it early (ADR-0257).
+pub const SHELL_STREAM_FLOOD_LINES: usize = 1_000;
+/// Maximum bytes a foreground synchronous command may produce before StreamGuard terminates it early (ADR-0257).
+pub const SHELL_STREAM_FLOOD_BYTES: usize = 128 * 1024;
+/// Maximum consecutive periodic samples before StreamGuard declares instantaneous snapshot sufficiency (ADR-0257).
+pub const STREAM_METRONOMIC_SAMPLE_LIMIT: usize = 4;
+/// Maximum full screen redraws before StreamGuard declares TUI snapshot sufficiency (ADR-0257).
+pub const TUI_REDRAW_LIMIT: usize = 2;
+
+/// Tracks physical stream arrival cadence and structural entropy to identify
+/// metronomic polling monitors (intel_gpu_top, vmstat, ping) and TUI screen redraws early.
+#[derive(Debug, Default)]
+pub struct StreamCadenceTracker {
+    last_line_instant: Option<std::time::Instant>,
+    periodic_streak: usize,
+    last_token_count: Option<usize>,
+    tui_redraw_count: usize,
+}
+
+impl StreamCadenceTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Observe a newly arrived output line with current timestamp.
+    pub fn observe(&mut self, text: &str) -> bool {
+        self.observe_at(text, std::time::Instant::now())
+    }
+
+    /// Observe a newly arrived output line at a specific instant (supports deterministic unit tests).
+    pub fn observe_at(&mut self, text: &str, now: std::time::Instant) -> bool {
+        // 1. TUI screen redraw detection: ANSI cursor-home / screen-clear codes.
+        if text.contains("\x1b[H") || text.contains("\x1b[2J") || text.contains("\x1b[1;1H") {
+            self.tui_redraw_count += 1;
+            if self.tui_redraw_count >= TUI_REDRAW_LIMIT {
+                return true;
+            }
+        }
+
+        // 2. Metronomic periodic cadence detection (e.g. intel_gpu_top -l, vmstat, ping).
+        if let Some(prev) = self.last_line_instant {
+            let delta = now.saturating_duration_since(prev);
+            // Polling interval between 200ms and 3000ms is typical of CLI status monitors.
+            if delta >= std::time::Duration::from_millis(200)
+                && delta <= std::time::Duration::from_millis(3000)
+            {
+                let token_count = text.split_whitespace().count();
+                // If consecutive lines share structural token density (numeric data rows),
+                // it is an active polling stream.
+                if let Some(last_count) = self.last_token_count
+                    && last_count > 0
+                    && last_count == token_count
+                {
+                    self.periodic_streak += 1;
+                    if self.periodic_streak >= STREAM_METRONOMIC_SAMPLE_LIMIT {
+                        return true;
+                    }
+                } else {
+                    self.last_token_count = Some(token_count);
+                }
+            } else if delta < std::time::Duration::from_millis(100) {
+                // High-speed bursts (e.g. compilation batches) reset the periodic cadence streak.
+                self.periodic_streak = 0;
+            }
+        }
+        self.last_line_instant = Some(now);
+        false
+    }
+}
+
 /// Background reader tasks draining child stdout and stderr concurrently into a merged channel.
 pub struct StreamReaders {
     pub rx: UnboundedReceiver<(ShellStream, String)>,
@@ -68,6 +138,8 @@ pub struct OutputCollector {
     pending_stdout: String,
     pending_stderr: String,
     last_flush: std::time::Instant,
+    cadence_tracker: StreamCadenceTracker,
+    cadence_flooded: bool,
 }
 
 impl Default for OutputCollector {
@@ -80,6 +152,8 @@ impl Default for OutputCollector {
             pending_stdout: String::new(),
             pending_stderr: String::new(),
             last_flush: std::time::Instant::now(),
+            cadence_tracker: StreamCadenceTracker::new(),
+            cadence_flooded: false,
         }
     }
 }
@@ -95,6 +169,10 @@ impl OutputCollector {
         text: String,
         on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + '_),
     ) {
+        if self.cadence_tracker.observe(&text) {
+            self.cadence_flooded = true;
+        }
+
         match stream {
             ShellStream::Out => {
                 self.stdout_buf.push_str(&text);
@@ -185,6 +263,24 @@ impl OutputCollector {
     /// (service banner, then listen-loop quiet); silence-from-birth is not.
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
+    }
+
+    /// Check whether a foreground synchronous command has exceeded continuous streaming flood limits (ADR-0257).
+    ///
+    /// When `raw` is false, commands that continuously emit streaming output without self-terminating
+    /// (e.g. `intel_gpu_top -l`, `top`, `ping`, `tail -f`) are caught early once they reach the flood threshold,
+    /// preventing turn hangs and context-window blowup.
+    /// In `raw: true` mode, the threshold relaxes to `SHELL_COLLECT_MAX_LINES` / `SHELL_COLLECT_MAX_CHARS`
+    /// to support intentional deep log inspection.
+    pub fn is_stream_flooded(&self, raw: bool) -> bool {
+        if raw {
+            self.lines.len() >= SHELL_COLLECT_MAX_LINES
+                || (self.stdout_buf.len() + self.stderr_buf.len()) >= SHELL_COLLECT_MAX_CHARS
+        } else {
+            self.cadence_flooded
+                || self.lines.len() >= SHELL_STREAM_FLOOD_LINES
+                || (self.stdout_buf.len() + self.stderr_buf.len()) >= SHELL_STREAM_FLOOD_BYTES
+        }
     }
 
     /// The captured lines in arrival order (for adoption replay).

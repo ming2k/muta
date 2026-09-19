@@ -8,6 +8,7 @@ Before writing, modifying, or archiving any documentation, please read and follo
   2. For tests, ALWAYS use targeted filters (e.g. `cargo nextest run -p <package> -E 'test(<filter>)'`) instead of running full package or workspace suites.
 - **Latency Consciousness**: Prioritize developer waiting time and iterative speed. Avoid triggering redundant, long-running compilation or test tasks.
 - **Long-Running Commands (ADR-0190)**: A dev server, watcher, or daemon MUST be started with `service: true` on `run_command` (readiness is reported; running is the success state). Use `background: true` for bounded work you want to overlap with other work, and collect its outcome with the `process` tool (`wait`/`status`/`logs`). A foreground call whose sync budget expires while the process is still alive detaches it to the background fabric automatically (the process keeps running; you get the job id) — but an explicit `background`/`service` call is always preferable. Nothing resumes your turn when a background job finishes (ADR-0212/ADR-0234): the completion is a task event, not an automatic continuation.
+- **Finite Foreground Execution (ADR-0257)**: The AI shell has no TTY. Foreground commands MUST be finite and self-terminating. NEVER run unbounded streaming or monitoring tools (`top`, `intel_gpu_top`, `tail -f`, `ping`, `watch`) directly without explicit bounds (`timeout 2s <cmd>`, `| head -n 30`, `top -b -n 1`, `ping -c 3`). Continuous unbounded streaming in the foreground triggers StreamGuard early cutoff.
 
 ## Non-interactive Git Discipline
 

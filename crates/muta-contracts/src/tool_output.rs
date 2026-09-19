@@ -283,6 +283,10 @@ pub enum ShellTermination {
     /// The tool execution was cancelled by an operator interrupt. The child
     /// was killed.
     Cancelled,
+    /// The foreground command produced unbounded continuous streaming output
+    /// reaching the StreamGuard budget without self-terminating (ADR-0257).
+    /// The process was killed and an instantaneous snapshot was preserved.
+    StreamGuard,
 }
 
 /// Which pipe a captured shell line came from. Lets the renderer colour
@@ -819,6 +823,13 @@ pub fn termination_model_note(termination: ShellTermination) -> Option<&'static 
         ShellTermination::Cancelled => {
             Some("[killed by harness: cancelled by an operator interrupt.]")
         }
+        ShellTermination::StreamGuard => Some(
+            "[killed by harness: stream budget reached — the command produced continuous \
+             streaming output without self-terminating. Headless foreground commands must be \
+             finite. If you need an instantaneous snapshot, bound the command (e.g. `timeout 2s <cmd>`, \
+             `<cmd> | head -n 30`, or one-shot flags like `top -b -n 1`). If you need continuous monitoring, \
+             run with `background: true` or `service: true`.]",
+        ),
         ShellTermination::Detached => Some(
             "[running: the sync budget expired but the command is still alive. \
              It was NOT killed — it continues as a background job, independent \
@@ -1051,6 +1062,10 @@ mod tests {
                 "[killed by harness: wall-clock timeout reached",
             ),
             (ShellTermination::Cancelled, "[killed by harness: cancelled"),
+            (
+                ShellTermination::StreamGuard,
+                "[killed by harness: stream budget reached",
+            ),
         ] {
             let o = ToolOutput::Shell {
                 command: "x".into(),

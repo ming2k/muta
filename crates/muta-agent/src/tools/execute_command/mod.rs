@@ -16,10 +16,12 @@ use crate::tools::helpers::{
 
 #[derive(ToolSchema, Deserialize)]
 struct ExecuteCommandArgs {
-    #[tool(desc = "The shell command to execute")]
+    #[tool(
+        desc = "The shell command to execute. Foreground commands must be finite and self-terminating."
+    )]
     command: String,
     #[tool(
-        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is detached or killed as a blocked-command guard."
+        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is detached or killed as a blocked-command guard. Continuous unbounded streaming is terminated early by StreamGuard (ADR-0257)."
     )]
     timeout: Option<u64>,
     #[tool(
@@ -43,10 +45,12 @@ struct ExecuteCommandArgs {
 #[allow(dead_code)] // tool-schema: dynamic JSON schema generation
 #[derive(ToolSchema, Deserialize)]
 struct WorkspaceExecuteCommandArgs {
-    #[tool(desc = "The shell command to execute inside the workspace sandbox")]
+    #[tool(
+        desc = "The shell command to execute inside the workspace sandbox. Foreground commands must be finite and self-terminating."
+    )]
     command: String,
     #[tool(
-        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is killed early as a blocked-command guard."
+        desc = "Overall timeout in seconds (default 1800 = 30 minutes). A command producing no output for timeout/3 (min 5s, max 480s) is killed early as a blocked-command guard. Continuous unbounded streaming is terminated early by StreamGuard (ADR-0257)."
     )]
     timeout: Option<u64>,
     #[tool(
@@ -171,9 +175,9 @@ impl Tool for ExecuteCommandTool {
     /// ADR-0012.
     fn description(&self) -> &str {
         if self.workspace_sandbox {
-            "Execute a shell command inside the isolated workspace. Use for builds, tests, metadata inspection, and contained checks. Host files outside the admitted workspace roots and network access are unavailable."
+            "Execute a shell command inside the isolated workspace. Foreground commands must be finite and self-terminating; continuous unbounded streaming is terminated early by StreamGuard. Host files outside admitted roots and network access are unavailable."
         } else {
-            "Execute a shell command. Use for build, test, git, or system commands. For bounded work that should run while you do something else, set background: true and collect the outcome later with the process tool; for a long-lived service, watcher, or daemon, set service: true and do not wait for it to exit. A foreground call whose sync budget expires while the process is still running detaches it to the background job fabric (it keeps running; you get the job id)."
+            "Execute a shell command in a headless non-interactive environment. Foreground commands MUST be finite and self-terminating. Never execute unbounded continuous monitoring or streaming tools (e.g. top, intel_gpu_top, tail -f, ping) without bounds (e.g. `timeout 2s`, `| head`, or one-shot flags). Continuous streaming in foreground is terminated early by StreamGuard (ADR-0257). For bounded work that should run while you do something else, set background: true; for a long-lived service, watcher, or daemon, set service: true and do not wait for it to exit."
         }
     }
     fn parameters(&self) -> serde_json::Value {

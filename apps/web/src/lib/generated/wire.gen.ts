@@ -2072,7 +2072,7 @@ export type ShellStream = "Out" | "Err";
  * marker. Back-compat: restored sessions without this field deserialize as
  * [`ShellTermination::Exited`].
  */
-export type ShellTermination = "Exited" | "IdleBlocked" | "InteractiveBlocked" | "Detached" | "Timeout" | "Cancelled";
+export type ShellTermination = "Exited" | "IdleBlocked" | "InteractiveBlocked" | "Detached" | "Timeout" | "Cancelled" | "StreamGuard";
 
 /**
  * Working-state snapshot carried by a `state` entry. Fields are additive;

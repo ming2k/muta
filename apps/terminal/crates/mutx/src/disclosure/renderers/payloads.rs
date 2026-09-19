@@ -1327,6 +1327,12 @@ fn termination_footer(
             warn_style,
         )),
         T::Cancelled => Some(("command cancelled (interrupted).".to_string(), err_style)),
+        T::StreamGuard => Some((
+            "killed by harness: continuous streaming output exceeded limit — \
+             foreground commands must be finite or run with service/background."
+                .to_string(),
+            warn_style,
+        )),
         T::Detached => Some((
             "still running: adopted by the background fabric at the sync \
              budget — completion will be reported automatically."
@@ -2355,4 +2361,20 @@ fn code_gutter_line_syntax(
         Style::default().bg(code_bg),
     ));
     Line::from(spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muta_contracts::tool_output::ShellTermination;
+
+    #[test]
+    fn termination_footer_renders_stream_guard_warning() {
+        let theme = crate::Theme::default();
+        let footer = termination_footer(ShellTermination::StreamGuard, &theme);
+        assert!(footer.is_some());
+        let (text, style) = footer.unwrap();
+        assert!(text.contains("continuous streaming output exceeded limit"));
+        assert_eq!(style.fg, theme.warn());
+    }
 }

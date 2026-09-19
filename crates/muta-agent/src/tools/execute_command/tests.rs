@@ -633,3 +633,130 @@ fn semantic_folding_bypassed_when_raw_is_true() {
     assert!(stdout.contains("[1/5] test_1 OK 0.01s"));
     assert!(!stdout.contains("pure-green output folded"));
 }
+
+#[test]
+fn output_collector_detects_stream_flooding() {
+    use super::pipes::{OutputCollector, SHELL_STREAM_FLOOD_LINES};
+    use muta_contracts::tool_output::{ShellLine, ShellStream};
+
+    let mut collector = OutputCollector::new();
+    assert!(!collector.is_stream_flooded(false));
+
+    // Under flood threshold
+    for i in 0..SHELL_STREAM_FLOOD_LINES - 1 {
+        collector.lines.push(ShellLine {
+            stream: ShellStream::Out,
+            text: format!("line {i}"),
+        });
+    }
+    assert!(!collector.is_stream_flooded(false));
+
+    // Reaching flood threshold triggers StreamGuard in normal mode
+    collector.lines.push(ShellLine {
+        stream: ShellStream::Out,
+        text: "line flood".into(),
+    });
+    assert!(collector.is_stream_flooded(false));
+
+    // In raw mode, higher ceiling applies
+    assert!(!collector.is_stream_flooded(true));
+}
+
+#[test]
+fn stream_cadence_tracker_detects_metronomic_monitoring_stream() {
+    use super::pipes::StreamCadenceTracker;
+    use std::time::{Duration, Instant};
+
+    let mut tracker = StreamCadenceTracker::new();
+    let base = Instant::now();
+
+    // Line 1: Header row (e.g. intel_gpu_top -l header)
+    assert!(!tracker.observe_at("Freq MHz IRQ RC6 Power W RCS BCS VCS VECS CCS", base));
+
+    // Lines 2-6: Periodic data rows arriving ~500ms apart with matching column token counts
+    for i in 1..=5 {
+        let t = base + Duration::from_millis(500 * i);
+        let triggered = tracker.observe_at("1351 355 213 32 2.97 14.45 46.43 0 0 0.00 0 0 0.00 0 0 0.00 0 0", t);
+        if i < 5 {
+            assert!(!triggered, "Should not trigger prematurely at sample {i}");
+        } else {
+            assert!(triggered, "Must trigger on 5th periodic sample row!");
+        }
+    }
+}
+
+#[test]
+fn stream_cadence_tracker_ignores_rapid_compilation_bursts() {
+    use super::pipes::StreamCadenceTracker;
+    use std::time::{Duration, Instant};
+
+    let mut tracker = StreamCadenceTracker::new();
+    let base = Instant::now();
+
+    // Rapid lines arriving within 20ms of each other (like cargo build or test runner)
+    for i in 1..=100 {
+        let t = base + Duration::from_millis(20 * i);
+        let triggered = tracker.observe_at(&format!("Compiling crate_{i} v0.1.0"), t);
+        assert!(!triggered, "High-frequency compilation bursts must not trigger cadence guard");
+    }
+}
+
+#[test]
+fn stream_cadence_tracker_detects_tui_redraws() {
+    use super::pipes::StreamCadenceTracker;
+
+    let mut tracker = StreamCadenceTracker::new();
+
+    // First TUI frame
+    assert!(!tracker.observe("\x1b[H\x1b[2Jtop - 14:00:00 up 10 days"));
+    // Second TUI frame
+    assert!(
+        tracker.observe("\x1b[H\x1b[2Jtop - 14:00:01 up 10 days"),
+        "Second TUI screen redraw must trigger early snapshot sufficiency"
+    );
+}
+
+/// Continuous streaming output (e.g. `yes` or `intel_gpu_top -l`) in the foreground
+/// is cut off early by StreamGuard rather than running to wall-clock timeout (ADR-0257).
+#[tokio::test]
+async fn execute_command_stream_guard_cuts_off_unbounded_stream() {
+    let tool = ExecuteCommandTool::new(None);
+    // `yes` produces infinite lines at maximum speed
+    let args = serde_json::json!({
+        "command": native_command("yes 'gpu metrics row'", "while ($true) { Write-Output 'gpu metrics row' }"),
+        "timeout": 30,
+    })
+    .to_string();
+
+    let out = tokio::time::timeout(Duration::from_secs(5), tool.call_structured(&args))
+        .await
+        .expect("StreamGuard must terminate infinite stream in seconds, never hanging")
+        .expect("command execution succeeded with structured output");
+
+    match &out {
+        muta_contracts::ToolOutput::Shell {
+            termination,
+            exit,
+            stdout,
+            ..
+        } => {
+            assert_eq!(
+                *termination,
+                muta_contracts::tool_output::ShellTermination::StreamGuard,
+                "Expected StreamGuard termination for infinite streaming command"
+            );
+            assert_eq!(*exit, None);
+            assert!(
+                stdout.contains("gpu metrics row"),
+                "Snapshot must preserve output captured before cutoff"
+            );
+            // Verify model text representation includes actionable guidance
+            let text = out.to_text();
+            assert!(
+                text.contains("[killed by harness: stream budget reached"),
+                "to_text must provide actionable guidance to the model"
+            );
+        }
+        other => panic!("expected Shell output, got {:?}", other),
+    }
+}
