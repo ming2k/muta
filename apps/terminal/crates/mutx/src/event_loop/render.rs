@@ -1235,6 +1235,7 @@ fn compose_frame(
                         muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
                         muta_contracts::ConnectionAuth::XaiOAuth => "xAI",
                         muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
+                        muta_contracts::ConnectionAuth::QoderOAuth => "Qoder",
                         muta_contracts::ConnectionAuth::ApiKey => "OAuth",
                     };
                     Some(render::draw_oauth_pending(

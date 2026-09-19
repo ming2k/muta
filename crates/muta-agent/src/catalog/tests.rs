@@ -69,9 +69,45 @@ fn sandboxed_paths() -> PathsSandbox {
 fn instance(name: &str, provider: Option<&str>) -> Connection {
     Connection {
         name: name.to_string(),
-        provider: provider.unwrap_or("custom").to_string(),
+        provider: provider.unwrap_or("deepseek").to_string(),
         ..Default::default()
     }
+}
+
+fn register_mock_provider(
+    id: &'static str,
+    base_url: &str,
+    protocol: WireProtocol,
+    models: &'static [&'static str],
+    catalog_protocol: muta_providers::DiscoveryProtocol,
+) {
+    let mut store = muta_persistence::model_providers::ModelProviders::load();
+    store.set_provider(
+        id,
+        muta_persistence::model_providers::UserDeclaredProvider {
+            label: Some(id.to_string()),
+            root_url: base_url.to_string(),
+            default_protocol: Some(protocol),
+            client_profile: None,
+            user_agent: None,
+            catalog_format: None,
+            dialect: None,
+        },
+    );
+    store.save().unwrap();
+    muta_providers::register_user_declared_provider(muta_providers::ModelProviderSpec {
+        prompt_cache: muta_providers::unsupported_prompt_cache,
+        id,
+        baselines: &[],
+        base_url: Box::leak(base_url.to_string().into_boxed_str()),
+        user_agent: None,
+        protocol,
+        models,
+        catalog_source: muta_providers::RemoteCatalogSource::Endpoint(catalog_protocol),
+        default_client_profile: muta_contracts::ClientPreset::Native,
+        client_profile_sensitive: false,
+        wire_overrides: &[],
+    });
 }
 
 // derivation
@@ -207,7 +243,14 @@ fn declared_extra_model_rides_the_preset_route_with_declared_capabilities() {
 
 #[test]
 fn custom_instance_serves_its_declared_models() {
-    let mut custom = instance("relay", None);
+    register_mock_provider(
+        "test-relay-declared",
+        "https://relay.example.com/v1/chat/completions",
+        WireProtocol::ChatCompletions,
+        &[],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
+    let mut custom = instance("relay", Some("test-relay-declared"));
     custom.models.include = vec![
         muta_contracts::model::DeclaredModel {
             id: "a".to_string(),
@@ -218,8 +261,6 @@ fn custom_instance_serves_its_declared_models() {
             ..Default::default()
         },
     ];
-    custom.protocol = Some(WireProtocol::ChatCompletions);
-    custom.base_url = Some("https://relay.example.com/v1/chat/completions".to_string());
     assert_eq!(
         route_models(&custom, &DiscoveryCache::default()),
         vec!["a", "b"]
@@ -425,12 +466,8 @@ fn openai_route_uses_official_api_not_opencode_go_relay() {
 }
 
 #[test]
-fn connection_catalog_source_override_preserves_transport_endpoint() {
-    use muta_contracts::RemoteCatalogSourceOverride;
-    let mut relay_conn = instance("corp-relay", Some("openai"));
-    relay_conn.catalog_source = Some(RemoteCatalogSourceOverride::ModelsDev {
-        models_dev: "openai".to_string(),
-    });
+fn connection_uses_provider_transport_endpoint() {
+    let relay_conn = instance("corp-relay", Some("openai"));
     let channel = derive_channel(
         &relay_conn,
         "gpt-4o",
@@ -448,8 +485,7 @@ fn connection_catalog_source_override_preserves_transport_endpoint() {
 
 #[test]
 fn preset_instance_always_uses_the_hardcoded_template_endpoint() {
-    let mut deepseek = instance("deepseek", Some("deepseek"));
-    deepseek.base_url = Some("https://relay.example.com/v1/responses".to_string());
+    let deepseek = instance("deepseek", Some("deepseek"));
     let channel = derive_channel(
         &deepseek,
         "deepseek-v4-flash",
@@ -589,6 +625,52 @@ fn copilot_route_uses_remote_endpoint_metadata() {
     );
 }
 
+#[test]
+fn model_level_protocol_cascade_resolution() {
+    let mut cache = DiscoveryCache::default();
+    // Advertise that a model on an OpenAI-compatible connection wants Anthropic wire format
+    cache.remote_metadata.insert("corp-relay".to_string(), {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert(
+            "claude-custom".to_string(),
+            muta_contracts::RemoteModelMetadata {
+                protocol: Some(WireProtocol::AnthropicMessages),
+                ..Default::default()
+            },
+        );
+        m
+    });
+    register_mock_provider(
+        "corp-relay-test-prov",
+        "https://relay.example.com/v1/chat/completions",
+        WireProtocol::ChatCompletions,
+        &[],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
+    let conn = Connection {
+        name: "corp-relay".to_string(),
+        provider: "corp-relay-test-prov".to_string(),
+        ..Default::default()
+    };
+    let channel = derive_channel(
+        &conn,
+        "claude-custom",
+        &cache,
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    );
+    assert!(
+        matches!(
+            &channel.transport,
+            Transport::Anthropic {
+                dialect: muta_contracts::catalog::AnthropicMessagesDialect::Standard,
+                ..
+            }
+        ),
+        "ADR-0259: model-level protocol override is honored over provider default"
+    );
+}
+
 // picker
 
 #[test]
@@ -660,12 +742,18 @@ async fn live_discovery_writes_the_per_instance_cache() {
         .create_async()
         .await;
 
-    // An instance pointed at the mock; its base_url override feeds discovery.
+    let provider_id = "test-mock-deepseek";
+    register_mock_provider(
+        provider_id,
+        &format!("{}/v1/responses", server.url()),
+        WireProtocol::Responses,
+        &["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-lite"],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
     let instances = Connections {
         connections: vec![Connection {
             name: "deepseek".to_string(),
-            provider: "deepseek".to_string(),
-            base_url: Some(format!("{}/v1/responses", server.url())),
+            provider: provider_id.to_string(),
             ..Default::default()
         }],
     };
@@ -722,9 +810,16 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
         .create_async()
         .await;
 
-    let mut conn = instance("agy-live", Some("google-antigravity"));
+    let provider_id = "test-mock-agy";
+    register_mock_provider(
+        provider_id,
+        &format!("{}/v1internal", server.url()),
+        WireProtocol::GoogleGemini,
+        &[],
+        muta_providers::DiscoveryProtocol::GoogleCloudCode,
+    );
+    let mut conn = instance("agy-live", Some(provider_id));
     conn.auth = ConnectionAuth::AntigravityOAuth;
-    conn.base_url = Some(format!("{}/v1internal", server.url()));
     let connections = Connections {
         connections: vec![conn],
     };
@@ -751,6 +846,7 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
                 scope: None,
                 project_id: Some("projects/antigravity-test".into()),
                 user_email: None,
+                qoder: None,
             },
         );
         store.save().expect("auth store save");
@@ -798,7 +894,6 @@ async fn opencode_go_source_materializes_catalog_models() {
         connections: vec![Connection {
             name: "opencode-go".to_string(),
             provider: "opencode-go".to_string(),
-            base_url: None,
             ..Default::default()
         }],
     };
@@ -859,14 +954,18 @@ async fn single_source_endpoint_failure_records_failure_and_preserves_determinis
         .create_async()
         .await;
 
+    let provider_id = "test-mock-zai";
+    register_mock_provider(
+        provider_id,
+        &server.url(),
+        WireProtocol::ChatCompletions,
+        &["glm-4-plus"],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
     let instances = Connections {
         connections: vec![Connection {
             name: "zai".to_string(),
-            provider: "glm-cn".to_string(),
-            base_url: Some(format!(
-                "{}/api/coding/paas/v4/chat/completions",
-                server.url()
-            )),
+            provider: provider_id.to_string(),
             ..Default::default()
         }],
     };
@@ -906,18 +1005,32 @@ async fn connection_discovery_never_touches_unrelated_connections() {
         .create_async()
         .await;
 
+    let sel_id = "test-mock-selected";
+    let unrel_id = "test-mock-unrelated";
+    register_mock_provider(
+        sel_id,
+        &format!("{}/v1/responses", selected_server.url()),
+        WireProtocol::Responses,
+        &["deepseek-v4-flash"],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
+    register_mock_provider(
+        unrel_id,
+        &format!("{}/v1/responses", unrelated_server.url()),
+        WireProtocol::Responses,
+        &["deepseek-v4-pro"],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
     Connections {
         connections: vec![
             Connection {
                 name: "selected".to_string(),
-                provider: "deepseek".to_string(),
-                base_url: Some(format!("{}/v1/responses", selected_server.url())),
+                provider: sel_id.to_string(),
                 ..Default::default()
             },
             Connection {
                 name: "unrelated".to_string(),
-                provider: "deepseek".to_string(),
-                base_url: Some(format!("{}/v1/responses", unrelated_server.url())),
+                provider: unrel_id.to_string(),
                 ..Default::default()
             },
         ],
@@ -958,11 +1071,18 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
         .create_async()
         .await;
 
+    let provider_id = "test-mock-deepseek-fail";
+    register_mock_provider(
+        provider_id,
+        &format!("{}/v1/responses", server.url()),
+        WireProtocol::Responses,
+        &["deepseek-v4-flash"],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
     let instances = Connections {
         connections: vec![Connection {
             name: "deepseek".to_string(),
-            provider: "deepseek".to_string(),
-            base_url: Some(format!("{}/v1/responses", server.url())),
+            provider: provider_id.to_string(),
             ..Default::default()
         }],
     };
@@ -988,10 +1108,17 @@ async fn successful_empty_remote_catalog_clears_previous_models() {
         .with_body(r#"{"data":[]}"#)
         .create_async()
         .await;
+    let provider_id = "test-mock-deepseek-empty";
+    register_mock_provider(
+        provider_id,
+        &format!("{}/v1/responses", server.url()),
+        WireProtocol::Responses,
+        &["deepseek-v4-flash"],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
     let mut connection = Connection {
         name: "deepseek".to_string(),
-        provider: "deepseek".to_string(),
-        base_url: Some(format!("{}/v1/responses", server.url())),
+        provider: provider_id.to_string(),
         ..Default::default()
     };
     connection.models.filter = Some(muta_contracts::ConnectionFilterPolicy::Named(
@@ -1145,7 +1272,14 @@ fn antigravity_models_derivation_and_hidden_filter() {
 #[test]
 fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
     let _sandbox = sandboxed_paths();
-    let mut conn = instance("my-custom", None);
+    register_mock_provider(
+        "test-open-relay-prune",
+        "https://relay.example.com",
+        WireProtocol::ChatCompletions,
+        &[],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
+    let mut conn = instance("my-custom", Some("test-open-relay-prune"));
     conn.models.include = vec![
         muta_contracts::model::DeclaredModel {
             id: "model-a".to_string(),
@@ -1199,21 +1333,24 @@ fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
 #[test]
 fn model_recency_isolation_across_same_preset_connections() {
     let _sandbox = sandboxed_paths();
-    let mut conn1 = instance("conn-1", None);
+    register_mock_provider(
+        "test-open-relay-recency",
+        "https://relay.example.com",
+        WireProtocol::ChatCompletions,
+        &[],
+        muta_providers::DiscoveryProtocol::OpenAi,
+    );
+    let mut conn1 = instance("conn-1", Some("test-open-relay-recency"));
     conn1.models.include = vec![muta_contracts::model::DeclaredModel {
         id: "shared-model".to_string(),
         ..Default::default()
     }];
-    conn1.protocol = Some(WireProtocol::ChatCompletions);
-    conn1.base_url = Some("https://relay1.example.com".to_string());
 
-    let mut conn2 = instance("conn-2", None);
+    let mut conn2 = instance("conn-2", Some("test-open-relay-recency"));
     conn2.models.include = vec![muta_contracts::model::DeclaredModel {
         id: "shared-model".to_string(),
         ..Default::default()
     }];
-    conn2.protocol = Some(WireProtocol::ChatCompletions);
-    conn2.base_url = Some("https://relay2.example.com".to_string());
 
     let connections = Connections {
         connections: vec![conn1, conn2],

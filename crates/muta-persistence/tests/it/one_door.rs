@@ -28,7 +28,7 @@ const THE_DOOR: &str = "crates/muta-persistence/src/db.rs";
 const THE_DOOR_DIR: &str = "crates/muta-persistence/src/db/";
 
 /// This guard names the forbidden patterns, so it exempts itself.
-const THE_GUARD: &str = "crates/muta-persistence/tests/one_door.rs";
+const THE_GUARD: &str = "crates/muta-persistence/tests/it/one_door.rs";
 
 /// The workspace root, from this crate's manifest directory.
 fn workspace_root() -> PathBuf {

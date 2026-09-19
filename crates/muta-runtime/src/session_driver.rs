@@ -849,13 +849,35 @@ impl SessionDriver {
                     )
                     .await;
                 }
+                AgentRequest::RegisterProvider {
+                    id,
+                    label,
+                    root_url,
+                    protocol,
+                    client_profile,
+                    user_agent,
+                    catalog_format,
+                    dialect,
+                } => {
+                    if let Err(e) = crate::handlers_provider::register_provider(
+                        id,
+                        label,
+                        root_url,
+                        protocol,
+                        client_profile,
+                        user_agent,
+                        catalog_format,
+                        dialect,
+                    ) {
+                        let _ = resp_tx.send(AgentResponse::Error(format!(
+                            "Could not register provider: {e}"
+                        )));
+                    }
+                }
                 AgentRequest::AddConnection {
                     name,
                     provider,
-                    protocol,
-                    base_url,
                     api_key,
-                    user_agent,
                     models,
                     auth,
                     client_identity,
@@ -873,10 +895,7 @@ impl SessionDriver {
                         crate::handlers_provider::AddConnectionParams {
                             name,
                             provider,
-                            protocol,
-                            base_url,
                             api_key,
-                            user_agent,
                             models,
                             auth,
                             client_identity,
@@ -951,8 +970,6 @@ impl SessionDriver {
                 AgentRequest::EditConnection {
                     name,
                     provider,
-                    protocol,
-                    base_url,
                     api_key,
                     client_identity,
                 } => {
@@ -967,8 +984,6 @@ impl SessionDriver {
                         },
                         name,
                         provider,
-                        protocol,
-                        base_url,
                         api_key,
                         client_identity,
                     )

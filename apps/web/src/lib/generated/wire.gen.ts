@@ -331,7 +331,7 @@ export type ComposerCompletionKind = "slash" | "slash_alias" | "intent" | "path_
 /**
  * How a user-defined connection authenticates.
  */
-export type ConnectionAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOAuth" | "AntigravityOAuth";
+export type ConnectionAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOAuth" | "AntigravityOAuth" | "QoderOAuth";
 
 /**
  * Full inspection detail for one connection in the `/connections` modal.

@@ -31,11 +31,44 @@ pub struct TokenSet {
     pub project_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_email: Option<String>,
+    /// Qoder request identity, persisted per connection. `None` for every
+    /// other provider. Serde-defaulted so existing `auth.toml` files keep
+    /// decoding; only Qoder connections write this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qoder: Option<QoderStoredIdentity>,
+}
+
+/// The durable form of [`crate::auth::QoderRequestIdentity`] — what the auth
+/// store serializes. The machine key is the long-lived device identity; uid
+/// and org scope come from login/userinfo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QoderStoredIdentity {
+    pub uid: String,
+    /// AES key hex (32 lowercase hex chars); the device's signing identity.
+    pub machine_key_hex: SecretString,
+    #[serde(default)]
+    pub data_policy_agreed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
+    #[serde(default)]
+    pub organization_tags: Vec<String>,
 }
 
 impl TokenSet {
     pub fn is_valid(&self) -> bool {
         !self.access.expose_secret().trim().is_empty()
+    }
+
+    /// Lift the stored Qoder identity into the contract's typed request
+    /// identity for `ResolvedAuth`. `None` for non-Qoder connections.
+    pub fn qoder_request_identity(&self) -> Option<muta_contracts::QoderRequestIdentity> {
+        self.qoder.as_ref().map(|stored| muta_contracts::QoderRequestIdentity {
+            uid: stored.uid.clone(),
+            machine_key_hex: stored.machine_key_hex.clone(),
+            data_policy_agreed: stored.data_policy_agreed,
+            organization_id: stored.organization_id.clone(),
+            organization_tags: stored.organization_tags.clone(),
+        })
     }
 }
 
@@ -239,6 +272,7 @@ mod tests {
             scope: None,
             project_id: None,
             user_email: None,
+            qoder: None,
         }
     }
 

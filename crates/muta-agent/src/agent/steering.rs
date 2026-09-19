@@ -834,10 +834,17 @@ mod tests {
             crate::AgentIdentity::new("test", "test agent"),
         );
 
-        // Applying developer role equips code intelligence.
+        // Applying developer role equips code intelligence and excludes code_query.
         assert!(agent.apply_role("developer").is_some());
         assert_eq!(agent.extensions().len(), 1);
         assert_eq!(agent.extensions()[0].id(), "code_intelligence");
+        let tools_scope = agent.tools.lock().unwrap().scope.clone();
+        let muta_contracts::ToolScope::Only(names) = tools_scope else {
+            panic!("developer role must have explicit scoped tools");
+        };
+        assert!(!names.contains("code_query"));
+        assert!(names.contains("read_text"));
+        assert!(names.contains("write_file"));
 
         // Applying philosophist role drops code intelligence (0 overhead).
         assert!(agent.apply_role("philosophist").is_some());

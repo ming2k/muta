@@ -462,6 +462,31 @@ impl ClientPreset {
     pub const fn all() -> &'static [ClientPreset] {
         Self::ALL
     }
+
+    /// Parse a preset from an id or common alias.
+    pub fn from_id(id: &str) -> Option<Self> {
+        ClientProfile::from_id(id).and_then(|p| p.preset())
+    }
+}
+
+impl Serialize for ClientPreset {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.spec().id)
+    }
+}
+
+impl<'de> Deserialize<'de> for ClientPreset {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Self::from_id(&s)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown client preset: {s}")))
+    }
 }
 
 /// First-class client profile presets and custom identity for connection emulation.

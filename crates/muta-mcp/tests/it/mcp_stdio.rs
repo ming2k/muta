@@ -11,12 +11,7 @@ use std::path::PathBuf;
 use muta_contracts::mcp::{McpConnectionStatus, McpServerConfig};
 use muta_mcp::load_mcp_tools;
 
-fn python3() -> Option<String> {
-    let probe = std::process::Command::new("python3")
-        .arg("--version")
-        .output();
-    matches!(probe, Ok(out) if out.status.success()).then(|| "python3".to_string())
-}
+use super::python3;
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_mcp_server.py")

@@ -90,7 +90,7 @@ vocabulary ships as a compact binary blob (`vendor/cl100k_base.packed`,
 models using that encoding family (GPT-3.5/4 and most OpenAI-compatible
 relays) and a close approximation for siblings (`o200k_base`); it is
 cross-validated against an offline tiktoken reference in
-`crates/muta-contracts/tests/tokenizer_corpus.rs`.
+`crates/muta-contracts/tests/it/tokenizer_corpus.rs`.
 
 Message-level estimation (`estimate_message_tokens`) additionally charges
 chat framing overhead — 4 tokens per message, 2 per tool call — measured the

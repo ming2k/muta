@@ -126,7 +126,7 @@ a current-thread runtime, and the invariant is asserted from four flavors.
 
 ### D4. The rule is mechanized, not merely documented
 
-`crates/muta-persistence/tests/one_door.rs` scans the tree's Rust sources and
+`crates/muta-persistence/tests/it/one_door.rs` scans the tree's Rust sources and
 fails on any of `DatabaseEngine`, `Connection::open`, `initialize_db`,
 `rusqlite::Connection` outside `db.rs` and the guard itself. The compile-time
 half (privacy) covers the *type*; the scan covers the *library*, since
@@ -253,5 +253,5 @@ bypass), but neither implies the other.
 - ADR-0187: persistence v2 incremental append and blob reference ledger
 - ADR-0196: supervised persistence writer and typed persistence errors
 - ADR-0218: durable request-projection archive
-- `crates/muta-persistence/tests/one_door.rs`: the mechanized rule (one-door
+- `crates/muta-persistence/tests/it/one_door.rs`: the mechanized rule (one-door
   scan + door-shape assertions + the four runtime-flavor sync-verb tests)

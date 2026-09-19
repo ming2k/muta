@@ -41,7 +41,7 @@ adapter name.
 
 | Protocol | Dialects | Difference from the standard dialect |
 |----------|----------|--------------------------------------|
-| Chat Completions | standard, Copilot, OpenRouter | Copilot bearer/client headers; OpenRouter unified reasoning controls, app attribution, and reasoning-detail replay |
+| Chat Completions | standard, Copilot, OpenRouter, Qoder | Copilot bearer/client headers; OpenRouter unified reasoning controls, app attribution, and reasoning-detail replay; Qoder QoderEncoding body codec, COSY-signed header set, and envelope-wrapped SSE |
 | Responses | standard, ChatGPT, Copilot | Subscription authentication, account/client headers, and non-persistent response state |
 | Anthropic Messages | standard, Copilot | Copilot bearer and client headers instead of Anthropic API-key headers |
 | Google Gemini | Generative Language, Antigravity | Antigravity `v1internal` envelope, project identity, and response normalization |
@@ -69,6 +69,7 @@ a wire protocol and never an authentication mode. The closed id set lives in
 | `deepseek` | `responses` | standard | API key |
 | `glm-cn` | `chat-completions` | standard plus ZCode identity | coding-plan key |
 | `kimi-code` | `chat-completions` | standard | coding-plan key |
+| `qoder` | `chat-completions` | Qoder | Qoder OAuth (device flow) or pasted `pt-` personal-access token |
 | `opencode-go` | Selected per model: chat-completions, anthropic-messages, or google-gemini | standard relay routes | API key |
 | `custom` | `chat-completions` (connection default; a connection may override) | standard | optional API key |
 

@@ -20,6 +20,57 @@ pub struct ResolvedAuth {
     pub project_id: Option<String>,
     /// User email address if known.
     pub user_email: Option<String>,
+    /// Alibaba Qoder request identity (COSY surface): typed per-provider
+    /// material rather than overloading the ChatGPT/Google fields. `None`
+    /// for every other provider.
+    pub qoder: Option<QoderRequestIdentity>,
+}
+
+/// Alibaba Qoder's request identity: the typed, provider-owned material the
+/// COSY signing layer consumes. One instance per connection; each field is
+/// exactly what the corresponding COSY header/payload slot needs.
+#[derive(Clone, PartialEq, Eq)]
+pub struct QoderRequestIdentity {
+    /// The Qoder account's user id (`Cosy-User` header, payload `uid`).
+    pub uid: String,
+    /// The machine's AES key hex — generated once per device, persisted in
+    /// the auth store, and stable across sessions. Qoder's risk signals pin
+    /// to this identity; a rotating key would look like device churn.
+    pub machine_key_hex: SecretString,
+    /// Whether the user agreed to Qoder's data policy (`Cosy-Data-Policy`).
+    pub data_policy_agreed: bool,
+    /// Organization scope, when the account has one (`Cosy-Organization-Id`).
+    pub organization_id: Option<String>,
+    /// Organization tags, comma-joined in order (`Cosy-Organization-Tags`).
+    pub organization_tags: Vec<String>,
+}
+
+impl QoderRequestIdentity {
+    /// Identity payload plaintext for the AES layer (the `info` field's
+    /// pre-encryption form). This is the exact JSON shape Qoder's client
+    /// encrypts — field order matters to the signature.
+    pub fn identity_payload_json(&self, bearer: &str, email: &str) -> String {
+        serde_json::json!({
+            "uid": self.uid,
+            "aid": "",
+            "name": "Muta",
+            "email": email,
+            "security_oauth_token": bearer,
+        })
+        .to_string()
+    }
+}
+
+impl fmt::Debug for QoderRequestIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QoderRequestIdentity")
+            .field("uid", &self.uid)
+            .field("machine_key_hex", &"[REDACTED]")
+            .field("data_policy_agreed", &self.data_policy_agreed)
+            .field("organization_id", &self.organization_id)
+            .field("organization_tags", &self.organization_tags)
+            .finish()
+    }
 }
 
 impl ResolvedAuth {
@@ -30,7 +81,14 @@ impl ResolvedAuth {
             account_id: None,
             project_id: None,
             user_email: None,
+            qoder: None,
         }
+    }
+
+    /// Attach Qoder request identity (typed, provider-owned).
+    pub fn with_qoder_identity(mut self, identity: QoderRequestIdentity) -> Self {
+        self.qoder = Some(identity);
+        self
     }
 
     /// Set the account id.
@@ -64,6 +122,7 @@ impl fmt::Debug for ResolvedAuth {
             .field("account_id", &self.account_id)
             .field("project_id", &self.project_id)
             .field("user_email", &self.user_email)
+            .field("qoder", &self.qoder)
             .finish()
     }
 }

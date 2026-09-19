@@ -9,7 +9,7 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::subagent::SubAgentProfile;
-use crate::{AgentIdentity, ToolScope, ToolSelection};
+use crate::{AgentIdentity, ToolSelection};
 
 /// User-tunable agent runtime behaviour.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -89,6 +89,7 @@ impl AgentRoleProfile {
                 "Role: developer. You are an expert AI software engineer with native tool access and deep system architecture capability. Execute commands and edit files with surgical precision, maintain strict testing discipline, and prioritize root-cause solutions over superficial patches.",
             ),
         )
+        .with_tools(MainAgentRole::Developer.tool_selection())
     }
 
     /// Role for standard developer master.
@@ -104,12 +105,8 @@ impl AgentRoleProfile {
              You can perceive our historical dialogue using `recall_memory` to recall past discussions, philosophical \
              positions, or shared reflections when relevant.",
         );
-        Self::with_identity("philosophist", identity).with_tools(ToolSelection::only([
-            "read_url",
-            "search_web",
-            "ask_user",
-            "recall_memory",
-        ]))
+        Self::with_identity("philosophist", identity)
+            .with_tools(MainAgentRole::Philosophist.tool_selection())
     }
 
     /// Preset for ops role (workspace-free system administration, infrastructure maintenance, and remote operations).
@@ -126,22 +123,8 @@ impl AgentRoleProfile {
              verify results post-action, and proactively seek confirmation via `ask_user` before executing high-risk, destructive, \
              or potentially connectivity-breaking operations.",
         );
-        Self::with_identity("ops", identity).with_tools(ToolSelection::only([
-            "run_command",
-            "process",
-            "read_text",
-            "edit_text",
-            "write_file",
-            "list_dir",
-            "find_files",
-            "search_text",
-            "read_url",
-            "search_web",
-            "read_image",
-            "ask_user",
-            "todo",
-            "spawn_agent",
-        ]))
+        Self::with_identity("ops", identity)
+            .with_tools(MainAgentRole::Ops.tool_selection())
     }
 
     /// Narrow the capability scope. Builder-style.
@@ -171,7 +154,7 @@ impl AgentRoleProfile {
                 } else {
                     base.clone()
                 };
-                Self::with_identity("developer", id)
+                Self::with_identity("developer", id).with_tools(role.tool_selection())
             }
             MainAgentRole::Philosophist => Self::philosophist(),
             MainAgentRole::Ops => Self::ops(),
@@ -304,7 +287,10 @@ impl SessionRoleManifest {
             ),
             instructions: profile.identity.directive.clone(),
             identity: profile.identity,
-            tools: vec!["*".to_string()],
+            tools: MainAgentRole::DEVELOPER_TOOLS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             admit_mcp: vec!["*".to_string()],
             created_at_s: 0,
         }
@@ -319,12 +305,10 @@ impl SessionRoleManifest {
             description: Some("philosophical inquiry & reflection (workspace-free)".to_string()),
             instructions: profile.identity.directive.clone(),
             identity: profile.identity,
-            tools: vec![
-                "read_url".to_string(),
-                "search_web".to_string(),
-                "ask_user".to_string(),
-                "recall_memory".to_string(),
-            ],
+            tools: MainAgentRole::PHILOSOPHIST_TOOLS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             admit_mcp: Vec::new(),
             created_at_s: 0,
         }
@@ -341,22 +325,10 @@ impl SessionRoleManifest {
             ),
             instructions: profile.identity.directive.clone(),
             identity: profile.identity,
-            tools: vec![
-                "run_command".to_string(),
-                "process".to_string(),
-                "read_text".to_string(),
-                "edit_text".to_string(),
-                "write_file".to_string(),
-                "list_dir".to_string(),
-                "find_files".to_string(),
-                "search_text".to_string(),
-                "read_url".to_string(),
-                "search_web".to_string(),
-                "read_image".to_string(),
-                "ask_user".to_string(),
-                "todo".to_string(),
-                "spawn_agent".to_string(),
-            ],
+            tools: MainAgentRole::OPS_TOOLS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             admit_mcp: vec!["*".to_string()],
             created_at_s: 0,
         }
@@ -454,6 +426,55 @@ impl MainAgentRole {
             MainAgentRole::Ops => false,
         }
     }
+
+    /// Built-in tools admitted for standard developer sessions.
+    ///
+    /// AST-level structural queries (`code_query`) are strictly excluded by design:
+    /// developer delegates exploration and AST investigation to dedicated
+    /// subagents (`explore`/`debug`) to maintain a lean, clean context window.
+    pub const DEVELOPER_TOOLS: &'static [&'static str] = &[
+        "run_command",
+        "process",
+        "read_text",
+        "edit_text",
+        "write_file",
+        "list_dir",
+        "find_files",
+        "search_text",
+        "read_url",
+        "search_web",
+        "read_image",
+        "ask_user",
+        "todo",
+        "spawn_agent",
+        "recall_memory",
+    ];
+
+    /// Built-in tools admitted for philosophist sessions.
+    pub const PHILOSOPHIST_TOOLS: &'static [&'static str] = &[
+        "read_url",
+        "search_web",
+        "ask_user",
+        "recall_memory",
+    ];
+
+    /// Built-in tools admitted for ops sessions.
+    pub const OPS_TOOLS: &'static [&'static str] = &[
+        "run_command",
+        "process",
+        "read_text",
+        "edit_text",
+        "write_file",
+        "list_dir",
+        "find_files",
+        "search_text",
+        "read_url",
+        "search_web",
+        "read_image",
+        "ask_user",
+        "todo",
+        "spawn_agent",
+    ];
 }
 
 impl AgentRole for MainAgentRole {
@@ -471,26 +492,15 @@ impl AgentRole for MainAgentRole {
 
     fn tool_selection(&self) -> ToolSelection {
         match self {
-            MainAgentRole::Developer => ToolSelection::unrestricted(),
-            MainAgentRole::Philosophist => {
-                ToolSelection::only(["read_url", "search_web", "ask_user", "recall_memory"])
+            MainAgentRole::Developer => {
+                ToolSelection::only(MainAgentRole::DEVELOPER_TOOLS.iter().copied())
             }
-            MainAgentRole::Ops => ToolSelection::only([
-                "run_command",
-                "process",
-                "read_text",
-                "edit_text",
-                "write_file",
-                "list_dir",
-                "find_files",
-                "search_text",
-                "read_url",
-                "search_web",
-                "read_image",
-                "ask_user",
-                "todo",
-                "spawn_agent",
-            ]),
+            MainAgentRole::Philosophist => {
+                ToolSelection::only(MainAgentRole::PHILOSOPHIST_TOOLS.iter().copied())
+            }
+            MainAgentRole::Ops => {
+                ToolSelection::only(MainAgentRole::OPS_TOOLS.iter().copied())
+            }
         }
     }
 }
@@ -547,44 +557,26 @@ impl AgentRole for SubAgentRole {
 
     fn tool_selection(&self) -> ToolSelection {
         match self {
-            SubAgentRole::Explore => ToolSelection::only([
-                "read_text",
-                "find_files",
-                "list_dir",
-                "read_image",
-                "search_text",
-                "code_query",
-                "read_url",
-                "search_web",
-            ]),
-            SubAgentRole::Debug => ToolSelection::only([
-                "read_text",
-                "find_files",
-                "list_dir",
-                "read_image",
-                "search_text",
-                "code_query",
-                "run_command",
-                "process",
-                "read_url",
-                "search_web",
-            ]),
+            SubAgentRole::Explore => {
+                ToolSelection::only(SubAgentProfile::EXPLORE_TOOLS.iter().copied())
+            }
+            SubAgentRole::Debug => {
+                ToolSelection::only(SubAgentProfile::DEBUG_TOOLS.iter().copied())
+            }
             SubAgentRole::Skill => {
-                ToolSelection::only(["read_text", "find_files", "list_dir", "search_text"])
+                ToolSelection::only(SubAgentProfile::SKILL_TOOLS.iter().copied())
             }
         }
     }
 }
 
-/// The delegation face of an agent role: which subagents it may load, and the tool scope it declares.
+/// The delegation face of an agent role: which subagents it may load, and the tools it declares.
 #[derive(Debug, Clone)]
 pub struct AgentRoleDelegation {
     /// Stable id.
     pub role_id: &'static str,
     /// Subagent role names this agent may load, in preference order.
     pub subagent_roles: &'static [&'static str],
-    /// The tool scope this agent declares against the pool.
-    pub tool_scope: ToolScope,
 }
 
 pub type DelegationPolicy = AgentRoleDelegation;
@@ -597,14 +589,12 @@ impl AgentRoleDelegation {
             SubAgentProfile::EXPLORE.name,
             SubAgentProfile::DEBUG.name,
         ],
-        tool_scope: ToolScope::All,
     };
 
     /// The philosophist agent role delegation policy: workspace-free philosophical exploration.
     pub const PHILOSOPHIST: AgentRoleDelegation = AgentRoleDelegation {
         role_id: "philosophist",
         subagent_roles: &[SubAgentProfile::EXPLORE.name],
-        tool_scope: ToolScope::All,
     };
 
     /// The ops agent role delegation policy: workspace-free system administration and remote operations.
@@ -615,7 +605,6 @@ impl AgentRoleDelegation {
             SubAgentProfile::TITLE.name,
             SubAgentProfile::SKILL.name,
         ],
-        tool_scope: ToolScope::All,
     };
 
     /// Whether an agent bound to this role may load the subagent role
@@ -632,23 +621,9 @@ impl AgentRoleDelegation {
 
     pub fn declared_tools(&self) -> Option<&'static [&'static str]> {
         match self.role_id {
-            "philosophist" => Some(&["read_url", "search_web", "ask_user", "recall_memory"]),
-            "ops" => Some(&[
-                "run_command",
-                "process",
-                "read_text",
-                "edit_text",
-                "write_file",
-                "list_dir",
-                "find_files",
-                "search_text",
-                "read_url",
-                "search_web",
-                "read_image",
-                "ask_user",
-                "todo",
-                "spawn_agent",
-            ]),
+            "developer" => Some(MainAgentRole::DEVELOPER_TOOLS),
+            "philosophist" => Some(MainAgentRole::PHILOSOPHIST_TOOLS),
+            "ops" => Some(MainAgentRole::OPS_TOOLS),
             _ => None,
         }
     }
@@ -755,10 +730,23 @@ mod tests {
     }
 
     #[test]
-    fn developer_role_is_unrestricted_baseline() {
+    fn developer_role_excludes_ast_code_query() {
         let base = AgentIdentity::from_mission("coding assistant");
         let dev = AgentRoleProfile::from_role(MainAgentRole::Developer, &base);
-        assert_eq!(dev.tools.scope, crate::ToolScope::All);
+        let crate::ToolScope::Only(names) = &dev.tools.scope else {
+            panic!("developer must be scoped with explicit tools");
+        };
+        assert!(names.contains("run_command"));
+        assert!(names.contains("process"));
+        assert!(names.contains("read_text"));
+        assert!(names.contains("edit_text"));
+        assert!(names.contains("write_file"));
+        assert!(names.contains("spawn_agent"));
+        assert!(names.contains("recall_memory"));
+        assert!(
+            !names.contains("code_query"),
+            "code_query must be delegated to explore/debug subagents"
+        );
     }
 
     #[test]
@@ -797,7 +785,8 @@ mod tests {
     fn session_role_manifest_defaults_and_serde() {
         let dev_manifest = SessionRoleManifest::developer();
         assert_eq!(dev_manifest.role_id, "developer");
-        assert_eq!(dev_manifest.tools, vec!["*"]);
+        assert_eq!(dev_manifest.tools, MainAgentRole::DEVELOPER_TOOLS);
+        assert!(!dev_manifest.tools.contains(&"code_query".to_string()));
         assert!(
             dev_manifest
                 .identity
@@ -870,5 +859,12 @@ mod tests {
         // AST code parsing and philosophical memory dialogue are excluded:
         assert!(!names.contains("code_query"));
         assert!(!names.contains("recall_memory"));
+
+        let dev = AgentRoleProfile::from_role(MainAgentRole::Developer, &base);
+        let crate::ToolScope::Only(dev_names) = &dev.tools.scope else {
+            panic!("developer must be scoped with explicit tools");
+        };
+        assert!(!dev_names.contains("code_query"));
+        assert!(dev_names.contains("recall_memory"));
     }
 }

@@ -17,6 +17,7 @@ mod antigravity;
 mod deepseek;
 mod kimi;
 mod openrouter;
+mod qoder;
 mod siliconflow;
 
 pub use antigravity::{
@@ -26,6 +27,7 @@ pub use antigravity::{
 pub use deepseek::DeepSeekUsageFetcher;
 pub use kimi::KimiUsageFetcher;
 pub use openrouter::OpenRouterUsageFetcher;
+pub use qoder::QoderUsageFetcher;
 pub use siliconflow::SiliconFlowUsageFetcher;
 
 /// Trait implemented by provider-specific usage / quota fetchers.
@@ -50,6 +52,7 @@ pub fn registered_fetchers() -> &'static [&'static dyn ProviderUsageFetcher] {
         &DeepSeekUsageFetcher,
         &KimiUsageFetcher,
         &OpenRouterUsageFetcher,
+        &QoderUsageFetcher,
         &SiliconFlowUsageFetcher,
     ]
 }

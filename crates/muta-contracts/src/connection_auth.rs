@@ -27,6 +27,12 @@ pub enum ConnectionAuth {
     /// Google Antigravity subscription. The exact connection id owns its token
     /// set; inference uses native Google REST.
     AntigravityOAuth,
+    /// Alibaba Qoder subscription (qoder.com / qoder.com.cn). The exact
+    /// connection id owns its token set; inference uses the Qoder COSY-signed
+    /// SSE endpoint. A pasted personal-access token (`pt-…`) downgrades to
+    /// ordinary [`ConnectionAuth::ApiKey`] at add time (see
+    /// `handlers_provider`).
+    QoderOAuth,
 }
 
 /// Backwards-compatible alias for [`ConnectionAuth`].
@@ -42,6 +48,7 @@ impl ConnectionAuth {
                 | ConnectionAuth::ChatGptOAuth
                 | ConnectionAuth::CopilotOAuth
                 | ConnectionAuth::AntigravityOAuth
+                | ConnectionAuth::QoderOAuth
         )
     }
 
@@ -65,6 +72,11 @@ impl ConnectionAuth {
         matches!(self, ConnectionAuth::XaiOAuth)
     }
 
+    /// Whether this variant is Alibaba Qoder OAuth.
+    pub fn is_qoder(self) -> bool {
+        matches!(self, ConnectionAuth::QoderOAuth)
+    }
+
     /// Stable OAuth integration id used to select endpoints and protocol
     /// configuration. It is never a runtime credential namespace.
     pub fn oauth_provider_id(self) -> Option<&'static str> {
@@ -73,6 +85,7 @@ impl ConnectionAuth {
             ConnectionAuth::ChatGptOAuth => Some("chatgpt"),
             ConnectionAuth::CopilotOAuth => Some("copilot"),
             ConnectionAuth::AntigravityOAuth => Some("google-antigravity"),
+            ConnectionAuth::QoderOAuth => Some("qoder"),
             ConnectionAuth::ApiKey => None,
         }
     }
@@ -85,7 +98,9 @@ impl ConnectionAuth {
             ConnectionAuth::ChatGptOAuth | ConnectionAuth::AntigravityOAuth => {
                 Some(LoginMethod::Browser)
             }
-            ConnectionAuth::XaiOAuth | ConnectionAuth::CopilotOAuth => Some(LoginMethod::Device),
+            ConnectionAuth::XaiOAuth
+            | ConnectionAuth::CopilotOAuth
+            | ConnectionAuth::QoderOAuth => Some(LoginMethod::Device),
             ConnectionAuth::ApiKey => None,
         }
     }
@@ -117,6 +132,10 @@ mod tests {
         // keeps device authorization as its portable default.
         assert_eq!(
             ConnectionAuth::CopilotOAuth.default_login_method(),
+            Some(LoginMethod::Device)
+        );
+        assert_eq!(
+            ConnectionAuth::QoderOAuth.default_login_method(),
             Some(LoginMethod::Device)
         );
         assert_eq!(

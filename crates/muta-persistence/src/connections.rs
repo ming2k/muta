@@ -21,8 +21,8 @@
 //! Stored in `$XDG_STATE_HOME/muta/connections.toml` — a program-managed
 //! state file, separate from the user-edited `config.toml`.
 
-use muta_contracts::model_providers::canonical_provider_id;
-use muta_contracts::{ClientIdentity, ConnectionAuth, RemoteCatalogSourceOverride, WireProtocol};
+use muta_contracts::model_providers::{canonical_provider_id, is_known_model_provider};
+use muta_contracts::{ClientIdentity, ConnectionAuth, WireProtocol};
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil;
@@ -33,11 +33,11 @@ pub use muta_contracts::model::{
     NamedFilterPolicy,
 };
 
-/// The provider id used by a connection that brings its own endpoint. It is an
-/// ordinary model provider whose model universe is open (ADR-0201 §6).
-pub const CUSTOM_PROVIDER: &str = "custom";
-
-/// One connection: a credentialed pipe to a model provider.
+/// One connection: a credentialed pipe to a model provider (ADR-0201, ADR-0258).
+///
+/// Purified of transport-level concerns (endpoint, wire protocol, discovery) per ADR-0258.
+/// A connection binds an authentication mode and identity to a model provider, and
+/// optionally applies model scoping/filtering.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Connection {
@@ -62,23 +62,8 @@ pub struct Connection {
     /// Defaults to [`muta_contracts::ClientProfile::Native`].
     #[serde(default, alias = "client_profile")]
     pub client_identity: ClientIdentity,
-    /// Wire transport override. `None` uses the provider's default protocol.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<WireProtocol>,
-    /// Endpoint override. `None` uses the provider's default endpoint.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
-    /// Optional catalog-source override. This never changes the inference
-    /// transport endpoint; omitted connections inherit their provider source.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_source: Option<RemoteCatalogSourceOverride>,
-    /// `User-Agent` header override. `None` uses the provider's default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_agent: Option<String>,
     /// Model scope configuration (ADR-0199, ADR-0201): this connection's
-    /// include / exclude / override delta over the provider's universe. A
-    /// curated provider admits only models it knows; `provider = "custom"`
-    /// admits anything.
+    /// include / exclude / override delta over the provider's universe.
     #[serde(default, skip_serializing_if = "ModelScopeConfig::is_empty")]
     pub models: ModelScopeConfig,
 }
@@ -87,14 +72,10 @@ impl Default for Connection {
     fn default() -> Self {
         Self {
             name: String::new(),
-            provider: CUSTOM_PROVIDER.to_string(),
+            provider: String::new(),
             auth: ConnectionAuth::ApiKey,
             api_key_env: None,
             client_identity: ClientIdentity::Native,
-            protocol: None,
-            base_url: None,
-            catalog_source: None,
-            user_agent: None,
             models: ModelScopeConfig::default(),
         }
     }
@@ -150,8 +131,9 @@ struct RawConnection {
     protocol: Option<WireProtocol>,
     #[serde(default)]
     base_url: Option<String>,
+    #[allow(dead_code)]
     #[serde(default)]
-    catalog_source: Option<RemoteCatalogSourceOverride>,
+    catalog_source: Option<serde_json::Value>,
     #[serde(default)]
     user_agent: Option<String>,
     #[serde(default, deserialize_with = "deserialize_connection_models")]
@@ -190,17 +172,58 @@ impl RawConnection {
 
         let declared = self.provider.or(self.preset_id);
         let provider = match declared {
-            // A pure-custom connection (`preset_id` absent) becomes a `custom`
-            // provider connection — one kind, not two (ADR-0201 §6).
-            None => CUSTOM_PROVIDER.to_string(),
-            Some(raw) => canonical_provider_id(raw.trim())
-                .ok_or_else(|| format!("unknown model provider '{raw}'"))?,
+            None => {
+                if name.starts_with("custom-") {
+                    name.to_lowercase().replace(' ', "-")
+                } else {
+                    format!("custom-{}", name.to_lowercase().replace(' ', "-"))
+                }
+            }
+            Some(raw) => {
+                let trimmed = raw.trim();
+                if trimmed == "custom" || trimmed == "custom-openai" {
+                    if name.starts_with("custom-") {
+                        name.to_lowercase().replace(' ', "-")
+                    } else {
+                        format!("custom-{}", name.to_lowercase().replace(' ', "-"))
+                    }
+                } else if let Some(canonical) = canonical_provider_id(trimmed) {
+                    canonical
+                } else {
+                    let store = crate::model_providers::ModelProviders::load();
+                    if store.get_provider(trimmed).is_some() {
+                        trimmed.to_string()
+                    } else {
+                        return Err(format!("unknown model provider '{raw}'"));
+                    }
+                }
+            }
         };
+
+        // ADR-0258 Auto-hoist legacy transport properties into model_providers.toml
+        if let Some(base_url) = self.base_url {
+            let mut store = crate::model_providers::ModelProviders::load();
+            if store.get_provider(&provider).is_none() {
+                store.set_provider(
+                    &provider,
+                    crate::model_providers::UserDeclaredProvider {
+                        label: Some(name.clone()),
+                        root_url: base_url,
+                        default_protocol: self.protocol,
+                        client_profile: None,
+                        user_agent: self.user_agent,
+                        catalog_format: None,
+                        dialect: None,
+                    },
+                );
+                let _ = store.save();
+            }
+        }
 
         let mut models = self.models;
         if models.filter.is_none() {
             models.filter = Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All));
-            if provider != CUSTOM_PROVIDER {
+            if is_known_model_provider(&provider) {
                 models.include.clear();
             }
         }
@@ -216,10 +239,6 @@ impl RawConnection {
             auth: self.auth,
             api_key_env: self.api_key_env,
             client_identity: self.client_identity,
-            protocol: self.protocol,
-            base_url: self.base_url,
-            catalog_source: self.catalog_source,
-            user_agent: self.user_agent,
             models,
         })
     }
@@ -619,7 +638,7 @@ models = ["llama3:latest", "mistral:latest"]
             .migrate()
             .unwrap();
         assert_eq!(conn.name, "custom-ollama");
-        assert_eq!(conn.provider, CUSTOM_PROVIDER);
+        assert_eq!(conn.provider, "custom-ollama");
         assert_eq!(conn.models.include.len(), 2);
         assert_eq!(conn.models.include[0].id, "llama3:latest");
     }
@@ -632,7 +651,7 @@ models = ["llama3:latest", "mistral:latest"]
             ("copilot-oauth", "github-copilot"),
             ("xai-oauth", "xai"),
             ("zai-code", "glm-cn"),
-            ("custom-openai", "custom"),
+            ("custom-openai", "custom-c"),
         ] {
             let raw: RawConnections = toml::from_str(&format!(
                 "[[connections]]\nname = \"c\"\npreset_id = \"{legacy}\"\n"

@@ -66,6 +66,7 @@ fn request_for(address: &str) -> RequestParts {
             b"{\"model\":\"shadow\",\"stream\":true}",
         )),
         timeout: None,
+        telemetry: muta_contracts::TransportTelemetry::default(),
     }
 }
 

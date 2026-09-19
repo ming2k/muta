@@ -51,9 +51,8 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
                     })
                     .unwrap_or_default();
                 let is_custom = provider == crate::providers::CUSTOM_TEMPLATE.id;
-                // Only the `custom` provider owns its wire/endpoint; a curated
+                // Only a custom provider owns its wire/endpoint; a curated
                 // provider derives both from its spec.
-                let protocol = is_custom.then_some(protocol);
                 let base_url = app
                     .custom_fields
                     .contains(&crate::CustomField::BaseUrl)
@@ -65,11 +64,21 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
                         to: name.clone(),
                     });
                 }
+                if is_custom && let Some(url) = base_url {
+                    app.send_intent(AgentRequest::RegisterProvider {
+                        id: provider.clone(),
+                        label: Some(name.clone()),
+                        root_url: url,
+                        protocol: Some(protocol),
+                        client_profile: None,
+                        user_agent: None,
+                        catalog_format: None,
+                        dialect: None,
+                    });
+                }
                 app.send_intent(AgentRequest::EditConnection {
                     name,
                     provider,
-                    protocol,
-                    base_url,
                     api_key,
                     client_identity: Some(app.custom_client_identity.clone()),
                 });
@@ -112,19 +121,33 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
                 // the client silently suffixing it.
                 let provider = app.custom_provider_id.take().unwrap_or_default();
                 let is_custom = provider == crate::providers::CUSTOM_TEMPLATE.id;
-                let protocol = is_custom.then_some(protocol);
                 let base_url = app
                     .custom_fields
                     .contains(&crate::CustomField::BaseUrl)
                     .then(|| base_url.clone())
                     .filter(|url| !url.is_empty());
+                let provider_id = if is_custom {
+                    let pid = format!("custom-{}", name.to_lowercase().replace(' ', "-"));
+                    if let Some(url) = base_url {
+                        app.send_intent(AgentRequest::RegisterProvider {
+                            id: pid.clone(),
+                            label: Some(name.clone()),
+                            root_url: url,
+                            protocol: Some(protocol),
+                            client_profile: None,
+                            user_agent: app.custom_user_agent.clone(),
+                            catalog_format: None,
+                            dialect: None,
+                        });
+                    }
+                    pid
+                } else {
+                    provider
+                };
                 app.send_intent(AgentRequest::AddConnection {
                     name,
-                    provider,
-                    protocol,
-                    base_url,
+                    provider: provider_id,
                     api_key,
-                    user_agent: app.custom_user_agent.clone(),
                     models,
                     auth: app.custom_auth,
                     client_identity: Some(app.custom_client_identity.clone()),

@@ -42,6 +42,13 @@ httpdate = "1"
 fastrand = "2"
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
+# Qoder COSY signing: canonical MD5 signature + RSA(PKCS#1)-wrapped identity
+# key + AES-128-CBC identity payload (all client-side; see
+# muta-llm-client/src/protocol/openai/chat_completions/qoder.rs).
+md-5 = "0.10"
+rsa = { version = "0.9", features = ["sha2"] }
+cbc = { version = "0.1", features = ["alloc"] }
+aes = "0.8"
 tracing = "0.1"
 inventory = "0.3"
 # Proc-macro support for the tool-schema derive (muta-tool-derive).

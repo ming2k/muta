@@ -47,6 +47,12 @@ pub struct TokenResponse {
     pub expires_in: Option<u64>,
     #[serde(default)]
     pub scope: Option<String>,
+    /// Qoder's device-token/device-exchange responses carry the account's
+    /// uid; every other issuer leaves this absent. Consumed by the runtime
+    /// to assemble the connection's typed [`muta_contracts::QoderRequestIdentity`]
+    /// at login time.
+    #[serde(default, alias = "uid", alias = "userId")]
+    pub qoder_uid: Option<String>,
 }
 
 impl TokenResponse {

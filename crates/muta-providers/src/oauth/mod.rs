@@ -16,6 +16,7 @@ pub mod credential_source;
 pub mod device;
 pub mod manual;
 pub mod pkce;
+pub mod qoder;
 pub mod store;
 pub mod token;
 
@@ -33,10 +34,10 @@ pub use muta_contracts::provider_auth::{
     CHATGPT, COPILOT, ClientAuthMethod, DeviceFlow, GOOGLE_ANTIGRAVITY, GOOGLE_ANTIGRAVITY_CLI,
     OAuthConfig, OAuthConfigBuilder, PkceMode, PortMode, TokenRequestFormat, XAI, chatgpt_preset,
     config_by_provider_id, copilot_preset, google_antigravity_cli_preset,
-    google_antigravity_preset, xai_preset,
+    google_antigravity_preset, is_qoder, qoder_preset, xai_preset,
 };
 pub use pkce::{PkceCodes, new_nonce, new_state};
-pub use store::{AuthStore, AuthStoreError, LockedAuthStore, TokenSet};
+pub use store::{AuthStore, AuthStoreError, LockedAuthStore, QoderStoredIdentity, TokenSet};
 pub use token::{
     ACCESS_TOKEN_REFRESH_SKEW_MS, ANTIGRAVITY_LOAD_CODE_ASSIST_URL, ANTIGRAVITY_ONBOARD_USER_URL,
     ANTIGRAVITY_USER_AGENT, GOOGLE_USERINFO_URL, GoogleUserInfo, TokenResponse,
@@ -150,6 +151,9 @@ enum OAuthLoginFlow {
         config: OAuthConfig,
         device: ChatGptDeviceCode,
     },
+    QoderDevice {
+        session: crate::oauth::qoder::QoderDeviceSession,
+    },
 }
 
 impl OAuthLoginSession {
@@ -175,8 +179,47 @@ impl OAuthLoginSession {
                 .await
                 .map_err(|_| AuthError::Timeout)?
             }
+            OAuthLoginFlow::QoderDevice { session } => {
+                tokio::time::timeout(DEVICE_LOGIN_TIMEOUT, async {
+                    // Poll → device token, then exchange for the `jt-`
+                    // inference token the COSY surface consumes.
+                    let device_token =
+                        crate::oauth::qoder::poll_device_token(&self.client, &session).await?;
+                    crate::oauth::qoder::exchange_inference_token(
+                        &self.client,
+                        device_token.access_token.expose_secret(),
+                    )
+                    .await
+                })
+                .await
+                .map_err(|_| AuthError::Timeout)?
+            }
         }
     }
+}
+
+/// A stable per-machine identifier for the Qoder device flow. Qoder pins its
+/// risk signals to this value, so it must persist across runs; it lives in
+/// the state directory next to the credential file (`machine_id`, 0600 by
+/// umask).
+fn machine_id_for_flow() -> String {
+    let path = muta_persistence::paths::get()
+        .state_dir
+        .join("machine_id");
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let id = existing.trim();
+        if !id.is_empty() {
+            return id.to_string();
+        }
+    }
+    let fresh = uuid::Uuid::new_v4().to_string();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Non-fatal on failure: the flow still works with a per-process id;
+    // persistence only keeps the server-side fingerprint stable across runs.
+    let _ = std::fs::write(&path, &fresh);
+    fresh
 }
 
 /// The high-level OAuth orchestrator.
@@ -229,6 +272,11 @@ impl OAuth {
     /// Convenience constructor for GitHub Copilot.
     pub fn copilot() -> Self {
         Self::new(copilot_preset())
+    }
+
+    /// Convenience constructor for Alibaba Qoder.
+    pub fn qoder() -> Self {
+        Self::new(qoder_preset())
     }
 
     /// The provider config this OAuth instance authenticates against.
@@ -305,6 +353,28 @@ impl OAuth {
                             device,
                         },
                     )
+                }
+                muta_contracts::provider_auth::DeviceFlow::Qoder => {
+                    // Qoder has no device-code request step: the client-side
+                    // PKCE pair + nonce IS the correlation key. The machine id
+                    // keys the server-side fingerprint — reuse the
+                    // connection-scoped machine id the credential source
+                    // persists (a stable per-process uuid here is only a
+                    // placeholder until the token set carries the real one).
+                    let machine_id = machine_id_for_flow();
+                    let session = crate::oauth::qoder::QoderDeviceSession::new(
+                        &machine_id,
+                        self.config.client_id.as_ref(),
+                    );
+                    let prompt = OAuthLoginPrompt {
+                        method,
+                        url: session.user_url(),
+                        // Qoder shows no short user_code; the URL is the act.
+                        user_code: None,
+                        message: "Open the URL and approve this device in your Qoder account."
+                            .to_string(),
+                    };
+                    (prompt, OAuthLoginFlow::QoderDevice { session })
                 }
                 muta_contracts::provider_auth::DeviceFlow::Disabled => {
                     unreachable!("support checked above")
@@ -472,6 +542,9 @@ impl OAuth {
             scope: refreshed.scope.clone().or(stored.scope),
             project_id,
             user_email,
+            // Qoder identity is durable device/account material — refreshes
+            // rotate the bearer, never the machine key.
+            qoder: stored.qoder.clone(),
         };
 
         *inner = Some(tokens.clone());

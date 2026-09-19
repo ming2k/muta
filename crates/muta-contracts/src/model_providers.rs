@@ -75,6 +75,10 @@ pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.3", "glm-5.3-flash", "glm-5.2"];
 
 pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
 
+/// Qoder subscription models, in activation order (mirrors
+/// `muta-providers::registry::qoder::QODER_MODELS`).
+pub const QODER_MODELS: &[&str] = &["qoder3", "qoder3-max", "qoder3-base", "qwen3-coder-plus"];
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Model provider ids — contract vocabulary (ADR-0201)
 // ═════════════════════════════════════════════════════════════════════════════
@@ -102,7 +106,7 @@ pub const MODEL_PROVIDER_IDS: &[&str] = &[
     "kimi-code",
     "openrouter",
     "opencode-go",
-    "custom",
+    "qoder",
 ];
 
 /// Whether `id` names a registered model provider.
@@ -124,7 +128,6 @@ pub fn canonical_provider_id(id: &str) -> Option<String> {
         "copilot-oauth" => "github-copilot",
         "xai-oauth" => "xai",
         "zai-code" => "glm-cn",
-        "custom-openai" => "custom",
         other => other,
     };
     is_known_model_provider(canonical).then(|| canonical.to_string())
@@ -144,9 +147,9 @@ pub fn model_provider_label(id: &str) -> &'static str {
         "opencode-go" => "OpenCode Go",
         "openrouter" => "OpenRouter",
         "glm-cn" => "ZAI Code (CN)",
+        "qoder" => "Qoder",
         "xai" => "xAI",
-        "custom" => "Custom connection",
-        _ => "Custom connection",
+        _ => "Custom Provider",
     }
 }
 

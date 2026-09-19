@@ -71,9 +71,13 @@ impl OAuthCredentialSource {
         });
         ResolvedAuth {
             token: tokens.access.clone(),
-            account_id: account_id.clone(),
-            project_id: tokens.project_id.clone().or(account_id),
+            account_id,
+            project_id: tokens.project_id.clone(),
             user_email: tokens.user_email.clone(),
+            // Qoder carries its own typed request identity; the generic
+            // account/project fields stay provider-specific to their own
+            // protocols (ChatGPT account id, Google project id).
+            qoder: tokens.qoder_request_identity(),
         }
     }
 
@@ -231,6 +235,7 @@ mod tests {
             scope: None,
             project_id: None,
             user_email: None,
+            qoder: None,
         }
     }
 

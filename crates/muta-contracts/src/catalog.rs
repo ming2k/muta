@@ -27,6 +27,13 @@ pub enum OpenAiChatDialect {
     /// OpenRouter's normalized Chat Completions surface. It uses the unified
     /// `reasoning` object and returns replayable `reasoning_details` sidecars.
     OpenRouter,
+    /// Qoder's COSY-signed SSE surface (`api*.qoder.sh`). The request body is
+    /// the standard chat-completions JSON wrapped by QoderEncoding
+    /// (custom-alphabet base64 + outer-third swap); headers carry the COSY
+    /// signature set; the response is plain SSE whose `data:` payloads are
+    /// HTTP-like envelopes (`{"body":"<chat.completion.chunk JSON>",..}`)
+    /// terminated by an `event:finish` frame.
+    Qoder,
 }
 
 /// Provider-specific behavior layered on the OpenAI Responses protocol.

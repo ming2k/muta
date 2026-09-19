@@ -717,21 +717,25 @@ fn custom_connection_submits_with_multiple_comma_separated_models() {
 
     crate::event_loop::actions::handle_submit_custom_provider(&mut app);
 
-    let req = rx.try_recv().expect("should send a request");
-    match req {
+    let req1 = rx.try_recv().expect("should send RegisterProvider request");
+    match req1 {
+        muta_contracts::AgentRequest::RegisterProvider { id, root_url, .. } => {
+            assert_eq!(id, "custom-wechat-multi");
+            assert_eq!(root_url, "https://chatapi.weixin.qq.com/openai/v1/chat/completions");
+        }
+        _ => panic!("Expected RegisterProvider request"),
+    }
+
+    let req2 = rx.try_recv().expect("should send AddConnection request");
+    match req2 {
         muta_contracts::AgentRequest::AddConnection {
             name,
             provider,
-            protocol,
             models,
             ..
         } => {
             assert_eq!(name, "WeChat Multi", "the raw trimmed name is sent");
-            assert_eq!(provider, "custom");
-            assert_eq!(
-                protocol,
-                Some(muta_contracts::WireProtocol::ChatCompletions)
-            );
+            assert_eq!(provider, "custom-wechat-multi");
             assert_eq!(models, vec!["gpt-4o", "gpt-4o-mini", "claudy"]);
         }
         _ => panic!("Expected AddConnection request"),
@@ -759,15 +763,11 @@ fn curated_template_submits_the_provider_id_without_a_protocol_override() {
         muta_contracts::AgentRequest::AddConnection {
             name,
             provider,
-            protocol,
-            base_url,
             models,
             ..
         } => {
             assert_eq!(name, "OpenAI Work");
             assert_eq!(provider, "openai");
-            assert_eq!(protocol, None, "curated providers never send a protocol");
-            assert_eq!(base_url, None, "curated providers own their endpoint");
             assert!(!models.is_empty(), "seeded model list travels");
         }
         _ => panic!("Expected AddConnection request"),
@@ -824,24 +824,25 @@ fn editor_rename_sends_the_rename_transaction_then_the_metadata_edit() {
         }
         other => panic!("Expected RenameConnection first, got {other:?}"),
     }
-    let edit = rx.try_recv().expect("metadata edit second");
+    let reg = rx.try_recv().expect("register provider second");
+    match reg {
+        muta_contracts::AgentRequest::RegisterProvider { id, root_url, .. } => {
+            assert_eq!(id, "custom");
+            assert_eq!(root_url, "https://relay.example.com/v1");
+        }
+        other => panic!("Expected RegisterProvider second, got {other:?}"),
+    }
+    let edit = rx.try_recv().expect("metadata edit third");
     match edit {
         muta_contracts::AgentRequest::EditConnection {
             name,
             provider,
-            protocol,
-            base_url,
             ..
         } => {
             assert_eq!(name, "My Relay Renamed", "the edit follows the rename");
             assert_eq!(provider, "custom");
-            assert_eq!(
-                protocol,
-                Some(muta_contracts::WireProtocol::ChatCompletions)
-            );
-            assert_eq!(base_url.as_deref(), Some("https://relay.example.com/v1"));
         }
-        other => panic!("Expected EditConnection second, got {other:?}"),
+        other => panic!("Expected EditConnection third, got {other:?}"),
     }
 }
 

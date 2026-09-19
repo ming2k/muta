@@ -26,6 +26,7 @@ use crate::transport::{decode_response_json, ensure_success};
 use crate::{Client, ClientProfile, Endpoint};
 
 pub mod echo;
+pub mod qoder;
 pub mod request;
 pub mod response;
 
@@ -148,11 +149,14 @@ impl OpenAiChatCompletionsProvider {
         match self.dialect {
             muta_contracts::OpenAiChatDialect::Copilot => "Copilot",
             muta_contracts::OpenAiChatDialect::OpenRouter => "OpenRouter",
+            muta_contracts::OpenAiChatDialect::Qoder => "Qoder",
             muta_contracts::OpenAiChatDialect::Standard => "OpenAI",
         }
     }
 
     /// Apply the per-request auth + user-agent headers to a request builder.
+    /// In Qoder dialect the bearer is the exchange token and the body is the
+    /// already-QoderEncoding-encoded string (see `build_qoder_request`).
     fn build_request_for_auth(
         &self,
         body: &serde_json::Value,
@@ -181,6 +185,77 @@ impl OpenAiChatCompletionsProvider {
         req
     }
 
+    /// Build a Qoder COSY-signed request from the chat-completions JSON.
+    ///
+    /// Qoder's wire differs from the plain bearer surface in three ways: the
+    /// body is QoderEncoding-encoded, the `Authorization` header carries the
+    /// COSY signature bundle (not the raw bearer), and identity headers
+    /// (`Cosy-User`, `Cosy-Date`, `Cosy-Key`, org scope) ride along. The
+    /// resolved auth's `qoder` field carries the typed request identity —
+    /// the provider-owned machine key, uid, and org scope; the generic
+    /// `account_id`/`project_id` fields belong to other protocols and are
+    /// not consulted here.
+    fn build_qoder_request(
+        &self,
+        body: &serde_json::Value,
+        auth: &ResolvedAuth,
+        now_secs: u64,
+    ) -> Result<crate::request::RequestBuilder, ProviderError> {
+        let qoder_identity = auth.qoder.as_ref().ok_or_else(|| {
+            ProviderError::authentication(
+                self.label(),
+                "Qoder request identity is missing; re-authorize this connection".to_string(),
+            )
+        })?;
+        let key_hex = qoder_identity.machine_key_hex.expose_secret();
+        let identity_key = qoder::CosyIdentity::parse_key_hex(key_hex).ok_or_else(|| {
+            ProviderError::authentication(
+                self.label(),
+                "Qoder machine key is malformed; re-authorize this connection".to_string(),
+            )
+        })?;
+        let identity = qoder::CosyIdentity::from_key_hex(&identity_key);
+        let uid = qoder_identity.uid.as_str();
+        let raw = serde_json::to_vec(body)
+            .map_err(|e| ProviderError::invalid_request(self.label(), e.to_string()))?;
+        let encoded = qoder::encode_body(&raw[..]);
+        let identity_json = qoder_identity.identity_payload_json(
+            auth.token.expose_secret(),
+            auth.user_email.as_deref().unwrap_or(""),
+        );
+        let prepared = qoder::prepare_request(&identity, &identity_json, uid, &encoded, now_secs);
+        let mut req = crate::request::RequestBuilder::new(
+            http::Method::POST,
+            qoder::inference_url(self.endpoint.base_url()),
+        )
+        .header(http::header::USER_AGENT, self.endpoint.user_agent())
+        .header("Content-Type", "application/json")
+        .header("Authorization", prepared.authorization)
+        .header("Cosy-Date", prepared.date)
+        .header("Cosy-Key", prepared.key);
+        if !uid.is_empty() {
+            req = req.header("Cosy-User", uid);
+        }
+        // Organization scope: presence is conditional (20/21/22-header
+        // contract — omit entirely when unset, keep order otherwise).
+        if let Some(org_id) = qoder_identity.organization_id.as_deref()
+            && !org_id.is_empty()
+        {
+            req = req.header("Cosy-Organization-Id", org_id);
+        }
+        if !qoder_identity.organization_tags.is_empty() {
+            req = req.header(
+                "Cosy-Organization-Tags",
+                qoder_identity.organization_tags.join(","),
+            );
+        }
+        for (name, value) in self.endpoint.headers() {
+            req = req.header(name, value);
+        }
+        req = req.body(prepared.encoded_body);
+        Ok(req)
+    }
+
     /// Send a request with automatic token resolution, timeout stamping,
     /// and reactive force-refresh on HTTP 401 Unauthorized for OAuth channels.
     async fn send_request(
@@ -194,15 +269,22 @@ impl OpenAiChatCompletionsProvider {
             .resolve_auth()
             .await
             .map_err(|e| ProviderError::authentication(self.label(), e))?;
-        let mut req = self
-            .build_request_for_auth(body, &auth)
-            .with_telemetry(telemetry.clone());
+        let qoder = self.dialect == muta_contracts::OpenAiChatDialect::Qoder;
+        let mut req = if qoder {
+            let built = self
+                .build_qoder_request(body, &auth, unix_secs())
+                .map_err(|e| e)?;
+            built.with_telemetry(telemetry.clone())
+        } else {
+            self.build_request_for_auth(body, &auth).with_telemetry(telemetry.clone())
+        };
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
         let response = self.client.send_raw(req, self.label()).await?;
 
-        if response.status == http::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() {
+        if response.status == http::StatusCode::UNAUTHORIZED && self.endpoint.is_oauth() && !qoder
+        {
             tracing::warn!(
                 provider = %self.endpoint.id,
                 model = %self.endpoint.model,
@@ -225,6 +307,14 @@ impl OpenAiChatCompletionsProvider {
 
         ensure_success(response, self.label(), Some(&self.endpoint.model)).await
     }
+}
+
+/// Current unix seconds (Qoder's `Cosy-Date` granularity).
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[async_trait]
@@ -424,9 +514,37 @@ impl Provider for OpenAiChatCompletionsProvider {
         let reasoning_details_for_body = Arc::clone(&reasoning_details);
         let collect_reasoning_details =
             self.dialect == muta_contracts::OpenAiChatDialect::OpenRouter;
+        let unwrap_qoder_envelope = self.dialect == muta_contracts::OpenAiChatDialect::Qoder;
         let label = self.label();
         let body = crate::sse::data_payloads(response, label).map(move |item| {
             let data = item?;
+            // Qoder's outer envelope (`{"headers":..,"body":"<chunk>",
+            // "statusCodeValue":200}`) unwraps first: the inner `body` string
+            // is the chat.completion.chunk JSON that `stream_events` parses.
+            // A `statusCodeValue != 200` envelope is an upstream error and
+            // surfaces as-is; the `[DONE]` marker inside a 200 body is not a
+            // terminator (the authoritative close is `event:finish`).
+            let data = if unwrap_qoder_envelope {
+                match qoder::unwrap_envelope(&data) {
+                    qoder::Envelope::Chunk(inner) => inner,
+                    qoder::Envelope::Done => String::new(),
+                    qoder::Envelope::Skip => String::new(),
+                    qoder::Envelope::Error(status, message) => {
+                        return Err(ProviderError::new(
+                            label,
+                            ProviderErrorKind::Upstream,
+                            format!("Qoder upstream error ({status}): {message}"),
+                        ));
+                    }
+                }
+            } else {
+                data
+            };
+            if data.is_empty() {
+                return Ok::<Vec<Result<ProviderStreamEvent, ProviderError>>, ProviderError>(
+                    Vec::new(),
+                );
+            }
             // Parse-once discipline (ADR-0184): the single deserialization
             // here doubles as the validity check — a non-JSON payload is a
             // decode error, and the parsed `Value` feeds the stream parser
@@ -643,6 +761,160 @@ mod tests {
         assert_eq!(
             headers.get("user-agent").unwrap().to_str().unwrap(),
             crate::OPENCODE_USER_AGENT
+        );
+    }
+
+    // ── Qoder dialect ───────────────────────────────────────────────────────
+
+    fn qoder_provider() -> OpenAiChatCompletionsProvider {
+        OpenAiChatCompletionsProvider::with_base_url(
+            String::new(),
+            "qoder3".to_string(),
+            "https://api2.qoder.sh",
+        )
+        .with_dialect(muta_contracts::OpenAiChatDialect::Qoder)
+    }
+
+    fn qoder_auth() -> ResolvedAuth {
+        ResolvedAuth {
+            token: "pt-demo".into(),
+            account_id: None,
+            project_id: None,
+            user_email: Some("dev@example.com".to_string()),
+            qoder: Some(muta_contracts::QoderRequestIdentity {
+                uid: "u-123".to_string(),
+                machine_key_hex: qoder::CosyIdentity::generate().key_hex().into(),
+                data_policy_agreed: true,
+                organization_id: None,
+                organization_tags: Vec::new(),
+            }),
+        }
+    }
+
+    #[test]
+    fn qoder_static_headers_carry_the_identity_contract() {
+        let provider = qoder_provider();
+        let body = serde_json::json!({"model": "qoder3"});
+        let req = provider
+            .build_request_for_auth(&body, &qoder_auth())
+            .build("Test")
+            .unwrap();
+        let header = |name: &str| {
+            req.headers
+                .get(name)
+                .map(|v| v.to_str().unwrap().to_string())
+                .unwrap_or_default()
+        };
+        assert_eq!(header("Cosy-ClientType"), "5");
+        assert_eq!(header("Cosy-MachineType"), "5");
+        assert_eq!(header("Cosy-Version"), qoder::COSY_VERSION);
+        assert_eq!(header("Cosy-Business-Product"), "cli");
+        assert_eq!(header("Cosy-Business-Type"), "agent");
+        assert_eq!(header("Cosy-Scene"), "assistant");
+        assert_eq!(header("Cosy-Data-Policy"), "agree");
+        assert_eq!(header("Login-Version"), "v2");
+        assert_eq!(header("accept"), "text/event-stream");
+    }
+
+    #[test]
+    fn qoder_request_stamps_cosy_signature_and_encoded_body() {
+        let provider = qoder_provider();
+        let body = serde_json::json!({"model": "qoder3", "messages": []});
+        let req = provider
+            .build_qoder_request(&body, &qoder_auth(), 1_700_000_000)
+            .unwrap()
+            .build("Test")
+            .unwrap();
+        // URL is the inference path with the fixed query contract.
+        assert!(
+            req.url.starts_with(
+                "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation"
+            ),
+            "{}",
+            req.url
+        );
+        assert!(req.url.contains("FetchKeys=llm_model_result"));
+        assert!(req.url.contains("AgentId=agent_common"));
+        assert!(req.url.contains("Encode=1"));
+        // COSY authorization shape.
+        let auth_header = req
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(auth_header.starts_with("Bearer COSY."), "{auth_header}");
+        let signature = auth_header.rsplit('.').next().unwrap();
+        assert_eq!(signature.len(), 32);
+        // Identity headers.
+        assert_eq!(
+            req.headers.get("cosy-date").unwrap().to_str().unwrap(),
+            "1700000000"
+        );
+        assert_eq!(
+            req.headers.get("cosy-user").unwrap().to_str().unwrap(),
+            "u-123"
+        );
+        assert!(!req.headers.get("cosy-key").unwrap().is_empty());
+        // The body is QoderEncoding (not plain JSON).
+        let body_bytes = req.body.unwrap();
+        let body_text = String::from_utf8_lossy(&body_bytes).to_string();
+        assert!(
+            !body_text.contains("{\"model\""),
+            "body must be encoded, not raw JSON: {body_text}"
+        );
+    }
+
+    #[test]
+    fn qoder_request_fails_closed_without_machine_identity() {
+        let provider = qoder_provider();
+        let auth = ResolvedAuth {
+            token: "pt-demo".into(),
+            account_id: None,
+            project_id: None,
+            user_email: None,
+            qoder: None,
+        };
+        let body = serde_json::json!({"model": "qoder3"});
+        let result = provider.build_qoder_request(&body, &auth, 0);
+        assert!(result.is_err(), "missing machine key must fail closed");
+    }
+
+    #[test]
+    fn qoder_request_omits_org_headers_when_unscoped() {
+        let provider = qoder_provider();
+        let body = serde_json::json!({"model": "qoder3"});
+        let req = provider
+            .build_qoder_request(&body, &qoder_auth(), 0)
+            .unwrap()
+            .build("Test")
+            .unwrap();
+        assert!(req.headers.get("cosy-organization-id").is_none());
+        assert!(req.headers.get("cosy-organization-tags").is_none());
+    }
+
+    #[test]
+    fn qoder_request_carries_org_scope_when_present() {
+        let provider = qoder_provider();
+        let mut auth = qoder_auth();
+        if let Some(identity) = auth.qoder.as_mut() {
+            identity.organization_id = Some("org-9".to_string());
+            identity.organization_tags = vec!["team-a".to_string(), "team-b".to_string()];
+        }
+        let body = serde_json::json!({"model": "qoder3"});
+        let req = provider
+            .build_qoder_request(&body, &auth, 0)
+            .unwrap()
+            .build("Test")
+            .unwrap();
+        assert_eq!(
+            req.headers.get("cosy-organization-id").unwrap().to_str().unwrap(),
+            "org-9"
+        );
+        assert_eq!(
+            req.headers.get("cosy-organization-tags").unwrap().to_str().unwrap(),
+            "team-a,team-b"
         );
     }
 }

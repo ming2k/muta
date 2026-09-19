@@ -51,6 +51,22 @@ pub fn headers(api_key: &str, dialect: OpenAiChatDialect) -> Vec<(&'static str, 
         // supplied by Endpoint; the title makes dashboard traffic readable
         // without inventing a project URL for HTTP-Referer.
         h.push(("X-OpenRouter-Title", "Muta".to_string()));
+    } else if dialect == OpenAiChatDialect::Qoder {
+        // Qoder's COSY identity headers. The Authorization/Cosy-Key/Cosy-Date
+        // triple is stamped later by the executor (`prepare_request`), which
+        // owns the machine identity, the encoded body, and the clock; here we
+        // only declare the static identity facts the real client always sends.
+        h.push(("Accept", "text/event-stream".to_string()));
+        h.push(("Cache-Control", "no-cache".to_string()));
+        h.push(("Connection", "keep-alive".to_string()));
+        h.push(("Cosy-ClientType", "5".to_string()));
+        h.push(("Cosy-MachineType", "5".to_string()));
+        h.push(("Cosy-Version", super::qoder::COSY_VERSION.to_string()));
+        h.push(("Cosy-Business-Product", "cli".to_string()));
+        h.push(("Cosy-Business-Type", "agent".to_string()));
+        h.push(("Cosy-Scene", "assistant".to_string()));
+        h.push(("Cosy-Data-Policy", "agree".to_string()));
+        h.push(("Login-Version", "v2".to_string()));
     }
     h
 }

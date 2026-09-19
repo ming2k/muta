@@ -19,7 +19,6 @@ mod anthropic;
 mod antigravity_oauth;
 mod chatgpt;
 mod copilot;
-mod custom;
 mod custom_baselines;
 mod deepseek;
 mod google;
@@ -27,6 +26,7 @@ mod kimi;
 mod openai;
 pub(crate) mod opencode_go;
 mod openrouter;
+mod qoder;
 mod xai;
 mod zai;
 
@@ -166,7 +166,7 @@ pub struct ModelProviderSpec {
     pub prompt_cache: fn(&str) -> muta_contracts::PromptCacheSpec,
 }
 
-pub(crate) const fn unsupported_prompt_cache(_: &str) -> muta_contracts::PromptCacheSpec {
+pub const fn unsupported_prompt_cache(_: &str) -> muta_contracts::PromptCacheSpec {
     muta_contracts::PromptCacheSpec::UNSUPPORTED
 }
 
@@ -188,14 +188,80 @@ pub const MODEL_PROVIDER_SPECS: &[ModelProviderSpec] = &[
     copilot::MODEL_PROVIDER_SPEC,
     kimi::MODEL_PROVIDER_SPEC,
     zai::MODEL_PROVIDER_SPEC,
+    qoder::MODEL_PROVIDER_SPEC,
     opencode_go::MODEL_PROVIDER_SPEC,
     antigravity_oauth::MODEL_PROVIDER_SPEC,
-    custom::MODEL_PROVIDER_SPEC,
 ];
 
-/// Look up a model provider spec by its stable id. Exact match only.
+static USER_DECLARED_SPECS: std::sync::RwLock<std::collections::BTreeMap<String, &'static ModelProviderSpec>> =
+    std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// Look up a user-declared model provider spec registered dynamically (ADR-0258).
+pub fn user_declared_provider_spec(id: &str) -> Option<&'static ModelProviderSpec> {
+    let guard = USER_DECLARED_SPECS.read().ok()?;
+    guard.get(id).copied()
+}
+
+/// Register a user-declared model provider spec dynamically in the process (ADR-0258).
+///
+/// Leaks the spec into `'static` storage so it can be referenced identically to
+/// compiled-in `ModelProviderSpec` constants with zero lifetime friction.
+pub fn register_user_declared_provider(spec: ModelProviderSpec) -> &'static ModelProviderSpec {
+    let id = spec.id.to_string();
+    let leaked: &'static ModelProviderSpec = Box::leak(Box::new(spec));
+    if let Ok(mut guard) = USER_DECLARED_SPECS.write() {
+        guard.insert(id, leaked);
+    }
+    leaked
+}
+
+/// Synchronize and register all user-declared model providers from `model_providers.toml` (ADR-0258).
+pub fn sync_user_declared_providers_from_disk() {
+    let store = muta_persistence::model_providers::ModelProviders::load();
+    for (id, user_prov) in store.providers {
+        let wire = user_prov.default_protocol.unwrap_or(muta_contracts::WireProtocol::ChatCompletions);
+        let catalog_source = match user_prov.catalog_format.as_deref() {
+            Some("none") | Some("static") => RemoteCatalogSource::None,
+            Some("anthropic") => RemoteCatalogSource::Endpoint(DiscoveryProtocol::Anthropic),
+            Some("google") => RemoteCatalogSource::Endpoint(DiscoveryProtocol::Google),
+            Some("opencode-go") => RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpencodeGo),
+            Some("openai") => RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+            _ => RemoteCatalogSource::Endpoint(DiscoveryProtocol::from_wire_protocol(wire)),
+        };
+        let leaked_id: &'static str = Box::leak(id.into_boxed_str());
+        let leaked_url: &'static str = Box::leak(user_prov.root_url.into_boxed_str());
+        let leaked_ua: Option<&'static str> =
+            user_prov.user_agent.map(|ua| Box::leak(ua.into_boxed_str()) as &'static str);
+        let spec = ModelProviderSpec {
+            id: leaked_id,
+            baselines: &[],
+            base_url: leaked_url,
+            user_agent: leaked_ua,
+            protocol: wire,
+            models: &[],
+            catalog_source,
+            default_client_profile: user_prov
+                .client_profile
+                .unwrap_or(muta_contracts::ClientPreset::Native),
+            client_profile_sensitive: false,
+            wire_overrides: &[],
+            prompt_cache: unsupported_prompt_cache,
+        };
+        register_user_declared_provider(spec);
+    }
+}
+
+/// Look up a model provider spec by its stable id. Checks built-in specs first,
+/// then user-declared provider specs (ADR-0258). Exact match only.
 pub fn model_provider_spec(id: &str) -> Option<&'static ModelProviderSpec> {
-    MODEL_PROVIDER_SPECS.iter().find(|spec| spec.id == id)
+    if let Some(spec) = MODEL_PROVIDER_SPECS.iter().find(|spec| spec.id == id) {
+        return Some(spec);
+    }
+    if let Some(spec) = user_declared_provider_spec(id) {
+        return Some(spec);
+    }
+    sync_user_declared_providers_from_disk();
+    user_declared_provider_spec(id)
 }
 
 /// Resolve the transport endpoint for **one model** of a model provider — the
@@ -495,6 +561,29 @@ mod spec_tests {
         }
         // Unknown ids resolve to None; the loader rejects them (ADR-0201 INV-2).
         assert!(model_provider_spec("does-not-exist").is_none());
+    }
+
+    #[test]
+    fn user_declared_provider_can_be_registered_and_resolved() {
+        let test_id = "test-corp-relay";
+        let custom_spec = ModelProviderSpec {
+            prompt_cache: unsupported_prompt_cache,
+            id: test_id,
+            baselines: &[],
+            base_url: "https://relay.example.com/v1",
+            user_agent: None,
+            protocol: muta_contracts::WireProtocol::ChatCompletions,
+            models: &[],
+            catalog_source: RemoteCatalogSource::None,
+            default_client_profile: muta_contracts::ClientPreset::Cursor,
+            client_profile_sensitive: false,
+            wire_overrides: &[],
+        };
+        register_user_declared_provider(custom_spec);
+        let resolved = model_provider_spec(test_id).expect("dynamic spec resolves");
+        assert_eq!(resolved.id, test_id);
+        assert_eq!(resolved.base_url, "https://relay.example.com/v1");
+        assert_eq!(resolved.default_client_profile, muta_contracts::ClientPreset::Cursor);
     }
 
     #[test]

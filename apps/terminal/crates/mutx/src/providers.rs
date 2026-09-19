@@ -277,6 +277,19 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ConnectionTemplate {
+        id: "qoder",
+        label: "Qoder",
+        description: "Alibaba's Qoder subscription for Qoder3 and Qwen coding models with COSY-signed inference; paste a personal access token (pt-…) or authorize via device flow.",
+        protocol: WireProtocol::ChatCompletions,
+        models: muta_contracts::model_providers::QODER_MODELS,
+        needs_url: false,
+        url_hint: "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
+        needs_model: false,
+        default_url: Some("https://api2.qoder.sh"),
+        user_agent: None,
+        auth: muta_contracts::ConnectionAuth::QoderOAuth,
+    },
+    ConnectionTemplate {
         id: "glm-cn",
         label: "ZAI Code (CN)",
         description: "Zhipu's Z.AI Coding Plan with flagship GLM and code-enhanced models; sign in with a plan API key.",
@@ -1291,6 +1304,7 @@ mod tests {
             "ZAI Code (CN)",
             "OpenCode Go",
             "OpenRouter",
+            "Qoder",
         ];
         for t in PROVIDER_PRESETS {
             if builtin_labels.contains(&t.label) {

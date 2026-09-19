@@ -54,15 +54,39 @@ pub(crate) struct ProviderEnv<'a> {
 pub(crate) struct AddConnectionParams {
     pub name: String,
     pub provider: String,
-    /// Wire-protocol override. Honored only for the `custom` provider, whose
-    /// endpoint the connection owns; a curated provider owns its own wire.
-    pub protocol: Option<WireProtocol>,
-    pub base_url: Option<String>,
     pub api_key: SecretString,
-    pub user_agent: Option<String>,
     pub models: Vec<String>,
     pub auth: muta_contracts::ConnectionAuth,
     pub client_identity: Option<ClientIdentity>,
+}
+
+/// Register a user-declared model provider surface (ADR-0258).
+pub(crate) fn register_provider(
+    id: String,
+    label: Option<String>,
+    root_url: String,
+    protocol: Option<WireProtocol>,
+    client_profile: Option<muta_contracts::ClientPreset>,
+    user_agent: Option<String>,
+    catalog_format: Option<String>,
+    dialect: Option<String>,
+) -> Result<(), String> {
+    let mut store = ModelProviders::load();
+    store.set_provider(
+        &id,
+        muta_persistence::model_providers::UserDeclaredProvider {
+            label,
+            root_url,
+            default_protocol: protocol,
+            client_profile,
+            user_agent,
+            catalog_format,
+            dialect,
+        },
+    );
+    store.save().map_err(|e| e.to_string())?;
+    muta_providers::sync_user_declared_providers_from_disk();
+    Ok(())
 }
 
 pub(crate) struct PendingOAuthAuthorization {
@@ -106,7 +130,7 @@ pub(crate) async fn switch(
     api_key: Option<SecretString>,
     base_url: Option<String>,
 ) {
-    let mut connections = Connections::load();
+    let connections = Connections::load();
     // A key entered in the TUI is the connection's credential; an environment
     // variable (`api_key_env`) still wins at catalog resolution time.
     if let Some(key) = api_key
@@ -120,11 +144,13 @@ pub(crate) async fn switch(
     }
     if let Some(url) = base_url
         && !url.trim().is_empty()
-        && let Some(connection) = connections.get_mut(&provider_type)
+        && let Some(connection) = connections.get(&provider_type)
     {
-        connection.base_url = Some(url.trim().to_string());
-        if connections.save().is_err() {
-            tracing::warn!("switch: could not persist base-url override");
+        let mut store = ModelProviders::load();
+        if let Some(prov) = store.providers.get_mut(&connection.provider) {
+            prov.root_url = url.trim().to_string();
+            let _ = store.save();
+            muta_providers::sync_user_declared_providers_from_disk();
         }
     }
 
@@ -185,10 +211,7 @@ pub(crate) async fn add(
     let AddConnectionParams {
         name,
         provider,
-        protocol,
-        base_url,
         api_key,
-        user_agent,
         models,
         auth,
         client_identity,
@@ -213,30 +236,26 @@ pub(crate) async fn add(
         );
         return;
     };
-    let is_custom = provider == muta_persistence::connections::CUSTOM_PROVIDER;
+    let is_open_universe = spec.baselines.is_empty() && spec.catalog_source == muta_providers::RemoteCatalogSource::None;
     let trimmed_key = api_key.expose_secret().trim();
     // Pasted API key on an OAuth provider → ordinary ApiKey auth.
     let auth = match (auth, !trimmed_key.is_empty()) {
         (a, true) if a.is_oauth() => muta_contracts::ConnectionAuth::ApiKey,
         (other, _) => other,
     };
-    let base_url = base_url.and_then(|url| {
-        let trimmed = url.trim().to_string();
-        (!trimmed.is_empty()).then_some(trimmed)
-    });
     // Sanitized declared model ids. A curated provider owns its model universe,
-    // so the list is an initial inclusion set; `custom` declares its own.
+    // so the list is an initial inclusion set; an open-universe provider declares its own.
     let declared_models: Vec<String> = models
         .iter()
         .map(|m| muta_contracts::sanitize_model_id(m))
         .filter(|m| !m.is_empty())
         .collect();
-    // `custom` must declare at least one model — nothing else supplies them.
-    if is_custom && declared_models.is_empty() {
+    // An open-universe provider must declare at least one model — nothing else supplies them.
+    if is_open_universe && declared_models.is_empty() {
         reject(
             resp_tx,
             "Could not add connection",
-            "a custom connection must declare at least one model",
+            "a custom provider without baseline models must declare at least one model",
         );
         return;
     }
@@ -349,7 +368,7 @@ pub(crate) async fn add(
         // Provider capability overrides stay in their own cascade layer.
         overrides: std::collections::BTreeMap::new(),
     };
-    if is_custom {
+    if is_open_universe {
         for id in declared_models {
             if !model_rules.include.iter().any(|model| model.id == id) {
                 model_rules
@@ -362,19 +381,13 @@ pub(crate) async fn add(
         }
     }
 
-    // Step 2: Publish connection to Connections store.
+    // Step 2: Publish connection to Connections store (purified pipe, ADR-0258).
     let connection = Connection {
         name: name.clone(),
         provider: provider.clone(),
         auth,
         api_key_env: None,
         client_identity,
-        // The protocol override is meaningful only for `custom`; a curated
-        // provider owns its wire (and per-model wire overrides).
-        protocol: if is_custom { protocol } else { None },
-        base_url,
-        catalog_source: None,
-        user_agent,
         models: model_rules,
     };
     connections.connections.push(connection);
@@ -470,8 +483,6 @@ pub(crate) async fn edit(
     }: ProviderEnv<'_>,
     name: String,
     provider: String,
-    protocol: Option<WireProtocol>,
-    base_url: Option<String>,
     api_key: SecretString,
     client_identity: Option<ClientIdentity>,
 ) {
@@ -486,7 +497,6 @@ pub(crate) async fn edit(
         );
         return;
     }
-    let is_custom = provider == muta_persistence::connections::CUSTOM_PROVIDER;
     let Some(instance) = connections.get_mut(&name) else {
         reject(
             resp_tx,
@@ -499,26 +509,11 @@ pub(crate) async fn edit(
     if let Some(ci) = client_identity {
         instance.client_identity = ci;
     }
-    // OAuth connections' endpoint and bearer are resolved by the auth flow.
-    // A curated provider owns its wire; only `custom` accepts a protocol
-    // override (a connection-level protocol would flatten per-model wire
-    // overrides such as opencode-go's).
-    if !instance.auth.is_oauth() {
-        let trimmed_url = base_url.unwrap_or_default();
-        let trimmed_url = trimmed_url.trim();
-        if !trimmed_url.is_empty() {
-            instance.base_url = Some(trimmed_url.to_string());
-        }
-        if is_custom {
-            instance.protocol = protocol;
-        }
-        // An empty key keeps whatever the instance already had.
-        if !trimmed_key.is_empty() {
-            let mut creds = Credentials::load();
-            creds.set_api_key(&name, Some(SecretString::from(trimmed_key)));
-            if creds.save().is_err() {
-                tracing::warn!("edit: could not persist credential");
-            }
+    if !instance.auth.is_oauth() && !trimmed_key.is_empty() {
+        let mut creds = Credentials::load();
+        creds.set_api_key(&name, Some(SecretString::from(trimmed_key)));
+        if creds.save().is_err() {
+            tracing::warn!("edit: could not persist credential");
         }
     }
     if connections.save().is_err() {
@@ -1454,6 +1449,28 @@ async fn run_oauth(
         tokens.expires_in,
         now_ms,
     );
+
+    // Qoder's typed request identity is assembled at login: the uid comes
+    // from the device/exchange response, the machine AES key is generated
+    // once per device and persisted with the connection (rotating it would
+    // look like device churn to Qoder's risk layer). The fields ChatGPT and
+    // Google use (`account_id`/`project_id`) stay empty for Qoder — identity
+    // materials never borrow another protocol's semantics.
+    let qoder_identity = if cfg.is_qoder() {
+        let uid = tokens.qoder_uid.clone().unwrap_or_default();
+        let machine_key_hex = stored_qoder_identity(&label)
+            .unwrap_or_else(muta_providers::oauth::qoder::generate_machine_key_hex);
+        Some(muta_providers::oauth::QoderStoredIdentity {
+            uid,
+            machine_key_hex: SecretString::from(machine_key_hex),
+            data_policy_agreed: true,
+            organization_id: None,
+            organization_tags: Vec::new(),
+        })
+    } else {
+        None
+    };
+
     Some(muta_providers::oauth::TokenSet {
         access: tokens.access_token,
         refresh: tokens.refresh_token.unwrap_or_default(),
@@ -1464,7 +1481,19 @@ async fn run_oauth(
         scope: tokens.scope,
         project_id,
         user_email,
+        qoder: qoder_identity,
     })
+}
+
+/// Read the persisted Qoder identity for a connection, if any, so re-login
+/// keeps the same machine key instead of generating device churn.
+fn stored_qoder_identity(connection_id: &str) -> Option<String> {
+    let store = muta_providers::oauth::AuthStore::load().ok()?;
+    store
+        .tokens
+        .get(connection_id)
+        .and_then(|tokens| tokens.qoder.as_ref())
+        .map(|identity| identity.machine_key_hex.expose_secret().to_string())
 }
 
 pub(crate) async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
@@ -1749,11 +1778,10 @@ pub(crate) async fn query_connection_detail(
             }
         })
         .unwrap_or_else(|| {
-            let p = connection.protocol.unwrap_or(WireProtocol::ChatCompletions);
-            (
-                p.to_string(),
-                connection.base_url.clone().unwrap_or_default(),
-            )
+            let spec = muta_providers::model_provider_spec(&connection.provider);
+            let p = spec.map(|s| s.protocol).unwrap_or(WireProtocol::ChatCompletions);
+            let url = spec.map(|s| s.base_url.to_string()).unwrap_or_default();
+            (p.to_string(), url)
         });
 
     let provider_label =
@@ -2026,16 +2054,14 @@ mod tests {
                 scope: None,
                 project_id: None,
                 user_email: None,
+                qoder: None,
             },
         };
 
         let params = AddConnectionParams {
             name: "Mismatched Provider".to_string(),
             provider: "openai-subscription".to_string(),
-            protocol: None,
-            base_url: Some("https://api.openai.com".to_string()),
             api_key: "".into(),
-            user_agent: None,
             models: vec!["gpt-5.6".to_string()],
             auth: muta_contracts::ConnectionAuth::ChatGptOAuth,
             client_identity: None,
@@ -2076,12 +2102,26 @@ mod tests {
         };
         muta_persistence::paths::set_test_default(Some(dirs));
 
+        let mut store = ModelProviders::default();
+        store.set_provider(
+            "test-prov",
+            muta_persistence::model_providers::UserDeclaredProvider {
+                label: Some("Test Relay".to_string()),
+                root_url: "https://example.com".to_string(),
+                default_protocol: Some(WireProtocol::ChatCompletions),
+                client_profile: None,
+                user_agent: None,
+                catalog_format: None,
+                dialect: None,
+            },
+        );
+        store.save().unwrap();
+        muta_providers::sync_user_declared_providers_from_disk();
+
         let mut conns = Connections::default();
         conns.connections.push(Connection {
             name: "test-relay".to_string(),
-            provider: "custom".to_string(),
-            base_url: Some("https://example.com".to_string()),
-            protocol: Some(WireProtocol::ChatCompletions),
+            provider: "test-prov".to_string(),
             ..Default::default()
         });
         conns.save().unwrap();
@@ -2290,10 +2330,7 @@ mod tests {
         let params = AddConnectionParams {
             name: "openai-test".to_string(),
             provider: "openai".to_string(),
-            protocol: None,
-            base_url: None,
             api_key: SecretString::from("sk-test"),
-            user_agent: None,
             models: vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()],
             auth: muta_contracts::ConnectionAuth::ApiKey,
             client_identity: None,

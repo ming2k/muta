@@ -16,8 +16,9 @@ mod registry;
 pub mod usage;
 
 pub use list_models::{
-    DiscoveredModel, DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest,
+    CatalogParser, DiscoveredModel, DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest,
     ModelDiscoveryUpdate, ModelListError, discover_models, list_models, models_endpoint_for,
+    normalize_root_url, parser_for,
 };
 pub use muta_llm_client::{
     AnthropicMessagesProvider, COPILOT_CLIENT_HEADERS, ChatCompletionsProvider, ClientIdentity,
@@ -33,7 +34,8 @@ pub use registry::{
     MODEL_PROVIDER_SPECS, ModelProviderSpec, OPENAI_BUILTIN_MODELS, OPENAI_PROVIDER_SPECS,
     OPENCODE_GO_MODELS, OPENROUTER_BUILTIN_MODELS, OpenAiProviderSpec, RemoteCatalogSource,
     WIRE_OVERRIDES, XAI_BUILTIN_MODELS, ZAI_CODE_MODELS, build_provider_for_channel,
-    model_provider_spec, openai_provider_spec, route_for_model,
+    model_provider_spec, openai_provider_spec, register_user_declared_provider, route_for_model,
+    sync_user_declared_providers_from_disk, unsupported_prompt_cache, user_declared_provider_spec,
 };
 pub use usage::{
     AntigravityUsageFetcher, DeepSeekUsageFetcher, KimiUsageFetcher, OpenRouterUsageFetcher,

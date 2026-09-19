@@ -179,10 +179,18 @@ impl SubAgentProfile {
     }
 }
 
+/// Tools a skill-discovery subagent may use: workspace inspection without AST or web dependencies.
+pub const SKILL_TOOLS: &[&str] = &[
+    "read_text",
+    "find_files",
+    "list_dir",
+    "search_text",
+];
+
 /// Tools a read-only subagent may use: pure
 /// inspection with no side effects. Listed by name so adding a new
 /// side-effecting tool to the parent never silently widens these profiles.
-const READ_ONLY_TOOLS: &[&str] = &[
+pub const READ_ONLY_TOOLS: &[&str] = &[
     "read_text",
     "read_image",
     "find_files",
@@ -202,7 +210,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
 /// so that a debugging subagent cannot mutate workspace files or attempt code changes;
 /// its job is strictly forensic diagnosis, root-cause analysis (RCA), and reporting
 /// recommended patches back to the parent developer.
-const DEBUG_TOOLS: &[&str] = &[
+pub const DEBUG_TOOLS: &[&str] = &[
     // Generic read-only inspection.
     "read_text",
     "read_image",
@@ -218,6 +226,10 @@ const DEBUG_TOOLS: &[&str] = &[
 ];
 
 impl SubAgentProfile {
+    /// Canonical tool lists admitted for autonomous subagents.
+    pub const EXPLORE_TOOLS: &'static [&'static str] = READ_ONLY_TOOLS;
+    pub const DEBUG_TOOLS: &'static [&'static str] = DEBUG_TOOLS;
+    pub const SKILL_TOOLS: &'static [&'static str] = SKILL_TOOLS;
     /// The built-in read-only research role.
     pub const EXPLORE: Self = SubAgentProfile {
         name: "explore",

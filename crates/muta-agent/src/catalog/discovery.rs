@@ -11,7 +11,7 @@
 use super::Stores;
 use super::derive::{resolve_credential, route_models};
 use futures::stream::{self, StreamExt};
-use muta_contracts::{RemoteCatalogEndpoint, RemoteCatalogSourceOverride, WireProtocol};
+use muta_contracts::WireProtocol;
 use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
 use muta_persistence::connections::Connections;
 use muta_providers::{
@@ -440,29 +440,11 @@ fn discovery_source(
     cache: &DiscoveryCache,
     spec: &'static ModelProviderSpec,
 ) -> Option<DiscoverySource> {
-    match connection.catalog_source.as_ref() {
-        Some(RemoteCatalogSourceOverride::ModelsDev { .. }) => {
-            build_first_party_source(connection, cache, spec, DiscoveryProtocol::OpencodeGo)
-        }
-        Some(RemoteCatalogSourceOverride::Endpoint { endpoint }) => {
-            let protocol = match endpoint {
-                RemoteCatalogEndpoint::OpenAiCompatible | RemoteCatalogEndpoint::Copilot => {
-                    DiscoveryProtocol::OpenAi
-                }
-                RemoteCatalogEndpoint::Anthropic => DiscoveryProtocol::Anthropic,
-                RemoteCatalogEndpoint::Google => DiscoveryProtocol::Google,
-                RemoteCatalogEndpoint::GoogleCloudCode => DiscoveryProtocol::GoogleCloudCode,
-                RemoteCatalogEndpoint::Codex => DiscoveryProtocol::Codex,
-                RemoteCatalogEndpoint::OpencodeGo => DiscoveryProtocol::OpencodeGo,
-            };
+    match spec.catalog_source {
+        RemoteCatalogSource::Endpoint(protocol) => {
             build_first_party_source(connection, cache, spec, protocol)
         }
-        None => match spec.catalog_source {
-            RemoteCatalogSource::Endpoint(protocol) => {
-                build_first_party_source(connection, cache, spec, protocol)
-            }
-            RemoteCatalogSource::None => None,
-        },
+        RemoteCatalogSource::None => None,
     }
 }
 
@@ -493,14 +475,8 @@ fn build_first_party_source(
         .next()
         .unwrap_or_default();
     let (_wire, provider_base, provider_ua) = route_for_model(&connection.provider, &first_model)?;
-    let base_url = connection
-        .base_url
-        .clone()
-        .filter(|u| !u.trim().is_empty())
-        .unwrap_or_else(|| provider_base.to_string());
-    let client_profile = if let Some(user_agent) = connection.user_agent.as_deref() {
-        muta_contracts::ClientProfile::from_user_agent(user_agent)
-    } else if connection.client_identity != muta_contracts::ClientIdentity::Native {
+    let base_url = provider_base.to_string();
+    let client_profile = if connection.client_identity != muta_contracts::ClientIdentity::Native {
         connection.client_identity.clone()
     } else if spec.default_client_profile != muta_contracts::ClientPreset::Native {
         muta_contracts::ClientProfile::from(spec.default_client_profile)

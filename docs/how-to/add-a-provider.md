@@ -71,38 +71,56 @@ models.include = ["GLM-5.2"]
 wechat = "sk-..."
 ```
 
-## Path 1: User-defined entry (no code)
+## Path 1: Declarative custom provider (ADR-0258, no code)
 
-Any OpenAI-compatible, Google-native, or Anthropic-format endpoint can be
-added to `connections.toml` without touching code. Declare a connection to the
-`custom` provider with its protocol, endpoint, and model ids:
+Per ADR-0258, service surfaces (endpoints, protocols, and discovery rules) live
+in `model_providers.toml`, while credentialed pipes live in `connections.toml`.
+This lets multiple connections share one custom relay or local vLLM/Ollama
+instance without duplicating URL and protocol configuration:
 
 ```toml
-[[connections]]
-name = "acme"
-provider = "custom"
-protocol = "chat-completions"  # chat-completions | responses | anthropic-messages | google-gemini
-base_url = "https://api.acme.example/v1/chat/completions"
-# api_key_env = "ACME_API_KEY"   # optional env var holding the credential
-models.include = ["acme-1"]
+# $XDG_CONFIG_HOME/muta/model_providers.toml
+[providers.acme-relay]
+label = "Acme Relay"
+root_url = "https://api.acme.example/v1"
+default_protocol = "chat-completions" # chat-completions | responses | anthropic-messages | google-gemini
+catalog_format = "openai"             # openai | anthropic | google | none
+client_profile = "cursor"             # optional: cursor | claude-code | opencode | native (ADR-0164 emulation)
 ```
 
 ```toml
-[connections]
-acme = "sk-..."               # $XDG_CONFIG_HOME/muta/credentials.toml
+# $XDG_STATE_HOME/muta/connections.toml
+[[connections]]
+name = "acme-work"
+provider = "acme-relay"               # references [providers.acme-relay]
+api_key_env = "ACME_WORK_KEY"         # or stored in credentials.toml
+models.include = ["acme-1", "acme-2"]
+
+[[connections]]
+name = "acme-test"
+provider = "acme-relay"               # reuses the same provider surface with another key
+api_key_env = "ACME_TEST_KEY"
 ```
 
-A **native-Google relay / 中转站** uses `protocol = "google-gemini"`.
-The `base_url` is the versioned base (carry the `/v1beta` prefix — the
-`/models/{id}:generateContent` path is appended for you). Auth stays on the
-`?key=` query param:
+A **native-Google relay / 中转站** sets `default_protocol = "google-gemini"`.
+Per ADR-0259 Root URL Algebra, specify the versioned API root (`https://relay.example.com/v1beta`).
+The `/models/{id}:generateContent` inference path and `/models` discovery path are
+derived algebraically:
 
 ```toml
+# $XDG_CONFIG_HOME/muta/model_providers.toml
+[providers.my-gemini-relay]
+label = "Gemini Relay"
+root_url = "https://relay.example.com/v1beta"
+default_protocol = "google-gemini"
+catalog_format = "google"
+```
+
+```toml
+# $XDG_STATE_HOME/muta/connections.toml
 [[connections]]
-name = "my-gemini-relay"
-provider = "custom"
-protocol = "google-gemini"
-base_url = "https://relay.example.com/v1beta"
+name = "my-gemini"
+provider = "my-gemini-relay"
 models.include = ["gemini-2.5-flash"]
 ```
 
@@ -258,8 +276,8 @@ through the standard message channel; a misnamed role breaks it.
 ## Verify
 
 ```bash
-cargo test -p muta-providers
-cargo test -p muta-agent catalog
+cargo nextest run -p muta-providers
+cargo nextest run -p muta-agent -E 'test(catalog)'
 ```
 
 Then exercise the provider end-to-end:

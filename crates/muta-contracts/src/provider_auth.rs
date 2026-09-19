@@ -32,6 +32,11 @@ pub enum DeviceFlow {
     /// `authorization_code` + `code_verifier` that are then exchanged at the
     /// `/oauth/token` endpoint for the token set.
     ChatGpt,
+    /// Qoder: client-side PKCE pair + nonce + machine id, the browser URL
+    /// itself is the device code (no request step), and the poll endpoint is
+    /// a GET that answers 404 while pending, 200 with the token when
+    /// approved.
+    Qoder,
     /// Device flow is not supported or disabled.
     Disabled,
 }
@@ -691,6 +696,74 @@ pub fn copilot_preset() -> OAuthConfig {
     }
 }
 
+/// Alibaba Qoder subscription OAuth client preset.
+///
+/// Qoder's device flow is a Qoder-flavored PKCE protocol, not RFC 8628: the
+/// CLI opens `https://qoder.com/device/selectAccounts?…&client_id=…` (CN:
+/// `https://qoder.com.cn/...` with the CN client id), the user approves, and
+/// the client polls `openapi.qoder.sh/api/v1/deviceToken/poll` with the
+/// `nonce` + `verifier` pair it generated (404 = still pending, 200 = the
+/// `dt-` device token). Because the poll shape differs from RFC 8628, this
+/// preset marks the flow as custom; the device polling loop lives in
+/// `muta-providers::oauth::qoder` rather than the generic RFC 8628 poller.
+/// A pasted personal-access token (`pt-…`) skips OAuth entirely and is
+/// exchanged for a `jt-` inference token at activation.
+pub fn qoder_preset() -> OAuthConfig {
+    OAuthConfig {
+        provider_id: Cow::Borrowed("qoder"),
+        // Qoder CLI device-flow client id — international build (extracted
+        // from qodercli 1.1.53/1.1.57; CN variant: e883ade2-e6e3-4d6d-adf7-
+        // f92ceff5fdcb). Not a secret: public clients embed it.
+        client_id: Cow::Borrowed("e93fe488-5778-4c35-a6fc-0f54ed7b3139"),
+        client_secret: None,
+        client_auth_method: ClientAuthMethod::None,
+        authorize_url: Cow::Borrowed("https://qoder.com/device/selectAccounts"),
+        token_url: Cow::Borrowed("https://openapi.qoder.sh/api/v1/deviceToken/poll"),
+        device_authorization_url: Cow::Borrowed("https://qoder.com/device/selectAccounts"),
+        grant_type_device: Cow::Borrowed("qoder.device.poll"),
+        scope: Cow::Borrowed(""),
+        extra_authorize_params: Vec::new(),
+        extra_token_params: Vec::new(),
+        extra_refresh_params: Vec::new(),
+        extra_headers: Vec::new(),
+        user_agent: None,
+        browser_login: false,
+        default_login_method: LoginMethod::Device,
+        oauth_host: Cow::Borrowed("127.0.0.1"),
+        oauth_port: 56123,
+        port_mode: PortMode::Fixed(56123),
+        oauth_path: Cow::Borrowed("/callback"),
+        redirect_host: Cow::Borrowed("127.0.0.1"),
+        custom_redirect_uri: None,
+        send_nonce: false,
+        pkce_mode: PkceMode::S256,
+        token_format: TokenRequestFormat::FormUrlEncoded,
+        device_flow: DeviceFlow::Qoder,
+        device_token_url: Cow::Borrowed("https://openapi.qoder.sh/api/v1/deviceToken/poll"),
+        device_redirect_uri: Cow::Borrowed(""),
+    }
+}
+
+/// Whether this OAuth config speaks the Alibaba Qoder protocol. The
+/// token-URL check is what identifies the issuer across reconnect flows
+/// (which rewrite `provider_id`), mirroring the other protocol predicates.
+pub fn is_qoder(config: &OAuthConfig) -> bool {
+    config.provider_id == "qoder"
+        || config.token_url.contains("openapi.qoder.sh")
+        || config.token_url.contains("openapi.qoder.com.cn")
+}
+
+impl OAuthConfig {
+    /// Whether this OAuth config speaks the Alibaba Qoder protocol. The
+    /// token-URL check identifies the issuer across reconnect flows (which
+    /// rewrite `provider_id`), mirroring the other protocol predicates.
+    pub fn is_qoder(&self) -> bool {
+        self.provider_id == "qoder"
+            || self.token_url.contains("openapi.qoder.sh")
+            || self.token_url.contains("openapi.qoder.com.cn")
+    }
+}
+
 // Lazy/Const compatible static accessors
 pub static GOOGLE_ANTIGRAVITY: std::sync::LazyLock<OAuthConfig> =
     std::sync::LazyLock::new(google_antigravity_preset);
@@ -699,6 +772,7 @@ pub static GOOGLE_ANTIGRAVITY_CLI: std::sync::LazyLock<OAuthConfig> =
 pub static XAI: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(xai_preset);
 pub static CHATGPT: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(chatgpt_preset);
 pub static COPILOT: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(copilot_preset);
+pub static QODER: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(qoder_preset);
 
 /// Resolve a config by its stable OAuth integration id.
 pub fn config_by_provider_id(id: &str) -> Option<OAuthConfig> {
@@ -708,6 +782,7 @@ pub fn config_by_provider_id(id: &str) -> Option<OAuthConfig> {
         "copilot" => Some(copilot_preset()),
         "google-antigravity" | "antigravity" => Some(google_antigravity_preset()),
         "antigravity-cli" | "agy" => Some(google_antigravity_cli_preset()),
+        "qoder" => Some(qoder_preset()),
         _ => None,
     }
 }

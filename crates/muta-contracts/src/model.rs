@@ -412,45 +412,6 @@ pub enum ConnectionFilterPolicy {
 
 /// A connection-local override for the provider's remote catalog source.
 ///
-/// The transport endpoint and the catalog source are deliberately independent:
-/// a private relay can send inference traffic to its own `base_url` while
-/// sourcing model metadata from a verified models.dev provider entry.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
-#[serde(untagged)]
-#[ts(
-    export,
-    export_to = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../apps/web/src/lib/generated/wire.gen.ts"
-    )
-)]
-pub enum RemoteCatalogSourceOverride {
-    /// Query the connection/provider endpoint with the selected catalog protocol.
-    Endpoint { endpoint: RemoteCatalogEndpoint },
-    /// Read a structured provider entry from models.dev.
-    ModelsDev { models_dev: String },
-}
-
-/// Network protocol used to query a first-party remote model catalog.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(
-    export,
-    export_to = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../apps/web/src/lib/generated/wire.gen.ts"
-    )
-)]
-pub enum RemoteCatalogEndpoint {
-    OpenAiCompatible,
-    Anthropic,
-    Google,
-    GoogleCloudCode,
-    Codex,
-    Copilot,
-    OpencodeGo,
-}
-
 /// Standard named pipe filter policies (ADR-0203).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]

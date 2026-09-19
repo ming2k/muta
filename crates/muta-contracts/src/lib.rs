@@ -71,7 +71,7 @@ pub mod tool_access;
 pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};
 
 pub mod auth;
-pub use auth::{CredentialSource, ResolvedAuth, StaticCredentialSource, static_credential};
+pub use auth::{CredentialSource, QoderRequestIdentity, ResolvedAuth, StaticCredentialSource, static_credential};
 
 pub mod tool_validation;
 
@@ -238,7 +238,7 @@ pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
     BaselineModels, CapabilityOverrides, ConnectionFilterPolicy, DeclaredModel, FittedModel, Model,
     ModelCapabilities, ModelCapabilityPatch, ModelScopeConfig, ModelTargetScope, NamedFilterPolicy,
-    RemoteCatalogEndpoint, RemoteCatalogSourceOverride, RemoteModelMetadata, RouteCapabilities,
+    RemoteModelMetadata, RouteCapabilities,
     WireProtocol, baseline_models, model_by_id, register_fitted_models, resolve as resolve_model,
     sanitize_model_id, simple_glob_matches,
 };

@@ -1,7 +1,7 @@
 //! Runtime shadow: run the owned transport beside `reqwest` on live traffic.
 //!
 //! ADR-0200's P2 exit criterion is "byte-identical response corpus against the
-//! `reqwest` path under shadow". The hermetic comparison (`tests/shadow.rs`)
+//! `reqwest` path under shadow". The hermetic comparison (`tests/it/shadow.rs`)
 //! proves it against a scripted server; this module proves it against *whatever
 //! the user is actually talking to*, without changing what the user gets.
 //!

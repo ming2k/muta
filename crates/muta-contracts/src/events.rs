@@ -147,7 +147,25 @@ pub enum AgentRequest {
     /// `provider` must name a registered model provider. `protocol`, `base_url`,
     /// and `user_agent` are optional overrides of the provider's defaults;
     /// `models` is an optional initial inclusion set, honored only for models
-    /// the provider's universe admits (`provider = "custom"` is exempt).
+    /// Register or update a declarative model provider surface in `model_providers.toml` (ADR-0258).
+    RegisterProvider {
+        id: String,
+        #[serde(default)]
+        label: Option<String>,
+        root_url: String,
+        #[serde(default)]
+        protocol: Option<crate::WireProtocol>,
+        #[serde(default)]
+        client_profile: Option<crate::ClientPreset>,
+        #[serde(default)]
+        user_agent: Option<String>,
+        #[serde(default)]
+        catalog_format: Option<String>,
+        #[serde(default)]
+        dialect: Option<String>,
+    },
+    /// Add a new connection instance to `connections.toml` (ADR-0201, ADR-0258).
+    /// A connection is a credentialed pipe to a model provider.
     ///
     /// Per ADR-0046, reasoning (effort/thinking) is not set at connection
     /// creation — it is opted in per model via the stage-2 model `e` editor
@@ -155,12 +173,6 @@ pub enum AgentRequest {
     AddConnection {
         name: String,
         provider: String,
-        #[serde(default)]
-        protocol: Option<crate::WireProtocol>,
-        #[serde(default)]
-        base_url: Option<String>,
-        #[serde(default)]
-        user_agent: Option<String>,
         api_key: crate::SecretString,
         #[serde(default)]
         models: Vec<String>,
@@ -186,16 +198,12 @@ pub enum AgentRequest {
     },
     /// Cancel any in-flight OAuth authorization.
     CancelAuthorizeOAuth,
-    /// Edit a connection's metadata in place (provider, protocol, base URL, API
-    /// key, client identity) without touching its model scope. Keyed by `name`;
+    /// Edit a connection's metadata in place (provider, API
+    /// key, client identity) without touching its model scope (ADR-0258). Keyed by `name`;
     /// renaming is the separate atomic request [`Self::RenameConnection`].
     EditConnection {
         name: String,
         provider: String,
-        #[serde(default)]
-        protocol: Option<crate::WireProtocol>,
-        #[serde(default)]
-        base_url: Option<String>,
         api_key: crate::SecretString,
         #[serde(default)]
         client_identity: Option<crate::ClientIdentity>,

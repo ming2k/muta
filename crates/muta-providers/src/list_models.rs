@@ -277,16 +277,38 @@ fn append_query(url: &str, params: &[(&str, &str)]) -> String {
 
 /// Derive the `GET /models` endpoint from a chat endpoint base URL.
 ///
+/// Normalize an arbitrary base or chat endpoint URL to an API root URL (ADR-0259).
+///
+/// Under ADR-0259 (Deterministic Root URL Algebra), discovery paths are derived
+/// directly from the API root. For backward-compatibility with URLs that still carry
+/// legacy inference paths like `/chat/completions` or `/messages`, those paths are
+/// stripped during root normalization.
+pub fn normalize_root_url(protocol: DiscoveryProtocol, url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+    let stripped = match protocol {
+        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => {
+            trimmed
+                .strip_suffix("/chat/completions")
+                .or_else(|| trimmed.strip_suffix("/responses"))
+                .unwrap_or(trimmed)
+        }
+        DiscoveryProtocol::Anthropic => {
+            trimmed.strip_suffix("/messages").unwrap_or(trimmed)
+        }
+        DiscoveryProtocol::GoogleCloudCode => {
+            trimmed.strip_suffix("/v1internal").unwrap_or(trimmed)
+        }
+        DiscoveryProtocol::Google | DiscoveryProtocol::OpencodeGo => trimmed,
+    };
+    stripped.trim_end_matches('/').to_string()
+}
+
 /// The chat endpoint is the authority (it is what the channel actually calls),
 /// so discovery reuses its host and scheme rather than guessing a separate
-/// models host. Path handling per protocol:
+/// models host.
 ///
-/// - `openai`: strip a trailing `/chat/completions` (and any `/v1/chat/…`),
-///   keep the API root, append `/models`. Accepts both a full
-///   `…/v1/chat/completions` URL and a bare `…/v1` root.
-/// - `anthropic`: strip a trailing `/messages`, append `/models`.
-/// - `google`: the base is already the API root (`…/v1beta`); append
-///   `/models`.
+/// Derived via deterministic Root URL Algebra (ADR-0259):
+/// `models_url = root_url + relative_discovery_path(protocol)`
 ///
 /// Returns [`ModelListError::BadEndpoint`] only for an empty/whitespace base.
 pub fn models_endpoint_for(
@@ -302,56 +324,23 @@ pub fn models_endpoint_for(
         return Ok(if trimmed.ends_with("/api.json") {
             trimmed.to_string()
         } else if trimmed.starts_with("http://") {
-            format!("{trimmed}/api.json")
+            let root = trimmed.trim_end_matches('/');
+            format!("{root}/api.json")
         } else {
             "https://models.opencode.ai/api.json".to_string()
         });
     }
 
-    // Split into the API root (scheme + host + version path) and drop any
-    // method-specific suffix. We look for the known suffixes from the right so
-    // a path like `/v1/chat/completions` keeps its `/v1` root.
-    let mut root = match protocol {
-        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => {
-            // Accept a `…/chat/completions` or `…/responses` endpoint and a
-            // bare `…/v1` root alike.
-            std::borrow::Cow::Borrowed(
-                trimmed
-                    .strip_suffix("/chat/completions")
-                    .or_else(|| trimmed.strip_suffix("/chat/completions/"))
-                    .or_else(|| trimmed.strip_suffix("/responses"))
-                    .or_else(|| trimmed.strip_suffix("/responses/"))
-                    .unwrap_or(trimmed),
-            )
-        }
-        DiscoveryProtocol::Anthropic => std::borrow::Cow::Borrowed(
-            trimmed
-                .strip_suffix("/messages")
-                .or_else(|| trimmed.strip_suffix("/messages/"))
-                .unwrap_or(trimmed),
-        ),
-        DiscoveryProtocol::Google => {
-            std::borrow::Cow::Borrowed(trimmed.strip_suffix('/').unwrap_or(trimmed))
-        }
-        DiscoveryProtocol::GoogleCloudCode => {
-            let base = trimmed.strip_suffix("/v1internal").unwrap_or(trimmed);
-            let base = base.strip_suffix('/').unwrap_or(base);
-            std::borrow::Cow::Owned(base.to_string())
-        }
+    let root = normalize_root_url(protocol, trimmed);
+    let path = match protocol {
+        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => "models",
+        DiscoveryProtocol::Anthropic => "models",
+        DiscoveryProtocol::Google => "models",
+        DiscoveryProtocol::GoogleCloudCode => "v1internal:fetchAvailableModels",
         DiscoveryProtocol::OpencodeGo => unreachable!(),
     };
-    // A trailing slash on the root is noise for the path join below.
-    while root.ends_with('/') {
-        root.to_mut().pop();
-    }
 
-    Ok(match protocol {
-        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Codex => format!("{root}/models"),
-        DiscoveryProtocol::Anthropic => format!("{root}/models"),
-        DiscoveryProtocol::Google => format!("{root}/models"),
-        DiscoveryProtocol::GoogleCloudCode => format!("{root}/v1internal:fetchAvailableModels"),
-        DiscoveryProtocol::OpencodeGo => unreachable!(),
-    })
+    Ok(format!("{root}/{path}"))
 }
 
 /// Fetch the live model list for `req`. Pure network + parse; the fallback
@@ -542,17 +531,62 @@ fn anthropic_version() -> &'static str {
     muta_llm_client::protocol::anthropic::request::ANTHROPIC_VERSION
 }
 
-/// Parse a `GET /models` response body into a list of model entries, per
-/// protocol. Pure function so the per-protocol shapes are unit-testable
-/// without any HTTP.
-fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredModel> {
-    match protocol {
-        DiscoveryProtocol::OpenAi => parse_data_models(json),
-        DiscoveryProtocol::Anthropic => parse_data_models(json),
-        DiscoveryProtocol::Google | DiscoveryProtocol::GoogleCloudCode => parse_google_models(json),
-        DiscoveryProtocol::Codex => parse_codex_models(json),
-        DiscoveryProtocol::OpencodeGo => crate::registry::opencode_go::parse_catalog(json),
+/// Strongly-typed catalog parser trait for model list payloads (ADR-0259).
+pub trait CatalogParser: Send + Sync {
+    /// Parse raw JSON value into standardized discovered models.
+    fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel>;
+}
+
+pub struct OpenAiCatalogParser;
+impl CatalogParser for OpenAiCatalogParser {
+    fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel> {
+        parse_data_models(json)
     }
+}
+
+pub struct AnthropicCatalogParser;
+impl CatalogParser for AnthropicCatalogParser {
+    fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel> {
+        parse_data_models(json)
+    }
+}
+
+pub struct GoogleCatalogParser;
+impl CatalogParser for GoogleCatalogParser {
+    fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel> {
+        parse_google_models(json)
+    }
+}
+
+pub struct CodexCatalogParser;
+impl CatalogParser for CodexCatalogParser {
+    fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel> {
+        parse_codex_models(json)
+    }
+}
+
+pub struct OpencodeGoCatalogParser;
+impl CatalogParser for OpencodeGoCatalogParser {
+    fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel> {
+        crate::registry::opencode_go::parse_catalog(json)
+    }
+}
+
+/// Return the typed catalog parser for the given discovery protocol (ADR-0259).
+pub fn parser_for(protocol: DiscoveryProtocol) -> Box<dyn CatalogParser> {
+    match protocol {
+        DiscoveryProtocol::OpenAi => Box::new(OpenAiCatalogParser),
+        DiscoveryProtocol::Anthropic => Box::new(AnthropicCatalogParser),
+        DiscoveryProtocol::Google | DiscoveryProtocol::GoogleCloudCode => Box::new(GoogleCatalogParser),
+        DiscoveryProtocol::Codex => Box::new(CodexCatalogParser),
+        DiscoveryProtocol::OpencodeGo => Box::new(OpencodeGoCatalogParser),
+    }
+}
+
+/// Parse a `GET /models` response body into a list of model entries, per
+/// protocol via the typed CatalogParser pipeline (ADR-0259).
+fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredModel> {
+    parser_for(protocol).parse_json(json)
 }
 
 fn validate_catalog_shape(protocol: DiscoveryProtocol, json: &Value) -> Result<(), ModelListError> {
@@ -994,6 +1028,22 @@ fn parse_antigravity_models_map(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_pipeline_dispatches_cleanly() {
+        let openai_json: serde_json::Value = serde_json::json!({
+            "data": [{"id": "model-1"}]
+        });
+        let parser = parser_for(DiscoveryProtocol::OpenAi);
+        let models = parser.parse_json(&openai_json);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "model-1");
+
+        let anthropic_parser = parser_for(DiscoveryProtocol::Anthropic);
+        let anthropic_models = anthropic_parser.parse_json(&openai_json);
+        assert_eq!(anthropic_models.len(), 1);
+        assert_eq!(anthropic_models[0].id, "model-1");
+    }
 
     #[test]
     fn derives_opencode_go_models_endpoint() {
