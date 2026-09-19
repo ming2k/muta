@@ -362,9 +362,10 @@ impl OAuth {
                     // persists (a stable per-process uuid here is only a
                     // placeholder until the token set carries the real one).
                     let machine_id = machine_id_for_flow();
-                    let session = crate::oauth::qoder::QoderDeviceSession::new(
+                    let session = crate::oauth::qoder::QoderDeviceSession::with_authorize_url(
                         &machine_id,
                         self.config.client_id.as_ref(),
+                        self.config.authorize_url.as_ref(),
                     );
                     let prompt = OAuthLoginPrompt {
                         method,

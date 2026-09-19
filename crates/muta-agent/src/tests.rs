@@ -431,64 +431,30 @@ fn provider_prompt_hints_are_injected_into_system_prompt() {
     assert!(messages[0].content.contains("Provider protocol hint."));
 }
 
-/// Golden layout test for ADR-0039 stage 2: the registry-assembled system
-/// message must reproduce the legacy `parts.join("\n")` layout byte-for-byte
-/// for the shipped baseline state (no identity, no skills). The always-on
-/// host-environment and persistence sections compose in unconditionally.
-/// Sections that need a gap carry their own leading `\n`, so a single-`\n`
-/// join yields a stable, readable layout.
+/// The shipped baseline agent has no default identity and no nanny sections;
+/// baseline request preparation emits no system message clutter, reserving
+/// the context window and attention entirely for the user's task.
 #[test]
-fn system_prompt_registry_reproduces_legacy_layout() {
+fn default_agent_has_clean_uncluttered_baseline_prompt() {
     let agent = agent();
-    // The `agent()` helper ships an empty identity, which is exactly what the
-    // shipped coding CLI uses: the baseline prompt opens at the host
-    // environment, with no "You are …" self-description.
-
     let mut messages: Vec<Message> = Vec::new();
     agent.prepare_request_messages_debug(&mut messages);
-    let prompt = &messages[0].content;
-
-    // host env \n\n persistence.
-    let expected = "## Host Execution Environment\n\
-     - Primary Workspace: `.`\n\
-     - Operating System: Unix-like (Linux/macOS)\n\
-     - Native Shell: POSIX sh / bash\n\
-     - Shell Syntax: Standard POSIX shell pipelines and syntax.\n\
-     - Temp Access: read/write to the platform temp directory (`$TMPDIR`, `/tmp` on Unix) is always admitted for scratch files — spill files, staging, probes — no additional roots required.\n\
-     - Tool Guidance: ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_text`, `search_text`, `find_files`, `list_dir`) over executing shell commands like `cat`, `grep`, `find`, `sed`, `echo >`.\n\
-     - Finite Foreground Execution Axiom: You operate in a headless, non-interactive shell without an interactive terminal (TTY). Foreground commands MUST be finite and self-terminating. NEVER execute unbounded continuous monitoring or streaming tools (such as `top`, `htop`, `intel_gpu_top`, `tail -f`, `ping`, `watch`) without bounds (e.g. `timeout 2s <cmd>`, `ping -c 3`, `top -b -n 1`, or `<cmd> | head -n 30`). Continuous streaming without exit in the foreground triggers StreamGuard early cutoff. For long-running background tasks or persistent daemons, you MUST use `run_command` with `background: true` or `service: true`.\n\
-     \n\
-     See the task through to a real result in this round. Don't stop at analysis \
-     or a partial fix — carry the work through implementation and verification. \
-     If a tool call fails or you hit a blocker, try to resolve it yourself before \
-     yielding; only hand back to the user when the work is actually done or you \
-     genuinely need their input.";
-    assert_eq!(
-        prompt, expected,
-        "registry output must match the composed layout"
-    );
-
-    // Origin is the channel canonical kind, regardless of how many sections
-    // composed the message.
-    assert_eq!(
-        messages[0].origin.as_ref().map(|o| o.kind),
-        Some(crate::InjectionKind::SystemPrompt)
+    assert!(
+        messages.is_empty(),
+        "baseline agent with no identity or project rules must emit no system prompt clutter"
     );
 }
 
 #[test]
 fn apply_preset_switches_identity_into_the_system_prompt() {
-    // Plan §3.3 acceptance: switching the agent role live re-rolls the
-    // system-prompt identity line, so the next request speaks with the new
-    // role directive. The baseline (empty identity) opens at the host
-    // environment instead.
+    // Switching the agent role live re-rolls the system-prompt identity line,
+    // so the next request speaks with the new role directive.
     let agent = agent();
     let mut baseline: Vec<Message> = Vec::new();
     agent.prepare_request_messages_debug(&mut baseline);
     assert!(
-        !baseline[0].content.starts_with("You are"),
-        "the shipped baseline must carry no self-description; got: {}",
-        baseline[0].content
+        baseline.is_empty() || !baseline[0].content.starts_with("You are"),
+        "the shipped baseline must carry no self-description",
     );
 
     let philosophist = muta_contracts::AgentRoleProfile::from_role(
@@ -3313,11 +3279,15 @@ fn prepare_request_messages_projects_out_command_echoes() {
 
 #[test]
 fn request_pressure_includes_system_prompt_and_tool_schemas() {
-    let without_tools = agent();
+    let without_tools = Agent::new(
+        Arc::new(TestProvider),
+        Vec::new(),
+        crate::AgentIdentity::from_directive("test system prompt directive"),
+    );
     let with_tools = Agent::new(
         Arc::new(TestProvider),
         vec![Arc::new(WriteTestTool)],
-        crate::AgentIdentity::default(),
+        crate::AgentIdentity::from_directive("test system prompt directive"),
     );
     let messages = vec![Message::new(Role::User, "inspect the request budget")];
 

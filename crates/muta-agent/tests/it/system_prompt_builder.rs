@@ -74,7 +74,7 @@ fn embedding_can_extend_and_disable_prompt_policy_before_build() {
             text: "PRODUCT-POLICY",
         })
         .unwrap()
-        .disable_system_prompt_section("system.persistence")
+        .disable_system_prompt_section("system.project_rules")
         .unwrap()
         .build();
 
@@ -83,24 +83,19 @@ fn embedding_can_extend_and_disable_prompt_policy_before_build() {
 
     assert_eq!(messages[0].role, Role::System);
     assert!(messages[0].content.contains("PRODUCT-POLICY"));
-    assert!(
-        !messages[0]
-            .content
-            .contains("See the task through to a real result")
-    );
 }
 
 #[test]
 fn embedding_configuration_errors_are_structured() {
     let result = builder().register_system_prompt_section(ProductPolicy {
-        id: "system.persistence",
+        id: "system.identity_preamble",
         tier: None,
         rank: 1,
         text: "collision",
     });
     assert!(matches!(
         result,
-        Err(SystemPromptRegistryError::DuplicateId("system.persistence"))
+        Err(SystemPromptRegistryError::DuplicateId("system.identity_preamble"))
     ));
 
     let result = builder().disable_system_prompt_section("system.missing");
@@ -111,40 +106,49 @@ fn embedding_configuration_errors_are_structured() {
 }
 
 #[test]
-fn host_environment_guidance_renders_in_default_prompt() {
+fn default_prompt_is_free_of_nanny_prompting() {
     let agent = builder().build();
     let mut messages = vec![Message::new(Role::User, "test prompt")];
     agent.prepare_request_messages_debug(&mut messages);
 
-    assert_eq!(messages[0].role, Role::System);
-    assert!(
-        messages[0]
-            .content
-            .contains("## Host Execution Environment"),
-        "system message must include host environment section: {}",
-        messages[0].content
-    );
-    assert!(
-        messages[0]
-            .content
-            .contains("ALWAYS prefer built-in tools (`read_text`, `write_file`, `edit_text`"),
-        "system message must emphasize built-in tools"
-    );
+    // Shipped default builder has no identity or project rules, so it renders
+    // no system message, ensuring zero prompt clutter and zero attention theft.
+    if let Some(system_msg) = messages.iter().find(|m| m.role == Role::System) {
+        assert!(
+            !system_msg.content.contains("ALWAYS prefer built-in tools"),
+            "system message must not contain tool micromanagement"
+        );
+        assert!(
+            !system_msg.content.contains("Finite Foreground Execution Axiom"),
+            "system message must not contain execution axioms"
+        );
+        assert!(
+            !system_msg.content.contains("See the task through to a real result"),
+            "system message must not contain persistence lecturing"
+        );
+    }
 }
 
 #[test]
 fn embedding_can_order_sections_semantically() {
     let agent = builder()
         .register_system_prompt_section(ProductPolicy {
-            id: "system.embedding.pre_host",
+            id: "system.embedding.first",
             tier: Some(muta_agent::InstructionTier::Base),
             rank: 0,
-            text: "PRE-HOST-GUIDANCE",
+            text: "FIRST-GUIDANCE",
+        })
+        .unwrap()
+        .register_system_prompt_section(ProductPolicy {
+            id: "system.embedding.second",
+            tier: Some(muta_agent::InstructionTier::Base),
+            rank: 1,
+            text: "SECOND-GUIDANCE",
         })
         .unwrap()
         .order_system_prompt_section(
-            "system.embedding.pre_host",
-            muta_agent::InstructionOrder::Before("system.host_environment"),
+            "system.embedding.first",
+            muta_agent::InstructionOrder::Before("system.embedding.second"),
         )
         .unwrap()
         .build();
@@ -153,10 +157,10 @@ fn embedding_can_order_sections_semantically() {
     agent.prepare_request_messages_debug(&mut messages);
 
     let content = &messages[0].content;
-    let pre_pos = content.find("PRE-HOST-GUIDANCE").unwrap();
-    let host_pos = content.find("## Host Execution Environment").unwrap();
+    let first_pos = content.find("FIRST-GUIDANCE").unwrap();
+    let second_pos = content.find("SECOND-GUIDANCE").unwrap();
     assert!(
-        pre_pos < host_pos,
-        "pre_host section must appear before host environment"
+        first_pos < second_pos,
+        "first section must appear before second section"
     );
 }

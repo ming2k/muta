@@ -711,10 +711,11 @@ pub fn copilot_preset() -> OAuthConfig {
 pub fn qoder_preset() -> OAuthConfig {
     OAuthConfig {
         provider_id: Cow::Borrowed("qoder"),
-        // Qoder CLI device-flow client id — international build (extracted
-        // from qodercli 1.1.53/1.1.57; CN variant: e883ade2-e6e3-4d6d-adf7-
-        // f92ceff5fdcb). Not a secret: public clients embed it.
-        client_id: Cow::Borrowed("e93fe488-5778-4c35-a6fc-0f54ed7b3139"),
+        // Qoder CLI device-flow client id — production constant (shared
+        // between international and CN lines; extracted from qodercli
+        // and qoder-worker-runtime; non-prod test/daily variant is
+        // e93fe488-5778-4c35-a6fc-0f54ed7b3139). Not a secret: public clients embed it.
+        client_id: Cow::Borrowed("e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"),
         client_secret: None,
         client_auth_method: ClientAuthMethod::None,
         authorize_url: Cow::Borrowed("https://qoder.com/device/selectAccounts"),

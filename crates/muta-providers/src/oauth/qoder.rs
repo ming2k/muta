@@ -45,12 +45,23 @@ pub struct QoderDeviceSession {
     pub challenge: String,
     pub machine_id: String,
     pub client_id: String,
+    pub authorize_url: String,
 }
 
 impl QoderDeviceSession {
-    /// Generate a fresh session. `machine_id` must be the connection's
-    /// stable machine UUID (36 chars) — it is what the server fingerprints.
+    /// Generate a fresh session with default international authorize URL.
+    /// `machine_id` must be the connection's stable machine UUID (36 chars) —
+    /// it is what the server fingerprints.
     pub fn new(machine_id: &str, client_id: &str) -> Self {
+        Self::with_authorize_url(
+            machine_id,
+            client_id,
+            "https://qoder.com/device/selectAccounts",
+        )
+    }
+
+    /// Generate a fresh session with a custom authorize URL (e.g. CN line).
+    pub fn with_authorize_url(machine_id: &str, client_id: &str, authorize_url: &str) -> Self {
         let verifier = new_verifier();
         let challenge = base64_url_no_pad(&sha2::Sha256::digest(verifier.as_bytes()));
         Self {
@@ -59,6 +70,7 @@ impl QoderDeviceSession {
             challenge,
             machine_id: machine_id.to_string(),
             client_id: client_id.to_string(),
+            authorize_url: authorize_url.to_string(),
         }
     }
 
@@ -66,9 +78,9 @@ impl QoderDeviceSession {
     /// "device code" prompt (no separate user_code exists).
     pub fn user_url(&self) -> String {
         format!(
-            "https://qoder.com/device/selectAccounts?challenge={}&challenge_method=S256\
+            "{}?challenge={}&challenge_method=S256\
 &nonce={}&machine_id={}&client_id={}",
-            self.challenge, self.nonce, self.machine_id, self.client_id
+            self.authorize_url, self.challenge, self.nonce, self.machine_id, self.client_id
         )
     }
 }
@@ -395,17 +407,29 @@ mod tests {
     fn session_url_carries_the_full_pkce_contract() {
         let session = QoderDeviceSession::new(
             "0f8e2b1a-1111-4222-8333-444455556666",
-            "e93fe488-5778-4c35-a6fc-0f54ed7b3139",
+            "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
         );
         let url = session.user_url();
         assert!(url.starts_with("https://qoder.com/device/selectAccounts?"), "{url}");
         assert!(url.contains("challenge_method=S256"));
-        assert!(url.contains("client_id=e93fe488-5778-4c35-a6fc-0f54ed7b3139"));
+        assert!(url.contains("client_id=e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"));
         assert!(url.contains("machine_id=0f8e2b1a"));
         assert!(url.contains(&format!("nonce={}", session.nonce)));
         // Challenge is unpadded base64url of SHA256(verifier).
         let expected = base64_url_no_pad(&sha2::Sha256::digest(session.verifier.as_bytes()));
         assert!(url.contains(&format!("challenge={expected}")));
+    }
+
+    #[test]
+    fn session_url_respects_custom_authorize_url() {
+        let session = QoderDeviceSession::with_authorize_url(
+            "0f8e2b1a-1111-4222-8333-444455556666",
+            "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
+            "https://qoder.cn/device/selectAccounts",
+        );
+        let url = session.user_url();
+        assert!(url.starts_with("https://qoder.cn/device/selectAccounts?"), "{url}");
+        assert!(url.contains("client_id=e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"));
     }
 
     #[test]

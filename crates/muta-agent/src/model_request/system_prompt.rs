@@ -77,7 +77,7 @@ pub enum InstructionOrder {
 /// A self-contained, declaratively registered instruction section.
 pub trait SystemPromptSection: Send + Sync {
     /// Stable unique identifier, used for overrides, disables, dependencies, and tracing.
-    /// Convention: `system.<area>[.<name>]`, e.g. `"system.host_environment"`.
+    /// Convention: `system.<area>[.<name>]`, e.g. `"system.project_rules"`.
     fn id(&self) -> &'static str;
 
     /// Cache tier and lifetime volatility of this section.
