@@ -2116,6 +2116,11 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 let _ = pa.apply(crate::question_model::QuestionAction::Down);
             }
         }
+        input::InputAction::PreAttachToggle => {
+            if let Some(pa) = app.pre_attach.as_mut() {
+                let _ = pa.apply(crate::question_model::QuestionAction::Toggle);
+            }
+        }
         input::InputAction::PreAttachSubmit => {
             if let Some(pa) = app.pre_attach.as_mut() {
                 let decision = pa.apply(crate::question_model::QuestionAction::Submit);

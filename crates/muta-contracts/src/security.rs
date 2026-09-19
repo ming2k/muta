@@ -118,7 +118,7 @@ pub struct WorkspaceSecuritySnapshot {
     #[serde(default)]
     pub hooks: WorkspaceTrustState,
     /// Trust status for project instructions (AGENTS.md).
-    #[serde(default, alias = "rules")]
+    #[serde(default)]
     pub instructions: WorkspaceTrustState,
     /// Trust status for project-declared external workspace roots.
     #[serde(default)]

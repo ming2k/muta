@@ -448,6 +448,7 @@ pub enum InputAction {
     /// actions).
     PreAttachUp,
     PreAttachDown,
+    PreAttachToggle,
     PreAttachSubmit,
     PreAttachCancel,
     /// Submit the input-injection panel's typed text (L3.5 β).

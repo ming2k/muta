@@ -67,21 +67,32 @@ pub(crate) fn apply(app: &mut App, runtime: &UiRuntime, mutation: AppMutation) -
             } else if app.current_role.is_some() {
                 app.current_workspace.clear();
             }
-            // PreAttach unmount (ADR-0175): when the snapshot transitions to
-            // trusted (or the workspace is no longer quarantined), clear the
-            // interstitial and latch the per-run gate so a subsequent
-            // periodic republish of a still-quarantined snapshot cannot
-            // re-mount within this run.
-            if app.pre_attach.is_some() {
-                let aggregate = snapshot.workspace_security.aggregate();
-                let trusted = aggregate == muta_contracts::WorkspaceTrustState::Trusted
-                    || aggregate == muta_contracts::WorkspaceTrustState::Absent;
-                if trusted {
-                    tracing::info!("mutx: clearing PreAttach interstitial (workspace trusted)");
+            // PreAttach unmount (ADR-0175, ADR-0253): when the snapshot transitions
+            // to having no unresolved quarantined/changed/expired domains (or the
+            // workspace is no longer quarantined), clear the interstitial and latch
+            // the per-run gate so a subsequent periodic republish cannot re-mount
+            // within this run.
+            if let Some(pa) = app.pre_attach.as_mut() {
+                let gate_needed =
+                    crate::trust_gate::gate_request(&snapshot.workspace_security).is_some();
+                if !gate_needed {
+                    tracing::info!(
+                        "mutx: clearing PreAttach interstitial (workspace review resolved)"
+                    );
                     app.pre_attach = None;
                     runtime
                         .trust_gate_dismissed
                         .store(true, std::sync::atomic::Ordering::SeqCst);
+                } else if pa.submitting() {
+                    // The snapshot round-tripped after submission, but the gate
+                    // is still not resolved (e.g. backend attestation failure).
+                    // Refresh the question model from the latest snapshot and reset
+                    // submitting so the user is never permanently stuck in a submission spinner.
+                    if let Some(new_state) =
+                        crate::PreAttachState::from_snapshot(&snapshot.workspace_security)
+                    {
+                        *pa = new_state;
+                    }
                 }
             }
             true

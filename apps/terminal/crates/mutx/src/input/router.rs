@@ -383,12 +383,11 @@ pub fn route_event(
                 return match key.code {
                     KeyCode::Up => InputAction::PreAttachUp,
                     KeyCode::Down => InputAction::PreAttachDown,
+                    KeyCode::Char(' ') => InputAction::PreAttachToggle,
                     KeyCode::Enter => InputAction::PreAttachSubmit,
-                    // Backspace, Delete, all chars, all Fn keys, all
-                    // Ctrl+X chords (other than the globals handled
-                    // above) and any unrecognized key fall through to
-                    // Esc semantics — the PreAttach surface has only
-                    // four meaningful inputs.
+                    // Backspace, Delete, unrecognized chars, all Fn keys, all
+                    // Ctrl+X chords (other than the globals handled above)
+                    // fall through to Esc semantics.
                     _ => InputAction::PreAttachCancel,
                 };
             }

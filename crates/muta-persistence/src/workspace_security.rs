@@ -35,11 +35,48 @@ struct WorkspaceRecord {
     expires_at_s: BTreeMap<String, u64>,
 }
 
+impl WorkspaceRecord {
+    fn normalize_legacy_keys(&mut self) -> bool {
+        let mut changed = false;
+        let legacy_maps = [
+            ("rules", "instructions"),
+            ("roots", "ex-workspace"),
+        ];
+        for (old_key, new_key) in legacy_maps {
+            if let Some(val) = self.domain_digests.remove(old_key) {
+                self.domain_digests.entry(new_key.to_string()).or_insert(val);
+                changed = true;
+            }
+            if let Some(val) = self.denied_digests.remove(old_key) {
+                self.denied_digests.entry(new_key.to_string()).or_insert(val);
+                changed = true;
+            }
+            if let Some(val) = self.expires_at_s.remove(old_key) {
+                self.expires_at_s.entry(new_key.to_string()).or_insert(val);
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedWorkspaceSecurity {
     version: u32,
     #[serde(default)]
     workspaces: BTreeMap<String, WorkspaceRecord>,
+}
+
+impl PersistedWorkspaceSecurity {
+    fn normalize_legacy_keys(&mut self) -> bool {
+        let mut changed = false;
+        for record in self.workspaces.values_mut() {
+            if record.normalize_legacy_keys() {
+                changed = true;
+            }
+        }
+        changed
+    }
 }
 
 impl Default for PersistedWorkspaceSecurity {
@@ -225,7 +262,7 @@ impl WorkspaceSecurityStore {
             .reader()
             .map_err(|e| format!("cannot open sqlite db '{}': {e}", self.db_path.display()))?;
 
-        if let Ok(Some(state)) =
+        if let Ok(Some(mut state)) =
             reader.get_json::<PersistedWorkspaceSecurity>("state:workspace_security")
         {
             if state.version != CURRENT_VERSION {
@@ -235,6 +272,9 @@ impl WorkspaceSecurityStore {
                     state.version,
                     CURRENT_VERSION
                 ));
+            }
+            if state.normalize_legacy_keys() {
+                let _ = self.persist(&state);
             }
             return Ok(state);
         }
@@ -464,6 +504,20 @@ fn collect_asset_files(
         return Ok(());
     }
     if meta.is_dir() {
+        if let Some(name) = current.file_name().and_then(|s| s.to_str()) {
+            if matches!(
+                name,
+                ".git"
+                    | "node_modules"
+                    | ".venv"
+                    | "venv"
+                    | "target"
+                    | "__pycache__"
+                    | ".pytest_cache"
+            ) {
+                return Ok(());
+            }
+        }
         let entries = std::fs::read_dir(current).map_err(|error| {
             format!(
                 "cannot read project asset directory '{}': {error}",
@@ -677,5 +731,52 @@ mod tests {
         // 4. User trusts it now -> becomes Trusted
         store.trust_domains(root, &[TrustDomain::Skills]).unwrap();
         assert_eq!(store.snapshot(root).skills, WorkspaceTrustState::Trusted);
+    }
+
+    #[test]
+    fn legacy_roots_and_rules_normalized_automatically() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let store = WorkspaceSecurityStore::load_from(root.join("state/workspace_security.json"));
+
+        std::fs::write(root.join("AGENTS.md"), "test agents rules").unwrap();
+        std::fs::create_dir_all(root.join(".muta")).unwrap();
+        std::fs::write(root.join(".muta/config.toml"), "[workspace]\nadditional_roots = []\n").unwrap();
+
+        let root_key = canonical_string(&workspace_identity(root));
+
+        // Manually inject legacy state with "rules" and "roots"
+        let mut digests = BTreeMap::new();
+        let instructions_digest = domain_digest(root, TrustDomain::Instructions).unwrap().unwrap();
+        let ex_workspace_digest = domain_digest(root, TrustDomain::ExWorkspace).unwrap().unwrap();
+        digests.insert("rules".to_string(), instructions_digest);
+        digests.insert("roots".to_string(), ex_workspace_digest);
+
+        let mut workspaces = BTreeMap::new();
+        workspaces.insert(root_key, WorkspaceRecord {
+            domain_digests: digests,
+            denied_digests: BTreeMap::new(),
+            expires_at_s: BTreeMap::new(),
+        });
+
+        let legacy_state = PersistedWorkspaceSecurity {
+            version: CURRENT_VERSION,
+            workspaces,
+        };
+
+        store.persist(&legacy_state).unwrap();
+
+        // When reading snapshot, it should automatically normalize and recognize them as Trusted!
+        let snap = store.snapshot(root);
+        assert_eq!(snap.instructions, WorkspaceTrustState::Trusted);
+        assert_eq!(snap.ex_workspace, WorkspaceTrustState::Trusted);
+
+        // Verify that the persisted DB state now has the normalized keys "instructions" and "ex-workspace"
+        let reloaded = store.read_state().unwrap();
+        let record = reloaded.workspaces.values().next().unwrap();
+        assert!(record.domain_digests.contains_key("instructions"));
+        assert!(record.domain_digests.contains_key("ex-workspace"));
+        assert!(!record.domain_digests.contains_key("rules"));
+        assert!(!record.domain_digests.contains_key("roots"));
     }
 }

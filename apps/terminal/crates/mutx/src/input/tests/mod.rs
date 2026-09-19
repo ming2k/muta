@@ -540,6 +540,36 @@ fn drain_guard(events: &[Event]) -> (usize, usize) {
     (accepted, dropped)
 }
 
+#[test]
+fn pre_attach_keys_including_space_toggle() {
+    let dispatch = Dispatch {
+        pre_attach: true,
+        ..Default::default()
+    };
+    let mut input = String::new();
+    let mut cur = 0;
+    let mut drag = SelectionDrag::default();
+
+    let mut route = |code: KeyCode| {
+        route_event(
+            Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+            &mut input,
+            &mut cur,
+            dispatch.clone(),
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &SceneKeys::default(),
+            &mut drag,
+        )
+    };
+
+    assert_eq!(route(KeyCode::Up), InputAction::PreAttachUp);
+    assert_eq!(route(KeyCode::Down), InputAction::PreAttachDown);
+    assert_eq!(route(KeyCode::Char(' ')), InputAction::PreAttachToggle);
+    assert_eq!(route(KeyCode::Enter), InputAction::PreAttachSubmit);
+    assert_eq!(route(KeyCode::Esc), InputAction::PreAttachCancel);
+}
+
 mod editing;
 mod modals;
 mod navigation;

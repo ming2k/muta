@@ -1253,9 +1253,17 @@ impl SessionDriver {
                     .await;
                 }
                 AgentRequest::TrustWorkspace { domains } => {
+                    let user_assets_state =
+                        crate::handlers_slash::security_ops::compute_user_assets_trust();
+                    let user_assets_needed_review = matches!(
+                        user_assets_state,
+                        muta_contracts::WorkspaceTrustState::Quarantined
+                            | muta_contracts::WorkspaceTrustState::Changed
+                            | muta_contracts::WorkspaceTrustState::Expired
+                    );
                     if domains.contains(&muta_contracts::TrustDomain::UserAssets) {
                         crate::handlers_slash::security_ops::trust_user_assets();
-                    } else {
+                    } else if user_assets_needed_review {
                         crate::handlers_slash::security_ops::deny_user_assets();
                     }
                     let effective = if let Some(root) = &project_root_for_side {
@@ -1264,15 +1272,10 @@ impl SessionDriver {
                             .copied()
                             .filter(|d| *d != muta_contracts::TrustDomain::UserAssets)
                             .collect();
-                        if !ws_domains.is_empty()
-                            && let Err(error) = workspace_security.trust_domains(root, &ws_domains)
-                        {
-                            tracing::error!(?error, "failed to persist workspace trust");
-                        }
 
-                        // Determine any present workspace domains that were NOT selected by human -> deny them (ADR-0253)
-                        let current_snap = workspace_security.snapshot(root);
-                        let all_present_ws: Vec<muta_contracts::TrustDomain> = [
+                        // Candidate workspace domains D: domains requiring human review (ADR-0253)
+                        let pre_snap = workspace_security.snapshot(root);
+                        let candidate_ws: Vec<muta_contracts::TrustDomain> = [
                             muta_contracts::TrustDomain::Mcp,
                             muta_contracts::TrustDomain::Skills,
                             muta_contracts::TrustDomain::Hooks,
@@ -1281,14 +1284,31 @@ impl SessionDriver {
                         ]
                         .into_iter()
                         .filter(|&d| {
-                            !matches!(
-                                current_snap.state(d),
-                                muta_contracts::WorkspaceTrustState::Absent
+                            matches!(
+                                pre_snap.state(d),
+                                muta_contracts::WorkspaceTrustState::Quarantined
+                                    | muta_contracts::WorkspaceTrustState::Changed
+                                    | muta_contracts::WorkspaceTrustState::Expired
                             )
                         })
                         .collect();
 
-                        let unselected_ws: Vec<muta_contracts::TrustDomain> = all_present_ws
+                        if !ws_domains.is_empty()
+                            && let Err(error) = workspace_security.trust_domains(root, &ws_domains)
+                        {
+                            tracing::error!(?error, "failed to persist workspace trust");
+                            let _ = resp_tx.send(round_response(
+                                &session.id().await,
+                                muta_contracts::RoundEvent::Notice(
+                                    muta_contracts::AgentNotice::trust_changed(format!(
+                                        "Workspace trust failed: {error}"
+                                    )),
+                                ),
+                            ));
+                        }
+
+                        // Explicit negative attestation on unselected candidate domains: D \ S (ADR-0253)
+                        let unselected_ws: Vec<muta_contracts::TrustDomain> = candidate_ws
                             .into_iter()
                             .filter(|d| !ws_domains.contains(d))
                             .collect();
