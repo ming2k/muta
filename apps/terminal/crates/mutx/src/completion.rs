@@ -190,11 +190,21 @@ pub(super) fn mention_range_at(input: &str, cursor_byte: usize) -> Option<(usize
             return None;
         }
         if character == '@' {
-            let preceded_by_space = chars_before
+            let is_escaped = chars_before
                 .last()
-                .map(|(_, previous)| previous.is_whitespace())
+                .map(|(_, previous)| *previous == '\\')
+                .unwrap_or(false);
+            if is_escaped {
+                return None;
+            }
+            let preceded_by_valid = chars_before
+                .last()
+                .map(|(_, previous)| {
+                    previous.is_whitespace()
+                        || matches!(previous, '(' | '[' | '{' | '"' | '\'' | '<')
+                })
                 .unwrap_or(true);
-            return preceded_by_space.then_some((idx, cursor_byte));
+            return preceded_by_valid.then_some((idx, cursor_byte));
         }
     }
     None

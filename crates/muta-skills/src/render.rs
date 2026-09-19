@@ -138,6 +138,46 @@ fn is_name_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '-' | '_' | '.')
 }
 
+/// Mask out inline (`...`) and fenced (```...```) code blocks with spaces,
+/// preserving exact UTF-8 byte lengths and newlines so that byte offsets align.
+fn mask_code_spans(text: &str) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if i + 2 < n && bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
+            let start = i;
+            i += 3;
+            while i + 2 < n && !(bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`') {
+                i += 1;
+            }
+            let end = if i + 2 < n { i + 3 } else { n };
+            for b in &mut bytes[start..end] {
+                if *b != b'\n' {
+                    *b = b' ';
+                }
+            }
+            i = end;
+        } else if bytes[i] == b'`' {
+            let start = i;
+            i += 1;
+            while i < n && bytes[i] != b'`' && bytes[i] != b'\n' {
+                i += 1;
+            }
+            if i < n && bytes[i] == b'`' {
+                let end = i + 1;
+                for b in &mut bytes[start..end] {
+                    *b = b' ';
+                }
+                i = end;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
+}
+
 /// Extract every skill identifier the text *explicitly* refers to via an
 /// `@`-mention, returning borrowed slices into `text`. The three forms all
 /// collapse to the bare name:
@@ -150,10 +190,28 @@ fn is_name_char(c: char) -> bool {
 /// collisions cannot inflate matches.
 fn at_mention_names(text: &str) -> std::collections::HashSet<&str> {
     let mut names = std::collections::HashSet::new();
+    let masked = mask_code_spans(text);
     let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find('@') {
+    while let Some(rel) = masked[search_from..].find('@') {
         let at = search_from + rel;
         let after_at = at + 1;
+
+        // 1. Backslash escape: \@skill:... is literal text
+        if at > 0 && text.as_bytes()[at - 1] == b'\\' {
+            search_from = after_at;
+            continue;
+        }
+
+        // 2. Word boundary check
+        if at > 0 {
+            let prev = text[..at].chars().next_back().unwrap();
+            let is_boundary = prev.is_whitespace() || matches!(prev, '(' | '[' | '{' | '"' | '\'' | '<');
+            if !is_boundary {
+                search_from = after_at;
+                continue;
+            }
+        }
+
         let rest = text.get(after_at..).unwrap_or("");
         // Optional `skill:` / `skills:` namespace prefix.
         let name_start = rest
@@ -182,8 +240,9 @@ fn at_mention_names(text: &str) -> std::collections::HashSet<&str> {
 fn skill_uris(text: &str) -> Vec<String> {
     const SCHEME: &str = "skill://";
     let mut out = Vec::new();
+    let masked = mask_code_spans(text);
     let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find(SCHEME) {
+    while let Some(rel) = masked[search_from..].find(SCHEME) {
         let start = search_from + rel + SCHEME.len();
         let mut end = start;
         while let Some(ch) = text[end..].chars().next()
@@ -283,6 +342,23 @@ mod tests {
         let skills = vec![sample_skill("rust-expert"), sample_skill("pdf")];
         let mentions = resolve_mentions("use @skill:rust-expert and @skills:pdf here", &skills);
         assert_eq!(mentions.len(), 2);
+    }
+
+    #[test]
+    fn parses_escaped_and_code_spans() {
+        let skills = vec![sample_skill("rust-expert")];
+        // Backslash escaped
+        assert!(resolve_mentions(r"use \@skill:rust-expert here", &skills).is_empty());
+        // Inline code span
+        assert!(resolve_mentions("use `@skill:rust-expert` here", &skills).is_empty());
+        assert!(resolve_mentions("use `skill://rust-expert` here", &skills).is_empty());
+        // Non-word-boundary
+        assert!(resolve_mentions("foo@skill:rust-expert", &skills).is_empty());
+        // Valid boundary
+        assert_eq!(
+            resolve_mentions("(@skill:rust-expert)", &skills).len(),
+            1
+        );
     }
 
     #[test]

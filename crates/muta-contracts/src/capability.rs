@@ -51,7 +51,7 @@ impl ProviderTurnContext {
 /// Configured per model id under `[tool_variants."<model-id>"]` in
 /// `config.toml`; the agent selects the map matching `Provider::model()`.
 /// Subagent profiles carry their own static selection (see
-/// [`crate::SubagentPreset::variant_pins`]).
+/// [`crate::SubAgentProfile::variant_pins`]).
 pub type VariantSelection = HashMap<String, String>;
 
 /// Narrow prompt hints exposed by a concrete provider implementation.

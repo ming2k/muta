@@ -23,7 +23,7 @@ use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round
 use muta_agent::{Agent, AgentIdentity, AgentRoleProfile, RoundLifecycle, SubagentTool};
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, Message, NoticeKind, NoticeSeverity, NoticeSource,
-    NoticeSurface, Provider, RoundEvent, SUBAGENT_EXPLORE, ToolContextBuilder, ToolSet,
+    NoticeSurface, Provider, RoundEvent, SubAgentProfile, ToolContextBuilder, ToolSet,
     WorkspaceTrustState, collect_toolset,
 };
 
@@ -491,12 +491,12 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     // SubagentTool gets the static capability set (excluding itself) so spawned
     // subagents cannot recurse and inherit the live provider. Dynamic connector
     // sources are master-only unless a future policy explicitly delegates
-    // them. It binds the SUBAGENT_EXPLORE profile (read-only / non-interactive /
+    // them. It binds the SubAgentProfile::EXPLORE profile (read-only / non-interactive /
     // non-recursive).
     let subagent_tool = Arc::new(SubagentTool::new(
         agent_provider.clone(),
         toolset.clone(),
-        &SUBAGENT_EXPLORE,
+        &SubAgentProfile::EXPLORE,
     ));
     // Subagents resolve relative write-grants against the session's project
     // root, not the daemon process's cwd (ADR-0096).

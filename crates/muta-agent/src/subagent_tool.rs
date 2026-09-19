@@ -6,7 +6,7 @@
 //! concern, not a domain-tool concern. The other tools (Bash/Read/Web/…)
 //! stay in [`crate::tools`] and remain pure trait implementations.
 //!
-//! Admission of tools to the subagent is driven by [`muta_contracts::SUBAGENT_EXPLORE`]
+//! Admission of tools to the subagent is driven by [`muta_contracts::SubAgentProfile::EXPLORE`]
 //! — the single source of truth for the read-only / non-interactive /
 //! non-recursive policy. See ADR-0011.
 
@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use muta_contracts::{SubagentPreset, Tool};
+use muta_contracts::{SubAgentProfile, Tool};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -33,31 +33,26 @@ pub const SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
 /// instead of being silently treated as the bound default (ADR-0179's
 /// "actionable diagnostics for mode errors").
 ///
-/// Deliberately narrower than [`muta_contracts::SubagentPresetPool::ALL`]:
+/// Deliberately narrower than [`muta_contracts::SubAgentProfile::ALL`]:
 /// `title` is a harness-internal role (session titling drives it directly
 /// through the cognitive pipeline) and must not become spawnable just because
 /// it lives in the same pool.
-pub const DISPATCH_ROLES: &[&str] = &["explore", "code", "skill"];
+pub const DISPATCH_ROLES: &[&str] = &["explore", "debug", "skill"];
 
 /// Canonical description of the default `spawn_agent` dispatch tool (ADR-0183).
 pub const SPAWN_AGENT_TOOL_DESCRIPTION: &str = "\
 Spawn an isolated child agent to perform a focused subtask in a separate \
 context window and return a consolidated summary. Set 'role' to 'explore' for read-only \
-research (default), 'code' for full implementation and testing, or 'skill' for skill \
-discovery, inspection, and domain guideline synthesis.";
+research (default), 'debug' for non-interactive diagnosis and root-cause analysis, \
+or 'skill' for skill discovery, inspection, and domain guideline synthesis.";
 
-/// Canonical description of the write-capable `delegate_code` dispatch tool.
-pub const DELEGATE_CODE_TOOL_DESCRIPTION: &str = "\
-Delegate a well-scoped software-engineering task to a child agent that \
-implements the change end to end — it reads the relevant code, edits files, \
-and runs builds/tests/git, then returns a technically complete summary of what \
-it changed and how it verified the change. Use it for substantial, \
-self-contained implementation work you want isolated in its own context \
-window. Unlike the read-only child agent, this one CAN modify files and run \
-commands — but every write and command it attempts is presented to the user \
-for approval before it executes, just like a top-level call. Do not use it \
-for trivial edits you can make directly, and once it is running, leave the \
-scope to it (do not redo its work in parallel).";
+/// Canonical description of the diagnostic `delegate_debug` dispatch tool.
+pub const DELEGATE_DEBUG_TOOL_DESCRIPTION: &str = "\
+Delegate a defect, crash, or test failure investigation to a child agent that \
+runs builds, tests, and non-interactive diagnostics (e.g. gdb -batch, sanitizers) \
+in an isolated context window, then returns a structured root-cause analysis and \
+proposed fix. Unlike the main developer, it has no file-writing tools and will not \
+mutate your workspace.";
 
 /// Retry settings for a subagent, inherited from the session's provider retry configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,23 +126,23 @@ impl SubagentRegistry {
 /// Spawn a read-only exploration subagent to handle a research sub-task.
 ///
 /// The subagent runs the same provider with the tools admitted by the bound
-/// [`SubagentPreset`] (today always [`muta_contracts::SUBAGENT_EXPLORE`]): read-only, non-interactive,
+/// [`SubAgentProfile`] (today always [`SubAgentProfile::EXPLORE`]): read-only, non-interactive,
 /// non-recursive. Its final answer is returned to the calling agent, which
 /// stays in control of any write operations and any questions for the user.
 pub struct SubagentTool {
     provider: Arc<dyn muta_contracts::Provider>,
     toolset: muta_contracts::ToolSet,
-    profile: &'static SubagentPreset,
+    profile: &'static SubAgentProfile,
     /// The tool name the model calls this dispatch tool by. The default (set by
     /// [`SubagentTool::new`]) is `"subagent"` for the read-only research role; a
-    /// second instance bound to a write-capable profile (e.g. [`muta_contracts::SUBAGENT_CODE`]) takes a
-    /// distinct name like `"delegate_code"` so it registers as its own capability
+    /// second instance bound to a diagnostic profile (e.g. [`SubAgentProfile::DEBUG`]) takes a
+    /// distinct name like `"delegate_debug"` so it registers as its own capability
     /// alongside the read-only `subagent`, instead of colliding on the name.
     tool_name: &'static str,
     /// Human-facing description surfaced to the model as the tool's purpose.
-    /// Defaults to the read-only research framing; a write-capable instance
+    /// Defaults to the read-only research framing; a diagnostic instance
     /// passes its own so the model knows it is the delegation path for
-    /// implementation work, not exploration.
+    /// debugging and root-cause analysis, not exploration.
     tool_description: &'static str,
     /// Shared handle to the parent agent's variant selection (the **override**
     /// axis). Bound after the parent agent is built (see
@@ -208,12 +203,12 @@ struct SubagentAccountingContext {
 impl SubagentTool {
     /// `toolset` should be the parent agent's full capability set; `profile`
     /// declares what the spawned subagent may actually use (admission + variant
-    /// pins + framing). The caller binds the role explicitly — `&SUBAGENT_EXPLORE` for
+    /// pins + framing). The caller binds the role explicitly — `&SubAgentProfile::EXPLORE` for
     /// the `spawn_agent` tool.
     pub fn new(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static SubagentPreset,
+        profile: &'static SubAgentProfile,
     ) -> Self {
         Self::named(
             provider,
@@ -229,7 +224,7 @@ impl SubagentTool {
     pub fn with_registry(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static SubagentPreset,
+        profile: &'static SubAgentProfile,
         registry: Arc<SubagentRegistry>,
     ) -> Self {
         Self::named_with_registry(
@@ -243,15 +238,15 @@ impl SubagentTool {
     }
 
     /// Build a dispatch tool under an explicit name and description. This is
-    /// how a second, write-capable subagent dispatch tool is constructed: a
-    /// profile like [`muta_contracts::SUBAGENT_CODE`] is paired with a distinct tool name
-    /// (e.g. `"delegate_code"`) and a description that tells the model this is the
-    /// delegation path for implementation work. The read-only `subagent` tool and
+    /// how a second subagent dispatch tool is constructed: a
+    /// profile like [`SubAgentProfile::DEBUG`] is paired with a distinct tool name
+    /// (e.g. `"delegate_debug"`) and a description that tells the model this is the
+    /// delegation path for debugging and diagnostics. The read-only `subagent` tool and
     /// a named variant coexist as separate capabilities in the parent toolset.
     pub fn named(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static SubagentPreset,
+        profile: &'static SubAgentProfile,
         tool_name: &'static str,
         tool_description: &'static str,
     ) -> Self {
@@ -280,7 +275,7 @@ impl SubagentTool {
     pub fn named_with_registry(
         provider: Arc<dyn muta_contracts::Provider>,
         toolset: muta_contracts::ToolSet,
-        profile: &'static SubagentPreset,
+        profile: &'static SubAgentProfile,
         tool_name: &'static str,
         tool_description: &'static str,
         registry: Arc<SubagentRegistry>,
@@ -444,7 +439,7 @@ impl Tool for SubagentTool {
                 "role": {
                     "type": "string",
                     "enum": DISPATCH_ROLES,
-                    "description": "Optional sub-agent role: 'explore' (default, read-only research), 'code' (coding, file edits, testing), or 'skill' (skill discovery, inspection, and domain guideline synthesis). Defaults to 'explore'."
+                    "description": "Optional sub-agent role: 'explore' (default, read-only research), 'debug' (non-interactive diagnosis and root-cause analysis), or 'skill' (skill discovery, inspection, and domain guideline synthesis). Defaults to 'explore'."
                 }
             },
             "required": ["description", "prompt"]
@@ -615,7 +610,7 @@ impl SubagentTool {
                         self.profile.name
                     ));
                 }
-                muta_contracts::SubagentPresetPool::find(role).ok_or_else(|| {
+                muta_contracts::SubAgentProfile::find(role).ok_or_else(|| {
                     format!(
                         "Role '{role}' is advertised by this dispatch tool but has no preset in \
                          the pool. This is a dispatch-tool configuration error, not a caller \
@@ -690,8 +685,8 @@ impl SubagentTool {
             muta_contracts::ToolSelection::unrestricted().with_variants(self.variant_snapshot());
         let sub_tools = profile.resolve_tools(&self.toolset, &model, &model_sel);
 
-        // The subagent's identity *is* its preset's task prompt — that is the
-        // role framing for this child (e.g. SUBAGENT_EXPLORE's research mission),
+        // The subagent's identity *is* its profile's task prompt — that is the
+        // role framing for this child (e.g. SubAgentProfile::EXPLORE's research mission),
         // while posture (no human interaction, ephemeral scratchpad, depth cap)
         // is enforced by the execution policy below, not by prose.
         let identity = crate::AgentIdentity::from_directive(profile.system_prompt);
@@ -1139,7 +1134,7 @@ impl SubagentTool {
 mod tests {
     use super::*;
     use futures::stream::{self, BoxStream};
-    use muta_contracts::{Message, Provider, ProviderStreamEvent, Role, SUBAGENT_EXPLORE};
+    use muta_contracts::{Message, Provider, ProviderStreamEvent, Role, SubAgentProfile};
 
     struct CannedProvider;
 
@@ -1304,7 +1299,7 @@ mod tests {
     }
     #[test]
     fn subagent_inherits_model_variant_then_applies_profile_scope() {
-        // `StubWriteTool` (name "stub_write") is not in SUBAGENT_EXPLORE's read-only
+        // `StubWriteTool` (name "stub_write") is not in SubAgentProfile::EXPLORE's read-only
         // scope, so it is always excluded; `read_text` has two variants.
         let toolset = muta_contracts::ToolSet::from_tools([
             std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>,
@@ -1314,7 +1309,7 @@ mod tests {
         let tool = SubagentTool::new(
             std::sync::Arc::new(CannedProvider),
             toolset,
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let resolve = |tool: &SubagentTool| {
@@ -1351,7 +1346,7 @@ mod tests {
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let output = tool
@@ -1378,7 +1373,7 @@ mod tests {
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
         tool.bind_retry_policy(1, 10, 10); // only 1 attempt
 
@@ -1401,7 +1396,7 @@ mod tests {
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let output = tool
@@ -1494,7 +1489,7 @@ mod tests {
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         ));
 
         let tool_for_run = tool.clone();
@@ -1557,7 +1552,7 @@ mod tests {
             muta_contracts::ToolSet::from_tools([
                 std::sync::Arc::new(EchoReadTool) as std::sync::Arc<dyn Tool>
             ]),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
         let outcome = tool
             .run_subagent_outcome(
@@ -1577,7 +1572,7 @@ mod tests {
         let system_content = request.instructions.render_combined();
         assert!(
             system_content.starts_with("You are a delegated research subagent"),
-            "system instructions should open with the SUBAGENT_EXPLORE task prompt"
+            "system instructions should open with the SubAgentProfile::EXPLORE task prompt"
         );
         assert!(
             !system_content.contains("Task: find files"),
@@ -1609,7 +1604,7 @@ mod tests {
         let tool = SubagentTool::new(
             std::sync::Arc::new(CannedProvider),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
         assert!(tool.call(r#"{"description":"x"}"#).await.is_err());
         assert!(tool.call(r#"{"prompt":"x"}"#).await.is_err());
@@ -1624,7 +1619,7 @@ mod tests {
         let tool = SubagentTool::new(
             std::sync::Arc::new(CannedProvider),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
         assert!(
             tool.parameters()
@@ -1675,7 +1670,7 @@ mod tests {
         let subagent_tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
@@ -1687,13 +1682,13 @@ mod tests {
 
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let admitted = SUBAGENT_EXPLORE.resolve_tools(&toolset, &model, &model_sel);
+        let admitted = SubAgentProfile::EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let admitted_names: Vec<&str> = admitted.iter().map(|t| t.name()).collect();
 
         assert_eq!(admitted_names, vec!["read_text"]);
     }
 
-    /// Cross-cut regression: `SUBAGENT_EXPLORE` admits only its whitelisted read tools —
+    /// Cross-cut regression: `SubAgentProfile::EXPLORE` admits only its whitelisted read tools —
     /// `ask_user`, the non-whitelisted write stub, and recursion are all
     /// excluded. The read stub is admitted because it is named `read_text`,
     /// which is in [`READ_ONLY_TOOLS`].
@@ -1703,7 +1698,7 @@ mod tests {
         let subagent_tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
@@ -1714,29 +1709,30 @@ mod tests {
             std::sync::Arc::new(subagent_tool),
         ]);
 
-        // SUBAGENT_EXPLORE: only the whitelisted read tool survives (bash, ask_user,
+        // SubAgentProfile::EXPLORE: only the whitelisted read tool survives (bash, ask_user,
         // the write stub, and recursion are all excluded).
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let explore_selected = SUBAGENT_EXPLORE.resolve_tools(&toolset, &model, &model_sel);
+        let explore_selected = SubAgentProfile::EXPLORE.resolve_tools(&toolset, &model, &model_sel);
         let explore_names: Vec<&str> = explore_selected.iter().map(|t| t.name()).collect();
         assert_eq!(explore_names, vec!["read_text"]);
     }
 
-    /// A write-capable `delegate_code` tool (bound to [`muta_contracts::SUBAGENT_CODE`])
-    /// admits the edit surface a coder needs. Built with the real tools the
+    /// A diagnostic `delegate_debug` tool (bound to [`muta_contracts::SubAgentProfile::DEBUG`])
+    /// admits read tools and command execution/process tools, but strictly excludes
+    /// workspace writes, human interaction, and recursion. Built with the real tools the
     /// harness registers so a future capability regression is caught here —
     /// mirrors `explore_profile_excludes_bash_writes_user_and_recursion` for
     /// the inverse contract.
     #[test]
-    fn code_profile_admits_edit_surface_using_real_tools() {
+    fn debug_profile_admits_command_and_read_tools_excluding_writes_and_recursion() {
         let provider: std::sync::Arc<dyn Provider> = std::sync::Arc::new(CannedProvider);
-        let delegate_code_arc = std::sync::Arc::new(SubagentTool::named(
+        let delegate_debug_arc = std::sync::Arc::new(SubagentTool::named(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &muta_contracts::SUBAGENT_CODE,
-            "delegate_code",
-            "coding subagent",
+            &muta_contracts::SubAgentProfile::DEBUG,
+            "delegate_debug",
+            "debugging subagent",
         ));
 
         let toolset = muta_contracts::ToolSet::from_tools(vec![
@@ -1745,26 +1741,27 @@ mod tests {
             std::sync::Arc::new(crate::tools::WriteFileTool::new(None)),
             std::sync::Arc::new(crate::tools::EditTextTool::new(None)),
             std::sync::Arc::new(crate::tools::AskUserTool),
-            delegate_code_arc.clone() as std::sync::Arc<dyn Tool>,
+            delegate_debug_arc.clone() as std::sync::Arc<dyn Tool>,
         ]);
 
-        // SUBAGENT_CODE admits bash, write_file, edit_text, and the read tools; it
-        // excludes the subagent dispatch tool itself (recursion).
+        // SubAgentProfile::DEBUG admits bash (run_command) and the read tools; it
+        // strictly excludes write_file, edit_text, ask_user, and the subagent dispatch tool itself (recursion).
         let model = muta_contracts::resolve_model(&CannedProvider.model());
         let model_sel = muta_contracts::ToolSelection::unrestricted();
-        let selected = muta_contracts::SUBAGENT_CODE.resolve_tools(&toolset, &model, &model_sel);
+        let selected = muta_contracts::SubAgentProfile::DEBUG.resolve_tools(&toolset, &model, &model_sel);
         let names: std::collections::HashSet<&str> = selected.iter().map(|t| t.name()).collect();
         assert!(names.contains("read_text"));
         assert!(names.contains("run_command"));
-        assert!(names.contains("write_file"));
-        assert!(names.contains("edit_text"));
+        assert!(!names.contains("write_file"));
+        assert!(!names.contains("edit_text"));
+        assert!(!names.contains("ask_user"));
         assert!(
-            !names.contains("delegate_code"),
+            !names.contains("delegate_debug"),
             "recursion must be excluded"
         );
 
         // The tool surfaces under its own name.
-        assert_eq!(delegate_code_arc.name(), "delegate_code");
+        assert_eq!(delegate_debug_arc.name(), "delegate_debug");
     }
 
     /// Two dispatch tools sharing one registry is the load-bearing property
@@ -1778,28 +1775,45 @@ mod tests {
         let explore = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
         let shared = explore.registry();
-        let code = SubagentTool::named_with_registry(
+        let debug = SubagentTool::named_with_registry(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &muta_contracts::SUBAGENT_CODE,
-            "delegate_code",
-            "coding subagent",
+            &muta_contracts::SubAgentProfile::DEBUG,
+            "delegate_debug",
+            "debugging subagent",
             shared.clone(),
         );
         // Same Arc<SubagentRegistry> — the driver hands one to the harness, and
         // children of either tool land in the same table.
         assert!(
-            std::sync::Arc::ptr_eq(&explore.registry(), &code.registry()),
+            std::sync::Arc::ptr_eq(&explore.registry(), &debug.registry()),
             "named_with_registry must share the registry, not clone-allocate"
         );
         // The two tools are distinct capabilities (different names) so they
         // coexist in a parent toolset without one shadowing the other.
-        assert_ne!(explore.name(), code.name());
+        assert_ne!(explore.name(), debug.name());
         assert_eq!(explore.name(), "spawn_agent");
-        assert!(!explore.matches_name("delegate_code"));
+        assert!(!explore.matches_name("delegate_debug"));
+    }
+
+    #[tokio::test]
+    async fn debug_subagent_role_execution() {
+        let provider = std::sync::Arc::new(CannedProvider);
+        let tool = SubagentTool::new(
+            provider.clone(),
+            muta_contracts::ToolSet::default(),
+            &SubAgentProfile::EXPLORE,
+        );
+
+        let summary = tool
+            .call(r#"{"description":"debug crash","prompt":"investigate segfault in parser","role":"debug"}"#)
+            .await
+            .expect("debug subagent dispatch succeeds");
+
+        assert_eq!(summary, "found 3 relevant files");
     }
 
     #[tokio::test]
@@ -1808,7 +1822,7 @@ mod tests {
         let tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let summary = tool
@@ -1830,7 +1844,7 @@ mod tests {
         let tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let error = tool
@@ -1853,7 +1867,7 @@ mod tests {
         let tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let error = tool
@@ -1871,7 +1885,7 @@ mod tests {
         let tool = SubagentTool::new(
             std::sync::Arc::new(CannedProvider),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         let advertised: Vec<String> = tool.parameters()["properties"]["role"]["enum"]
@@ -1895,7 +1909,7 @@ mod tests {
         // Every advertised role must resolve to a real preset.
         for role in DISPATCH_ROLES {
             assert!(
-                muta_contracts::SubagentPresetPool::find(role).is_some(),
+                muta_contracts::SubAgentProfile::find(role).is_some(),
                 "advertised role '{role}' has no preset"
             );
         }
@@ -1907,7 +1921,7 @@ mod tests {
         let tool = SubagentTool::new(
             provider.clone(),
             muta_contracts::ToolSet::default(),
-            &SUBAGENT_EXPLORE,
+            &SubAgentProfile::EXPLORE,
         );
 
         // Max depth is 1, current depth is already 1 (child trying to spawn grandchild)

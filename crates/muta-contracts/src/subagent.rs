@@ -33,7 +33,7 @@
 //! `spawns_subagent` is never admitted, regardless of profile. User
 //! interaction is a per-profile knob ([`ToolPolicy::allow_user_interaction`])
 //! so a future interactive role could opt in once the plumbing surfaces the
-//! request; the built-in [`SUBAGENT_EXPLORE`] profile leaves it off.
+//! request; the built-in [`SubAgentProfile::EXPLORE`] profile leaves it off.
 
 use std::sync::Arc;
 
@@ -72,10 +72,10 @@ impl ToolPolicy {
     /// expressible as a capability *name* scope, so the pool resolver (which
     /// handles name scope + the model-capability filter) cannot apply them — the
     /// subagent resolution applies this as a post-filter. See
-    /// [`SubagentPreset::resolve_tools`].
+    /// [`SubAgentProfile::resolve_tools`].
     pub fn admits_runtime(&self, tool: &dyn Tool) -> bool {
         // Recursion is unconditionally forbidden in child sub-agents.
-        if tool.spawns_subagent() || tool.spawns_subagent() {
+        if tool.spawns_subagent() {
             return false;
         }
         // Control-flow tools (e.g. the abort/exit escape hatch) are
@@ -103,14 +103,12 @@ impl ToolPolicy {
     }
 }
 
-/// A declarative subagent role: a name, the system-prompt fragment that
+/// A declarative subagent role profile: a name, the system-prompt fragment that
 /// frames the role, and the [`ToolPolicy`] that scopes what it may touch.
 ///
-/// Profiles live in `muta-contracts` (domain vocabulary) so dispatch tools in
-/// `muta-agent` resolve them without re-implementing admission logic. The
-/// built-in [`SUBAGENT_EXPLORE`] profile is what `task` binds to today.
+/// Symmetric with [`crate::MainAgentProfile`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SubagentPreset {
+pub struct SubAgentProfile {
     pub name: &'static str,
     pub system_prompt: &'static str,
     pub tool_policy: ToolPolicy,
@@ -136,7 +134,7 @@ pub struct SubagentPreset {
     pub allow_model_stdin: bool,
 }
 
-impl SubagentPreset {
+impl SubAgentProfile {
     /// This profile's [`ToolSelection`] — the agent-identity selector it hands
     /// the pool: the capability **name scope** from its [`ToolPolicy`], plus its
     /// own variant pins (the **override** axis, agent side). Built-in profiles
@@ -181,7 +179,7 @@ impl SubagentPreset {
     }
 }
 
-/// Tools a read-only subagent (SUBAGENT_EXPLORE / REVIEW / SUBAGENT_TITLE) may use: pure
+/// Tools a read-only subagent may use: pure
 /// inspection with no side effects. Listed by name so adding a new
 /// side-effecting tool to the parent never silently widens these profiles.
 const READ_ONLY_TOOLS: &[&str] = &[
@@ -195,14 +193,35 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "search_web",
 ];
 
-/// The built-in read-only research role used by `task`.
+/// Tools a debugging subagent may use: the generic read-only inspection tools
+/// plus non-interactive command execution and
+/// process inspection tools (`run_command`, `process`) for compiling, reproducing,
+/// testing, and running diagnostics.
 ///
-/// Read-only, non-interactive, non-recursive. This is the profile the `task`
-/// tool binds to; declaring additional profiles (and exposing a role selector
-/// on `task`) is a future extension that needs no changes here.
-pub const SUBAGENT_EXPLORE: SubagentPreset = SubagentPreset {
-    name: "explore",
-    system_prompt: "\
+/// Crucially, `edit_text` and `write_file` are strictly excluded from this profile
+/// so that a debugging subagent cannot mutate workspace files or attempt code changes;
+/// its job is strictly forensic diagnosis, root-cause analysis (RCA), and reporting
+/// recommended patches back to the parent developer.
+const DEBUG_TOOLS: &[&str] = &[
+    // Generic read-only inspection.
+    "read_text",
+    "read_image",
+    "find_files",
+    "list_dir",
+    "search_text",
+    "code_query",
+    "read_url",
+    "search_web",
+    // Execution and process observation for builds, tests, gdb, sanitizers.
+    "run_command",
+    "process",
+];
+
+impl SubAgentProfile {
+    /// The built-in read-only research role.
+    pub const EXPLORE: Self = SubAgentProfile {
+        name: "explore",
+        system_prompt: "\
 You are a delegated research subagent. Your single job is to answer the assigned \
 task accurately and concisely. Explore the workspace or the web as needed, \
 then write a clear, complete final answer with the key findings (file paths, \
@@ -212,129 +231,82 @@ You are non-interactive: never ask the user any \
 question — if information is missing, make a reasonable assumption, note it \
 explicitly in your answer, or report that you could not find it. Run at most a \
 handful of turns, then answer.",
-    tool_policy: ToolPolicy {
-        allowed_tools: Some(READ_ONLY_TOOLS),
-        allow_user_interaction: false,
-    },
-    variant_pins: &[],
-    unattended: true,
-    allow_model_stdin: false,
-};
+        tool_policy: ToolPolicy {
+            allowed_tools: Some(READ_ONLY_TOOLS),
+            allow_user_interaction: false,
+        },
+        variant_pins: &[],
+        unattended: true,
+        allow_model_stdin: false,
+    };
 
-/// The session-titling role (ADR-0022). Read-only and non-interactive, its
-/// task is pure text-in/text-out — it admits no tool loop at all. The
-/// digest generator makes a single `provider.chat()`
-/// through the cognitive pipeline and normalizes the title via
-/// `clean_title`. Declared as a profile (not an ad-hoc call) so the
-/// capability-axis vocabulary stays the single source of truth for what a
-/// bounded subagent may do, per ADR-0011.
-pub const SUBAGENT_TITLE: SubagentPreset = SubagentPreset {
-    name: "title",
-    system_prompt: "\
+    /// The session-titling role (ADR-0022). Read-only and non-interactive, its
+    /// task is pure text-in/text-out — it admits no tool loop at all.
+    pub const TITLE: Self = SubAgentProfile {
+        name: "title",
+        system_prompt: "\
 You are a session-titling subagent. You are shown an excerpt of a conversation \
 and asked for a short title that captures what the session is about. Reply with \
 only the title — 3 to 7 words, plain text, no quotes, no markdown, no trailing \
 punctuation, no preamble. Name the concrete subject of the work (a feature, \
 file, bug, or task) rather than a generic word like \"chat\" or \"help\". Write \
 the title in the same language as the conversation.",
-    tool_policy: ToolPolicy {
-        allowed_tools: Some(READ_ONLY_TOOLS),
-        allow_user_interaction: false,
-    },
-    variant_pins: &[],
-    unattended: true,
-    allow_model_stdin: false,
-};
+        tool_policy: ToolPolicy {
+            allowed_tools: Some(READ_ONLY_TOOLS),
+            allow_user_interaction: false,
+        },
+        variant_pins: &[],
+        unattended: true,
+        allow_model_stdin: false,
+    };
 
-/// Tools a coding subagent may use: the generic read-only inspection tools
-/// (shared with [`SUBAGENT_EXPLORE`]) plus the workspace-mutating tools —
-/// `run_command` for
-/// running builds/tests/git, `edit_text` and `write_file` for code, and the
-/// `todo*` pair so a long delegation can track its own progress. Listed by
-/// name so adding a new side-effecting tool to the parent never silently
-/// widens this profile — the only tools a SUBAGENT_CODE subagent can touch are the ones
-/// enumerated here. Recursion (`spawn_agent`) and control-flow escapes are excluded
-/// absolutely by [`ToolPolicy::admits_runtime`], independent of this list.
-const CODING_TOOLS: &[&str] = &[
-    // Generic read-only inspection (shared with SUBAGENT_EXPLORE).
-    "read_text",
-    "read_image",
-    "find_files",
-    "list_dir",
-    "search_text",
-    "read_url",
-    "search_web",
-    // Workspace mutation — the code-editing surface.
-    "run_command",
-    "edit_text",
-    "write_file",
-    // Self-contained task tracking (the subagent's own todo list, not the
-    // parent's).
-    "todo",
-];
+    /// The debugging subagent role. Unlike `EXPLORE` (pure static read-only),
+    /// this subagent is granted non-interactive execution authority (`run_command` and
+    /// `process`) so it can reproduce defects, run test suites, execute batch debuggers
+    /// (e.g. `gdb -batch`), and capture sanitizer diagnostics (ASan, UBSan, Valgrind)
+    /// in an isolated context window.
+    pub const DEBUG: Self = SubAgentProfile {
+        name: "debug",
+        system_prompt: "\
+You are a delegated debugging and root-cause analysis subagent. You are handed \
+a defect, test failure, crash, compiler error, or anomalous behaviour: your \
+mission is to isolate the reproduction, investigate execution traces, and \
+identify the root cause without polluting the parent's context with voluminous \
+terminal or diagnostic logs. \
+The toolset handed to you is the full set you are permitted to use — work \
+within it, do not request others. You have inspection tools and non-interactive \
+command execution (`run_command`, `process`), but NO file-editing permissions. \
+Your role is strictly forensic diagnosis, hypothesis testing, and solution design. \
+Key operational guidelines: \
+1. Form explicit hypotheses and test them systematically using non-interactive \
+   builds, tests, sanitizers (ASan/UBSan/TSan), GDB/LLDB batch mode \
+   (e.g., `gdb -batch -ex run -ex \"bt full\"`), or minimal repro commands. \
+2. The shell environment is non-interactive: never run commands that block on \
+   TTY/stdin or wait for user input. \
+3. Keep the parent agent's context clean: do not dump raw multi-megabyte \
+   stack traces or verbose build logs into your final reply. Synthesize findings \
+   into an actionable, high-signal report. \
+4. All your messages come from the parent agent, which cannot see your \
+   working context. Your final answer is the complete handoff to the parent \
+   developer. Structure your report clearly: \
+   - Symptom & Reproduction: Command or conditions to reproduce, plus key error signature. \
+   - Root-Cause Analysis (RCA): Exact file, line, and technical explanation of why the failure occurs. \
+   - Verification Evidence: How you validated the root cause (e.g. sanitizer frame, reproduction log). \
+   - Proposed Fix: The recommended diff or concrete code modifications for the parent developer to apply. \
+Run at most a handful of focused turns, then answer.",
+        tool_policy: ToolPolicy {
+            allowed_tools: Some(DEBUG_TOOLS),
+            allow_user_interaction: false,
+        },
+        variant_pins: &[],
+        unattended: true,
+        allow_model_stdin: false,
+    };
 
-/// The coding subagent role. Unlike [`SUBAGENT_EXPLORE`] (read-only, autonomous), this is
-/// a **write-capable** sub-agent: it can edit files and run commands to
-/// implement a delegated task end-to-end, then hand back a technically
-/// complete summary. It is the analogue of kimi-code's `coder` subagent.
-///
-/// Like every built-in subagent, the role is **autonomous** (`delegated: true`):
-/// the principal's act of delegating a task via the `delegate_code` tool *is* the
-/// authorization — the child runs its writes and commands on its own authority,
-/// without routing each one back through the permission broker. The broker
-/// (the TUI permission sheet, `/permissions`, the `Always` allowlist) is the
-/// principal's gate, not the subagent's: it gates the top-level call that spawns
-/// the subagent, and the principal stays accountable for the result via the
-/// subagent's final handoff. See ADR-0087.
-/// - `allow_user_interaction: true` admits `ask_user` (and any future
-///   approval-gated tool), so an ambiguous requirement can be surfaced rather
-///   than guessed; that path still uses the full-duplex channel
-///   ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)).
-/// - `delegated: true` keeps the broker off for the child's writes/commands,
-///   matching every other built-in profile.
-///
-/// ADR-0086 originally shipped this profile with an attended posture (every
-/// write/command user-approved); ADR-0087 reverses that to keep the
-/// delegation-as-authorization contract uniform across subagents.
-///
-/// This is the built-in profile with side effects that a dispatch tool can bind to
-/// for delegated *implementation* work. The read-only research contract of
-/// [`SUBAGENT_EXPLORE`] is untouched.
-pub const SUBAGENT_CODE: SubagentPreset = SubagentPreset {
-    name: "code",
-    system_prompt: "\
-You are a delegated implementation subagent. You are handed a well-scoped software-engineering \
-task: implement the change end to end. Read the relevant code first, then edit \
-files and run commands (builds, tests, git) to land the change and verify it. \
-Prefer the narrowest change that satisfies the task, and run commands only \
-when they advance the work. The toolset handed \
-to you is the full set you are permitted to use — work within it, do not \
-request others. All your `user` messages come from the parent agent, which \
-cannot see your working context — it sees only your final message. Treat the \
-parent as your caller: do not address the end user directly. Your final \
-answer is the entire handoff, so make it technically complete — what you \
-changed and why, the path of every file you touched, how you verified the \
-change (tests or commands run, with results), and anything left undone. A \
-final message of only a sentence or two is too brief. Run at most a handful \
-of turns, then answer.",
-    tool_policy: ToolPolicy {
-        allowed_tools: Some(CODING_TOOLS),
-        allow_user_interaction: true,
-    },
-    variant_pins: &[],
-    unattended: true,
-    allow_model_stdin: false,
-};
-
-/// The MCP specialist subagent role for running external and dynamic MCP tools
-/// The skill discovery and domain expertise subagent role.
-///
-/// Specialized in dynamically locating, inspecting, and synthesizing guidelines,
-/// rules, workflows, and procedures from available project and user skills (`SKILL.md`)
-/// on demand without cluttering the parent agent's persistent system prompt.
-pub const SUBAGENT_SKILL: SubagentPreset = SubagentPreset {
-    name: "skill",
-    system_prompt: "\
+    /// The skill discovery and domain expertise subagent role.
+    pub const SKILL: Self = SubAgentProfile {
+        name: "skill",
+        system_prompt: "\
 You are a skill-discovery subagent. Your role is to locate, \
 inspect, and synthesize specialized instructions and procedures from available \
 skills (project-local `.muta/skills/`, user-global `~/.local/share/muta/skills/`, \
@@ -343,49 +315,36 @@ relevant `SKILL.md` documents and associated reference files, extract the concre
 rules, tool sequences, edge cases, and best practices, and return an actionable, \
 well-structured domain briefing to the calling agent. Do not modify files or ask \
 questions of the user; focus strictly on skill discovery and instruction synthesis.",
-    tool_policy: ToolPolicy {
-        allowed_tools: Some(READ_ONLY_TOOLS),
-        allow_user_interaction: false,
-    },
-    variant_pins: &[],
-    unattended: true,
-    allow_model_stdin: false,
-};
+        tool_policy: ToolPolicy {
+            allowed_tools: Some(READ_ONLY_TOOLS),
+            allow_user_interaction: false,
+        },
+        variant_pins: &[],
+        unattended: true,
+        allow_model_stdin: false,
+    };
 
-impl SubagentPreset {
-    pub const EXPLORE: Self = SUBAGENT_EXPLORE;
-    pub const CODE: Self = SUBAGENT_CODE;
-    pub const TITLE: Self = SUBAGENT_TITLE;
-    pub const SKILL: Self = SUBAGENT_SKILL;
-}
-
-/// The pool of subagent presets available for master delegation.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SubagentPresetPool;
-
-impl SubagentPresetPool {
-    /// Static catalog of all built-in subagent presets.
-    pub const ALL: &'static [&'static SubagentPreset] = &[
-        &SUBAGENT_EXPLORE,
-        &SUBAGENT_TITLE,
-        &SUBAGENT_CODE,
-        &SUBAGENT_SKILL,
+    /// Static catalog of all built-in subagent profiles.
+    pub const ALL: &'static [&'static SubAgentProfile] = &[
+        &Self::EXPLORE,
+        &Self::TITLE,
+        &Self::DEBUG,
+        &Self::SKILL,
     ];
 
-    /// Find a subagent preset by name.
-    pub fn find(name: &str) -> Option<&'static SubagentPreset> {
+    /// Find a subagent profile by name.
+    pub fn find(name: &str) -> Option<&'static SubAgentProfile> {
         Self::ALL.iter().copied().find(|p| p.name == name)
     }
 
-    /// List all available preset names in the pool.
+    /// List all available profile names in the catalog.
     pub fn names() -> Vec<&'static str> {
         Self::ALL.iter().map(|p| p.name).collect()
     }
-
-    /// Filter subagent presets admitted by an agent delegation policy.
+    /// Filter subagent profiles admitted by an agent delegation policy.
     pub fn admitted_for_delegation(
         delegation: &crate::AgentRoleDelegation,
-    ) -> Vec<&'static SubagentPreset> {
+    ) -> Vec<&'static SubAgentProfile> {
         Self::ALL
             .iter()
             .copied()
@@ -468,18 +427,18 @@ mod tests {
 
     #[test]
     fn explore_admits_a_whitelisted_read_tool() {
-        assert!(SUBAGENT_EXPLORE.tool_policy.admits(&make("read_text")));
-        assert!(SUBAGENT_EXPLORE.tool_policy.admits(&make("search_text")));
+        assert!(SubAgentProfile::EXPLORE.tool_policy.admits(&make("read_text")));
+        assert!(SubAgentProfile::EXPLORE.tool_policy.admits(&make("search_text")));
     }
 
     #[test]
     fn explore_rejects_a_non_whitelisted_tool() {
         // write_file is not in READ_ONLY_TOOLS — a research explorer must not
         // mutate files.
-        assert!(!SUBAGENT_EXPLORE.tool_policy.admits(&make("write_file")));
+        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("write_file")));
         // Command execution is also not whitelisted.
         assert!(
-            !SUBAGENT_EXPLORE
+            !SubAgentProfile::EXPLORE
                 .tool_policy
                 .admits(&make("execute_command"))
         );
@@ -487,10 +446,8 @@ mod tests {
 
     #[test]
     fn explore_rejects_a_whitelisted_tool_that_requires_user() {
-        // ask_user is not whitelisted, but even a whitelisted name is rejected
-        // when requires_user is set and the profile disallows interaction.
         assert!(
-            !SUBAGENT_EXPLORE
+            !SubAgentProfile::EXPLORE
                 .tool_policy
                 .admits(&with_user(make("read_text")))
         );
@@ -498,10 +455,8 @@ mod tests {
 
     #[test]
     fn explore_rejects_dispatch_tool_even_if_named_like_a_read() {
-        // Recursion is absolute: even a whitelisted name is excluded when it
-        // spawns a subagent.
         assert!(
-            !SUBAGENT_EXPLORE
+            !SubAgentProfile::EXPLORE
                 .tool_policy
                 .admits(&with_spawn(make("read_text")))
         );
@@ -509,7 +464,7 @@ mod tests {
 
     #[test]
     fn explore_rejects_control_flow_tool() {
-        assert!(!SUBAGENT_EXPLORE.tool_policy.admits(&make_control()));
+        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make_control()));
     }
 
     #[test]
@@ -531,9 +486,6 @@ mod tests {
         assert!(!permissive.admits(&make_control()));
     }
 
-    /// A test model (vision-capable; the Stub tools require no vision, so the
-    /// model-capability filter is a no-op here — this test isolates the scope +
-    /// runtime-rule composition).
     fn test_model() -> Model {
         Model {
             id: "test",
@@ -550,16 +502,13 @@ mod tests {
 
     #[test]
     fn resolve_tools_applies_scope_and_runtime_rules() {
-        // `search_text` is whitelisted; command execution is dropped
-        // by scope. `read_text` is whitelisted *but spawns a subagent* → dropped
-        // by the runtime recursion rule despite passing the name scope.
         let toolset = ToolSet::from_tools(vec![
             Arc::new(make("search_text")) as Arc<dyn Tool>,
             Arc::new(make("execute_command")) as Arc<dyn Tool>,
             Arc::new(with_spawn(make("read_text"))) as Arc<dyn Tool>,
         ]);
         let selected =
-            SUBAGENT_EXPLORE.resolve_tools(&toolset, &test_model(), &ToolSelection::unrestricted());
+            SubAgentProfile::EXPLORE.resolve_tools(&toolset, &test_model(), &ToolSelection::unrestricted());
         let names: Vec<&str> = selected.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["search_text"]);
     }
@@ -575,84 +524,72 @@ mod tests {
         assert!(open.admits(&make("write_file")));
     }
 
-    /// SUBAGENT_EXPLORE (the research role) excludes unlisted tools (e.g. trading,
-    /// write/execute tools). Only explicit READ_ONLY_TOOLS are admitted.
     #[test]
     fn explore_profile_excludes_unlisted_tools() {
-        assert!(!SUBAGENT_EXPLORE.tool_policy.admits(&make("market_data")));
-        assert!(!SUBAGENT_EXPLORE.tool_policy.admits(&make("backtest")));
-        assert!(!SUBAGENT_EXPLORE.tool_policy.admits(&make("place_order")));
-        assert!(!SUBAGENT_EXPLORE.tool_policy.admits(&make("cancel_order")));
-        assert!(!SUBAGENT_EXPLORE.tool_policy.admits(&make("list_positions")));
+        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("market_data")));
+        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("backtest")));
+        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("place_order")));
+        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("cancel_order")));
+        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("list_positions")));
     }
 
-    /// SUBAGENT_CODE is the write-capable coding role. It admits the full edit surface
-    /// (`execute_command`, `edit_text`, `write_file`) and the shared read-only
-    /// tools, but — like
-    /// every subagent — it still excludes recursion and control-flow escapes
-    /// absolutely, and unlisted tools stay out.
     #[test]
-    fn code_profile_admits_edit_surface_but_not_recursion_or_unlisted() {
-        use crate::SUBAGENT_CODE;
-        // Write/execute surface: admitted.
-        assert!(SUBAGENT_CODE.tool_policy.admits(&make("run_command")));
-        assert!(SUBAGENT_CODE.tool_policy.admits(&make("edit_text")));
-        assert!(SUBAGENT_CODE.tool_policy.admits(&make("write_file")));
-        assert!(SUBAGENT_CODE.tool_policy.admits(&make("todo")));
-        // Shared read-only inspection: admitted.
-        assert!(SUBAGENT_CODE.tool_policy.admits(&make("read_text")));
-        assert!(SUBAGENT_CODE.tool_policy.admits(&make("search_text")));
-        // A non-whitelisted tool is excluded (name scope is real — adding a
-        // new tool to the parent never silently widens SUBAGENT_CODE).
-        assert!(!SUBAGENT_CODE.tool_policy.admits(&make("some_new_tool")));
-        assert!(!SUBAGENT_CODE.tool_policy.admits(&make("market_data")));
-        assert!(!SUBAGENT_CODE.tool_policy.admits(&make("place_order")));
-        // Recursion and control-flow remain absolute.
+    fn debug_profile_admits_read_and_command_but_excludes_writes_and_recursion() {
+        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("read_text")));
+        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("search_text")));
+        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("code_query")));
+        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("run_command")));
+        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("process")));
+
+        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("edit_text")));
+        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("write_file")));
+        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("todo")));
+
+        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("some_new_tool")));
+        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("market_data")));
+
         assert!(
-            !SUBAGENT_CODE
+            !SubAgentProfile::DEBUG
                 .tool_policy
                 .admits(&with_spawn(make("run_command")))
         );
-        assert!(!SUBAGENT_CODE.tool_policy.admits(&make_control()));
+        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make_control()));
+
+        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&with_user(make("ask_user"))));
     }
 
-    /// ADR-0087: the principal's act of delegating via `delegate_code` *is* the
-    /// authorization, so SUBAGENT_CODE runs autonomous like every other built-in
-    /// profile — the permission broker is the principal's gate, not the
-    /// subagent's. Pins the value so ADR-0086's attended posture cannot
-    /// silently come back.
-    // The assertion is constant by design: it pins the compiled-in `SUBAGENT_CODE`
-    // profile value (see the doc comment above), not a computed property.
     #[allow(clippy::assertions_on_constants)]
     #[test]
-    fn code_profile_runs_unattended() {
-        use crate::SUBAGENT_CODE;
-        assert!(SUBAGENT_CODE.unattended);
+    fn debug_profile_runs_unattended() {
+        assert!(SubAgentProfile::DEBUG.unattended);
+        assert!(!SubAgentProfile::DEBUG.allow_model_stdin);
     }
 
     #[test]
-    fn subagent_preset_pool_catalog_and_filtering() {
-        assert_eq!(SubagentPresetPool::ALL.len(), 4);
+    fn subagent_profile_catalog_and_filtering() {
+        assert_eq!(SubAgentProfile::ALL.len(), 4);
         assert_eq!(
-            SubagentPresetPool::find("explore").map(|p| p.name),
+            SubAgentProfile::find("explore").map(|p| p.name),
             Some("explore")
         );
         assert_eq!(
-            SubagentPresetPool::find("code").map(|p| p.name),
-            Some("code")
+            SubAgentProfile::find("debug").map(|p| p.name),
+            Some("debug")
         );
         assert_eq!(
-            SubagentPresetPool::find("skill").map(|p| p.name),
+            SubAgentProfile::find("skill").map(|p| p.name),
             Some("skill")
         );
-        assert_eq!(SubagentPresetPool::find("nonexistent"), None);
+        assert_eq!(SubAgentProfile::find("nonexistent"), None);
 
         let dev_delegation = crate::AgentRoleProfile::DEVELOPER;
-        let dev_subagents = SubagentPresetPool::admitted_for_delegation(&dev_delegation);
-        assert_eq!(dev_subagents.len(), 4);
+        let dev_subagents = SubAgentProfile::admitted_for_delegation(&dev_delegation);
+        assert_eq!(dev_subagents.len(), 2);
+        let dev_names: Vec<&str> = dev_subagents.iter().map(|p| p.name).collect();
+        assert_eq!(dev_names, vec!["explore", "debug"]);
 
         let phil_delegation = crate::AgentRoleProfile::PHILOSOPHIST;
-        let phil_subagents = SubagentPresetPool::admitted_for_delegation(&phil_delegation);
+        let phil_subagents = SubAgentProfile::admitted_for_delegation(&phil_delegation);
         assert_eq!(phil_subagents.len(), 1);
         let names: Vec<&str> = phil_subagents.iter().map(|p| p.name).collect();
         assert_eq!(names, vec!["explore"]);

@@ -24,7 +24,7 @@ Background *shell* work is available through `run_command`'s `background` and
 
 Spawns a subagent that inherits the parent's provider, runs isolated in its own
 context, and receives only the tools admitted by the bound preset
-(`SUBAGENT_EXPLORE` by default; `crates/muta-contracts/src/subagent.rs`). Its
+(`SubAgentProfile::EXPLORE` by default; `crates/muta-contracts/src/subagent.rs`). Its
 final answer is returned to the calling agent, which stays in control of
 top-level writes and user interactions. Communication is full-duplex
 ([ADR-0029](../../adr/0029-full-duplex-subagent-communication.md)): a

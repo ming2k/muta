@@ -8,6 +8,7 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
+use crate::subagent::SubAgentProfile;
 use crate::{AgentIdentity, ToolScope, ToolSelection};
 
 /// User-tunable agent runtime behaviour.
@@ -178,11 +179,11 @@ impl AgentRoleProfile {
     }
 
     /// Preset developer policy (associated constant).
-    pub const DEVELOPER: AgentRoleDelegation = AGENT_ROLE_DEVELOPER;
+    pub const DEVELOPER: AgentRoleDelegation = AgentRoleDelegation::DEVELOPER;
     /// Preset philosophist policy (associated constant).
-    pub const PHILOSOPHIST: AgentRoleDelegation = AGENT_ROLE_PHILOSOPHIST;
+    pub const PHILOSOPHIST: AgentRoleDelegation = AgentRoleDelegation::PHILOSOPHIST;
     /// Preset ops policy (associated constant).
-    pub const OPS: AgentRoleDelegation = AGENT_ROLE_OPS;
+    pub const OPS: AgentRoleDelegation = AgentRoleDelegation::OPS;
 }
 
 /// The common contract for any agent role (Main or Sub).
@@ -498,24 +499,25 @@ impl AgentRole for MainAgentRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubAgentRole {
     Explore,
-    Code,
-    Mcp,
+    Debug,
     Skill,
 }
 
 impl SubAgentRole {
     pub const ALL: &[SubAgentRole] = &[
         SubAgentRole::Explore,
-        SubAgentRole::Code,
-        SubAgentRole::Mcp,
+        SubAgentRole::Debug,
         SubAgentRole::Skill,
     ];
+
+    pub const EXPLORE: SubAgentProfile = SubAgentProfile::EXPLORE;
+    pub const DEBUG: SubAgentProfile = SubAgentProfile::DEBUG;
+    pub const SKILL: SubAgentProfile = SubAgentProfile::SKILL;
 
     pub fn as_str(self) -> &'static str {
         match self {
             SubAgentRole::Explore => "explore",
-            SubAgentRole::Code => "code",
-            SubAgentRole::Mcp => "mcp",
+            SubAgentRole::Debug => "debug",
             SubAgentRole::Skill => "skill",
         }
     }
@@ -523,8 +525,7 @@ impl SubAgentRole {
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "explore" => Some(SubAgentRole::Explore),
-            "code" => Some(SubAgentRole::Code),
-            "mcp" => Some(SubAgentRole::Mcp),
+            "debug" => Some(SubAgentRole::Debug),
             "skill" => Some(SubAgentRole::Skill),
             _ => None,
         }
@@ -556,38 +557,24 @@ impl AgentRole for SubAgentRole {
                 "read_url",
                 "search_web",
             ]),
-            SubAgentRole::Code => ToolSelection::only([
+            SubAgentRole::Debug => ToolSelection::only([
                 "read_text",
                 "find_files",
                 "list_dir",
                 "read_image",
                 "search_text",
                 "code_query",
-                "edit_text",
-                "write_file",
                 "run_command",
+                "process",
                 "read_url",
                 "search_web",
             ]),
-            SubAgentRole::Mcp => ToolSelection::unrestricted(),
             SubAgentRole::Skill => {
                 ToolSelection::only(["read_text", "find_files", "list_dir", "search_text"])
             }
         }
     }
 }
-
-/// The developer agent role: native toolchain authority.
-pub const AGENT_ROLE_DEVELOPER: AgentRoleDelegation = AgentRoleDelegation {
-    role_id: "developer",
-    subagent_roles: &[
-        crate::subagent::SUBAGENT_EXPLORE.name,
-        crate::subagent::SUBAGENT_TITLE.name,
-        crate::subagent::SUBAGENT_CODE.name,
-        crate::subagent::SUBAGENT_SKILL.name,
-    ],
-    tool_scope: ToolScope::All,
-};
 
 /// The delegation face of an agent role: which subagents it may load, and the tool scope it declares.
 #[derive(Debug, Clone)]
@@ -603,6 +590,34 @@ pub struct AgentRoleDelegation {
 pub type DelegationPolicy = AgentRoleDelegation;
 
 impl AgentRoleDelegation {
+    /// The developer agent role delegation policy: native toolchain authority.
+    pub const DEVELOPER: AgentRoleDelegation = AgentRoleDelegation {
+        role_id: "developer",
+        subagent_roles: &[
+            SubAgentProfile::EXPLORE.name,
+            SubAgentProfile::DEBUG.name,
+        ],
+        tool_scope: ToolScope::All,
+    };
+
+    /// The philosophist agent role delegation policy: workspace-free philosophical exploration.
+    pub const PHILOSOPHIST: AgentRoleDelegation = AgentRoleDelegation {
+        role_id: "philosophist",
+        subagent_roles: &[SubAgentProfile::EXPLORE.name],
+        tool_scope: ToolScope::All,
+    };
+
+    /// The ops agent role delegation policy: workspace-free system administration and remote operations.
+    pub const OPS: AgentRoleDelegation = AgentRoleDelegation {
+        role_id: "ops",
+        subagent_roles: &[
+            SubAgentProfile::EXPLORE.name,
+            SubAgentProfile::TITLE.name,
+            SubAgentProfile::SKILL.name,
+        ],
+        tool_scope: ToolScope::All,
+    };
+
     /// Whether an agent bound to this role may load the subagent role
     pub fn admits_subagent(&self, name: &str) -> bool {
         self.subagent_roles.contains(&name)
@@ -610,9 +625,9 @@ impl AgentRoleDelegation {
 
     /// All shipping agent role delegations, developer first.
     pub const ALL: &'static [AgentRoleDelegation] = &[
-        AGENT_ROLE_DEVELOPER,
-        AGENT_ROLE_PHILOSOPHIST,
-        AGENT_ROLE_OPS,
+        Self::DEVELOPER,
+        Self::PHILOSOPHIST,
+        Self::OPS,
     ];
 
     pub fn declared_tools(&self) -> Option<&'static [&'static str]> {
@@ -645,24 +660,6 @@ impl AgentRoleDelegation {
         }
     }
 }
-
-/// The philosophist agent role: workspace-free philosophical exploration.
-pub const AGENT_ROLE_PHILOSOPHIST: AgentRoleDelegation = AgentRoleDelegation {
-    role_id: "philosophist",
-    subagent_roles: &[crate::subagent::SUBAGENT_EXPLORE.name],
-    tool_scope: ToolScope::All,
-};
-
-/// The ops agent role: workspace-free system administration and remote operations.
-pub const AGENT_ROLE_OPS: AgentRoleDelegation = AgentRoleDelegation {
-    role_id: "ops",
-    subagent_roles: &[
-        crate::subagent::SUBAGENT_EXPLORE.name,
-        crate::subagent::SUBAGENT_TITLE.name,
-        crate::subagent::SUBAGENT_SKILL.name,
-    ],
-    tool_scope: ToolScope::All,
-};
 
 fn role_directive(text: &str) -> AgentIdentity {
     AgentIdentity::from_directive(text)

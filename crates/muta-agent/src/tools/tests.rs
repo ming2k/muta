@@ -425,16 +425,18 @@ mod tests {
     ///   `process` change already in the tree when this was measured.)
     /// - 1955 (ADR-0246) — `recall_memory` (113) added to the built-in tool
     ///   surface for symmetric role memory recall across sessions.
+    /// - 1983 (ADR-0254, ADR-0256) — `run_command` raw folding bypass option (+18)
+    ///   and `spawn_agent` debug RCA role description (+10).
     #[test]
     fn builtin_tool_surface_stays_within_its_token_budget() {
-        const BUDGET_TOKENS: usize = 1_955;
+        const BUDGET_TOKENS: usize = 1_983;
 
         let ctx = muta_contracts::ToolContextBuilder::new().build();
         let mut tools = muta_contracts::collect_toolset(&ctx).default_view();
         tools.push(std::sync::Arc::new(crate::SubagentTool::new(
             std::sync::Arc::new(crate::NoProvider),
             muta_contracts::ToolSet::default(),
-            &muta_contracts::SUBAGENT_EXPLORE,
+            &muta_contracts::SubAgentProfile::EXPLORE,
         )) as std::sync::Arc<dyn Tool>);
 
         let weights = muta_contracts::ToolSchemaWeights::new();

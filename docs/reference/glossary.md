@@ -39,7 +39,7 @@ The architecture defines the Homogeneous Agent Model (ADR-0183): a single unifie
 |------|------------|
 | **agent** | The sole autonomous execution engine (`Agent`, crate `muta-agent`) and its lifecycle protocol (`AgentRequest` / `AgentResponse` / `AgentEvent` / `AgentOp`). Runs a full ReAct loop, intent reasoning, and tool dispatch. |
 | **root agent** | The top-level agent (`depth = 0`, formerly "master") directly interacting with the user, bound to the session, holding human interaction authority and sub-agent delegation rights. |
-| **sub-agent / child agent** | An isolated agent (`depth > 0`) spawned by a parent agent via `spawn_agent` / `delegate_code` with fresh context, scoped tools, and single-task lifecycle. |
+| **sub-agent / child agent** | An isolated agent (`depth > 0`) spawned by a parent agent via `spawn_agent` with fresh context, scoped tools, and single-task lifecycle. |
 | **hypervisor** | The singleton daemon-level governance station (staffed by an Agent in root posture) orchestrating sessions, multi-session coordination, debug tracing, and global lifecycle. [ADR-0167](../adr/0167-worker-station-agent-model-and-hypervisor.md), [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
 | **cognitive pipeline** | Harness-internal, stateless, zero-tool typed LLM execution pipeline (`CognitiveTask`: stream repetition detection, working memory digest, session titling, pre-flight routing). Zero-tool, fail-open. [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
 | **spatiotemporal aspect engine** | The 5-phase deterministic lifecycle hook engine (PreFlight, TurnIntake, InFlightStream, ToolGating, RoundEol) protecting against trajectory derailment. [ADR-0183](../adr/0183-homogeneous-agent-kernel-and-spatiotemporal-aspect-engine.md) |
@@ -65,7 +65,7 @@ The architecture defines the Homogeneous Agent Model (ADR-0183): a single unifie
 | **sub-agent** | An isolated child agent spawned by a parent agent to investigate or execute a sub-task; shares only the provider, running with fresh history and policy-filtered tools. |
 | **profile / preset** | A declarative bundle (name, system-prompt fragment, and `ToolPolicy`) that scopes a sub-agent's behavior. |
 | **`EXPLORE` profile** | Research role: pure read tools. Bound by `spawn_agent` (`role = "explore"`). |
-| **`CODE` profile** | Coding role: write-capable (admits `execute_command`/`edit_text`/`write_file`). Runs delegated (autonomous) — delegation via `delegate_code` is the authorization. |
+| **`DEBUG` profile** | Diagnostic role: read-only tools plus non-interactive command execution (`run_command`/`process`). Probes and investigates root causes without mutating workspace code. Bound by `spawn_agent(role: "debug")`. |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
 | **full-duplex** | Sub-agents are not fire-and-forget: requests travel up to the parent agent, replies travel down to the child. |
 

@@ -1320,7 +1320,7 @@ impl TranscriptMessage {
         }
         match event {
             // The subagent announced its role — stamp it on the step so the
-            // renderer can draw an `[SUBAGENT_EXPLORE]` / `[PLAN]` role badge in front
+            // renderer can draw an `[explore]` / `[debug]` role badge in front
             // of the summary instead of a generic `[SUBAGENT]`.
             // No child message is produced.
             SubagentEvent::Started { profile: name } => {

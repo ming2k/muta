@@ -61,6 +61,8 @@ impl InputCompletionEngine {
         let query = &input[at_start + 1..cursor_end];
         if is_skill_query(query) {
             self.complete_skills(input, query, at_start, cursor_end)
+        } else if is_file_query(query) {
+            self.complete_files(input, query, at_start, cursor_end).await
         } else if is_explicit_path_prefix(query) {
             self.complete_explicit_path(input, query, at_start, cursor_end)
         } else {
@@ -124,6 +126,55 @@ impl InputCompletionEngine {
         items
     }
 
+    async fn complete_files(
+        &self,
+        input: &str,
+        query: &str,
+        at_start: usize,
+        cursor_end: usize,
+    ) -> Vec<InputCompletion> {
+        let mut items = Vec::new();
+        if query == "file" || query == "files" {
+            items.push(file_namespace_item(input, at_start, cursor_end));
+        }
+
+        let filter = query
+            .strip_prefix("files:")
+            .or_else(|| query.strip_prefix("file:"))
+            .unwrap_or(query);
+
+        let root = self.project_root.clone();
+        let entries = self
+            .project_entries
+            .get_or_init(|| async move {
+                tokio::task::spawn_blocking(move || scan_project_files(&root))
+                    .await
+                    .unwrap_or_default()
+            })
+            .await;
+        let mut path_items = entries
+            .iter()
+            .filter(|path| path_query_match(path, filter))
+            .take(MAX_PATH_COMPLETIONS)
+            .map(|path| {
+                path_item(
+                    input,
+                    path,
+                    at_start,
+                    cursor_end,
+                    if path.ends_with('/') {
+                        InputCompletionKind::PathDir
+                    } else {
+                        InputCompletionKind::PathFile
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        sort_path_completions(&mut path_items);
+        items.extend(path_items);
+        items
+    }
+
     async fn complete_project_and_skills(
         &self,
         input: &str,
@@ -133,8 +184,11 @@ impl InputCompletionEngine {
     ) -> Vec<InputCompletion> {
         let mut items = Vec::new();
 
-        if query.is_empty() && self.skills_registry.is_some() {
-            items.push(skill_namespace_item(input, at_start, cursor_end));
+        if query.is_empty() {
+            items.push(file_namespace_item(input, at_start, cursor_end));
+            if self.skills_registry.is_some() {
+                items.push(skill_namespace_item(input, at_start, cursor_end));
+            }
         }
 
         if let Some(registry) = &self.skills_registry
@@ -419,12 +473,20 @@ pub fn complete_for_frontend_test(
         return Vec::new();
     };
     let query = &input[at_start + 1..cursor_end];
+    let query_filter = query
+        .strip_prefix("files:")
+        .or_else(|| query.strip_prefix("file:"))
+        .unwrap_or(query);
     if is_explicit_path_prefix(query) {
         engine.complete_explicit_path(input, query, at_start, cursor_end)
     } else {
-        let mut items = scan_project_files(&engine.project_root)
+        let mut items = Vec::new();
+        if query == "file" || query == "files" {
+            items.push(file_namespace_item(input, at_start, cursor_end));
+        }
+        let mut file_items = scan_project_files(&engine.project_root)
             .iter()
-            .filter(|path| path_query_match(path, query))
+            .filter(|path| path_query_match(path, query_filter))
             .take(MAX_PATH_COMPLETIONS)
             .map(|path| {
                 path_item(
@@ -440,7 +502,8 @@ pub fn complete_for_frontend_test(
                 )
             })
             .collect::<Vec<_>>();
-        sort_path_completions(&mut items);
+        sort_path_completions(&mut file_items);
+        items.extend(file_items);
         items
     }
 }
@@ -473,6 +536,30 @@ fn is_skill_query(query: &str) -> bool {
         || query.starts_with("skills:")
         || query == "skill"
         || query == "skills"
+}
+
+fn is_file_query(query: &str) -> bool {
+    query.starts_with("file:")
+        || query.starts_with("files:")
+        || query == "file"
+        || query == "files"
+}
+
+fn file_namespace_item(
+    input: &str,
+    at_start_byte: usize,
+    replace_end_byte: usize,
+) -> InputCompletion {
+    InputCompletion {
+        label: "@file:".to_string(),
+        description: "File mention namespace".to_string(),
+        insert_text: "@file:".to_string(),
+        replace_start: input[..at_start_byte].chars().count(),
+        replace_end: input[..replace_end_byte].chars().count(),
+        kind: InputCompletionKind::PathDir,
+        alias_of: None,
+        command: None,
+    }
 }
 
 fn skill_namespace_item(
@@ -539,18 +626,23 @@ fn path_item(
     replace_end_byte: usize,
     kind: InputCompletionKind,
 ) -> InputCompletion {
-    let (replace_start_byte, mut insert_text) = match kind {
-        // A project directory keeps the `@` trigger so accepting it can ask
+    let (item_label, replace_start_byte, mut insert_text) = match kind {
+        // A project directory keeps the `@file:` trigger so accepting it can ask
         // the backend for the next path segment.
-        InputCompletionKind::PathDir => (at_start_byte, format!("@{label}")),
-        // Files and explicit paths are terminal mentions: consume the `@`
-        // and separate the resolved path from following prose.
-        InputCompletionKind::PathFile | InputCompletionKind::PathExplicit => {
-            (at_start_byte, label.to_string())
+        InputCompletionKind::PathDir => {
+            (format!("@file:{label}"), at_start_byte, format!("@file:{label}"))
+        }
+        // Files inside the workspace are canonical `@file:...` entity mentions.
+        InputCompletionKind::PathFile => {
+            (format!("@file:{label}"), at_start_byte, format!("@file:{label}"))
+        }
+        // Explicit paths outside workspace (e.g. @../, @~/) expand to raw paths.
+        InputCompletionKind::PathExplicit => {
+            (label.to_string(), at_start_byte, label.to_string())
         }
         InputCompletionKind::Slash
         | InputCompletionKind::SlashAlias
-        | InputCompletionKind::Intent => (at_start_byte, label.to_string()),
+        | InputCompletionKind::Intent => (label.to_string(), at_start_byte, label.to_string()),
     };
     if matches!(
         kind,
@@ -566,8 +658,12 @@ fn path_item(
         }
     }
     InputCompletion {
-        label: label.to_string(),
-        description: String::new(),
+        label: item_label,
+        description: match kind {
+            InputCompletionKind::PathDir => "Directory".to_string(),
+            InputCompletionKind::PathFile => "File".to_string(),
+            _ => String::new(),
+        },
         insert_text,
         replace_start: input[..replace_start_byte].chars().count(),
         replace_end: input[..replace_end_byte].chars().count(),
@@ -595,11 +691,21 @@ fn mention_range_at(input: &str, cursor_byte: usize) -> Option<(usize, usize)> {
             return None;
         }
         if character == '@' {
-            let preceded_by_space = chars_before
+            let is_escaped = chars_before
                 .last()
-                .map(|(_, previous)| previous.is_whitespace())
+                .map(|(_, previous)| *previous == '\\')
+                .unwrap_or(false);
+            if is_escaped {
+                return None;
+            }
+            let preceded_by_valid = chars_before
+                .last()
+                .map(|(_, previous)| {
+                    previous.is_whitespace()
+                        || matches!(previous, '(' | '[' | '{' | '"' | '\'' | '<')
+                })
                 .unwrap_or(true);
-            return preceded_by_space.then_some((idx, cursor_byte));
+            return preceded_by_valid.then_some((idx, cursor_byte));
         }
     }
     None
@@ -1057,7 +1163,11 @@ mod tests {
         else {
             panic!("unexpected response")
         };
-        assert!(items.iter().any(|item| item.label == "src/main.rs"));
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label == "@file:src/main.rs" && item.insert_text == "@file:src/main.rs ")
+        );
     }
 
     #[test]

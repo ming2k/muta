@@ -102,7 +102,7 @@ There are two paths from identifying a skill to placing its body in context:
    otherwise pull large bodies into context accidentally. Already implicitly loaded skills
    (including legacy markers in prior session histories) are not re-injected.
 
-3. **Dynamic Discovery & Subagent Delegation.** The system prompt stays clean and free of static `<available_skills>` catalog bloat. Instead, when domain expertise is required, the principal agent can spawn a dedicated subagent with `role: "skill"` (`SUBAGENT_SKILL`) to dynamically discover, inspect, and extract instructions from project (`.muta/skills/`) and user (`$XDG_DATA_HOME/muta/skills/`) skill trees, returning synthesized guidelines directly into the execution flow. Global and local skill roots are natively admitted to the sandbox.
+3. **Dynamic Discovery & Subagent Delegation.** The system prompt stays clean and free of static `<available_skills>` catalog bloat. Instead, when domain expertise is required, the principal agent can spawn a dedicated subagent with `role: "skill"` (`SubAgentProfile::SKILL`) to dynamically discover, inspect, and extract instructions from project (`.muta/skills/`) and user (`$XDG_DATA_HOME/muta/skills/`) skill trees, returning synthesized guidelines directly into the execution flow. Global and local skill roots are natively admitted to the sandbox.
 
 Both paths emit the same structured envelope, so persisted context remains auditable even
 though one path is a tool result and the other is harness-authored user context.

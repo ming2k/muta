@@ -63,13 +63,13 @@ pub(crate) async fn inject_mentioned_files(
         return;
     }
 
-    let already_loaded: HashSet<String> = messages
+    let already_attempted: HashSet<String> = messages
         .iter()
         .filter(|message| message.role == Role::User && message.hidden)
         .filter_map(|message| {
             let prefix = "[File '";
             let start = message.content.find(prefix)? + prefix.len();
-            let end = message.content[start..].find("' loaded]")?;
+            let end = message.content[start..].find('\'')?;
             Some(message.content[start..start + end].to_string())
         })
         .collect();
@@ -88,7 +88,7 @@ pub(crate) async fn inject_mentioned_files(
             );
             continue;
         }
-        if already_loaded.contains(&raw) {
+        if already_attempted.contains(&raw) {
             continue;
         }
         // Sandboxed resolution + read is real filesystem work (canonicalize,
@@ -131,6 +131,46 @@ fn latest_visible_user_text(messages: &[Message]) -> String {
         .join("\n")
 }
 
+/// Mask out inline (`...`) and fenced (```...```) code blocks with spaces,
+/// preserving exact UTF-8 byte lengths and newlines so that byte offsets align.
+fn mask_code_spans(text: &str) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if i + 2 < n && bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
+            let start = i;
+            i += 3;
+            while i + 2 < n && !(bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`') {
+                i += 1;
+            }
+            let end = if i + 2 < n { i + 3 } else { n };
+            for b in &mut bytes[start..end] {
+                if *b != b'\n' {
+                    *b = b' ';
+                }
+            }
+            i = end;
+        } else if bytes[i] == b'`' {
+            let start = i;
+            i += 1;
+            while i < n && bytes[i] != b'`' && bytes[i] != b'\n' {
+                i += 1;
+            }
+            if i < n && bytes[i] == b'`' {
+                let end = i + 1;
+                for b in &mut bytes[start..end] {
+                    *b = b' ';
+                }
+                i = end;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
+}
+
 /// Extract `@file:{path}` / `@files:{path}` references from `text`, in order,
 /// deduplicated. The path runs until the first whitespace or any character
 /// that cannot legally begin a relative path, so `@file:src/main.rs` and
@@ -138,10 +178,28 @@ fn latest_visible_user_text(messages: &[Message]) -> String {
 fn parse_file_refs(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
+    let masked = mask_code_spans(text);
     let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find('@') {
+    while let Some(rel) = masked[search_from..].find('@') {
         let at = search_from + rel;
         let after_at = at + 1;
+
+        // 1. Backslash escape check: \@file:... is literal text
+        if at > 0 && text.as_bytes()[at - 1] == b'\\' {
+            search_from = after_at;
+            continue;
+        }
+
+        // 2. Word boundary check: must be start of string, whitespace, or open delimiter
+        if at > 0 {
+            let prev = text[..at].chars().next_back().unwrap();
+            let is_boundary = prev.is_whitespace() || matches!(prev, '(' | '[' | '{' | '"' | '\'' | '<');
+            if !is_boundary {
+                search_from = after_at;
+                continue;
+            }
+        }
+
         let Some(rest) = text.get(after_at..) else {
             break;
         };
@@ -428,28 +486,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inject_skips_already_loaded_file() {
+    async fn inject_skips_already_loaded_or_failed_file() {
         let tmp = tempdir();
         std::fs::write(tmp.path().join("lib.rs"), "pub fn x() {}").unwrap();
-        // First turn: loads it.
-        let mut messages = vec![Message::new(Role::User, "@file:lib.rs".to_string())];
+        // First turn: loads lib.rs, fails non_existent.rs.
+        let mut messages = vec![Message::new(
+            Role::User,
+            "@file:lib.rs and @file:non_existent.rs".to_string(),
+        )];
         inject_mentioned_files(Some(tmp.path()), &mut messages).await;
-        assert_eq!(messages.len(), 2);
-        // Second turn: mention it again — must NOT re-inject.
+        assert_eq!(messages.len(), 3);
+        // Second turn: mention both again — neither must be re-injected.
         messages.push(Message::new(
             Role::User,
-            "and @file:lib.rs again".to_string(),
+            "again @file:lib.rs and @file:non_existent.rs".to_string(),
         ));
         inject_mentioned_files(Some(tmp.path()), &mut messages).await;
-        // One user turn each + exactly one hidden load.
-        assert_eq!(messages.len(), 3);
-        assert_eq!(
-            messages
-                .iter()
-                .filter(|m| m.hidden && m.content.contains("[File 'lib.rs' loaded]"))
-                .count(),
-            1
-        );
+        // Only the user message was added; no new hidden injection notes.
+        assert_eq!(messages.len(), 4);
+    }
+
+    #[test]
+    fn parses_escaped_and_code_spans() {
+        // Escaped with backslash: skipped
+        assert!(parse_file_refs(r"look at \@file:escaped.rs").is_empty());
+        // Inside inline code block: skipped
+        assert!(parse_file_refs("discussing `@file:inline.rs` in backticks").is_empty());
+        // Inside fenced code block: skipped
+        let fenced = "```\n@file:fenced.rs\n```";
+        assert!(parse_file_refs(fenced).is_empty());
+        // Non-word-boundary: skipped
+        assert!(parse_file_refs("user@file:foo.rs").is_empty());
+        // Valid boundary: matched
+        assert_eq!(parse_file_refs("(@file:valid.rs)"), vec!["valid.rs"]);
     }
 
     #[tokio::test]

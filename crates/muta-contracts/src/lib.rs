@@ -223,10 +223,7 @@ pub use provider_state::{
     read_continuation_cursor, request_envelope_fingerprint, request_prefix_fingerprint,
     select_request_delivery, semantic_context_head, write_continuation_cursor,
 };
-pub use subagent::{
-    SUBAGENT_CODE, SUBAGENT_EXPLORE, SUBAGENT_SKILL, SUBAGENT_TITLE, SubagentPreset,
-    SubagentPresetPool, ToolPolicy,
-};
+pub use subagent::{SubAgentProfile, ToolPolicy};
 pub use trajectory_guard_config::TrajectoryGuardConfig;
 pub mod monitor;
 pub use hooks::{

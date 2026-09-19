@@ -1632,7 +1632,7 @@ async fn execute_tool_evented_drains_interrupted_subagent() {
             gate: gate_tx,
         }),
         muta_contracts::ToolSet::from_tools(vec![Arc::new(SubagentReadTool) as Arc<dyn Tool>]),
-        &muta_contracts::SUBAGENT_EXPLORE,
+        &muta_contracts::SubAgentProfile::EXPLORE,
     ));
     let agent = Arc::new(Agent::new(
         Arc::new(TestProvider),
@@ -3471,7 +3471,7 @@ async fn interrupted_batch_records_subagent_drain_and_cancels_unproduced_calls()
             gate: gate_tx,
         }),
         muta_contracts::ToolSet::from_tools(vec![Arc::new(SubagentReadTool) as Arc<dyn Tool>]),
-        &muta_contracts::SUBAGENT_EXPLORE,
+        &muta_contracts::SubAgentProfile::EXPLORE,
     ));
     let started = Arc::new(tokio::sync::Notify::new());
     let agent = Arc::new(Agent::new(

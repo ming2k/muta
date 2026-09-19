@@ -35,7 +35,7 @@ use muta_agent::{
     Agent, AgentEvent, AgentOp, Message, Provider, ProviderStreamEvent, Role, SubagentEvent,
     SubagentTool,
 };
-use muta_contracts::{PermissionDecision, SubagentPreset, Tool, ToolOutput, ToolPolicy};
+use muta_contracts::{PermissionDecision, SubAgentProfile, Tool, ToolOutput, ToolPolicy};
 
 /// `stream_chat` emits "done" with no tool calls (the default
 /// `stream_chat_events` wraps it into one `TextDelta`). Used by the inject
@@ -266,7 +266,7 @@ impl Provider for StreamWriteCallProvider {
 /// `PermissionRequest` — the shape needed to exercise the full up→down
 /// round-trip through `SubagentTool` + the registry. Declared `const` because
 /// `SubagentTool::new` borrows the profile for `'static`.
-const INTERACTIVE: SubagentPreset = SubagentPreset {
+const INTERACTIVE: SubAgentProfile = SubAgentProfile {
     name: "test_interactive",
     system_prompt: "test",
     tool_policy: ToolPolicy {

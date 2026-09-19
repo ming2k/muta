@@ -499,18 +499,18 @@ fn accept_slash_completion_does_not_append_trailing_space() {
 
 #[test]
 fn accept_path_dir_completion_stays_live_for_descend() {
-    // `@path` *directory* accepts stay live so Tab can keep descending the
-    // directory tree: the `@` trigger is kept and the popup re-triggers on the
+    // `@file:` *directory* accepts stay live so Tab can keep descending the
+    // directory tree: the `@file:` trigger is kept and the popup re-triggers on the
     // directory's contents. This guards against the terminal-accept logic
     // accidentally suppressing directory navigation.
     let (mut app, _tmp) = app_in_tempdir(&["src/main.rs", "src/util.rs"], &["src"]);
     app.input = "@".to_string();
     app.cursor_position = 1;
     let completions = app.completions();
-    // The first candidate is a directory (`src/` sorts before files).
+    // The directory candidate (`@file:src/`).
     let dir_idx = completions
         .iter()
-        .position(|c| c.label == "src/")
+        .position(|c| c.label == "@file:src/")
         .expect("src/ directory in candidates");
     app.accept_completion(dir_idx);
     // Directory accept must NOT latch dismissal — descend continues.
@@ -518,31 +518,30 @@ fn accept_path_dir_completion_stays_live_for_descend() {
         !app.completion_dismissed,
         "directory accept must stay live for descend"
     );
-    // The `@` trigger is kept so the popup re-triggers on `src/`'s contents.
+    // The `@file:` trigger is kept so the popup re-triggers on `src/`'s contents.
     assert!(
-        app.input.starts_with("@src/"),
-        "dir accept keeps @: {}",
+        app.input.starts_with("@file:src/"),
+        "dir accept keeps @file:: {}",
         app.input
     );
 }
 
 #[test]
-fn accept_path_file_completion_is_terminal_and_drops_at() {
-    // `@path` *file* accepts are terminal: the `@` is only a completion
-    // trigger and must not survive into the message context once a concrete
-    // file is chosen, so accept_completion drops the `@`, appends a trailing
-    // space, and latches the dismissal flag.
+fn accept_path_file_completion_is_terminal_and_formats_canonical() {
+    // Project file accepts are terminal canonical mentions: selecting a file
+    // formats it as `@file:path `, appends a trailing space, and latches
+    // the dismissal flag so the popup stays closed while typing resumes.
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
     app.input = "@Ca".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let idx = completions
         .iter()
-        .position(|c| c.label == "Cargo.toml")
+        .position(|c| c.label == "@file:Cargo.toml")
         .expect("Cargo.toml in candidates");
     app.accept_completion(idx);
-    // The `@` trigger is dropped; a trailing space lets the user keep typing.
-    assert_eq!(app.input, "Cargo.toml ");
+    // Canonical entity mention format `@file:... `
+    assert_eq!(app.input, "@file:Cargo.toml ");
     assert!(
         app.completion_dismissed,
         "file accept must be terminal (latch dismissal)"
@@ -551,9 +550,8 @@ fn accept_path_file_completion_is_terminal_and_drops_at() {
 
 #[test]
 fn accept_path_file_completion_inline_preserves_surrounding_text() {
-    // An inline `@mention` mid-sentence: accepting a file must drop the `@`
-    // and splice the path in place, preserving the surrounding prose. This is
-    // the real-world case — `look at @Cargo` in the middle of a message.
+    // An inline `@mention` mid-sentence: accepting a file formats it as `@file:path`
+    // and splices the canonical mention in place, preserving surrounding prose.
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
     // Cursor sits right after the `@Cargo` token, inside the mention.
     // `look at @Cargo please`: `look at ` is 8 chars, `@Cargo` is 6 → cursor
@@ -563,12 +561,11 @@ fn accept_path_file_completion_inline_preserves_surrounding_text() {
     let completions = app.completions();
     let idx = completions
         .iter()
-        .position(|c| c.label == "Cargo.toml")
+        .position(|c| c.label == "@file:Cargo.toml")
         .expect("Cargo.toml in candidates");
     app.accept_completion(idx);
-    // The `@` is dropped; the path replaces `@Cargo`; trailing `please` is
-    // preserved; the existing space before it is reused (no double space).
-    assert_eq!(app.input, "look at Cargo.toml please");
+    // Replaced with canonical @file: mention; trailing `please` is preserved.
+    assert_eq!(app.input, "look at @file:Cargo.toml please");
 }
 
 /// Esc back-out must respect modal hierarchy: a drill-in sub-page backs out to

@@ -509,16 +509,15 @@ fn completions_path_returns_top_level_for_bare_at() {
 
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     // Dirs come first alphabetically, then files alphabetically.
-    assert!(labels.contains(&"src/"));
-    assert!(labels.contains(&"Cargo.toml"));
-    assert!(labels.contains(&"README.md"));
+    assert!(labels.contains(&"@file:src/"));
+    assert!(labels.contains(&"@file:Cargo.toml"));
+    assert!(labels.contains(&"@file:README.md"));
     // No nested paths leak into the bare-`@` menu.
     assert!(!labels.iter().any(|l| l.contains("main.rs")));
     // The backend edit owns the whole mention, including the `@` trigger.
     for c in &completions {
         assert_eq!(c.replace_start, 0);
         assert_eq!(c.replace_end, 1);
-        assert!(c.description.is_empty(), "path menu carries no description");
     }
 }
 
@@ -533,10 +532,10 @@ fn completions_path_descends_into_subdirectory() {
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert!(labels.contains(&"src/"));
-    assert!(labels.contains(&"src/main.rs"));
-    assert!(labels.contains(&"src/util/"));
-    assert!(labels.contains(&"src/util/mod.rs"));
+    assert!(labels.contains(&"@file:src/"));
+    assert!(labels.contains(&"@file:src/main.rs"));
+    assert!(labels.contains(&"@file:src/util/"));
+    assert!(labels.contains(&"@file:src/util/mod.rs"));
     // Nothing from `tests/` leaks in — descend is a prefix match.
     assert!(!labels.iter().any(|l| l.contains("tests")));
 }
@@ -549,7 +548,7 @@ fn completions_path_substring_match_picks_files_across_dirs() {
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    assert!(labels.contains(&"src/main.rs"));
+    assert!(labels.contains(&"@file:src/main.rs"));
     assert!(!labels.iter().any(|l| l.contains("other.rs")));
 }
 
@@ -565,9 +564,9 @@ fn completions_path_skips_dotgit_directory() {
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     // Hidden files like `.env` are listed; `.git/` and its contents are not.
-    assert!(labels.contains(&".env"));
-    assert!(labels.contains(&"src/"));
-    assert!(!labels.iter().any(|l| l.starts_with(".git")));
+    assert!(labels.contains(&"@file:.env"));
+    assert!(labels.contains(&"@file:src/"));
+    assert!(!labels.iter().any(|l| l.contains(".git")));
 }
 
 #[test]
