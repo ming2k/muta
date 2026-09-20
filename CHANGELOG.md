@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.5] - 2026-10-22
+
 ### Added
 
 - **Transport Middleware Pipeline and Extensible Credential Architecture (ADR-0267)**:
@@ -7595,7 +7597,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.4...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.5...HEAD
+[0.50.5]: https://github.com/ming2k/muta/compare/v0.50.4...v0.50.5
 [0.50.4]: https://github.com/ming2k/muta/compare/v0.50.3...v0.50.4
 [0.50.3]: https://github.com/ming2k/muta/compare/v0.50.2...v0.50.3
 [0.50.2]: https://github.com/ming2k/muta/compare/v0.50.1...v0.50.2
