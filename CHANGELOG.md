@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.4] - 2026-10-21
+
+### Added
+
+- **Epistemic Stream Spooling, Content-Aware Projection, and Unified Inspect Architecture (ADR-0264)**:
+  - Content-aware ingestion gate in `OutputCollector`: single unwrapped lines over 4096 bytes
+    (minified bundles, mangled symbol tables) are suppressed inline with a self-describing
+    omission notice, protecting the context budget from zero-signal token noise.
+  - Actionable self-describing diagnostic envelopes: truncated shell tool messages and
+    middle-truncation placeholders now carry explicit `call:<tool_call_id>` handles so pruned
+    offstream content is demand-pageable via the unified `inspect` channel (ADR-0262).
+
+### Changed
+
+- **Retirement of ad-hoc `.muta/spill/` file spooling** (supersedes ADR-0254 §1.3): output
+  spooling moved to `.muta/storage/spool` and the model is pointed at the `inspect` channel
+  instead of leaking filesystem tool usage into the internal runtime domain.
+  Amends ADR-0257 §2 stream truncation diagnostics.
+
+### Fixed
+
+- Enhanced Qoder OAuth device flow: adopt the polled `dt-` device token directly at login
+  (mirrors qodercli ≥1.1.34 `refreshStrategy: device-token`), add device-token refresh
+  rotation via `/api/v1/deviceToken/refresh` (`drt-` → `dt-`), tolerate `expireTime`
+  field aliasing and seconds-shaped expiry values, and correct `jrt-` → `drt-` doc drift.
+
 ## [0.50.3] - 2026-09-19
 
 ### Added
@@ -7464,7 +7490,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.3...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.4...HEAD
+[0.50.4]: https://github.com/ming2k/muta/compare/v0.50.3...v0.50.4
 [0.50.3]: https://github.com/ming2k/muta/compare/v0.50.2...v0.50.3
 [0.50.2]: https://github.com/ming2k/muta/compare/v0.50.1...v0.50.2
 [0.50.1]: https://github.com/ming2k/muta/compare/v0.50.0...v0.50.1
