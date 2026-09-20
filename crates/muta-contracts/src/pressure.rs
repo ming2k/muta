@@ -508,7 +508,7 @@ fn degrade(content: &str, meta: &ToolMeta, stale: bool) -> String {
     }
     // Large and fresh -> truncate (gentler). Small -> clear directly.
     if tokenizer::count_tokens(content) >= TRUNCATE_MIN_TOKENS {
-        truncate_middle(content)
+        truncate_middle(content, meta.call_id.as_deref())
     } else {
         cleared_placeholder(meta, content)
     }
@@ -711,7 +711,7 @@ fn cleared_placeholder(meta: &ToolMeta, content: &str) -> String {
 /// content unchanged when it is too short for truncation to help. Head and tail
 /// are bounded in **tokens** (ADR-0120): the cut lands on exact token
 /// boundaries, so what survives costs precisely what the budget says.
-fn truncate_middle(content: &str) -> String {
+fn truncate_middle(content: &str, call_id: Option<&str>) -> String {
     let keep = TRUNCATE_KEEP_EACH_SIDE_TOKENS;
     let total = tokenizer::count_tokens(content);
     if total <= keep * 2 + 16 {
@@ -722,7 +722,11 @@ fn truncate_middle(content: &str) -> String {
     let (tail_rev, _tail_tokens) = tokenizer::truncate_to_tokens(&reversed, keep);
     let tail: String = tail_rev.chars().rev().collect();
     let dropped = total - head_tokens - tokenizer::count_tokens(&tail);
-    format!("{head}\n[... {dropped}{ELIDED_MARKER}\n{tail}")
+    if let Some(id) = call_id {
+        format!("{head}\n[... {dropped}{ELIDED_MARKER} — inspect with handle \"call:{id}\"]\n{tail}")
+    } else {
+        format!("{head}\n[... {dropped}{ELIDED_MARKER}\n{tail}")
+    }
 }
 
 /// Freeze one historical tool output into its **final, single-pass** provider

@@ -50,17 +50,17 @@ impl ToolMiddleware for SpillMiddleware {
             return Ok(());
         }
 
-        // Generate deterministic/unique spill path inside .muta/spill or workspace
-        let spill_dir = env.workspace_root().join(".muta").join("spill");
-        let _ = env.fs().create_dir_all(&spill_dir).await;
+        // Generate internal spool storage path inside .muta/storage/spool (ADR-0264: out of workspace)
+        let spool_dir = env.workspace_root().join(".muta").join("storage").join("spool");
+        let _ = env.fs().create_dir_all(&spool_dir).await;
 
         let filename = format!(
-            "spill_{}_{}_{}.txt",
+            "spool_{}_{}_{}.txt",
             tool,
             chrono::Utc::now().format("%Y%m%d_%H%M%S"),
             fastrand::u32(1000..9999)
         );
-        let spill_path = spill_dir.join(&filename);
+        let spill_path = spool_dir.join(&filename);
 
         // Write full content to disk through the execution environment's FsProvider
         if let Err(e) = env.fs().write(&spill_path, text.as_bytes()).await {
@@ -79,11 +79,10 @@ impl ToolMiddleware for SpillMiddleware {
         let rewritten = format!(
             "{head}\n\n\
              [... Output exceeded {max_bytes} bytes ({total_bytes} total bytes). \
-             Full unabridged output saved to '{path}'. Use `read_text` or `search_text` on this file to inspect specifics. ...]\n\n\
+             Output spooled to offstream epistemic memory. Use `inspect` or filter queries to inspect specifics. ...]\n\n\
              {tail}",
             max_bytes = self.max_inline_bytes,
             total_bytes = text.len(),
-            path = spill_path.display()
         );
 
         match output {

@@ -11,7 +11,7 @@
 //!    endpoint; the browser URL itself is the device code.
 //! 3. It polls `GET openapi.qoder.sh/api/v1/deviceToken/poll?…`. A `404`
 //!    means still pending (keep polling at 1s); a `200` carries the `dt-`
-//!    prefixed device token plus its `jrt-` refresh token (~30-day device
+//!    prefixed device token plus its `drt-` refresh token (~30-day device
 //!    token lifetime per the protocol docs).
 //! 4. Inference needs the *inference* token, which the device token
 //!    exchanges via the OpenAPI surface (same `jobToken` family a pasted
@@ -138,7 +138,7 @@ fn base64_url_no_pad(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// The device-token poll response (`dt-` access, `jrt-` refresh).
+/// The device-token poll response (`dt-` access, `drt-` refresh).
 ///
 /// Field-name drift (qodercli 1.1.57): the poll endpoint now returns the
 /// access token under `token`; 1.1.34-era clients used
@@ -151,7 +151,9 @@ pub struct QoderDeviceToken {
     pub refresh_token: Option<SecretString>,
     #[serde(default)]
     pub uid: Option<String>,
-    #[serde(default)]
+    /// Milliseconds since the epoch (qodercli's `expireTime`); seconds-shaped
+    /// values (>1e12) are normalized on the wire below.
+    #[serde(default, alias = "expireTime", alias = "expire_time")]
     pub expire_time: Option<u64>,
 }
 
@@ -245,9 +247,27 @@ where
     poll_device_token_at(client, DEVICE_POLL_URL, session, sleep, QODER_FLOW_DEADLINE_MS).await
 }
 
-/// Exchange a Qoder credential (a `pt-` personal-access token or a `dt-`
-/// device token) for the `jt-` inference token the COSY surface consumes.
-/// Idempotent; the `jt-` token lives ~24h and is refreshed the same way.
+/// Complete a device-flow login: poll for the device token and return it as
+/// the token response. Mirrors qodercli ≥1.1.34, which adopts the polled
+/// device token directly (its credential's `refreshStrategy` is
+/// `"device-token"`); the inference token is *not* exchanged at login.
+pub async fn device_login(
+    client: &crate::http::Http,
+    session: &QoderDeviceSession,
+) -> Result<TokenResponse, crate::oauth::AuthError> {
+    let device = poll_device_token(client, session).await?;
+    Ok(TokenResponse {
+        access_token: device.access_token,
+        refresh_token: device.refresh_token,
+        id_token: None,
+        token_type: Some("Bearer".to_string()),
+        expires_in: device.expire_time.map(|ms| if ms > 1_000_000_000_000 { ms / 1000 } else { ms }),
+        scope: None,
+        qoder_uid: device.uid,
+    })
+}
+
+/// Exchange a Qoder credential (a `pt-` personal-access token) for the
 pub async fn exchange_inference_token(
     client: &crate::http::Http,
     credential: &str,
@@ -280,6 +300,59 @@ pub async fn exchange_inference_token_at(
     let parsed: TokenResponse = serde_json::from_str(&text)
         .map_err(|e| crate::oauth::AuthError::Decode(format!("exchange parse failed: {e}")))?;
     parsed.validate()
+}
+
+/// The device-token refresh endpoint (OpenAPI surface, international line).
+const DEVICE_TOKEN_REFRESH_URL: &str = "https://openapi.qoder.sh/api/v1/deviceToken/refresh";
+
+/// Rotate a `dt-` device token with its `drt-` device refresh token
+/// (`POST /api/v1/deviceToken/refresh` with a JSON `refresh_token` body —
+/// verified against the live endpoint: a missing field yields
+/// `DeviceRefreshTokenRequired`, a wrong prefix yields
+/// `DeviceRefreshTokenPrefixInvalid`).
+pub async fn refresh_device_token(
+    client: &crate::http::Http,
+    refresh_token: &str,
+) -> Result<TokenResponse, crate::oauth::AuthError> {
+    refresh_device_token_at(client, DEVICE_TOKEN_REFRESH_URL, refresh_token).await
+}
+
+/// Test-injectable variant with an explicit endpoint.
+pub async fn refresh_device_token_at(
+    client: &crate::http::Http,
+    endpoint: &str,
+    refresh_token: &str,
+) -> Result<TokenResponse, crate::oauth::AuthError> {
+    let request = crate::http::Request::new(netune::Method::POST, endpoint)
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "refresh_token": refresh_token }));
+    let response = client
+        .send(request)
+        .await
+        .map_err(|e| crate::oauth::AuthError::Transport(format!("refresh failed: {e}")))?;
+    let status = response.status;
+    let text = response.body;
+    if !status.is_success() {
+        return Err(crate::oauth::AuthError::TokenEndpoint {
+            status: status.as_u16(),
+            body: text,
+        });
+    }
+    let device: QoderDeviceToken = serde_json::from_str(&text).map_err(|e| {
+        crate::oauth::AuthError::Decode(format!("device refresh parse failed: {e}"))
+    })?;
+    Ok(TokenResponse {
+        access_token: device.access_token,
+        refresh_token: device.refresh_token,
+        id_token: None,
+        token_type: Some("Bearer".to_string()),
+        expires_in: device
+            .expire_time
+            .map(|ms| if ms > 1_000_000_000_000 { ms / 1000 } else { ms }),
+        scope: None,
+        qoder_uid: device.uid,
+    })
 }
 
 fn percent(value: &str) -> String {
@@ -565,6 +638,69 @@ mod tests {
             let parsed: QoderDeviceToken = serde_json::from_str(body).unwrap();
             assert_eq!(parsed.access_token.expose_secret(), "dt-abc");
         }
+    }
+
+    #[tokio::test]
+    async fn device_login_adopts_the_device_token_without_exchange() {
+        // qodercli ≥1.1.34 uses refreshStrategy="device-token": the polled
+        // `dt-` token IS the credential. Exchanging it as a `personal_token`
+        // against /api/v1/jobToken/exchange is what produced the login-time
+        // "token endpoint returned HTTP 400 BadRequest" regression.
+        let (addr, hits, _keep) = spawn_scripted_server(vec![(
+            200,
+            r#"{"token":"dt-abc","refreshToken":"drt-xyz","uid":"u1","expireTime":1700000000000}"#
+                .to_string(),
+        )])
+        .await;
+        let session = QoderDeviceSession::new("m", "c");
+        let client = crate::http::Http::control_plane().unwrap();
+        let url = format!("http://{addr}/api/v1/deviceToken/poll");
+        let mut session = session;
+        session.authorize_url = url.replace("/api/v1/deviceToken/poll", "/device/selectAccounts");
+        // Poll directly (device_login wraps poll_device_token with prod URLs).
+        let token = poll_device_token_at(&client, &url, &session, |_| async {}, 5_000)
+            .await
+            .unwrap();
+        let login = TokenResponse {
+            access_token: token.access_token,
+            refresh_token: token.refresh_token,
+            id_token: None,
+            token_type: Some("Bearer".to_string()),
+            expires_in: token
+                .expire_time
+                .map(|ms| if ms > 1_000_000_000_000 { ms / 1000 } else { ms }),
+            scope: None,
+            qoder_uid: token.uid,
+        };
+        assert!(login.access_token.expose_secret().starts_with("dt-"));
+        assert_eq!(
+            login.refresh_token.as_ref().map(|r| r.expose_secret()),
+            Some("drt-xyz")
+        );
+        assert_eq!(login.qoder_uid.as_deref(), Some("u1"));
+        // Second-normalized expiry from the ms epoch value.
+        assert_eq!(login.expires_in, Some(1_700_000_000));
+        // Exactly one HTTP hit: no exchange round-trip.
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn device_refresh_posts_the_json_refresh_token() {
+        let (addr, hits, _keep) = spawn_scripted_server(vec![(
+            200,
+            r#"{"token":"dt-new","refreshToken":"drt-new2","expireTime":1700000012000}"#
+                .to_string(),
+        )])
+        .await;
+        let client = crate::http::Http::control_plane().unwrap();
+        let url = format!("http://{addr}/api/v1/deviceToken/refresh");
+        let token = refresh_device_token_at(&client, &url, "drt-old").await.unwrap();
+        assert_eq!(token.access_token.expose_secret(), "dt-new");
+        assert_eq!(
+            token.refresh_token.as_ref().map(|r| r.expose_secret()),
+            Some("drt-new2")
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -13,6 +13,8 @@ pub const SHELL_COLLECT_MAX_LINES: usize = 5_000;
 pub const SHELL_STREAM_FLOOD_LINES: usize = 1_000;
 /// Maximum bytes a foreground synchronous command may produce before StreamGuard terminates it early (ADR-0257).
 pub const SHELL_STREAM_FLOOD_BYTES: usize = 128 * 1024;
+/// Maximum length of a single unwrapped line before being classified as a minified artifact (ADR-0264).
+pub const MAX_UNWRAPPED_LINE_LEN: usize = 4_096;
 /// Maximum consecutive periodic samples before StreamGuard declares instantaneous snapshot sufficiency (ADR-0257).
 pub const STREAM_METRONOMIC_SAMPLE_LIMIT: usize = 4;
 /// Maximum full screen redraws before StreamGuard declares TUI snapshot sufficiency (ADR-0257).
@@ -173,21 +175,39 @@ impl OutputCollector {
             self.cadence_flooded = true;
         }
 
+        // ADR-0264: Content-Aware Ingestion Gate for unwrapped minified lines.
+        // Prevent single massive minified lines (e.g. 100KB+ JS bundles / CSS modules)
+        // from flooding inline buffers while preserving structural information.
+        let is_minified = text.len() > MAX_UNWRAPPED_LINE_LEN;
+        let displayed_text = if is_minified {
+            self.truncated = true;
+            let head = truncate_utf8(&text, 256);
+            format!(
+                "{head} ... [minified line: {} bytes omitted to protect context budget]",
+                text.len().saturating_sub(256)
+            )
+        } else {
+            text.clone()
+        };
+
         match stream {
             ShellStream::Out => {
-                self.stdout_buf.push_str(&text);
+                self.stdout_buf.push_str(&displayed_text);
                 self.stdout_buf.push('\n');
-                self.pending_stdout.push_str(&text);
+                self.pending_stdout.push_str(&displayed_text);
                 self.pending_stdout.push('\n');
             }
             ShellStream::Err => {
-                self.stderr_buf.push_str(&text);
+                self.stderr_buf.push_str(&displayed_text);
                 self.stderr_buf.push('\n');
-                self.pending_stderr.push_str(&text);
+                self.pending_stderr.push_str(&displayed_text);
                 self.pending_stderr.push('\n');
             }
         }
-        self.lines.push(ShellLine { stream, text });
+        self.lines.push(ShellLine {
+            stream,
+            text: displayed_text,
+        });
 
         self.compact_in_flight_if_needed();
 

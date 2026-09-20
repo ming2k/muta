@@ -181,15 +181,15 @@ impl OAuthLoginSession {
             }
             OAuthLoginFlow::QoderDevice { session } => {
                 tokio::time::timeout(DEVICE_LOGIN_TIMEOUT, async {
-                    // Poll → device token, then exchange for the `jt-`
-                    // inference token the COSY surface consumes.
-                    let device_token =
-                        crate::oauth::qoder::poll_device_token(&self.client, &session).await?;
-                    crate::oauth::qoder::exchange_inference_token(
-                        &self.client,
-                        device_token.access_token.expose_secret(),
-                    )
-                    .await
+                    // Poll → the `dt-` device token. That token IS the
+                    // inference credential: qodercli adopts it directly as
+                    // the COSY bearer (`refreshStrategy="device-token"`) and
+                    // rotates it lazily via /api/v1/deviceToken/refresh with
+                    // the `drt-` device refresh token. Exchanging a `dt-`
+                    // token against /api/v1/jobToken/exchange as a
+                    // `personal_token` fails with HTTP 400 BadRequest — that
+                    // endpoint only accepts `pt-` personal-access tokens.
+                    crate::oauth::qoder::device_login(&self.client, &session).await
                 })
                 .await
                 .map_err(|_| AuthError::Timeout)?

@@ -185,10 +185,10 @@ async fn spill_middleware_offloads_massive_output() {
 
     let text = output.to_text();
     assert!(text.contains("Output exceeded 100 bytes"));
-    assert!(text.contains("Full unabridged output saved to"));
+    assert!(text.contains("Output spooled to offstream epistemic memory"));
 
     // Verify spill file was created on the virtual filesystem
-    let spill_dir = PathBuf::from("/virtual/workspace/.muta/spill");
+    let spill_dir = PathBuf::from("/virtual/workspace/.muta/storage/spool");
     let entries = env.fs().list_dir(&spill_dir).await.unwrap();
     assert_eq!(entries.len(), 1);
 

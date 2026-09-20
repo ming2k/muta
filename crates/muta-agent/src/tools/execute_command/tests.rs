@@ -242,14 +242,14 @@ async fn execute_command_timeout_kills_grandchildren() {
     panic!("grandchild pid {pid} survived the Job Object termination");
 }
 
-/// A huge-output command is capped in memory.
+/// A huge multi-line output command is capped in memory.
 #[tokio::test]
 async fn execute_command_caps_huge_output_in_memory() {
     let tool = ExecuteCommandTool::new(None);
     let out = tool
         .call_structured(&arguments(native_command(
-            "for i in $(seq 1 80000); do printf 'abcdefghij'; done; echo TAIL-MARKER",
-            "[Console]::Out.Write((('abcdefghij' * 80000) -join '')); \
+            "for i in $(seq 1 8000); do echo 'abcdefghij'; done; echo TAIL-MARKER",
+            "1..8000 | ForEach-Object { [Console]::Out.WriteLine('abcdefghij') }; \
              [Console]::Out.WriteLine('TAIL-MARKER')",
         )))
         .await
@@ -630,6 +630,36 @@ async fn execute_command_stream_guard_cuts_off_unbounded_stream() {
             assert!(
                 text.contains("[killed by harness: stream budget reached"),
                 "to_text must provide actionable guidance to the model"
+            );
+        }
+        other => panic!("expected Shell output, got {:?}", other),
+    }
+}
+
+/// A command that emits an excessively long minified line triggers the content-aware
+/// ingestion gate (ADR-0264), suppressing the inline raw line while flagging truncation.
+#[tokio::test]
+async fn execute_command_suppresses_long_minified_line() {
+    let tool = ExecuteCommandTool::new(None);
+    let minified_line = "a".repeat(10_000);
+    let args = serde_json::json!({
+        "command": native_command(
+            &format!("echo '{minified_line}'"),
+            &format!("Write-Output ('a' * 10000)"),
+        ),
+        "timeout": 10,
+    })
+    .to_string();
+
+    let out = tool.call_structured(&args).await.expect("command succeeds");
+    match out {
+        muta_contracts::ToolOutput::Shell {
+            stdout, truncated, ..
+        } => {
+            assert!(truncated, "single massive minified line must flag truncation");
+            assert!(
+                stdout.contains("[minified line:"),
+                "stdout must contain minified line suppression notice, got: {stdout}"
             );
         }
         other => panic!("expected Shell output, got {:?}", other),

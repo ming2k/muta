@@ -786,7 +786,7 @@ fn shell_to_text(stdout: &str, stderr: &str, exit: Option<i32>, truncated: bool)
         }
         let tail_part = &inner[tail_idx..];
         format!(
-            "[Output truncated: {tokens} tokens total]\n{}\n\n⋯ [middle output omitted to relieve context] ⋯\n\n{}\n\n[Output was large — use search_text or read_text if you need specific parts]",
+            "[Output truncated: {tokens} tokens total]\n{}\n\n⋯ [middle output omitted to relieve context] ⋯\n\n{}\n\n[Output exceeded context budget — inspect offstream with `inspect` or filter output on retry]",
             head_part, tail_part
         )
     } else {
@@ -1165,7 +1165,7 @@ mod tests {
             "got: {text:.80}"
         );
         assert!(text.ends_with(
-            "[Output was large — use search_text or read_text if you need specific parts]"
+            "[Output exceeded context budget — inspect offstream with `inspect` or filter output on retry]"
         ));
     }
 

@@ -169,6 +169,11 @@ pub async fn refresh_access_token(
     cfg: &OAuthConfig,
     refresh_token: &str,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
+    // Qoder's device grant is not RFC 8628: the `drt-` device refresh token
+    // rotates the `dt-` device token via a JSON POST on the OpenAPI surface.
+    if cfg.is_qoder() {
+        return super::qoder::refresh_device_token(client, refresh_token).await;
+    }
     let mut params: Vec<(&str, &str)> = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),

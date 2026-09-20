@@ -266,6 +266,8 @@ impl OffstreamSource for PrunedToolSource {
                 {
                     let content = entry.content.as_deref().unwrap_or("");
                     if (content.starts_with(muta_contracts::pressure::CLEARED_TOOL_PREFIX)
+                        || content.contains("[Epistemic virtual memory: inspect full output with handle")
+                        || content.contains("[Output truncated:")
                         || payload.content_blob.is_some())
                         && seen_calls.insert(call_id.clone())
                     {
@@ -289,6 +291,8 @@ impl OffstreamSource for PrunedToolSource {
                 {
                     let content = &message.content;
                     if (content.starts_with(muta_contracts::pressure::CLEARED_TOOL_PREFIX)
+                        || content.contains("[Epistemic virtual memory: inspect full output with handle")
+                        || content.contains("[Output truncated:")
                         || message.content_blob.is_some())
                         && seen_calls.insert(call_id.clone())
                     {

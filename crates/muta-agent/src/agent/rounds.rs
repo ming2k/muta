@@ -1490,7 +1490,22 @@ impl Agent {
                 .with_children(sub_messages.to_vec())
                 .with_subagent_meta(meta)
             }
-            None => Message::tool_result(call, format!("[{} result]:\n{}", call.name, text)),
+            None => {
+                let formatted = format!("[{} result]:\n{}", call.name, text);
+                let message_content = if let ToolOutput::Shell {
+                    truncated: true, ..
+                } = result
+                {
+                    // ADR-0264: If the shell command output was truncated, ensure the model message
+                    // contains the explicit call: handle so the model can inspect offstream immediately.
+                    format!(
+                        "{formatted}\n\n[Epistemic virtual memory: inspect full output with handle \"call:{call_id}\"]"
+                    )
+                } else {
+                    formatted
+                };
+                Message::tool_result(call, message_content)
+            }
         };
         messages.push(tool_message);
 
