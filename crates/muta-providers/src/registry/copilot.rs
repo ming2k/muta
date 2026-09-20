@@ -4,10 +4,10 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// The minimal model seed for a fresh GitHub Copilot instance, before its
-/// first live discovery completes. A Copilot instance uses a remote-catalog
+/// first live catalog sync completes. A Copilot instance uses a remote-catalog
 /// source pointing at `api.githubcopilot.com/models` (see [`COPILOT`](crate::oauth::COPILOT)
 /// / the `copilot-oauth` preset), so its real channel set is populated from
 /// that endpoint at runtime — this seed only needs one universally available
@@ -34,7 +34,10 @@ inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     dialect: muta_contracts::ProviderDialect::Copilot,
-    protocol_roots: std::borrow::Cow::Borrowed(&[(WireProtocol::AnthropicMessages, std::borrow::Cow::Borrowed("https://api.githubcopilot.com/v1"))]),
+    protocol_roots: std::borrow::Cow::Borrowed(&[(
+        WireProtocol::AnthropicMessages,
+        std::borrow::Cow::Borrowed("https://api.githubcopilot.com/v1"),
+    )]),
     catalog_root_url: None,
     prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
     id: std::borrow::Cow::Borrowed("github-copilot"),
@@ -49,11 +52,11 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     // advertised id the client registry does not know is overlaid with its
     // advertised capability metadata, mirroring the kimi-code flow.
     protocol: WireProtocol::ChatCompletions,
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Copilot,
     client_profile_sensitive: true,
     // Minimal seed: the id a fresh Copilot instance activates before the
-    // first live discovery completes. `gpt-4o-mini` is universally
+    // first live catalog sync completes. `gpt-4o-mini` is universally
     // available across every Copilot plan, so the seed never 400s.
     models: COPILOT_SEED_MODELS,
 };

@@ -288,7 +288,7 @@ pub enum AgentRequest {
     SetDefaultModel {
         id: String,
     },
-    /// Refresh / rediscover available models for discovery-enabled providers from upstream.
+    /// Refresh available models for catalog-enabled providers from upstream.
     RefreshProviderModels,
     /// Delete a session (active or archived) by id or short id prefix.
     DeleteSession {
@@ -1713,11 +1713,11 @@ pub enum ConnectStatus {
     /// Authorization succeeded; tokens persisted (and provider activated when
     /// this followed [`AgentRequest::ConnectConnection`]).
     Done { provider: String },
-    /// Authorization succeeded but the follow-up live model discovery failed,
+    /// Authorization succeeded but the follow-up live catalog sync failed,
     /// so the provider keeps its previous (often seed-only) model list. The
     /// UI surfaces this as a warning so the user does not mistake a stale list
     /// for the account's real entitlements.
-    DiscoveryWarning { provider: String, message: String },
+    CatalogSyncWarning { provider: String, message: String },
     /// Authorization failed or was denied.
     Failed { provider: String, message: String },
 }
@@ -2054,7 +2054,7 @@ pub enum AgentEvent {
     },
     /// A background job completed.
     BackgroundJobCompleted(crate::job::BackgroundJobOutcome),
-    /// Model catalog or discovery cache was updated; attached frontends should refresh provider picker.
+    /// Remote catalog was updated; attached frontends should refresh provider picker.
     CatalogInvalidated,
 }
 

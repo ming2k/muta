@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Transport Middleware Pipeline and Extensible Credential Architecture (ADR-0267)**:
+  eradication of provider-specific branches, uniform connection lifecycle, and protocol purity.
+  Purges all vendor fields (`account_id`, `project_id`, `qoder`, `copilot`) from `ResolvedAuth`
+  and `TokenSet` in favor of open-world `ExtensionMap` and generic attributes. Retires `ConnectionAuth`
+  enum proliferation in favor of clean binary `ConnectionAuth::ApiKey` and `ConnectionAuth::Subscription { provider }`.
+  Replaces unstructured interceptors with type-level phased transport pipeline (`EnvelopePhase`,
+  `BodyCodecPhase`, `RequestSignerPhase`, `StreamTransformer`), introduces algebraic `TransformedFrame`
+  streaming frame dissection, and unifies inference and catalog signing stacks.
+- **Declarative wire surfaces (ADR-0265)**: a provider dialect now resolves to
+  a `DialectSurface` table (inference path/query, identity, request envelope,
+  model-identity carriers) declared in `muta-providers`.
+- **Declarative remote catalog descriptors (ADR-0266)**: `RemoteCatalogSource::
+  Endpoint` now carries a `CatalogShape` (a closed set of response parsers)
+  instead of the per-provider `DiscoveryProtocol` enum, which is retired. A
+  shape carries its path, query, auth, signed path, and request dimensions.
+  Catalog request dimensions (`Connection::catalog_dimensions`) participate in
+  the discovery identity hash and may be overridden per connection.
+- **Qoder live model catalog**: `GET /algo/api/v2/model/list?Encode=1` over the
+  COSY-signed transport, parsed as `CatalogShape::SceneMap`. The `assistant`
+  scene exposes Qwen3.8-Max (`qmodel_38max`) and Qwen3.8-Flash (`qfmodel`).
+- **Qoder `agent_chat_generation` request envelope**: the inference endpoint
+  routes through an agent framework and rejects a flat chat-completions body
+  (`400 … None flow nodes found for router agent_router`); requests are now
+  wrapped in the declared envelope.
+- **Qoder account-uid resolution**: the uid is fetched from the OpenAPI
+  userinfo endpoint (`GET api/v1/userinfo`, plain bearer) for personal-access
+  tokens and backfilled onto existing credentials. The catalog signature
+  requires `Cosy-User`; inference tolerates its absence.
+- `RemoteModelMetadata.catalog_source`: the catalog a model came from, as the
+  provider names it, round-tripped rather than derived.
+
+### Changed
+
+- **Qoder model selection now reaches the wire.** `X-Model-Key` and
+  `X-Model-Source` are stamped from the surface's declared model-identity
+  carriers (ADR-0265). Previously the model choice was never sent, so the
+  server always served its default model.
+- **Qoder `Cosy-Version` raised to `1.1.58`**, with a single source on the
+  dialect surface (the version header, the signature payload, and the envelope
+  `business.version` all read it). The header now rides the catalog request as
+  well as inference.
+- **Qoder baseline models corrected** to the real wire keys
+  (`qmodel_38max`, `qfmodel`). The previous `qoder3*` identifiers never existed
+  on the platform.
+
+### Fixed
+
+- **Qoder live authentication (the root cause of every 403).** The 16-byte AES
+  key must be the 16 **ASCII** characters of the persisted 32-character machine
+  key, not the 16 binary bytes that string denotes. The server UTF-8-decodes the
+  RSA-unwrapped `Cosy-Key`, so a binary key is rejected with
+  `403 {"code":"101","message":"Signature invalid"}` — reproducibly (12/12
+  trials) on both inference and catalog. `CosyIdentity` now derives the key as
+  `hex(uuid[..8])`, matching the real client, and **existing credentials keep
+  working with no re-authorization and no device-identity churn**. Verified live:
+  the catalog returns `["qfmodel", "qmodel_38max"]` and inference streams.
+- **Qoder inference and catalog now send the version header.** The live
+  executor read the raw identity table (which omits `Cosy-Version`) instead of
+  `headers_with_version()`. Two guard tests pin it on the live path.
+- Qoder catalog requests no longer omit `Cosy-Version`, which caused
+  `403 {"code":"101","message":"Signature invalid"}` on every fetch.
+- A dead Qoder header branch in the generic chat-completions header table is
+  removed; it declared Qoder's headers a third time and was never exercised in
+  production.
+- The `agent_chat_generation` envelope's `model_config.{key,display_name,source}`
+  are now written by the surface's declared bindings (via
+  `apply_model_bindings`), not a hardcoded object that agreed by coincidence.
+  All five carrier kinds (`BodyField`, `BodyPointer`, `PathSegment`, `Header`,
+  `QueryParam`) are implemented.
+- Qoder's catalog signing is supplied to the generic catalog fetcher as a
+  `CatalogSigning` trait object by the catalog sync layer; the fetcher no longer
+  names the provider.
+
+### Known issues
+
+- **Qoder streaming is not yet decoded.** Inference authenticates and the
+  service streams, but each SSE event wraps the chat-completions object as a
+  JSON *string* inside `body`
+  (`data:{"headers":…,"body":"{\"choices\":[…]}"}`), while the parser reads
+  `choices` at the top level — so the completion arrives empty. Recorded in
+  `docs/explanation/qoder-provider-integration.md` §5.2a; not fixed here.
+
+### Removed
+
+- The retired `discovery` vocabulary (ADR-0203 §1/§29, delivered by ADR-0266):
+  `DiscoveryProtocol` → `CatalogShape`, `DiscoveryCache`/`LockedDiscoveryCache`
+  → `RemoteCatalogCache`/`LockedRemoteCatalogCache`, `DiscoveryOutcome` →
+  `CatalogSyncOutcome`, `DiscoverySource`/`DiscoveryFetch`/`DiscoveryJob` →
+  `CatalogFetchSource`/`CatalogFetchResult`/`CatalogSyncJob`, `DiscoveryWarning`
+  → `CatalogSyncWarning`, `ModelDiscovery{Request,Options,Update}` →
+  `RemoteCatalog{Request,Options,Update}`, `discover_provider_models` →
+  `sync_remote_catalog`, module `catalog::discovery` → `catalog::sync`. No
+  aliases: the old spellings do not parse.
+- The cache→state migration shim for the catalog file: the derivable catalog
+  payload is no longer carried forward (ADR-0203 §29). The one-shot
+  `route_settings` fold that rescues **user reasoning overrides** from the
+  retired file is retained, reading the frozen historical filename.
+
+### Changed
+
+- The catalog state file is `remote_catalog.json` (was `models_discovery.json`).
+  It holds only derivable state; a rename costs one background refresh.
+
 ## [0.50.4] - 2026-10-21
 
 ### Added

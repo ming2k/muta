@@ -2,7 +2,7 @@
 //!
 //! Each handler is one match arm of the agent background task's dispatch.
 //! Provider instances live in the `providers.toml` state store, credentials in
-//! `credentials.toml`, and per-route facts in the discovery cache — `config`
+//! `credentials.toml`, and per-route facts in the catalog cache — `config`
 //! holds only *behavior* (`default_provider` / `default_model` / favorites),
 //! which is what these handlers persist there. Routes are derived by the
 //! catalog at activation time.
@@ -15,7 +15,7 @@ use muta_contracts::{
     AgentNotice, AgentResponse, ClientIdentity, CommandRecord, CommandResult, Provider, RoundEvent,
     SecretString, WireProtocol,
 };
-use muta_persistence::config::{Config, Credentials, DiscoveryCache};
+use muta_persistence::config::{Config, Credentials, RemoteCatalogCache};
 use muta_persistence::connection_usage::ConnectionUsage;
 use muta_persistence::connections::{Connection, Connections};
 use muta_persistence::model_providers::ModelProviders;
@@ -85,15 +85,24 @@ pub(crate) fn register_provider(
             default_protocol: protocol,
             client_profile,
             user_agent,
-            catalog: catalog_format.map(|format| {
-                if matches!(format.as_str(), "none" | "static") { Ok(muta_contracts::RemoteCatalogSource::None) }
-                else { serde_json::from_value(serde_json::Value::String(format)).map(muta_contracts::RemoteCatalogSource::Endpoint).map_err(|e| e.to_string()) }
-            }).transpose()?,
+            catalog: catalog_format
+                .map(|format| {
+                    if matches!(format.as_str(), "none" | "static") {
+                        Ok(muta_contracts::RemoteCatalogSource::None)
+                    } else {
+                        serde_json::from_value(serde_json::Value::String(format))
+                            .map(muta_contracts::RemoteCatalogSource::Endpoint)
+                            .map_err(|e| e.to_string())
+                    }
+                })
+                .transpose()?,
             dialect: dialect.map(|value| value.parse()).transpose()?,
             protocol_roots,
             catalog_root_url: existing.as_ref().and_then(|p| p.catalog_root_url.clone()),
             prompt_cache: existing.as_ref().and_then(|p| p.prompt_cache.clone()),
-            client_profile_sensitive: existing.as_ref().is_some_and(|p| p.client_profile_sensitive),
+            client_profile_sensitive: existing
+                .as_ref()
+                .is_some_and(|p| p.client_profile_sensitive),
         },
     );
     store.save().map_err(|e| e.to_string())?;
@@ -161,7 +170,11 @@ pub(crate) async fn switch(
         let mut store = ModelProviders::load();
         if let Some(prov) = store.providers.get_mut(&connection.provider) {
             prov.root_url = url.trim().to_string();
-            if let Err(error) = store.save().map_err(|e| e.to_string()).and_then(|_| muta_providers::sync_user_declared_providers_from_disk()) {
+            if let Err(error) = store
+                .save()
+                .map_err(|e| e.to_string())
+                .and_then(|_| muta_providers::sync_user_declared_providers_from_disk())
+            {
                 let _ = resp_tx.send(AgentResponse::Error(error));
                 return;
             }
@@ -281,10 +294,11 @@ pub(crate) async fn add(
         .unwrap_or_default();
 
     let client_identity = client_identity.unwrap_or_else(|| {
-        if auth == muta_contracts::ConnectionAuth::AntigravityOAuth {
+        if auth.subscription_provider() == Some("google-antigravity") {
             ClientIdentity::Antigravity
         } else {
-            spec.user_agent.as_deref()
+            spec.user_agent
+                .as_deref()
                 .map(ClientIdentity::from_user_agent)
                 .unwrap_or_default()
         }
@@ -400,10 +414,11 @@ pub(crate) async fn add(
     let connection = Connection {
         name: name.clone(),
         provider: provider.clone(),
-        auth,
+        auth: auth.clone(),
         api_key_env: None,
         client_identity,
         models: model_rules,
+        catalog_dimensions: Default::default(),
     };
     connections.connections.push(connection);
     let conn_save_err = connections.save().err().map(|e| e.to_string());
@@ -443,19 +458,19 @@ pub(crate) async fn add(
     {
         tracing::warn!(?error, "could not persist session provider selection");
     }
-    // For OAuth providers, run live model discovery right away so the picker
+    // For OAuth providers, run live catalog sync right away so the picker
     // shows the account's real entitlements immediately rather than the seed
     // list. A failure keeps the seed; each failure is reported back as a
     // warning so the user knows the list may be incomplete.
-    if auth.is_oauth() && auth != muta_contracts::ConnectionAuth::AntigravityOAuth {
-        let outcome = catalog::discover_connection_models(&name).await;
+    if auth.is_subscription() && auth.subscription_provider() != Some("google-antigravity") {
+        let outcome = catalog::sync_connection_catalog(&name).await;
         if outcome.changed {
             catalog::sync_fitted_model_registry();
             catalog::prune_stale_models_on_disk();
         }
         for (failed_provider, message) in &outcome.failures {
             let _ = resp_tx.send(AgentResponse::ConnectStatus(
-                muta_contracts::ConnectStatus::DiscoveryWarning {
+                muta_contracts::ConnectStatus::CatalogSyncWarning {
                     provider: failed_provider.clone(),
                     message: message.clone(),
                 },
@@ -566,7 +581,7 @@ pub(crate) async fn edit(
 /// `AgentRequest::RenameConnection` — rename a connection, rewriting every hard
 /// join key in one transaction (ADR-0201 INV-4): `credentials.toml`,
 /// `auth.toml`, and `config.toml`'s `default_connection`. The regenerable
-/// stores (discovery cache, usage recency) expire on their own, and historical
+/// stores (catalog cache, usage recency) expire on their own, and historical
 /// session / telemetry records keep the old name rather than being rewritten
 /// retroactively.
 pub(crate) async fn rename(
@@ -892,7 +907,7 @@ pub(crate) async fn set_model_capabilities(
 }
 
 /// `AgentRequest::EditProviderModel` — update the per-(connection, model)
-/// reasoning overrides in the discovery cache. Connection metadata (name /
+/// reasoning overrides in the catalog cache. Connection metadata (name /
 /// endpoint / credential) is untouched.
 pub(crate) async fn edit_model(
     ProviderEnv {
@@ -1051,7 +1066,7 @@ pub(crate) async fn edit_model_reasoning(
 }
 
 /// `AgentRequest::DeleteProvider` — remove a connection entirely: drop
-/// it from the connection store, its credential, its discovery-cache records,
+/// it from the connection store, its credential, its catalog-cache records,
 /// and its OAuth tokens, and prune its model ids from favorites. When the
 /// deleted connection was the active one, fall back to the effective default and
 /// re-activate so the live provider never points at a removed entry.
@@ -1092,8 +1107,8 @@ pub(crate) async fn delete(
             tracing::error!(?error, connection_id = %id, "could not open OAuth credential store");
         }
     }
-    if let Err(error) = DiscoveryCache::modify(|cache| cache.remove_connection(&id)).await {
-        tracing::warn!(?error, connection_id = %id, "could not persist discovery cache on delete");
+    if let Err(error) = RemoteCatalogCache::modify(|cache| cache.remove_connection(&id)).await {
+        tracing::warn!(?error, connection_id = %id, "could not persist catalog cache on delete");
     }
     // The deleted connection's route settings go with it (state, not cache).
     let mut routes = RouteSettingsStore::load();
@@ -1241,9 +1256,9 @@ pub async fn authorize(
 /// `AgentRequest::ConnectProvider` — re-auth an existing OAuth connection, then
 /// activate it.
 ///
-/// After a successful login, runs live model discovery so the connection's
+/// After a successful login, runs live catalog sync so the connection's
 /// model list reflects the account's real entitlements immediately (rather
-/// than waiting for the next launch). Discovery failures are non-fatal: the
+/// than waiting for the next launch). Catalog sync failures are non-fatal: the
 /// connection keeps its previous model subset.
 pub async fn connect(
     config: &mut Config,
@@ -1276,7 +1291,7 @@ pub async fn run_oauth_for_connect(
     let connections = Connections::load();
     let auth_mode = connections
         .get(&provider_id)
-        .map(|p| p.auth)
+        .map(|p| p.auth.clone())
         .unwrap_or_default();
     let Some(cfg) = auth_mode
         .oauth_provider_id()
@@ -1329,7 +1344,7 @@ pub async fn run_oauth_for_connect(
     true
 }
 
-/// Run the post-OAuth discovery and activation logic for connect.
+/// Run the post-OAuth catalog sync and activation logic for connect.
 pub async fn connect_post_oauth(
     config: &mut Config,
     agent: &Agent,
@@ -1338,18 +1353,18 @@ pub async fn connect_post_oauth(
     provider_usage: &mut ConnectionUsage,
     provider_id: String,
 ) {
-    // Live model discovery: fetch the provider's actual model list with the
+    // Live catalog sync: fetch the provider's actual model list with the
     // fresh token so the picker shows the account's real entitlements right
     // away. A failure keeps the previous subset; each failure is reported back
     // as a warning so the user knows *why* the list did not refresh.
-    let outcome = catalog::discover_connection_models(&provider_id).await;
+    let outcome = catalog::sync_connection_catalog(&provider_id).await;
     if outcome.changed {
         catalog::sync_fitted_model_registry();
     }
     catalog::prune_stale_models(config, provider_usage);
     for (failed_provider, message) in &outcome.failures {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
-            muta_contracts::ConnectStatus::DiscoveryWarning {
+            muta_contracts::ConnectStatus::CatalogSyncWarning {
                 provider: failed_provider.clone(),
                 message: message.clone(),
             },
@@ -1414,134 +1429,20 @@ async fn run_oauth(
     let tokens = match login.complete().await {
         Ok(t) => t,
         Err(error) => {
+            let message = oauth.format_login_error(&error);
             let _ = resp_tx.send(AgentResponse::ConnectStatus(
                 muta_contracts::ConnectStatus::Failed {
                     provider: label.to_string(),
-                    message: qoder_login_error_message(&cfg, &error),
+                    message,
                 },
             ));
             return None;
         }
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
-
-    // Capture the ChatGPT account id from the id_token/access_token so the
-    // Responses transport can send the `ChatGPT-Account-Id` header. xAI tokens
-    // carry no such claim, so this is `None` for them.
-    let mut account_id = if cfg.is_chatgpt() {
-        tokens
-            .id_token
-            .as_ref()
-            .map(SecretString::expose_secret)
-            .or(Some(tokens.access_token.expose_secret()))
-            .and_then(muta_providers::oauth::chatgpt_account_id)
-    } else {
-        None
-    };
-
-    let mut project_id = None;
-    let mut user_email = None;
-
-    if cfg.is_antigravity() {
-        if let Ok(project) = muta_providers::oauth::resolve_antigravity_project(
-            oauth.client(),
-            tokens.access_token.expose_secret(),
-        )
-        .await
-            && !project.is_empty()
-        {
-            project_id = Some(project.clone());
-            if account_id.is_none() {
-                account_id = Some(project);
-            }
-        }
-        if let Ok(info) = muta_providers::oauth::fetch_google_userinfo(
-            oauth.client(),
-            tokens.access_token.expose_secret(),
-        )
-        .await
-        {
-            user_email = info.email;
-        }
-    }
-
-    let expires_ms = muta_providers::oauth::access_token_expiry_ms(
-        tokens.access_token.expose_secret(),
-        tokens.expires_in,
-        now_ms,
-    );
-
-    // Qoder's typed request identity is assembled at login: the uid comes
-    // from the device/exchange response, the machine AES key is generated
-    // once per device and persisted with the connection (rotating it would
-    // look like device churn to Qoder's risk layer). The fields ChatGPT and
-    // Google use (`account_id`/`project_id`) stay empty for Qoder — identity
-    // materials never borrow another protocol's semantics.
-    let qoder_identity = if cfg.is_qoder() {
-        let uid = tokens.qoder_uid.clone().unwrap_or_default();
-        let machine_key_hex = stored_qoder_identity(&label)
-            .unwrap_or_else(muta_providers::oauth::qoder::generate_machine_key_hex);
-        Some(muta_providers::oauth::QoderStoredIdentity {
-            uid,
-            machine_key_hex: SecretString::from(machine_key_hex),
-            data_policy_agreed: true,
-            organization_id: None,
-            organization_tags: Vec::new(),
-        })
-    } else {
-        None
-    };
-
-    Some(muta_providers::oauth::TokenSet {
-        access: tokens.access_token,
-        refresh: tokens.refresh_token.unwrap_or_default(),
-        expires_ms,
-        account_id,
-        id_token: tokens.id_token,
-        token_type: tokens.token_type,
-        scope: tokens.scope,
-        project_id,
-        user_email,
-        qoder: qoder_identity,
-    })
-}
-
-/// Human-facing message for a failed OAuth login. Qoder-specific: the
-/// `/device/selectAccounts` web page maps both a 400 and a 429 from its
-/// `/device/redirect` call to the same "Parameter invalid" dialog, so a raw
-/// error dump misleads the user — reframe rate limits and expired links
-/// with the action that actually fixes them.
-fn qoder_login_error_message(
-    cfg: &muta_providers::oauth::OAuthConfig,
-    error: &muta_providers::oauth::AuthError,
-) -> String {
-    if !cfg.is_qoder() {
-        return error.to_string();
-    }
-    match error {
-        muta_providers::oauth::AuthError::TokenEndpoint { status: 429, .. } => {
-            "Qoder rate-limited this login (shown by the web page as \"Parameter invalid\"). \
-             Wait 1–2 minutes without retrying, then start a new login — repeated attempts \
-             extend the cooldown."
-                .to_string()
-        }
-        muta_providers::oauth::AuthError::Timeout => {
-            "Login timed out. Qoder authorize links expire within minutes: start a new login \
-             and finish the browser step (open → sign in → approve) in one pass."
-                .to_string()
-        }
-        other => other.to_string(),
-    }
-}
-
-/// Read the persisted Qoder identity for a connection, if any, so re-login
-/// keeps the same machine key instead of generating device churn.
-fn stored_qoder_identity(connection_id: &str) -> Option<String> {    let store = muta_providers::oauth::AuthStore::load().ok()?;
-    store
-        .tokens
-        .get(connection_id)
-        .and_then(|tokens| tokens.qoder.as_ref())
-        .map(|identity| identity.machine_key_hex.expose_secret().to_string())
+    let token_set =
+        muta_providers::oauth::build_token_set_from_login(&oauth, &label, tokens, now_ms).await;
+    Some(token_set)
 }
 
 pub(crate) async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str) {
@@ -1552,7 +1453,7 @@ pub(crate) async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str)
     if !instance.auth.is_oauth() {
         return;
     }
-    let source = muta_providers::oauth::OAuthCredentialSource::new(provider_id, instance.auth);
+    let source = muta_providers::oauth::OAuthCredentialSource::new(provider_id, instance.auth.clone());
     if let Err(error) = muta_contracts::CredentialSource::resolve_auth(&source).await {
         tracing::warn!(error = %error, provider = %provider_id, "OAuth token resolution failed");
     }
@@ -1717,7 +1618,7 @@ pub async fn set_default_model(
     .await;
 }
 
-/// Apply one connection's streamed discovery result (ADR-0227). Called as each
+/// Apply one connection's streamed catalog-sync result (ADR-0227). Called as each
 /// connection completes, so a slow sibling never delays this one's picker
 /// update.
 pub fn apply_connection_update(
@@ -1732,7 +1633,7 @@ pub fn apply_connection_update(
     }
     if let Some(error) = &update.error {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
-            muta_contracts::ConnectStatus::DiscoveryWarning {
+            muta_contracts::ConnectStatus::CatalogSyncWarning {
                 provider: update.connection.clone(),
                 message: error.clone(),
             },
@@ -1744,15 +1645,15 @@ pub fn apply_connection_update(
     )));
 }
 
-/// Close a completed discovery pass: re-derive global state, emit the command
+/// Close a completed catalog-sync pass: re-derive global state, emit the command
 /// acknowledgement, and publish the final provider keys and picker. Per-channel
 /// changes and warnings are streamed by [`apply_connection_update`]; this only
 /// settles the pass.
-pub fn apply_model_discovery_outcome(
+pub fn apply_catalog_sync_outcome(
     config: &mut Config,
     resp_tx: &mpsc::UnboundedSender<AgentResponse>,
     provider_usage: &mut ConnectionUsage,
-    outcome: catalog::DiscoveryOutcome,
+    outcome: catalog::CatalogSyncOutcome,
     session_id: Option<String>,
 ) {
     if outcome.changed {
@@ -1827,7 +1728,8 @@ pub(crate) async fn query_connection_detail(
         })
         .unwrap_or_else(|| {
             let spec = muta_providers::model_provider_spec(&connection.provider);
-            let p = spec.as_ref()
+            let p = spec
+                .as_ref()
                 .map(|s| s.protocol)
                 .unwrap_or(WireProtocol::ChatCompletions);
             let url = spec.map(|s| s.root_url.to_string()).unwrap_or_default();
@@ -1909,7 +1811,7 @@ pub(crate) async fn query_connection_detail(
         api_key_source,
         client_identity: if connection.client_identity != ClientIdentity::Native {
             connection.client_identity.clone()
-        } else if connection.auth == muta_contracts::ConnectionAuth::AntigravityOAuth
+        } else if connection.auth.subscription_provider() == Some("google-antigravity")
             || connection.provider == "google-antigravity"
         {
             ClientIdentity::Antigravity
@@ -1931,12 +1833,12 @@ pub(crate) async fn query_connection_detail(
     // Phase 2: Async remote query in background task.
     let resp_tx_bg = resp_tx.clone();
     let conn_id = connection.name.clone();
-    let conn_auth = connection.auth;
+    let conn_auth = connection.auth.clone();
     let provider = connection.provider.clone();
     let raw_key_str = raw_key.expose_secret().to_string();
     tokio::spawn(async move {
         let (api_key, is_oauth) = if conn_auth.is_oauth() {
-            let source = muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth);
+            let source = muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth.clone());
             match muta_contracts::CredentialSource::resolve_auth(&source).await {
                 Ok(auth) => (auth.token.expose_secret().to_string(), true),
                 Err(err) => {
@@ -1955,7 +1857,7 @@ pub(crate) async fn query_connection_detail(
             && let muta_contracts::ConnectionUsageState::Error(ref err) = usage
             && is_auth_error(err)
         {
-            let source = muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth);
+            let source = muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth.clone());
             let rejected = SecretString::from(api_key.as_str());
             if let Ok(refreshed) =
                 muta_contracts::CredentialSource::force_refresh_after_rejection(&source, &rejected)
@@ -2091,20 +1993,18 @@ mod tests {
             provider_usage: &mut usage,
         };
 
-        // Pending auth is for AntigravityOAuth, but params requests ChatGptOAuth
+        // Pending auth is for Antigravity, but params requests ChatGPT
         let pending = PendingOAuthAuthorization {
-            auth: muta_contracts::ConnectionAuth::AntigravityOAuth,
+            auth: muta_contracts::ConnectionAuth::subscription("google-antigravity"),
             tokens: muta_providers::oauth::TokenSet {
                 access: "tok".into(),
                 refresh: "ref".into(),
                 expires_ms: 1000,
-                account_id: None,
                 id_token: None,
                 token_type: None,
                 scope: None,
-                project_id: None,
                 user_email: None,
-                qoder: None,
+                attributes: serde_json::Map::new(),
             },
         };
 
@@ -2113,7 +2013,7 @@ mod tests {
             provider: "openai-subscription".to_string(),
             api_key: "".into(),
             models: vec!["gpt-5.6".to_string()],
-            auth: muta_contracts::ConnectionAuth::ChatGptOAuth,
+            auth: muta_contracts::ConnectionAuth::subscription("chatgpt"),
             client_identity: None,
         };
 
@@ -2164,8 +2064,9 @@ mod tests {
                 catalog: None,
                 dialect: None,
                 protocol_roots: vec![],
-            catalog_root_url: None,
-            prompt_cache: None, client_profile_sensitive: false,
+                catalog_root_url: None,
+                prompt_cache: None,
+                client_profile_sensitive: false,
             },
         );
         store.save().unwrap();
@@ -2242,23 +2143,23 @@ mod tests {
 
         let warning = resp_rx.recv().await.expect("warning expected");
         match warning {
-            AgentResponse::ConnectStatus(muta_contracts::ConnectStatus::DiscoveryWarning {
+            AgentResponse::ConnectStatus(muta_contracts::ConnectStatus::CatalogSyncWarning {
                 provider,
                 message,
             }) => {
                 assert_eq!(provider, "gmain");
                 assert_eq!(message, "network error");
             }
-            other => panic!("expected DiscoveryWarning, got {other:?}"),
+            other => panic!("expected CatalogSyncWarning, got {other:?}"),
         }
         let picker = resp_rx.recv().await.expect("picker expected");
         assert!(matches!(picker, AgentResponse::ProviderPicker(_)));
 
-        apply_model_discovery_outcome(
+        apply_catalog_sync_outcome(
             &mut config,
             &resp_tx,
             &mut usage,
-            catalog::DiscoveryOutcome::default(),
+            catalog::CatalogSyncOutcome::default(),
             None,
         );
 

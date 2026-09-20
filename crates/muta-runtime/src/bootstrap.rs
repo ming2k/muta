@@ -148,7 +148,7 @@ pub fn ensure_app_roots() {
 /// Assemble one live session harness. See the module docs for the contract.
 ///
 /// The ordering and background-spawn behavior are identical to the original
-/// inline `main`: live model discovery, skill catalog
+/// inline `main`: live catalog sync, skill catalog
 /// refresh, MCP connect/refresh, and the schedule scheduler (which holds a
 /// `req_tx` clone) all run in the background so they never delay the first
 /// frame.
@@ -221,8 +221,8 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     catalog::sync_fitted_model_registry();
 
     // Startup is read-only for the remote catalog (ADR-0227). The persisted
-    // per-connection `DiscoveryCache` plus the compiled baseline/seed are the
-    // source of truth for the first frame; no network discovery or scheduled
+    // per-connection `RemoteCatalogCache` plus the compiled baseline/seed are the
+    // source of truth for the first frame; no network sync or scheduled
     // refresh runs here. A refresh happens only on explicit user action
     // (`AgentRequest::RefreshProviderModels`) or a connection lifecycle event.
 

@@ -5,7 +5,7 @@ use muta_contracts::effort::EFFORT_GLM_5;
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Z.AI's coding-plan endpoint, in display/activation
 /// order — the first entry is the initial active channel. `glm-5.3-flash`
@@ -19,7 +19,6 @@ pub use muta_contracts::model_providers::ZAI_CODE_MODELS;
 // Code platform, it expects a recognized coding-agent User-Agent. Shares
 // the ZHIPU_API_KEY legacy name for key compatibility with the broader
 // Zhipu ecosystem, while ZAI_API_KEY is the preferred alias.
-
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -141,7 +140,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     // models.dev entry for zai covers the gap so a plan refresh does not blank
     // the picker. Baselines stay the single source of capability truth either
     // way (capability overlay is unavailable here).
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::ZCode,
     client_profile_sensitive: false,
     models: ZAI_CODE_MODELS,

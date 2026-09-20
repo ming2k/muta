@@ -456,16 +456,17 @@ impl SessionDriver {
                 success: bool,
             },
         }
-        struct DiscoveryTaskResult {
-            outcome: catalog::DiscoveryOutcome,
+        struct CatalogSyncTaskResult {
+            outcome: catalog::CatalogSyncOutcome,
             session_id: Option<String>,
         }
         let mut active_oauth_task: Option<tokio::task::JoinHandle<OAuthResult>> = None;
-        let mut active_discovery_task: Option<tokio::task::JoinHandle<DiscoveryTaskResult>> = None;
-        // ADR-0227: discovery streams one update per connection as it completes.
+        let mut active_catalog_sync_task: Option<tokio::task::JoinHandle<CatalogSyncTaskResult>> =
+            None;
+        // ADR-0227: the sync streams one update per connection as it completes.
         // This sender stays alive for the driver's lifetime, so `recv()` yields
         // updates without ever observing a closed channel.
-        let (discovery_tx, mut discovery_rx) =
+        let (catalog_sync_tx, mut catalog_sync_rx) =
             mpsc::unbounded_channel::<catalog::ConnectionUpdate>();
         let mut pending_oauth_authorization: Option<
             crate::handlers_provider::PendingOAuthAuthorization,
@@ -491,18 +492,18 @@ impl SessionDriver {
                         None => break,
                     }
                 }
-                discovery_res = async {
-                    if let Some(ref mut task) = active_discovery_task {
+                catalog_sync_res = async {
+                    if let Some(ref mut task) = active_catalog_sync_task {
                         task.await
                     } else {
                         std::future::pending().await
                     }
                 } => {
-                    active_discovery_task = None;
-                    if let Ok(res) = discovery_res {
+                    active_catalog_sync_task = None;
+                    if let Ok(res) = catalog_sync_res {
                         let mut config = shared_config.write().await;
                         let mut provider_usage = shared_provider_usage.write().await;
-                        crate::handlers_provider::apply_model_discovery_outcome(
+                        crate::handlers_provider::apply_catalog_sync_outcome(
                             &mut config,
                             &resp_tx,
                             &mut provider_usage,
@@ -512,7 +513,7 @@ impl SessionDriver {
                     }
                     continue;
                 }
-                update = discovery_rx.recv() => {
+                update = catalog_sync_rx.recv() => {
                     if let Some(update) = update {
                         let mut config = shared_config.write().await;
                         let mut provider_usage = shared_provider_usage.write().await;
@@ -848,7 +849,7 @@ impl SessionDriver {
                     let provider = auth.oauth_provider_id().unwrap_or("oauth").to_string();
                     active_oauth_task = Some(tokio::spawn(async move {
                         let tokens =
-                            crate::handlers_provider::authorize(&resp_tx_clone, method, auth).await;
+                            crate::handlers_provider::authorize(&resp_tx_clone, method, auth.clone()).await;
                         OAuthResult::Authorize {
                             auth,
                             provider,
@@ -1017,14 +1018,14 @@ impl SessionDriver {
                 }
                 AgentRequest::RefreshProviderModels => {
                     // A user refresh always supersedes an in-flight one.
-                    if let Some(task) = active_discovery_task.take() {
+                    if let Some(task) = active_catalog_sync_task.take() {
                         task.abort();
                     }
                     let session_id = Some(session.id().await);
-                    let sink = discovery_tx.clone();
-                    active_discovery_task = Some(tokio::spawn(async move {
-                        let outcome = catalog::discover_provider_models_streaming(sink).await;
-                        DiscoveryTaskResult {
+                    let sink = catalog_sync_tx.clone();
+                    active_catalog_sync_task = Some(tokio::spawn(async move {
+                        let outcome = catalog::sync_remote_catalog_streaming(sink).await;
+                        CatalogSyncTaskResult {
                             outcome,
                             session_id,
                         }
@@ -1575,7 +1576,7 @@ impl SessionDriver {
         if let Some(task) = active_oauth_task.take() {
             task.abort();
         }
-        if let Some(task) = active_discovery_task.take() {
+        if let Some(task) = active_catalog_sync_task.take() {
             task.abort();
         }
     }

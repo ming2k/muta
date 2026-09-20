@@ -66,6 +66,12 @@ pub struct Connection {
     /// include / exclude / override delta over the provider's universe.
     #[serde(default, skip_serializing_if = "ModelScopeConfig::is_empty")]
     pub models: ModelScopeConfig,
+    /// Catalog request dimensions this connection overrides, keyed by dimension
+    /// name (e.g. Qoder's `scene`). The provider's catalog shape declares the
+    /// defaults; an override here selects a different catalog (Qoder's
+    /// `assistant` vs `experts`) and caches independently of the default.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub catalog_dimensions: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for Connection {
@@ -77,6 +83,7 @@ impl Default for Connection {
             api_key_env: None,
             client_identity: ClientIdentity::Native,
             models: ModelScopeConfig::default(),
+            catalog_dimensions: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -140,6 +147,8 @@ struct RawConnection {
     models: ModelScopeConfig,
     #[serde(default)]
     extra_models: Vec<DeclaredModel>,
+    #[serde(default)]
+    catalog_dimensions: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,7 +171,10 @@ impl RawConnection {
     /// unambiguous legacy marker: migrate that connection to the official
     /// remote-catalog policy and discard the materialized snapshot. Explicit
     /// `extra_models` remain user-owned injections and are restored afterward.
-    fn migrate(self, store: &mut crate::model_providers::ModelProviders) -> Result<Connection, String> {
+    fn migrate(
+        self,
+        store: &mut crate::model_providers::ModelProviders,
+    ) -> Result<Connection, String> {
         let name = self
             .name
             .or(self.id)
@@ -199,38 +211,58 @@ impl RawConnection {
             }
         };
 
-        if self.base_url.is_some() || store.get_provider(&provider).is_none() && !is_known_model_provider(&provider) {
+        if self.base_url.is_some()
+            || store.get_provider(&provider).is_none() && !is_known_model_provider(&provider)
+        {
             // Preserve a legacy connection-specific endpoint as its own service;
             // never shadow an immutable built-in provider ID.
             if is_known_model_provider(&provider) {
                 provider = format!("custom-{}", name.to_lowercase().replace(' ', "-"));
             }
-            let dialect = match self.auth {
-                ConnectionAuth::AntigravityOAuth => muta_contracts::ProviderDialect::Antigravity,
-                ConnectionAuth::ChatGptOAuth => muta_contracts::ProviderDialect::ChatGpt,
-                ConnectionAuth::CopilotOAuth => muta_contracts::ProviderDialect::Copilot,
-                ConnectionAuth::QoderOAuth => muta_contracts::ProviderDialect::Qoder,
-                _ => muta_contracts::ProviderDialect::Standard,
+            let dialect = match &self.auth {
+                ConnectionAuth::Subscription { provider } => match provider.as_ref() {
+                    "google-antigravity" => muta_contracts::ProviderDialect::Antigravity,
+                    "chatgpt" => muta_contracts::ProviderDialect::ChatGpt,
+                    "copilot" => muta_contracts::ProviderDialect::Copilot,
+                    "qoder" => muta_contracts::ProviderDialect::Qoder,
+                    _ => muta_contracts::ProviderDialect::Standard,
+                },
+                ConnectionAuth::ApiKey => muta_contracts::ProviderDialect::Standard,
             };
             let protocol = self.protocol.unwrap_or(match dialect {
                 muta_contracts::ProviderDialect::Antigravity => WireProtocol::GoogleGemini,
                 muta_contracts::ProviderDialect::ChatGpt => WireProtocol::Responses,
                 _ => WireProtocol::ChatCompletions,
             });
-            let root = self.base_url.as_deref().unwrap_or("http://localhost:8080/v1");
+            let root = self
+                .base_url
+                .as_deref()
+                .unwrap_or("http://localhost:8080/v1");
             let definition = crate::model_providers::UserDeclaredProvider {
                 label: Some(name.clone()),
                 root_url: crate::model_providers::migrate_endpoint_root(root),
-                default_protocol: Some(protocol), client_profile: None,
-                user_agent: self.user_agent, catalog: None, dialect: Some(dialect),
-                protocol_roots: vec![], catalog_root_url: None,
-            prompt_cache: None, client_profile_sensitive: false,
+                default_protocol: Some(protocol),
+                client_profile: None,
+                user_agent: self.user_agent,
+                catalog: None,
+                dialect: Some(dialect),
+                protocol_roots: vec![],
+                catalog_root_url: None,
+                prompt_cache: None,
+                client_profile_sensitive: false,
             };
             if let Some(existing) = store.get_provider(&provider) {
-                if existing.root_url != definition.root_url || existing.default_protocol != definition.default_protocol || existing.dialect != definition.dialect {
-                    return Err(format!("legacy connection `{name}` conflicts with provider `{provider}`"));
+                if existing.root_url != definition.root_url
+                    || existing.default_protocol != definition.default_protocol
+                    || existing.dialect != definition.dialect
+                {
+                    return Err(format!(
+                        "legacy connection `{name}` conflicts with provider `{provider}`"
+                    ));
                 }
-            } else { store.set_provider(&provider, definition); }
+            } else {
+                store.set_provider(&provider, definition);
+            }
         }
 
         let mut models = self.models;
@@ -246,14 +278,34 @@ impl RawConnection {
             }
         }
 
+        let auth = migrate_connection_auth(&provider, self.auth);
         Ok(Connection {
             name,
             provider,
-            auth: self.auth,
+            auth,
             api_key_env: self.api_key_env,
             client_identity: self.client_identity,
             models,
+            catalog_dimensions: self.catalog_dimensions,
         })
+    }
+}
+
+/// ADR-0268: OpenCode Go is an OpenCode Console account surface, authenticated
+/// exclusively by the OAuth device flow. A connection persisted under the
+/// retired API-key template is rewritten on load so no key-based path lingers;
+/// its now-inert `credentials.toml` entry is left untouched (it is unreachable
+/// once `auth` is a subscription), and the connection prompts for sign-in on
+/// next activation.
+fn migrate_connection_auth(provider: &str, auth: ConnectionAuth) -> ConnectionAuth {
+    if provider == "opencode-go" && auth == ConnectionAuth::ApiKey {
+        tracing::info!(
+            provider,
+            "migrating opencode-go connection to OpenCode Console OAuth (ADR-0268)"
+        );
+        ConnectionAuth::subscription("opencode")
+    } else {
+        auth
     }
 }
 
@@ -313,7 +365,10 @@ impl Connections {
         };
         let mut provider_store = match crate::model_providers::ModelProviders::try_load() {
             Ok(store) => store,
-            Err(error) => { tracing::error!(%error, "cannot migrate connections with invalid providers"); return Self::default(); }
+            Err(error) => {
+                tracing::error!(%error, "cannot migrate connections with invalid providers");
+                return Self::default();
+            }
         };
         let original_providers = provider_store.clone();
         let mut connections: Vec<Connection> = Vec::with_capacity(raw.connections.len());
@@ -347,7 +402,9 @@ impl Connections {
             }
         }
         let migrated = Self { connections };
-        if !lossless { return migrated; }
+        if !lossless {
+            return migrated;
+        }
         let providers_changed = original_providers != provider_store;
         if providers_changed {
             if let Err(error) = provider_store.save() {
@@ -357,7 +414,8 @@ impl Connections {
         }
         let canonical = toml::to_string_pretty(&migrated).unwrap_or_default();
         if (providers_changed || catalog_policy_migrated || canonical != content)
-            && let Err(error) = migrated.save() {
+            && let Err(error) = migrated.save()
+        {
             tracing::warn!(%error, "could not persist connection migration");
         }
         migrated
@@ -551,6 +609,52 @@ context_window = 500000
             conn.models.filter,
             Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All))
         );
+    }
+
+    #[test]
+    fn opencode_go_api_key_connection_migrates_to_console_oauth() {
+        let raw: RawConnections = toml::from_str(
+            r#"
+[[connections]]
+name = "opencode-go"
+provider = "opencode-go"
+auth = "api-key"
+"#,
+        )
+        .unwrap();
+        let conn = raw
+            .connections
+            .into_iter()
+            .next()
+            .unwrap()
+            .migrate(&mut crate::model_providers::ModelProviders::default())
+            .unwrap();
+        assert_eq!(
+            conn.auth,
+            ConnectionAuth::subscription("opencode"),
+            "opencode-go must load as an OpenCode Console OAuth connection (ADR-0268)"
+        );
+    }
+
+    #[test]
+    fn other_api_key_connections_are_not_reauthed() {
+        let raw: RawConnections = toml::from_str(
+            r#"
+[[connections]]
+name = "openai"
+provider = "openai"
+auth = "api-key"
+"#,
+        )
+        .unwrap();
+        let conn = raw
+            .connections
+            .into_iter()
+            .next()
+            .unwrap()
+            .migrate(&mut crate::model_providers::ModelProviders::default())
+            .unwrap();
+        assert_eq!(conn.auth, ConnectionAuth::ApiKey);
     }
 
     #[test]

@@ -15,7 +15,7 @@ use muta_contracts::{
 
 /// Re-export so server/TUI can use the config-layer path without depending on
 /// core's auth module name directly for `AddProvider`.
-pub use muta_contracts::ChannelAuth as ConfigChannelAuth;
+pub use muta_contracts::ConnectionAuth as ConfigChannelAuth;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -252,8 +252,8 @@ fn default_scope() -> String {
 
 /// Capability metadata overlaid from a provider's live `GET /models` response
 /// for one model id the client registry does not know. Persisted in the
-/// discovery cache (`models_discovery.json`) so the metadata survives
-/// restarts: live discovery refreshes it in the background, and a failed
+/// remote catalog cache (`remote_catalog.json`) so the metadata survives
+/// restarts: a background sync refreshes it, and a failed
 /// fetch leaves the last good values in place. Only instances created from a
 /// preset whose `RemoteCatalogSource` is an endpoint that returns capability
 /// fields (trusted official endpoints) ever carry this.
@@ -616,20 +616,20 @@ pub fn resolve_web_config(config: &WebConfig, credentials: &Credentials) -> Reso
 }
 
 /// Discovered model lists and fitted capabilities, cached under
-/// `$XDG_STATE_HOME/muta/models_discovery.json`.
+/// `$XDG_STATE_HOME/muta/remote_catalog.json`.
 ///
 /// Lives under state (not cache) since the contents — discovered model ids,
 /// ETag revalidation metadata, advertised capability fields — are
 /// program-generated state the user expects to survive restarts rather than
 /// regenerable-from-scratch cache data. A pre-0.43 build wrote this file under
-/// `$XDG_CACHE_HOME/muta/models_discovery.json`; that legacy copy is read once
+/// `$XDG_CACHE_HOME/muta/remote_catalog.json`; that legacy copy is read once
 /// on first load after upgrade and adopted into the state path (see
 /// [`Self::load`]).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DiscoveryCache {
+pub struct RemoteCatalogCache {
     /// Cached discovered model lists, keyed by connection id:
-    /// connection_id -> model ids (in discovery order).
-    #[serde(default, alias = "provider_models")]
+    /// connection_id -> model ids (in catalog order).
+    #[serde(default)]
     pub connection_models: BTreeMap<String, Vec<String>>,
     /// Fitted capability metadata, keyed by connection id then model id.
     #[serde(default)]
@@ -661,36 +661,26 @@ pub struct ModelListCacheState {
     pub refreshed_at_ms: i64,
 }
 
-impl DiscoveryCache {
+impl RemoteCatalogCache {
     pub fn file_path() -> PathBuf {
-        paths::get().discovery_cache_file()
+        paths::get().remote_catalog_cache_file()
     }
 
-    /// Read `models_discovery.json`, returning an empty value if missing or unparseable.
+    /// Read `remote_catalog.json`, returning an empty value if missing or unparseable.
     ///
-    /// On the first load after the 0.43 cache→state migration, the pre-migration
-    /// file at `$XDG_CACHE_HOME/muta/models_discovery.json` (see
-    /// [`paths::Dirs::legacy_discovery_cache_file`]) is adopted into the state
-    /// path: its contents are saved to the new location and the legacy file is
-    /// removed. Subsequent loads read the state path directly.
+    /// Clean break (ADR-0203 §29): no cache-dir migration shim. A file left at
+    /// the retired `$XDG_CACHE_HOME/muta/remote_catalog.json` location is
+    /// ignored and re-derived — the catalog is program-generated state, so a
+    /// missing read costs one refresh, not correctness.
     pub fn load() -> Self {
         let path = Self::file_path();
         if let Ok(content) = fs::read_to_string(&path) {
             return serde_json::from_str(&content).unwrap_or_default();
         }
-        let legacy = paths::get().legacy_discovery_cache_file();
-        if let Ok(content) = fs::read_to_string(&legacy)
-            && let Ok(parsed) = serde_json::from_str::<Self>(&content)
-        {
-            let _ = parsed.save();
-            let _ = std::fs::remove_file(&legacy);
-            let _ = std::fs::remove_file(format!("{}.lock", legacy.display()));
-            return parsed;
-        }
         Self::default()
     }
 
-    /// Persist atomically to `$XDG_STATE_HOME/muta/models_discovery.json`.
+    /// Persist atomically to `$XDG_STATE_HOME/muta/remote_catalog.json`.
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let bytes = serde_json::to_vec_pretty(self)?;
         fsutil::atomic_write_bytes(&Self::file_path(), &bytes)?;
@@ -716,21 +706,21 @@ impl DiscoveryCache {
             .and_then(|models| models.get(model_id))
     }
 
-    /// Acquire the cross-process lock on `models_discovery.json` and load the latest state under the lock.
-    pub async fn lock() -> Result<LockedDiscoveryCache, String> {
+    /// Acquire the cross-process lock on `remote_catalog.json` and load the latest state under the lock.
+    pub async fn lock() -> Result<LockedRemoteCatalogCache, String> {
         let path = Self::file_path();
         let lock = tokio::task::spawn_blocking(move || fsutil::FileLock::acquire(&path))
             .await
-            .map_err(|error| format!("model-discovery lock task failed: {error}"))?
-            .map_err(|error| format!("could not lock model-discovery cache: {error}"))?;
+            .map_err(|error| format!("remote-catalog lock task failed: {error}"))?
+            .map_err(|error| format!("could not lock remote-catalog cache: {error}"))?;
         let cache = Self::load();
-        Ok(LockedDiscoveryCache { cache, _lock: lock })
+        Ok(LockedRemoteCatalogCache { cache, _lock: lock })
     }
 
-    /// Execute a transactional mutation on `DiscoveryCache` under the cross-process lock and save atomically.
+    /// Execute a transactional mutation on `RemoteCatalogCache` under the cross-process lock and save atomically.
     pub async fn modify<F, R>(f: F) -> Result<R, String>
     where
-        F: FnOnce(&mut DiscoveryCache) -> R,
+        F: FnOnce(&mut RemoteCatalogCache) -> R,
     {
         let mut locked = Self::lock().await?;
         let result = f(&mut locked);
@@ -739,31 +729,31 @@ impl DiscoveryCache {
     }
 }
 
-/// An exclusive cross-process lock over `models_discovery.json`.
-pub struct LockedDiscoveryCache {
-    cache: DiscoveryCache,
+/// An exclusive cross-process lock over `remote_catalog.json`.
+pub struct LockedRemoteCatalogCache {
+    cache: RemoteCatalogCache,
     _lock: fsutil::FileLock,
 }
 
-impl std::ops::Deref for LockedDiscoveryCache {
-    type Target = DiscoveryCache;
+impl std::ops::Deref for LockedRemoteCatalogCache {
+    type Target = RemoteCatalogCache;
     fn deref(&self) -> &Self::Target {
         &self.cache
     }
 }
 
-impl std::ops::DerefMut for LockedDiscoveryCache {
+impl std::ops::DerefMut for LockedRemoteCatalogCache {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.cache
     }
 }
 
-impl LockedDiscoveryCache {
-    pub fn cache(&self) -> &DiscoveryCache {
+impl LockedRemoteCatalogCache {
+    pub fn cache(&self) -> &RemoteCatalogCache {
         &self.cache
     }
 
-    pub fn cache_mut(&mut self) -> &mut DiscoveryCache {
+    pub fn cache_mut(&mut self) -> &mut RemoteCatalogCache {
         &mut self.cache
     }
 
@@ -1849,9 +1839,9 @@ deepseek = "new-key"
     }
 
     #[test]
-    fn discovery_cache_and_remote_round_trip() {
+    fn catalog_cache_and_remote_round_trip() {
         let (tmp, _guard, _override_guard) = sandbox_config_dir();
-        let mut cache = DiscoveryCache::default();
+        let mut cache = RemoteCatalogCache::default();
         cache.connection_models.insert(
             "deepseek".to_string(),
             vec!["deepseek-v4-flash".to_string()],
@@ -1880,7 +1870,7 @@ deepseek = "new-key"
         );
         cache.save().unwrap();
 
-        let mut reloaded = DiscoveryCache::load();
+        let mut reloaded = RemoteCatalogCache::load();
         assert_eq!(
             reloaded.fitted_models["kimi"]["kimi-for-coding"].context_window,
             262_144
@@ -1895,43 +1885,7 @@ deepseek = "new-key"
         assert!(reloaded.connection_models.is_empty());
         assert!(reloaded.model_lists.is_empty());
         reloaded.save().unwrap();
-        assert!(DiscoveryCache::load().connection_models.is_empty());
-
-        paths::set_test_default(None);
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    #[test]
-    fn discovery_cache_load_adopts_legacy_cache_dir_file_into_state() {
-        let (tmp, _guard, _override_guard) = sandbox_config_dir();
-        // Seed a pre-0.43 cache-dir discovery file.
-        let mut legacy = DiscoveryCache::default();
-        legacy.connection_models.insert(
-            "deepseek".to_string(),
-            vec!["deepseek-v4-flash".to_string()],
-        );
-        let legacy_path = paths::get().legacy_discovery_cache_file();
-        std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
-        std::fs::write(&legacy_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
-
-        // The state path does not exist yet — load() must adopt the legacy file.
-        assert!(!paths::get().discovery_cache_file().exists());
-        let migrated = DiscoveryCache::load();
-        assert_eq!(
-            migrated.connection_models.get("deepseek"),
-            Some(&vec!["deepseek-v4-flash".to_string()])
-        );
-
-        // The contents now live under the state path; the legacy file is gone.
-        assert!(paths::get().discovery_cache_file().exists());
-        assert!(
-            !legacy_path.exists(),
-            "legacy cache file must be removed on adoption"
-        );
-
-        // A second load reads the state path directly — no fallback, no surprises.
-        let reloaded = DiscoveryCache::load();
-        assert_eq!(reloaded, migrated);
+        assert!(RemoteCatalogCache::load().connection_models.is_empty());
 
         paths::set_test_default(None);
         std::fs::remove_dir_all(&tmp).ok();

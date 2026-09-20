@@ -145,6 +145,19 @@ impl ProviderDialect {
     }
 }
 
+impl OpenAiChatDialect {
+    /// The declarative wire surface for this chat dialect, when it has one.
+    ///
+    /// A surface is the *data* form of a dialect: inference path, envelope,
+    /// model carriers, emulated identity, and live catalog. Plain,
+    /// self-describing dialects (Standard, Copilot, OpenRouter, DeepSeek) have
+    /// `None` here; a dialect with a bespoke signed surface returns its table.
+    /// The executor reads the table, never the enum key (ADR-0260).
+    pub fn surface(self) -> Option<&'static crate::wire_surface::DialectSurface> {
+        None
+    }
+}
+
 /// Canonical alias for the Google Gemini dialect enum.
 pub type GoogleGeminiDialect = GoogleGenerateContentDialect;
 
@@ -295,6 +308,25 @@ impl Channel {
     /// Return the active credential source for this channel.
     pub fn credentials_source(&self) -> std::sync::Arc<dyn crate::CredentialSource> {
         self.credentials.clone()
+    }
+
+    /// The model's catalog provenance: `(source, display_name)`.
+    ///
+    /// `source` is the provider's own label for the catalog the model came from
+    /// (Qoder's `system` / `custom`); `display_name` is the presentation label.
+    /// Both are empty when the catalog advertises none. A dialect whose surface
+    /// declares a matching `CatalogSource`/`DisplayName` carrier stamps them
+    /// into the request; the wire id stays the identity (ADR-0131).
+    pub fn catalog_provenance(&self) -> (String, String) {
+        let remote = self.remote.as_ref();
+        (
+            remote
+                .and_then(|metadata| metadata.catalog_source.clone())
+                .unwrap_or_default(),
+            remote
+                .and_then(|metadata| metadata.name.clone())
+                .unwrap_or_default(),
+        )
     }
 
     /// Whether this channel has a usable API key or valid credential.

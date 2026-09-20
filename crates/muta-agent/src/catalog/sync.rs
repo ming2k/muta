@@ -1,22 +1,22 @@
-//! Live model discovery and the fitted-model overlay.
+//! Live remote-catalog sync and the fitted-model overlay.
 //!
-//! Discovery fetches each discovery-capable connection's `GET /models` list
+//! Catalog sync fetches each catalog-capable connection's `GET /models` list
 //! live and folds it into the catalog's remote-catalog overlay (ADR-0203):
 //! advertised capability fields are trusted per preset and recorded in the
-//! per-connection discovery cache. Routes are *derived* from that cache at
+//! per-connection remote-catalog cache. Routes are *derived* from that cache at
 //! catalog-build time — nothing here mutates config or the connection store.
 //! Transport, status, and schema failures retain the last valid subset. A
 //! structurally valid empty result is authoritative and clears the connection.
 
 use super::Stores;
-use super::derive::{resolve_credential};
+use super::derive::resolve_credential;
 use futures::stream::{self, StreamExt};
 use muta_contracts::WireProtocol;
-use muta_persistence::config::{DiscoveryCache, FittedModelInfo, ModelListCacheState};
+use muta_persistence::config::{FittedModelInfo, ModelListCacheState, RemoteCatalogCache};
 use muta_persistence::connections::Connections;
 use muta_providers::{
-    DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest, ModelDiscoveryUpdate,
-    ModelProviderSpec, RemoteCatalogSource, model_provider_spec,
+    CatalogShape, ModelProviderSpec, RemoteCatalogOptions, RemoteCatalogRequest,
+    RemoteCatalogSource, RemoteCatalogUpdate, model_provider_spec,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
@@ -25,20 +25,28 @@ const MODEL_LIST_CACHE_TTL_MS: i64 = 5 * 60 * 1000;
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DISCOVERY_CONCURRENCY: usize = 8;
 
-/// The concrete network source a discovery job speaks. Both variants are
-/// network feeds normalized to the same [`ModelDiscoveryUpdate`]; the axis is
+/// The concrete network source a catalog sync job speaks. Both variants are
+/// network feeds normalized to the same [`RemoteCatalogUpdate`]; the axis is
 /// *who serves the data*, not the transport.
-enum DiscoverySource {
+enum CatalogFetchSource {
     /// The provider's own catalog endpoint (first-party `GET /models`).
     FirstParty {
-        protocol: DiscoveryProtocol,
+        protocol: CatalogShape,
         base_url: String,
         client_profile: muta_contracts::ClientProfile,
         cached_etag: Option<String>,
+        /// Whether the shape's catalog authenticates with the dialect's own
+        /// request signing (`CatalogAuth::Dialect`). When set, the fetch builds
+        /// the dialect signer (it has the resolved bearer) and hands it to the
+        /// generic fetcher as data.
+        needs_dialect_signing: bool,
+        /// The resolved request dimensions that select which catalog the server
+        /// returns (Qoder's `scene`), after any connection-level override.
+        dimensions: Vec<(String, String)>,
     },
 }
 
-impl DiscoverySource {
+impl CatalogFetchSource {
     /// Fingerprint every request attribute that may select a different catalog
     /// representation. Validators and TTLs must never cross this boundary.
     fn identity(&self) -> String {
@@ -49,12 +57,13 @@ impl DiscoverySource {
                 protocol,
                 base_url,
                 client_profile,
+                dimensions,
                 ..
             } => {
                 digest.update(b"first-party\0");
-                digest.update(discovery_protocol_id(*protocol).as_bytes());
+                digest.update(catalog_shape_id(*protocol).as_bytes());
                 digest.update(b"\0");
-                if *protocol == DiscoveryProtocol::Codex {
+                if *protocol == CatalogShape::Codex {
                     digest.update(muta_contracts::client_identity::CODEX_VERSION.as_bytes());
                     digest.update(b"\0");
                 }
@@ -65,6 +74,17 @@ impl DiscoverySource {
                 headers.sort_unstable();
                 for (name, value) in headers {
                     digest.update(b"\0");
+                    digest.update(name.as_bytes());
+                    digest.update(b"\0");
+                    digest.update(value.as_bytes());
+                }
+                // Request dimensions select a different catalog (Qoder's
+                // `scene`), so they belong in the identity: two connections
+                // that differ only here must never share a validator or TTL.
+                let mut dimensions = dimensions.clone();
+                dimensions.sort_unstable();
+                for (name, value) in dimensions {
+                    digest.update(b"\0dim\0");
                     digest.update(name.as_bytes());
                     digest.update(b"\0");
                     digest.update(value.as_bytes());
@@ -80,47 +100,50 @@ impl DiscoverySource {
     }
 }
 
-const fn discovery_protocol_id(protocol: DiscoveryProtocol) -> &'static str {
+const fn catalog_shape_id(protocol: CatalogShape) -> &'static str {
     match protocol {
-        DiscoveryProtocol::OpenAi => "openai",
-        DiscoveryProtocol::Anthropic => "anthropic",
-        DiscoveryProtocol::Google => "google",
-        DiscoveryProtocol::GoogleCloudCode => "google-cloud-code",
-        DiscoveryProtocol::Codex => "codex",
-        DiscoveryProtocol::OpencodeGo => "opencode-go",
+        CatalogShape::OpenAi => "openai",
+        CatalogShape::Anthropic => "anthropic",
+        CatalogShape::Google => "google",
+        CatalogShape::GoogleCloudCode => "google-cloud-code",
+        CatalogShape::Codex => "codex",
+        CatalogShape::OpencodeGo => "opencode-go",
+        CatalogShape::SceneMap => "scene-map",
     }
 }
 
-struct DiscoveryJob {
+struct CatalogSyncJob {
     connection: muta_persistence::connections::Connection,
-    source: DiscoverySource,
+    source: CatalogFetchSource,
     api_key: muta_contracts::SecretString,
 }
 
-struct DiscoveryFetch {
+struct CatalogFetchResult {
     connection: muta_persistence::connections::Connection,
     source_identity: String,
-    update: Result<ModelDiscoveryUpdate, String>,
+    update: Result<RemoteCatalogUpdate, String>,
 }
 
-async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
+async fn fetch_models(job: CatalogSyncJob) -> CatalogFetchResult {
     let source_identity = job.source.identity();
     match job.source {
-        DiscoverySource::FirstParty {
+        CatalogFetchSource::FirstParty {
             protocol,
             base_url,
             client_profile,
             cached_etag,
+            needs_dialect_signing,
+            dimensions,
         } => {
             let auth = if job.connection.auth.is_oauth() {
                 let source = muta_providers::oauth::OAuthCredentialSource::new(
                     &job.connection.name,
-                    job.connection.auth,
+                    job.connection.auth.clone(),
                 );
                 match muta_contracts::CredentialSource::resolve_auth(&source).await {
                     Ok(auth) => auth,
                     Err(error) => {
-                        return DiscoveryFetch {
+                        return CatalogFetchResult {
                             connection: job.connection,
                             source_identity,
                             update: Err(error),
@@ -131,21 +154,43 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
                 muta_contracts::ResolvedAuth::new(job.api_key)
             };
             let extra_headers = client_profile.headers();
-            let request = ModelDiscoveryRequest {
+            // Build the dialect signer with the freshly-resolved bearer, when
+            // the shape needs it. The generic fetcher receives it as data and
+            // never names a provider.
+            let catalog_signer = if needs_dialect_signing {
+                muta_providers::build_catalog_signer(
+                    &job.connection.name,
+                    auth.token.expose_secret(),
+                )
+                .await
+            } else {
+                None
+            };
+            let catalog_signing: Option<&dyn muta_providers::CatalogSigning> =
+                catalog_signer.as_deref();
+            let dimensions: Vec<(&str, &str)> = dimensions
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect();
+            let request = RemoteCatalogRequest {
                 protocol,
                 base_url: &base_url,
                 api_key: &auth.token,
-                account_id: auth.account_id.as_deref(),
+                account_id: auth
+                    .extension::<muta_contracts::ChatGptAuthMetadata>()
+                    .map(|m| m.account_id.as_str()),
                 user_agent: Some(client_profile.user_agent()),
                 extra_headers: &extra_headers,
+                catalog_signing,
+                dimensions: &dimensions,
             };
-            let options = ModelDiscoveryOptions {
+            let options = RemoteCatalogOptions {
                 etag: cached_etag.as_deref(),
             };
-            let update = muta_providers::discover_models(request, options)
+            let update = muta_providers::fetch_remote_catalog(request, options)
                 .await
                 .map_err(|error| error.to_string());
-            DiscoveryFetch {
+            CatalogFetchResult {
                 connection: job.connection,
                 source_identity,
                 update,
@@ -154,7 +199,7 @@ async fn fetch_models(job: DiscoveryJob) -> DiscoveryFetch {
     }
 }
 
-/// One connection's result from a live discovery pass. Emitted in completion
+/// One connection's result from a live catalog sync pass. Emitted in completion
 /// order so the frontend updates per connection without waiting on a slow
 /// sibling (ADR-0227).
 #[derive(Debug, Clone)]
@@ -167,73 +212,73 @@ pub struct ConnectionUpdate {
     pub error: Option<String>,
 }
 
-/// The result of a live model-discovery pass ([`discover_provider_models`]).
+/// The result of a live catalog sync pass ([`sync_remote_catalog`]).
 #[derive(Debug, Default)]
-pub struct DiscoveryOutcome {
+pub struct CatalogSyncOutcome {
     /// Whether any connection changed its cached model list or fitted metadata.
     pub changed: bool,
     /// Per-connection fetch failures: `(connection_name, error_message)`.
     pub failures: Vec<(String, String)>,
 }
 
-/// Fetch every discovery-capable connection's live model list and update the
-/// discovery cache. Used by single-shot callers that do not stream per
+/// Fetch every catalog-capable connection's live model list and update the
+/// remote-catalog cache. Used by single-shot callers that do not stream per
 /// connection.
-pub async fn discover_provider_models() -> DiscoveryOutcome {
-    discover_models_matching(None, None).await
+pub async fn sync_remote_catalog() -> CatalogSyncOutcome {
+    sync_catalogs_matching(None, None).await
 }
 
-/// Fetch every discovery-capable connection's live model list, emitting a
+/// Fetch every catalog-capable connection's live model list, emitting a
 /// [`ConnectionUpdate`] as each connection's result is applied.
-pub async fn discover_provider_models_streaming(
+pub async fn sync_remote_catalog_streaming(
     sink: mpsc::UnboundedSender<ConnectionUpdate>,
-) -> DiscoveryOutcome {
-    discover_models_matching(None, Some(sink)).await
+) -> CatalogSyncOutcome {
+    sync_catalogs_matching(None, Some(sink)).await
 }
 
 /// Refresh one exact connection. Login and add flows use this path so an
 /// unrelated slow provider cannot delay or contaminate their result.
-pub async fn discover_connection_models(connection_name: &str) -> DiscoveryOutcome {
-    discover_models_matching(Some(connection_name), None).await
+pub async fn sync_connection_catalog(connection_name: &str) -> CatalogSyncOutcome {
+    sync_catalogs_matching(Some(connection_name), None).await
 }
 
-/// Re-run discovery for one connection when the provider advertises a new
+/// Re-run the catalog sync for one connection when the provider advertises a new
 /// catalog ETag on an in-flight response. This is event-initiated, not a
 /// scheduled poll (ADR-0227).
 pub async fn refresh_connection_models_for_etag(
     connection_name: &str,
     advertised_etag: &str,
-) -> DiscoveryOutcome {
-    let cached = DiscoveryCache::load();
+) -> CatalogSyncOutcome {
+    let cached = RemoteCatalogCache::load();
     let connections = Connections::load();
     let Some(connection) = connections.get(connection_name) else {
-        return DiscoveryOutcome::default();
+        return CatalogSyncOutcome::default();
     };
     let Some(spec) = model_provider_spec(&connection.provider) else {
-        return DiscoveryOutcome::default();
+        return CatalogSyncOutcome::default();
     };
-    let Some(source) = discovery_source(connection, &cached, &spec) else {
-        return DiscoveryOutcome::default();
+    let Some(source) = catalog_fetch_source(connection, &cached, &spec) else {
+        return CatalogSyncOutcome::default();
     };
     let expected_source_identity = source.identity();
     let Some(state) = cached.model_lists.get(connection_name) else {
-        return discover_connection_models(connection_name).await;
+        return sync_connection_catalog(connection_name).await;
     };
     if state.etag.as_deref() != Some(advertised_etag)
         || state.client_version != CLIENT_VERSION
         || state.source_identity != expected_source_identity
     {
-        return discover_connection_models(connection_name).await;
+        return sync_connection_catalog(connection_name).await;
     }
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     if now_ms.saturating_sub(state.refreshed_at_ms) < MODEL_LIST_CACHE_TTL_MS / 2 {
-        return DiscoveryOutcome::default();
+        return CatalogSyncOutcome::default();
     }
-    let mut locked = match DiscoveryCache::lock().await {
+    let mut locked = match RemoteCatalogCache::lock().await {
         Ok(lock) => lock,
         Err(error) => {
-            return DiscoveryOutcome {
+            return CatalogSyncOutcome {
                 changed: false,
                 failures: vec![(connection_name.to_string(), error)],
             };
@@ -241,29 +286,29 @@ pub async fn refresh_connection_models_for_etag(
     };
     let Some(current) = locked.model_lists.get_mut(connection_name) else {
         drop(locked);
-        return discover_connection_models(connection_name).await;
+        return sync_connection_catalog(connection_name).await;
     };
     if current.etag.as_deref() != Some(advertised_etag)
         || current.client_version != CLIENT_VERSION
         || current.source_identity != expected_source_identity
     {
         drop(locked);
-        return discover_connection_models(connection_name).await;
+        return sync_connection_catalog(connection_name).await;
     }
     current.refreshed_at_ms = now_ms;
     match locked.save() {
-        Ok(()) => DiscoveryOutcome::default(),
-        Err(error) => DiscoveryOutcome {
+        Ok(()) => CatalogSyncOutcome::default(),
+        Err(error) => CatalogSyncOutcome {
             changed: false,
             failures: vec![(connection_name.to_string(), error.to_string())],
         },
     }
 }
 
-async fn discover_models_matching(
+async fn sync_catalogs_matching(
     target: Option<&str>,
     sink: Option<mpsc::UnboundedSender<ConnectionUpdate>>,
-) -> DiscoveryOutcome {
+) -> CatalogSyncOutcome {
     let stores = Stores::load();
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut jobs = Vec::new();
@@ -275,7 +320,7 @@ async fn discover_models_matching(
         let Some(spec) = model_provider_spec(&connection.provider) else {
             continue;
         };
-        let Some(mut source) = discovery_source(connection, &stores.cache, &spec) else {
+        let Some(mut source) = catalog_fetch_source(connection, &stores.cache, &spec) else {
             continue;
         };
         let source_identity = source.identity();
@@ -292,7 +337,7 @@ async fn discover_models_matching(
             // The validator belongs to a different source; never send it.
             source.discard_validator();
         }
-        jobs.push(DiscoveryJob {
+        jobs.push(CatalogSyncJob {
             connection: connection.clone(),
             source,
             api_key: resolve_credential(connection, &stores.creds),
@@ -300,7 +345,7 @@ async fn discover_models_matching(
     }
 
     if jobs.is_empty() {
-        return DiscoveryOutcome::default();
+        return CatalogSyncOutcome::default();
     }
 
     let mut fetched = stream::iter(jobs)
@@ -315,7 +360,7 @@ async fn discover_models_matching(
             continue;
         }
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let mut cache = match DiscoveryCache::lock().await {
+        let mut cache = match RemoteCatalogCache::lock().await {
             Ok(lock) => lock,
             Err(error) => {
                 failures.push((connection_name.clone(), error.clone()));
@@ -333,33 +378,33 @@ async fn discover_models_matching(
         drop(cache);
         if connection_changed {
             changed = true;
-            tracing::info!(connection = %connection_name, "live model discovery updated connection");
+            tracing::info!(connection = %connection_name, "live catalog sync updated connection");
         }
         if let Some(error) = &error {
             tracing::warn!(
                 connection = %connection_name,
                 error = %error,
-                "live model discovery failed; keeping previous models"
+                "live catalog sync failed; keeping previous models"
             );
             failures.push((connection_name.clone(), error.clone()));
         }
         emit(&sink, &connection_name, connection_changed, error);
     }
 
-    DiscoveryOutcome { changed, failures }
+    CatalogSyncOutcome { changed, failures }
 }
 
-/// Fold one connection's fetched result into the discovery cache. A fetch
+/// Fold one connection's fetched result into the remote-catalog cache. A fetch
 /// error leaves the existing list untouched (ADR-0227: failure never diminishes
 /// a connection).
 fn apply_fetched(
-    cache: &mut DiscoveryCache,
-    fetched: DiscoveryFetch,
+    cache: &mut RemoteCatalogCache,
+    fetched: CatalogFetchResult,
     now_ms: i64,
 ) -> (bool, Option<String>) {
     let connection = &fetched.connection;
     match fetched.update {
-        Ok(ModelDiscoveryUpdate::Modified { models, etag }) => {
+        Ok(RemoteCatalogUpdate::Modified { models, etag }) => {
             let mut changed = false;
             let fitted: std::collections::BTreeMap<String, FittedModelInfo> = models
                 .iter()
@@ -404,7 +449,7 @@ fn apply_fetched(
             );
             (changed, None)
         }
-        Ok(ModelDiscoveryUpdate::NotModified { etag }) => {
+        Ok(RemoteCatalogUpdate::NotModified { etag }) => {
             cache.model_lists.insert(
                 connection.name.clone(),
                 ModelListCacheState {
@@ -435,11 +480,11 @@ fn emit(
     }
 }
 
-fn discovery_source(
+fn catalog_fetch_source(
     connection: &muta_persistence::connections::Connection,
-    cache: &DiscoveryCache,
+    cache: &RemoteCatalogCache,
     spec: &ModelProviderSpec,
-) -> Option<DiscoverySource> {
+) -> Option<CatalogFetchSource> {
     match spec.catalog_source {
         RemoteCatalogSource::Endpoint(protocol) => {
             build_first_party_source(connection, cache, spec, protocol)
@@ -451,13 +496,13 @@ fn discovery_source(
 #[cfg(test)]
 pub(super) fn source_identity_for_connection(
     connection: &muta_persistence::connections::Connection,
-    cache: &DiscoveryCache,
+    cache: &RemoteCatalogCache,
 ) -> Option<String> {
     let spec = model_provider_spec(&connection.provider)?;
-    discovery_source(connection, cache, &spec).map(|source| source.identity())
+    catalog_fetch_source(connection, cache, &spec).map(|source| source.identity())
 }
 
-/// Build the [`DiscoverySource::FirstParty`] variant for a connection,
+/// Build the [`CatalogFetchSource::FirstParty`] variant for a connection,
 /// Returns `None` only when the
 /// connection's first route cannot be derived (unknown provider or an empty
 /// model seed) — a provider's declared `live_catalog` scheme is authoritative,
@@ -466,10 +511,10 @@ pub(super) fn source_identity_for_connection(
 #[allow(clippy::too_many_arguments)]
 fn build_first_party_source(
     connection: &muta_persistence::connections::Connection,
-    cache: &DiscoveryCache,
+    cache: &RemoteCatalogCache,
     spec: &ModelProviderSpec,
-    protocol: DiscoveryProtocol,
-) -> Option<DiscoverySource> {
+    protocol: CatalogShape,
+) -> Option<CatalogFetchSource> {
     let base_url = spec.catalog_root().to_string();
     let client_profile = if connection.client_identity != muta_contracts::ClientIdentity::Native {
         connection.client_identity.clone()
@@ -484,18 +529,52 @@ fn build_first_party_source(
         .model_lists
         .get(&connection.name)
         .and_then(|state| state.etag.clone());
-    Some(DiscoverySource::FirstParty {
+    // The catalog signer is built at fetch time, once the connection's bearer
+    // is resolved (the signature embeds it). This only records that the shape
+    // needs dialect signing; the fetcher receives the built signer as data.
+    let needs_dialect_signing = protocol
+        .auth()
+        .eq(&muta_contracts::provider_surface::CatalogAuth::Dialect);
+    let dimensions = resolved_catalog_dimensions(connection, protocol);
+    Some(CatalogFetchSource::FirstParty {
         protocol,
         base_url,
         client_profile,
         cached_etag,
+        needs_dialect_signing,
+        dimensions,
     })
 }
 
+/// The request dimensions a shape selects its catalog by, after applying any
+/// connection-level override.
+///
+/// A shape declares its defaults ([`CatalogShape::dimensions`]); a connection
+/// may override any of them (Qoder's `scene`: `assistant` vs `experts`). The
+/// resolved set is part of the catalog identity, so an override caches
+/// independently of the default.
+fn resolved_catalog_dimensions(
+    connection: &muta_persistence::connections::Connection,
+    protocol: CatalogShape,
+) -> Vec<(String, String)> {
+    let mut dimensions: Vec<(String, String)> = protocol
+        .dimensions()
+        .iter()
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+    for (name, value) in &connection.catalog_dimensions {
+        match dimensions.iter_mut().find(|(existing, _)| existing == name) {
+            Some(slot) => slot.1 = value.clone(),
+            None => dimensions.push((name.clone(), value.clone())),
+        }
+    }
+    dimensions
+}
+
 /// Rebuild the fitted-model overlay (`muta_contracts::model`) from the
-/// discovery cache.
+/// remote-catalog cache.
 pub fn sync_fitted_model_registry() {
-    let cache = DiscoveryCache::load();
+    let cache = RemoteCatalogCache::load();
     let connections = Connections::load();
     let fitted: Vec<muta_contracts::model::FittedModel> = connections
         .connections

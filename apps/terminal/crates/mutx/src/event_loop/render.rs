@@ -1230,12 +1230,16 @@ fn compose_frame(
                     &mut app.preset_scroll,
                 )),
                 SheetKind::OAuthPending => {
-                    let title: &'static str = match app.custom_auth {
-                        muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT Subscription",
-                        muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
-                        muta_contracts::ConnectionAuth::XaiOAuth => "xAI",
-                        muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
-                        muta_contracts::ConnectionAuth::QoderOAuth => "Qoder",
+                    let title: &'static str = match &app.custom_auth {
+                        muta_contracts::ConnectionAuth::Subscription { provider } => match provider.as_ref() {
+                            "chatgpt" => "ChatGPT Subscription",
+                            "copilot" => "Copilot",
+                            "xai" => "xAI",
+                            "google-antigravity" => "Google Antigravity",
+                            "qoder" => "Qoder",
+                            "opencode" | "opencode-go" => "OpenCode Go",
+                            _ => "Subscription",
+                        },
                         muta_contracts::ConnectionAuth::ApiKey => "OAuth",
                     };
                     Some(render::draw_oauth_pending(

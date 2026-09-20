@@ -5,12 +5,12 @@ use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Google Antigravity OAuth (Google One AI Premium / Pro).
 ///
-/// This is the **offline floor** (Layer 3 of the three-layer catalog): live
-/// discovery against `/v1internal:fetchAvailableModels` is authoritative for a
+/// This is the **offline floor** (Layer 3 of the three-layer catalog): the live
+/// catalog at `/v1internal:fetchAvailableModels` is authoritative for a
 /// signed-in account and may add generations this seed does not list. The seed
 /// stays current enough that a connection with no network still offers the
 /// current tiered generation.
@@ -228,9 +228,11 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     id: std::borrow::Cow::Borrowed("google-antigravity"),
     baselines: MODELS,
     root_url: std::borrow::Cow::Borrowed("https://daily-cloudcode-pa.googleapis.com"),
-    user_agent: Some(std::borrow::Cow::Borrowed(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT)),
+    user_agent: Some(std::borrow::Cow::Borrowed(
+        muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT,
+    )),
     protocol: WireProtocol::GoogleGemini,
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::GoogleCloudCode),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::GoogleCloudCode),
     default_client_profile: muta_contracts::ClientPreset::Antigravity,
     client_profile_sensitive: true,
     models: ANTIGRAVITY_OAUTH_MODELS,

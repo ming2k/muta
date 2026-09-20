@@ -170,7 +170,7 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         needs_model: false,
         default_url: Some("https://chatgpt.com/backend-api/codex/responses"),
         user_agent: None,
-        auth: muta_contracts::ConnectionAuth::ChatGptOAuth,
+        auth: muta_contracts::ConnectionAuth::subscription_const("chatgpt"),
     },
     ConnectionTemplate {
         id: "deepseek",
@@ -196,7 +196,7 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         needs_model: false,
         default_url: Some("https://api.githubcopilot.com/chat/completions"),
         user_agent: None,
-        auth: muta_contracts::ConnectionAuth::CopilotOAuth,
+        auth: muta_contracts::ConnectionAuth::subscription_const("copilot"),
     },
     ConnectionTemplate {
         id: "google",
@@ -222,7 +222,7 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         needs_model: false,
         default_url: Some("https://daily-cloudcode-pa.googleapis.com"),
         user_agent: Some(muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT),
-        auth: muta_contracts::ConnectionAuth::AntigravityOAuth,
+        auth: muta_contracts::ConnectionAuth::subscription_const("google-antigravity"),
     },
     ConnectionTemplate {
         id: "kimi-code",
@@ -253,7 +253,7 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
     ConnectionTemplate {
         id: "opencode-go",
         label: "OpenCode Go",
-        description: "OpenCode.ai subscription relay with cloud-accelerated coding and agent models; sign in with an OpenCode API key.",
+        description: "OpenCode.ai subscription relay with cloud-accelerated coding and agent models; sign in with your OpenCode account.",
         protocol: WireProtocol::ChatCompletions,
         models: muta_contracts::model_providers::OPENCODE_GO_MODELS,
         needs_url: false,
@@ -261,7 +261,7 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         needs_model: false,
         default_url: Some("https://opencode.ai/zen/go/v1/chat/completions"),
         user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
-        auth: muta_contracts::ConnectionAuth::ApiKey,
+        auth: muta_contracts::ConnectionAuth::subscription_const("opencode"),
     },
     ConnectionTemplate {
         id: "openrouter",
@@ -287,7 +287,7 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         needs_model: false,
         default_url: Some("https://api2.qoder.sh"),
         user_agent: None,
-        auth: muta_contracts::ConnectionAuth::QoderOAuth,
+        auth: muta_contracts::ConnectionAuth::subscription_const("qoder"),
     },
     ConnectionTemplate {
         id: "glm-cn",
@@ -313,7 +313,7 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         needs_model: false,
         default_url: Some("https://api.x.ai/v1/chat/completions"),
         user_agent: None,
-        auth: muta_contracts::ConnectionAuth::XaiOAuth,
+        auth: muta_contracts::ConnectionAuth::subscription_const("xai"),
     },
 ];
 
@@ -1682,10 +1682,10 @@ mod tests {
         // `https://chatgpt.com/backend-api/codex/...`). The editor must expose
         // only a rename, so the server-side guard is never the lone defense
         // against wiping them.
-        let xai = edit_fields(true, ConnectionAuth::XaiOAuth);
+        let xai = edit_fields(true, ConnectionAuth::subscription("xai"));
         assert_eq!(xai, vec![CustomField::Name]);
 
-        let chatgpt = edit_fields(true, ConnectionAuth::ChatGptOAuth);
+        let chatgpt = edit_fields(true, ConnectionAuth::subscription("chatgpt"));
         assert_eq!(chatgpt, vec![CustomField::Name]);
     }
 

@@ -7,12 +7,12 @@
 
 use muta_contracts::Provider;
 use muta_contracts::catalog::{Channel, Transport};
-use std::sync::Arc;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use crate::{
-    AnthropicMessagesProvider, DiscoveryProtocol, GoogleProvider,
-    OpenAiChatCompletionsProvider, OpenAiResponsesProvider, ThinkingConfig,
+    AnthropicMessagesProvider, CatalogShape, GoogleProvider, OpenAiChatCompletionsProvider,
+    OpenAiResponsesProvider, ThinkingConfig,
 };
 
 mod anthropic;
@@ -26,7 +26,7 @@ mod kimi;
 mod openai;
 pub(crate) mod opencode_go;
 mod openrouter;
-mod qoder;
+pub(crate) mod qoder;
 mod xai;
 mod zai;
 
@@ -42,6 +42,8 @@ pub use opencode_go::OPENCODE_GO_MODELS;
 pub use openrouter::OPENROUTER_BUILTIN_MODELS;
 pub use xai::XAI_BUILTIN_MODELS;
 pub use zai::ZAI_CODE_MODELS;
+
+pub use qoder::{QoderCatalogSigning, build_catalog_signer};
 
 use anthropic::anthropic_model_max_tokens;
 
@@ -145,20 +147,36 @@ pub const MODEL_PROVIDER_SPECS: &[ModelProviderSpec] = &[
     antigravity_oauth::MODEL_PROVIDER_SPEC,
 ];
 
-static USER_DECLARED_SPECS: std::sync::RwLock<std::collections::BTreeMap<String, Arc<ModelProviderSpec>>> =
-    std::sync::RwLock::new(std::collections::BTreeMap::new());
+static USER_DECLARED_SPECS: std::sync::RwLock<
+    std::collections::BTreeMap<String, Arc<ModelProviderSpec>>,
+> = std::sync::RwLock::new(std::collections::BTreeMap::new());
 
 pub fn user_declared_provider_spec(id: &str) -> Option<Arc<ModelProviderSpec>> {
-    USER_DECLARED_SPECS.read().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
+    USER_DECLARED_SPECS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+        .cloned()
 }
 
-pub fn register_user_declared_provider(spec: ModelProviderSpec) -> Result<Arc<ModelProviderSpec>, String> {
-    if MODEL_PROVIDER_SPECS.iter().any(|builtin| builtin.id == spec.id) {
-        return Err(format!("provider `{}` collides with a built-in provider", spec.id));
+pub fn register_user_declared_provider(
+    spec: ModelProviderSpec,
+) -> Result<Arc<ModelProviderSpec>, String> {
+    if MODEL_PROVIDER_SPECS
+        .iter()
+        .any(|builtin| builtin.id == spec.id)
+    {
+        return Err(format!(
+            "provider `{}` collides with a built-in provider",
+            spec.id
+        ));
     }
     spec.validate()?;
     let spec = Arc::new(spec);
-    USER_DECLARED_SPECS.write().unwrap_or_else(|e| e.into_inner()).insert(spec.id.to_string(), spec.clone());
+    USER_DECLARED_SPECS
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(spec.id.to_string(), spec.clone());
     Ok(spec)
 }
 
@@ -168,26 +186,46 @@ pub fn sync_user_declared_providers_from_disk() -> Result<(), String> {
     let store = muta_persistence::model_providers::ModelProviders::try_load()?;
     let mut next = std::collections::BTreeMap::new();
     for (id, provider) in store.providers {
-        let wire = provider.default_protocol.unwrap_or(muta_contracts::WireProtocol::ChatCompletions);
+        let wire = provider
+            .default_protocol
+            .unwrap_or(muta_contracts::WireProtocol::ChatCompletions);
         let dialect = provider.dialect.unwrap_or_default();
-        let catalog_source = provider.catalog.unwrap_or_else(|| RemoteCatalogSource::Endpoint(match dialect {
-            muta_contracts::ProviderDialect::Antigravity => DiscoveryProtocol::GoogleCloudCode,
-            muta_contracts::ProviderDialect::ChatGpt => DiscoveryProtocol::Codex,
-            _ => DiscoveryProtocol::from_wire_protocol(wire),
-        }));
+        let catalog_source = provider.catalog.unwrap_or_else(|| {
+            RemoteCatalogSource::Endpoint(match dialect {
+                muta_contracts::ProviderDialect::Antigravity => CatalogShape::GoogleCloudCode,
+                muta_contracts::ProviderDialect::ChatGpt => CatalogShape::Codex,
+                _ => CatalogShape::from_wire_protocol(wire),
+            })
+        });
         let spec = ModelProviderSpec {
-            id: Cow::Owned(id.clone()), baselines: &[], root_url: Cow::Owned(provider.root_url),
-            user_agent: provider.user_agent.map(Cow::Owned), protocol: wire, dialect,
-            protocol_roots: Cow::Owned(provider.protocol_roots.into_iter().map(|(wire, root)| (wire, Cow::Owned(root))).collect()),
+            id: Cow::Owned(id.clone()),
+            baselines: &[],
+            root_url: Cow::Owned(provider.root_url),
+            user_agent: provider.user_agent.map(Cow::Owned),
+            protocol: wire,
+            dialect,
+            protocol_roots: Cow::Owned(
+                provider
+                    .protocol_roots
+                    .into_iter()
+                    .map(|(wire, root)| (wire, Cow::Owned(root)))
+                    .collect(),
+            ),
             catalog_root_url: provider.catalog_root_url.map(Cow::Owned),
-            models: &[], catalog_source,
-            default_client_profile: provider.client_profile.unwrap_or(muta_contracts::ClientPreset::Native),
-            client_profile_sensitive: provider.client_profile_sensitive, prompt_cache: PromptCachePolicy::Declared(provider.prompt_cache.unwrap_or_default()),
+            models: &[],
+            catalog_source,
+            default_client_profile: provider
+                .client_profile
+                .unwrap_or(muta_contracts::ClientPreset::Native),
+            client_profile_sensitive: provider.client_profile_sensitive,
+            prompt_cache: PromptCachePolicy::Declared(provider.prompt_cache.unwrap_or_default()),
         };
         spec.validate()?;
         next.insert(id, Arc::new(spec));
     }
-    *USER_DECLARED_SPECS.write().unwrap_or_else(|e| e.into_inner()) = next;
+    *USER_DECLARED_SPECS
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = next;
     Ok(())
 }
 
@@ -213,39 +251,67 @@ pub fn model_provider_spec(id: &str) -> Option<Arc<ModelProviderSpec>> {
 /// `opencode-go` relay routes models by their registered wire format (OpenAI
 /// chat / Anthropic `/messages` / Google `/v1beta`), so its base URL and
 /// protocol vary per model. `None` means the provider id is unknown.
-pub fn route_for_model(provider_id: &str, model_id: &str) -> Option<(muta_contracts::WireProtocol, String, Option<Cow<'static, str>>)> {
+pub fn route_for_model(
+    provider_id: &str,
+    model_id: &str,
+) -> Option<(
+    muta_contracts::WireProtocol,
+    String,
+    Option<Cow<'static, str>>,
+)> {
     let spec = model_provider_spec(provider_id)?;
     let protocol = spec.model_protocol(model_id);
-    Some((protocol, spec.endpoint(protocol).ok()?, spec.user_agent.clone()))
+    Some((
+        protocol,
+        spec.endpoint(protocol).ok()?,
+        spec.user_agent.clone(),
+    ))
 }
 
 impl ModelProviderSpec {
     pub fn validate(&self) -> Result<(), String> {
         muta_contracts::ApiRoot::parse(&self.root_url)?;
         if !self.dialect.supports(self.protocol) {
-            return Err(format!("provider `{}` has an incompatible default protocol", self.id));
+            return Err(format!(
+                "provider `{}` has an incompatible default protocol",
+                self.id
+            ));
         }
         let mut seen = std::collections::HashSet::new();
         for (wire, root) in self.protocol_roots.iter() {
-            if !seen.insert(*wire) { return Err(format!("duplicate protocol root for {wire}")); }
+            if !seen.insert(*wire) {
+                return Err(format!("duplicate protocol root for {wire}"));
+            }
             muta_contracts::ApiRoot::parse(root)?;
         }
-        if let Some(root) = &self.catalog_root_url { muta_contracts::ApiRoot::parse(root)?; }
+        if let Some(root) = &self.catalog_root_url {
+            muta_contracts::ApiRoot::parse(root)?;
+        }
         Ok(())
     }
 
     pub fn model_protocol(&self, model_id: &str) -> muta_contracts::WireProtocol {
-        self.baselines.iter().find(|model| model.id == model_id).map(|model| model.protocol).unwrap_or(self.protocol)
+        self.baselines
+            .iter()
+            .find(|model| model.id == model_id)
+            .map(|model| model.protocol)
+            .unwrap_or(self.protocol)
     }
 
     /// Convert a provider root to the exact endpoint representation required by the wire adapter.
     pub fn endpoint(&self, protocol: muta_contracts::WireProtocol) -> Result<String, String> {
         use muta_contracts::{ApiRoot, ProviderDialect, WireProtocol};
-        let root = self.protocol_roots.iter().find(|(wire, _)| *wire == protocol)
-            .map(|(_, root)| root.as_ref()).unwrap_or(&self.root_url);
+        let root = self
+            .protocol_roots
+            .iter()
+            .find(|(wire, _)| *wire == protocol)
+            .map(|(_, root)| root.as_ref())
+            .unwrap_or(&self.root_url);
         let root = ApiRoot::parse(root)?;
         Ok(match (protocol, self.dialect) {
-            (WireProtocol::GoogleGemini, _) | (_, ProviderDialect::Qoder) => root.as_str().to_string(),
+            (WireProtocol::GoogleGemini, _) | (_, ProviderDialect::Qoder) => {
+                root.as_str().to_string()
+            }
             (WireProtocol::ChatCompletions, _) => root.append("chat/completions"),
             (WireProtocol::Responses, _) => root.append("responses"),
             (WireProtocol::AnthropicMessages, _) => root.append("messages"),
@@ -368,6 +434,7 @@ pub fn build_provider_for_channel(
             // the picker shows (GPT→medium, others→high clamped to the
             // ladder); an explicit channel override still wins.
             let effective_effort = effective_channel_effort(*effort, &capabilities);
+            let (catalog_source, display_name) = channel.catalog_provenance();
             let mut provider = OpenAiChatCompletionsProvider::with_credentials(
                 credentials,
                 channel.model.clone(),
@@ -378,7 +445,11 @@ pub fn build_provider_for_channel(
             .with_prompt_cache(prompt_cache)
             .with_model_capabilities(capabilities)
             .with_dialect(*dialect)
+            .with_catalog_provenance(catalog_source, display_name)
             .with_id(entry_id.to_string());
+            if *dialect == muta_contracts::OpenAiChatDialect::Qoder {
+                provider = provider.with_pipeline(qoder::build_qoder_pipeline());
+            }
             if let Some(sid) = session_id {
                 provider = provider.with_session_id(sid);
             }
@@ -444,7 +515,10 @@ mod spec_tests {
     fn model_provider_specs_have_unique_nonempty_ids() {
         // Provider ids are the durable join key between a connection and its
         // model provider, so they must be unique and non-empty.
-        let mut ids: Vec<&str> = MODEL_PROVIDER_SPECS.iter().map(|spec| spec.id.as_ref()).collect();
+        let mut ids: Vec<&str> = MODEL_PROVIDER_SPECS
+            .iter()
+            .map(|spec| spec.id.as_ref())
+            .collect();
         ids.sort_unstable();
         assert!(
             ids.iter().all(|id| !id.is_empty()),
@@ -499,7 +573,10 @@ mod spec_tests {
         // The persisted provider vocabulary is contract data (ADR-0201); the
         // registry must cover it exactly, or a stored connection could name a
         // provider this build cannot drive.
-        let mut registry: Vec<&str> = MODEL_PROVIDER_SPECS.iter().map(|spec| spec.id.as_ref()).collect();
+        let mut registry: Vec<&str> = MODEL_PROVIDER_SPECS
+            .iter()
+            .map(|spec| spec.id.as_ref())
+            .collect();
         let mut contract: Vec<&str> = muta_contracts::model_providers::MODEL_PROVIDER_IDS.to_vec();
         registry.sort_unstable();
         contract.sort_unstable();
@@ -537,7 +614,9 @@ mod spec_tests {
         for spec in MODEL_PROVIDER_SPECS {
             for m in spec.baselines {
                 let sig = signature(m);
-                if let Some((first_provider, first_sig)) = seen.insert(m.id, (spec.id.as_ref(), sig)) {
+                if let Some((first_provider, first_sig)) =
+                    seen.insert(m.id, (spec.id.as_ref(), sig))
+                {
                     assert_eq!(
                         first_sig,
                         seen[&m.id].1,
@@ -555,7 +634,7 @@ mod spec_tests {
     fn provider_models_are_covered_by_the_local_baseline_table() {
         // Every id a provider seeds must have baseline metadata in the same
         // provider file's local table — that table is what the reconciliation
-        // layer intersects live discovery against.
+        // layer intersects the live catalog against.
         for spec in MODEL_PROVIDER_SPECS {
             let baseline_ids: std::collections::HashSet<&str> =
                 spec.baselines.iter().map(|m| m.id).collect();
@@ -608,7 +687,6 @@ mod spec_tests {
             assert_eq!(endpoint, "https://opencode.ai/zen/go/v1/messages");
         }
     }
-
 }
 
 #[cfg(test)]
@@ -760,7 +838,11 @@ mod build_tests {
                 crate::OPENROUTER_BUILTIN_MODELS,
                 WireProtocol::ChatCompletions,
             ),
-            ("xai", crate::XAI_BUILTIN_MODELS, WireProtocol::ChatCompletions),
+            (
+                "xai",
+                crate::XAI_BUILTIN_MODELS,
+                WireProtocol::ChatCompletions,
+            ),
             (
                 "openai-subscription",
                 crate::CHATGPT_BUILTIN_MODELS,

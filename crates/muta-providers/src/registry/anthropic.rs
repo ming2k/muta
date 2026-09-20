@@ -6,7 +6,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Per-model `max_tokens` for the Anthropic `/messages` surface. The Messages
 /// API requires `max_tokens`; capping the response at the model's registered
@@ -168,7 +168,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     user_agent: None,
     protocol: WireProtocol::AnthropicMessages,
     models: ANTHROPIC_BUILTIN_MODELS,
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Anthropic),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::Anthropic),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
 };

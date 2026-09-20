@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Moonshot's Kimi Code endpoint, in display/activation
 /// order — the first entry is the initial active channel. `k3` is the
@@ -22,7 +22,6 @@ pub use muta_contracts::model_providers::KIMI_CODE_MODELS;
 // accept any UA — including none — under OAuth auth, but whether the
 // API-key path gates on a recognized coding-agent UA is unknown, so the
 // recognized default stays as the zero-risk choice.
-
 
 /// Baseline capability metadata for the models this provider serves,
 /// submitted to `muta_contracts`'s registry at link time (see
@@ -114,7 +113,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     protocol: WireProtocol::ChatCompletions,
     // The Kimi Code platform exposes a live /models endpoint, so instances
     // created from this preset track the platform's actual model list.
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
     models: KIMI_CODE_MODELS,

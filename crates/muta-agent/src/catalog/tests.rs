@@ -1,18 +1,18 @@
 //! Unit tests for the catalog modules: runtime derivation of routes from
-//! connections + presets + discovery cache, credential resolution, per-route
-//! reasoning, the fitted-model overlay, and live discovery.
+//! connections + presets + catalog cache, credential resolution, per-route
+//! reasoning, the fitted-model overlay, and live catalog sync.
 
 use super::derive::{derive_channel, derive_entries, resolve_credential, route_models};
-use super::discovery::source_identity_for_connection;
 use super::picker::channel_model_info;
+use super::sync::source_identity_for_connection;
 use super::{
-    build_catalog, build_picker_state, discover_connection_models, discover_provider_models,
-    refresh_connection_models_for_etag, sync_fitted_model_registry,
+    build_catalog, build_picker_state, refresh_connection_models_for_etag, sync_connection_catalog,
+    sync_fitted_model_registry, sync_remote_catalog,
 };
 use muta_contracts::catalog::Transport;
 use muta_contracts::{ConnectionAuth, Effort, OpenAiResponsesDialect, ReasoningMode, WireProtocol};
 use muta_persistence::config::{
-    Config, Credentials, DiscoveryCache, FittedModelInfo, ModelListCacheState,
+    Config, Credentials, FittedModelInfo, ModelListCacheState, RemoteCatalogCache,
 };
 use muta_persistence::connections::{Connection, Connections};
 use muta_persistence::route_settings::RouteSettingsStore;
@@ -41,7 +41,7 @@ impl Drop for PathsSandbox {
 }
 
 /// Sandbox the process-wide XDG roots for the duration of a test. Tests that
-/// write the instance store / credentials / discovery cache must bind the
+/// write the instance store / credentials / catalog cache must bind the
 /// result to `_sandbox` for the whole body.
 fn sandboxed_paths() -> PathsSandbox {
     let guard = muta_persistence::paths::TEST_OVERRIDE_GUARD
@@ -79,7 +79,7 @@ fn register_mock_provider(
     base_url: &str,
     protocol: WireProtocol,
     models: &'static [&'static str],
-    catalog_protocol: muta_providers::DiscoveryProtocol,
+    catalog_protocol: muta_providers::CatalogShape,
 ) {
     let mut store = muta_persistence::model_providers::ModelProviders::load();
     store.set_provider(
@@ -90,16 +90,23 @@ fn register_mock_provider(
             default_protocol: Some(protocol),
             client_profile: None,
             user_agent: None,
-            catalog: Some(muta_providers::RemoteCatalogSource::Endpoint(catalog_protocol)),
+            catalog: Some(muta_providers::RemoteCatalogSource::Endpoint(
+                catalog_protocol,
+            )),
             dialect: None,
             protocol_roots: vec![],
             catalog_root_url: None,
-            prompt_cache: None, client_profile_sensitive: false,
+            prompt_cache: None,
+            client_profile_sensitive: false,
         },
     );
-    store.get_or_create_mut(id).include = models.iter().map(|id| muta_contracts::DeclaredModel {
-        id: id.to_string(), ..Default::default()
-    }).collect();
+    store.get_or_create_mut(id).include = models
+        .iter()
+        .map(|id| muta_contracts::DeclaredModel {
+            id: id.to_string(),
+            ..Default::default()
+        })
+        .collect();
     store.save().unwrap();
     muta_providers::sync_user_declared_providers_from_disk().unwrap();
 }
@@ -108,13 +115,13 @@ fn register_mock_provider(
 fn provider_dialect_is_inherited_independently_of_auth_and_remote_protocol() {
     use muta_contracts::{GoogleGenerateContentDialect, ProviderDialect};
     let _sandbox = sandboxed_paths();
-    for auth in [ConnectionAuth::ApiKey, ConnectionAuth::AntigravityOAuth] {
+    for auth in [ConnectionAuth::ApiKey, ConnectionAuth::subscription("google-antigravity")] {
         for remote_protocol in [None, Some(WireProtocol::GoogleGemini)] {
             let mut conn = instance("dialect-inheritance", Some("google-antigravity"));
-            conn.auth = auth;
+            conn.auth = auth.clone();
             // An unknown generation must inherit without a baseline entry.
             let model = "gemini-future-flash-tiered";
-            let mut cache = DiscoveryCache::default();
+            let mut cache = RemoteCatalogCache::default();
             cache
                 .remote_metadata
                 .entry(conn.name.clone())
@@ -146,11 +153,11 @@ fn provider_dialect_is_inherited_independently_of_auth_and_remote_protocol() {
     }
     // Credential type cannot turn an ordinary Google service into Antigravity.
     let mut conn = instance("native-google", Some("google"));
-    conn.auth = ConnectionAuth::AntigravityOAuth;
+    conn.auth = ConnectionAuth::subscription("google-antigravity");
     let channel = derive_channel(
         &conn,
         "gemini-3.8-flash",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -184,7 +191,7 @@ fn provider_dialect_follows_model_protocol_across_service_families() {
     ] {
         // Deliberately use API-key auth to prove dialect is service-owned.
         let conn = instance("dialect-family", Some(provider));
-        let mut cache = DiscoveryCache::default();
+        let mut cache = RemoteCatalogCache::default();
         cache
             .remote_metadata
             .entry(conn.name.clone())
@@ -249,36 +256,35 @@ async fn declared_antigravity_provider_sends_internal_requests_from_derived_chan
             catalog: Some(muta_contracts::RemoteCatalogSource::None),
             protocol_roots: vec![],
             catalog_root_url: None,
-            prompt_cache: None, client_profile_sensitive: false,
+            prompt_cache: None,
+            client_profile_sensitive: false,
         },
     );
     providers.save().unwrap();
     muta_providers::sync_user_declared_providers_from_disk().unwrap();
     let mut conn = instance("test-agy-wire", Some("test-antigravity-wire"));
-    conn.auth = ConnectionAuth::AntigravityOAuth;
+    conn.auth = ConnectionAuth::subscription("google-antigravity");
     {
         let mut auth = AuthStore::lock().await.unwrap();
-        auth.set(
-            &conn.name,
-            TokenSet {
-                access: "test-token".into(),
-                refresh: "test-refresh".into(),
-                expires_ms: i64::MAX,
-                account_id: Some("test-project".into()),
-                project_id: Some("test-project".into()),
-                id_token: None,
-                token_type: Some("Bearer".into()),
-                scope: None,
-                user_email: None,
-                qoder: None,
-            },
-        );
+        let mut t = TokenSet {
+            access: "test-token".into(),
+            refresh: "test-refresh".into(),
+            expires_ms: i64::MAX,
+            id_token: None,
+            token_type: Some("Bearer".into()),
+            scope: None,
+            user_email: None,
+            attributes: serde_json::Map::new(),
+        };
+        t.set_attr("account_id", "test-project");
+        t.set_attr("project_id", "test-project");
+        auth.set(&conn.name, t);
         auth.save().unwrap();
     }
     let channel = derive_channel(
         &conn,
         model,
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -330,24 +336,24 @@ async fn declared_antigravity_provider_sends_internal_requests_from_derived_chan
 #[test]
 fn preset_connection_derives_models_from_the_preset() {
     let deepseek = instance("deepseek", Some("deepseek"));
-    let models = route_models(&deepseek, &DiscoveryCache::default());
+    let models = route_models(&deepseek, &RemoteCatalogCache::default());
     assert_eq!(models, DEEPSEEK_BUILTIN_MODELS);
-    // Discovery-enabled presets without a cache fall back to the snapshot.
+    // Catalog-enabled presets without a cache fall back to the snapshot.
     let openai = instance("openai", Some("openai"));
-    assert!(!route_models(&openai, &DiscoveryCache::default()).is_empty());
+    assert!(!route_models(&openai, &RemoteCatalogCache::default()).is_empty());
 }
 
 #[test]
 fn openrouter_connection_derives_gateway_dialect_and_nex_seed() {
     let connection = instance("openrouter", Some("openrouter"));
     assert_eq!(
-        route_models(&connection, &DiscoveryCache::default()),
+        route_models(&connection, &RemoteCatalogCache::default()),
         vec!["nex-agi/nex-n2.5-pro:free"]
     );
     let channel = derive_channel(
         &connection,
         "nex-agi/nex-n2.5-pro:free",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -364,7 +370,7 @@ fn openrouter_connection_derives_gateway_dialect_and_nex_seed() {
 
 #[test]
 fn discovered_model_list_prefers_the_cache() {
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     cache.connection_models.insert(
         "deepseek".to_string(),
         vec!["deepseek-v4-flash".to_string()],
@@ -382,16 +388,16 @@ fn declared_extra_models_union_after_the_derived_set() {
         ..Default::default()
     }];
     // Snapshot floor (no cache): extras append after the preset ids.
-    let models = route_models(&deepseek, &DiscoveryCache::default());
+    let models = route_models(&deepseek, &RemoteCatalogCache::default());
     assert_eq!(
         models.first().map(String::as_str),
         Some("deepseek-v4-flash")
     );
     assert!(models.contains(&"deepseek-v4-pro-preview-0912".to_string()));
 
-    // A discovery refresh that omits the hidden id can never evict it —
-    // the union happens after discovery, per connection (ADR-0198).
-    let mut cache = DiscoveryCache::default();
+    // A catalog sync that omits the hidden id can never evict it —
+    // the union happens after the sync, per connection (ADR-0198).
+    let mut cache = RemoteCatalogCache::default();
     cache.connection_models.insert(
         "ds-personal".to_string(),
         vec!["deepseek-v4-flash".to_string()],
@@ -410,8 +416,8 @@ fn declared_extra_models_union_after_the_derived_set() {
     assert_eq!(route_models(&other, &cache), DEEPSEEK_BUILTIN_MODELS);
     assert!(!route_models(&other, &cache).contains(&"deepseek-v4-pro-preview-0912".to_string()));
 
-    // A declared id the discovery list already carries is deduped, not doubled.
-    let mut cache_hit = DiscoveryCache::default();
+    // A declared id the catalog list already carries is deduped, not doubled.
+    let mut cache_hit = RemoteCatalogCache::default();
     cache_hit.connection_models.insert(
         "ds-personal".to_string(),
         vec![
@@ -434,7 +440,7 @@ fn declared_extra_model_rides_the_preset_route_with_declared_capabilities() {
     let channel = derive_channel(
         &deepseek,
         "deepseek-v4-pro-preview-0912",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -466,7 +472,7 @@ fn custom_instance_serves_its_declared_models() {
         "https://relay.example.com/v1",
         WireProtocol::ChatCompletions,
         &[],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     let mut custom = instance("relay", Some("test-relay-declared"));
     custom.models.include = vec![
@@ -480,14 +486,14 @@ fn custom_instance_serves_its_declared_models() {
         },
     ];
     assert_eq!(
-        route_models(&custom, &DiscoveryCache::default()),
+        route_models(&custom, &RemoteCatalogCache::default()),
         vec!["a", "b"]
     );
     let entry = derive_entries(
         &Connections {
             connections: vec![custom],
         },
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -504,7 +510,7 @@ fn custom_instance_serves_its_declared_models() {
 #[test]
 fn adr0203_connection_pipe_valve_algebra() {
     use muta_contracts::{ConnectionFilterPolicy, NamedFilterPolicy};
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     cache.connection_models.insert(
         "my-openai".to_string(),
         vec![
@@ -566,7 +572,7 @@ fn adr0203_connection_pipe_valve_algebra() {
 
 #[test]
 fn remote_catalog_provider_defaults_to_open_admission() {
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     cache
         .connection_models
         .insert("chatgpt".to_string(), vec!["gpt-6-astra".to_string()]);
@@ -583,7 +589,7 @@ fn remote_catalog_provider_defaults_to_open_admission() {
 
 #[test]
 fn catalog_cache_identity_tracks_client_emulation() {
-    let cache = DiscoveryCache::default();
+    let cache = RemoteCatalogCache::default();
     let mut connection = instance("chatgpt", Some("openai-subscription"));
     let codex_identity = source_identity_for_connection(&connection, &cache).unwrap();
 
@@ -605,7 +611,7 @@ fn deepseek_route_is_the_responses_transport() {
     let channel = derive_channel(
         &deepseek,
         "deepseek-v4-flash",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -629,7 +635,7 @@ fn opencode_go_routes_models_by_wire_format() {
     let glm = derive_channel(
         &go,
         "glm-5.2",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -641,7 +647,7 @@ fn opencode_go_routes_models_by_wire_format() {
     let minimax = derive_channel(
         &go,
         "minimax-m3",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -650,7 +656,7 @@ fn opencode_go_routes_models_by_wire_format() {
         matches!(&minimax.transport, Transport::Anthropic { base_url, .. } if base_url == "https://opencode.ai/zen/go/v1/messages"),
         "minimax-m3 must route to Anthropic /messages"
     );
-    // route_for_model agrees (the standalone resolver used by discovery).
+    // route_for_model agrees (the standalone resolver used by the sync).
     assert_eq!(
         route_for_model("opencode-go", "minimax-m3").map(|(p, b, _)| (p, b)),
         Some((
@@ -674,7 +680,7 @@ fn openai_route_uses_official_api_not_opencode_go_relay() {
     let channel = derive_channel(
         &openai_conn,
         "gpt-4o",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -693,7 +699,7 @@ fn connection_uses_provider_transport_endpoint() {
     let channel = derive_channel(
         &relay_conn,
         "gpt-4o",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -712,7 +718,7 @@ fn preset_instance_always_uses_the_hardcoded_template_endpoint() {
     let channel = derive_channel(
         &deepseek,
         "deepseek-v4-flash",
-        &DiscoveryCache::default(),
+        &RemoteCatalogCache::default(),
         &RouteSettingsStore::default(),
         &Credentials::default(),
     )
@@ -765,7 +771,7 @@ fn credential_resolves_env_then_credentials_then_empty() {
 
 #[test]
 fn reasoning_route_settings_apply_to_anthropic_routes() {
-    let cache = DiscoveryCache::default();
+    let cache = RemoteCatalogCache::default();
     let mut routes = RouteSettingsStore::default();
     routes
         .settings_for_mut("anthropic", "claude-opus-4-8")
@@ -814,7 +820,7 @@ fn reasoning_route_settings_apply_to_anthropic_routes() {
 
 #[test]
 fn copilot_route_uses_remote_endpoint_metadata() {
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     cache.remote_metadata.insert("copilot".to_string(), {
         let mut m = std::collections::BTreeMap::new();
         m.insert(
@@ -829,7 +835,7 @@ fn copilot_route_uses_remote_endpoint_metadata() {
     let copilot = Connection {
         name: "copilot".to_string(),
         provider: "github-copilot".to_string(),
-        auth: muta_contracts::ConnectionAuth::CopilotOAuth,
+        auth: muta_contracts::ConnectionAuth::subscription("copilot"),
         ..Default::default()
     };
     let channel = derive_channel(
@@ -855,7 +861,7 @@ fn copilot_route_uses_remote_endpoint_metadata() {
 #[test]
 fn model_level_protocol_cascade_resolution() {
     let _sandbox = sandboxed_paths();
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     // Advertise that a model on an OpenAI-compatible connection wants Anthropic wire format
     cache.remote_metadata.insert("corp-relay".to_string(), {
         let mut m = std::collections::BTreeMap::new();
@@ -873,7 +879,7 @@ fn model_level_protocol_cascade_resolution() {
         "https://relay.example.com/v1",
         WireProtocol::ChatCompletions,
         &[],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     let conn = Connection {
         name: "corp-relay".to_string(),
@@ -955,10 +961,10 @@ fn channel_model_info_effort_ladders_survive() {
     assert_eq!(info.thinking, None);
 }
 
-// discovery + fitted overlay
+// catalog sync + fitted overlay
 
 #[tokio::test]
-async fn live_discovery_writes_the_per_instance_cache() {
+async fn live_catalog_sync_writes_the_per_instance_cache() {
     let _sandbox = sandboxed_paths();
     let mut server = mockito::Server::new_async().await;
     server
@@ -977,7 +983,7 @@ async fn live_discovery_writes_the_per_instance_cache() {
         &format!("{}/v1", server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-lite"],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     let instances = Connections {
         connections: vec![Connection {
@@ -991,11 +997,11 @@ async fn live_discovery_writes_the_per_instance_cache() {
     creds.set_api_key("deepseek", Some("sk-test".into()));
     creds.save().unwrap();
 
-    let outcome = discover_provider_models().await;
-    assert!(outcome.changed, "discovery must record a change");
+    let outcome = sync_remote_catalog().await;
+    assert!(outcome.changed, "catalog sync must record a change");
     assert!(outcome.failures.is_empty());
 
-    let cache = DiscoveryCache::load();
+    let cache = RemoteCatalogCache::load();
     assert_eq!(
         cache.connection_models.get("deepseek").map(|m| m.len()),
         Some(3),
@@ -1008,12 +1014,12 @@ async fn live_discovery_writes_the_per_instance_cache() {
 }
 
 #[tokio::test]
-async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
+async fn antigravity_oauth_live_catalog_sync_materializes_tiered_generations() {
     // The antigravity-oauth preset declares its first-party catalog
     // (`fetchAvailableModels`). An OAuth connection must actually run that
-    // discovery — not silently keep the compiled snapshot — so a generation
+    // sync — not silently keep the compiled snapshot — so a generation
     // shipped upstream (gemini-3.8-flash) materializes for the signed-in
-    // account with no client edit. Regression guard: discovery used to skip
+    // account with no client edit. Regression guard: the sync used to skip
     // every AntigravityOAuth connection, leaving the cache empty forever.
     let _sandbox = sandboxed_paths();
     let mut server = mockito::Server::new_async().await;
@@ -1045,10 +1051,10 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
         &format!("{}", server.url()),
         WireProtocol::GoogleGemini,
         &[],
-        muta_providers::DiscoveryProtocol::GoogleCloudCode,
+        muta_providers::CatalogShape::GoogleCloudCode,
     );
     let mut conn = instance("agy-live", Some(provider_id));
-    conn.auth = ConnectionAuth::AntigravityOAuth;
+    conn.auth = ConnectionAuth::subscription("google-antigravity");
     let connections = Connections {
         connections: vec![conn],
     };
@@ -1063,28 +1069,25 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
         + 3_600_000;
     {
         let mut store = AuthStore::lock().await.expect("auth store lock");
-        store.set(
-            "agy-live",
-            TokenSet {
-                access: "ya29.antigravity-test".into(),
-                refresh: "refresh-test".into(),
-                expires_ms,
-                account_id: None,
-                id_token: None,
-                token_type: Some("Bearer".into()),
-                scope: None,
-                project_id: Some("projects/antigravity-test".into()),
-                user_email: None,
-                qoder: None,
-            },
-        );
+        let mut t = TokenSet {
+            access: "ya29.antigravity-test".into(),
+            refresh: "refresh-test".into(),
+            expires_ms,
+            id_token: None,
+            token_type: Some("Bearer".into()),
+            scope: None,
+            user_email: None,
+            attributes: serde_json::Map::new(),
+        };
+        t.set_attr("project_id", "projects/antigravity-test");
+        store.set("agy-live", t);
         store.save().expect("auth store save");
     }
 
-    let outcome = discover_connection_models("agy-live").await;
+    let outcome = sync_connection_catalog("agy-live").await;
     assert!(
         outcome.changed,
-        "antigravity live discovery must record a change"
+        "antigravity live catalog sync must record a change"
     );
     assert!(
         outcome.failures.is_empty(),
@@ -1092,7 +1095,7 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
         outcome.failures
     );
 
-    let cache = DiscoveryCache::load();
+    let cache = RemoteCatalogCache::load();
     let models = cache
         .connection_models
         .get("agy-live")
@@ -1115,7 +1118,7 @@ async fn antigravity_oauth_live_discovery_materializes_tiered_generations() {
 #[tokio::test]
 async fn opencode_go_source_materializes_catalog_models() {
     // The opencode-go preset's live catalog is the models.opencode.ai private
-    // directory (not the relay's own /models). Discovery resolves the
+    // directory (not the relay's own /models). The sync resolves the
     // catalog and materializes ids the client baseline does not
     // know (e.g. glm-5.3) via the remote-catalog overlay (ADR-0203).
     let _sandbox = sandboxed_paths();
@@ -1128,10 +1131,10 @@ async fn opencode_go_source_materializes_catalog_models() {
     };
     instances.save().unwrap();
 
-    let outcome = discover_provider_models().await;
+    let outcome = sync_remote_catalog().await;
     assert!(
         outcome.changed,
-        "opencode-go discovery must record a change"
+        "opencode-go catalog sync must record a change"
     );
     assert!(
         outcome.failures.is_empty(),
@@ -1139,7 +1142,7 @@ async fn opencode_go_source_materializes_catalog_models() {
         outcome.failures
     );
 
-    let cache = DiscoveryCache::load();
+    let cache = RemoteCatalogCache::load();
     let models = cache
         .connection_models
         .get("opencode-go")
@@ -1189,7 +1192,7 @@ async fn single_source_endpoint_failure_records_failure_and_preserves_determinis
         &server.url(),
         WireProtocol::ChatCompletions,
         &["glm-4-plus"],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     let instances = Connections {
         connections: vec![Connection {
@@ -1200,10 +1203,10 @@ async fn single_source_endpoint_failure_records_failure_and_preserves_determinis
     };
     instances.save().unwrap();
 
-    let outcome = discover_provider_models().await;
+    let outcome = sync_remote_catalog().await;
     assert!(
         !outcome.changed,
-        "failed discovery must not record a change"
+        "failed catalog sync must not record a change"
     );
     assert!(
         outcome.failures.iter().any(|(name, _)| name == "zai"),
@@ -1213,7 +1216,7 @@ async fn single_source_endpoint_failure_records_failure_and_preserves_determinis
 }
 
 #[tokio::test]
-async fn connection_discovery_never_touches_unrelated_connections() {
+async fn connection_catalog_sync_never_touches_unrelated_connections() {
     let _sandbox = sandboxed_paths();
     let mut selected_server = mockito::Server::new_async().await;
     let selected_mock = selected_server
@@ -1241,14 +1244,14 @@ async fn connection_discovery_never_touches_unrelated_connections() {
         &format!("{}/v1", selected_server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-flash"],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     register_mock_provider(
         unrel_id,
         &format!("{}/v1", unrelated_server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-pro"],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     Connections {
         connections: vec![
@@ -1271,17 +1274,20 @@ async fn connection_discovery_never_touches_unrelated_connections() {
     creds.set_api_key("unrelated", Some("sk-unrelated".into()));
     creds.save().unwrap();
 
-    let outcome = discover_connection_models("selected").await;
-    assert!(outcome.changed, "unexpected discovery result: {outcome:?}");
+    let outcome = sync_connection_catalog("selected").await;
+    assert!(
+        outcome.changed,
+        "unexpected catalog sync result: {outcome:?}"
+    );
     assert!(
         outcome.failures.is_empty(),
-        "unexpected discovery failures: {:?}",
+        "unexpected catalog sync failures: {:?}",
         outcome.failures
     );
     selected_mock.assert_async().await;
     unrelated_mock.assert_async().await;
 
-    let cache = DiscoveryCache::load();
+    let cache = RemoteCatalogCache::load();
     assert_eq!(
         cache.connection_models.get("selected"),
         Some(&vec!["deepseek-v4-flash".to_string()])
@@ -1290,7 +1296,7 @@ async fn connection_discovery_never_touches_unrelated_connections() {
 }
 
 #[tokio::test]
-async fn discovery_failure_keeps_the_previous_subset_and_reports() {
+async fn catalog_sync_failure_keeps_the_previous_subset_and_reports() {
     let _sandbox = sandboxed_paths();
     let mut server = mockito::Server::new_async().await;
     server
@@ -1306,7 +1312,7 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
         &format!("{}/v1", server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-flash"],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     let instances = Connections {
         connections: vec![Connection {
@@ -1317,12 +1323,12 @@ async fn discovery_failure_keeps_the_previous_subset_and_reports() {
     };
     instances.save().unwrap();
 
-    let outcome = discover_provider_models().await;
+    let outcome = sync_remote_catalog().await;
     assert!(!outcome.changed);
     assert_eq!(outcome.failures.len(), 1);
     assert_eq!(outcome.failures[0].0, "deepseek");
     // The previous subset is untouched (there was none → snapshot still wins).
-    let cache = DiscoveryCache::load();
+    let cache = RemoteCatalogCache::load();
     assert!(cache.connection_models.is_empty());
 }
 
@@ -1343,7 +1349,7 @@ async fn successful_empty_remote_catalog_clears_previous_models() {
         &format!("{}/v1", server.url()),
         WireProtocol::Responses,
         &["deepseek-v4-flash"],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     // This connection is populated only by the remote catalog; drop the
     // helper's declared seed so an authoritative empty catalog is observable.
@@ -1365,7 +1371,7 @@ async fn successful_empty_remote_catalog_clears_previous_models() {
     .save()
     .unwrap();
 
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     cache.connection_models.insert(
         "deepseek".to_string(),
         vec!["deepseek-v4-flash".to_string()],
@@ -1375,12 +1381,15 @@ async fn successful_empty_remote_catalog_clears_previous_models() {
         .insert("deepseek".to_string(), ModelListCacheState::default());
     cache.save().unwrap();
 
-    let outcome = discover_connection_models("deepseek").await;
-    assert!(outcome.changed, "unexpected discovery result: {outcome:?}");
+    let outcome = sync_connection_catalog("deepseek").await;
+    assert!(
+        outcome.changed,
+        "unexpected catalog sync result: {outcome:?}"
+    );
     assert!(outcome.failures.is_empty());
     model_list.assert_async().await;
 
-    let cache = DiscoveryCache::load();
+    let cache = RemoteCatalogCache::load();
     assert_eq!(cache.connection_models.get("deepseek"), Some(&Vec::new()));
     let connections = Connections::load();
     assert!(route_models(connections.get("deepseek").unwrap(), &cache).is_empty());
@@ -1389,7 +1398,7 @@ async fn successful_empty_remote_catalog_clears_previous_models() {
 #[tokio::test]
 async fn orphaned_response_etag_does_not_renew_catalog_state() {
     let _sandbox = sandboxed_paths();
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     cache.model_lists.insert(
         "chatgpt".to_string(),
         ModelListCacheState {
@@ -1405,7 +1414,7 @@ async fn orphaned_response_etag_does_not_renew_catalog_state() {
     assert!(!outcome.changed);
     assert!(outcome.failures.is_empty());
 
-    let renewed = DiscoveryCache::load();
+    let renewed = RemoteCatalogCache::load();
     let state = renewed.model_lists.get("chatgpt").expect("cache state");
     assert_eq!(state.etag.as_deref(), Some("catalog-v2"));
     assert_eq!(state.client_version, "stale-client");
@@ -1419,7 +1428,7 @@ fn sync_fitted_model_registry_overlays_fitted_ids() {
         connections: vec![instance("kimi", Some("kimi-code"))],
     };
     instances.save().unwrap();
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     cache.fitted_models.insert("kimi".to_string(), {
         let mut m = std::collections::BTreeMap::new();
         m.insert(
@@ -1461,7 +1470,7 @@ fn catalog_builds_from_the_state_store_only() {
 fn antigravity_models_derivation_and_hidden_filter() {
     let _sandbox = sandboxed_paths();
     let mut conn = instance("g11", Some("google-antigravity"));
-    conn.auth = muta_contracts::ConnectionAuth::AntigravityOAuth;
+    conn.auth = muta_contracts::ConnectionAuth::subscription("google-antigravity");
     let connections = Connections {
         connections: vec![conn],
     };
@@ -1512,7 +1521,7 @@ fn prune_stale_models_prunes_favorites_and_usage_and_default_model() {
         "https://relay.example.com",
         WireProtocol::ChatCompletions,
         &[],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     let mut conn = instance("my-custom", Some("test-open-relay-prune"));
     conn.models.include = vec![
@@ -1573,7 +1582,7 @@ fn model_recency_isolation_across_same_preset_connections() {
         "https://relay.example.com",
         WireProtocol::ChatCompletions,
         &[],
-        muta_providers::DiscoveryProtocol::OpenAi,
+        muta_providers::CatalogShape::OpenAi,
     );
     let mut conn1 = instance("conn-1", Some("test-open-relay-recency"));
     conn1.models.include = vec![muta_contracts::model::DeclaredModel {
@@ -1646,7 +1655,7 @@ async fn etag_matching_stale_renews_timestamp() {
     };
     connections.save().unwrap();
 
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     let source_identity =
         source_identity_for_connection(connections.get("test-etag-conn").unwrap(), &cache).unwrap();
     cache.model_lists.insert(
@@ -1664,14 +1673,14 @@ async fn etag_matching_stale_renews_timestamp() {
     assert!(!outcome.changed);
     assert!(outcome.failures.is_empty());
 
-    let reloaded = DiscoveryCache::load();
+    let reloaded = RemoteCatalogCache::load();
     let state = reloaded.model_lists.get("test-etag-conn").unwrap();
     assert_eq!(state.etag.as_deref(), Some("etag-abc"));
     assert!(state.refreshed_at_ms > 1000);
 }
 
 #[tokio::test]
-async fn discovery_never_resurrects_deleted_connection() {
+async fn catalog_sync_never_resurrects_deleted_connection() {
     let _sandbox = sandboxed_paths();
     // Do NOT add "deleted-conn" to Connections
     let connections = Connections {
@@ -1679,14 +1688,14 @@ async fn discovery_never_resurrects_deleted_connection() {
     };
     connections.save().unwrap();
 
-    let mut locked_cache = DiscoveryCache::lock().await.unwrap();
+    let mut locked_cache = RemoteCatalogCache::lock().await.unwrap();
     locked_cache.remove_connection("deleted-conn");
     locked_cache.save().unwrap();
 
-    let outcome = discover_connection_models("deleted-conn").await;
+    let outcome = sync_connection_catalog("deleted-conn").await;
     assert!(!outcome.changed);
 
-    let final_cache = DiscoveryCache::load();
+    let final_cache = RemoteCatalogCache::load();
     assert!(!final_cache.connection_models.contains_key("deleted-conn"));
     assert!(!final_cache.model_lists.contains_key("deleted-conn"));
 }
@@ -1719,7 +1728,7 @@ fn adr0199_preset_scope_and_instance_scope_cascade() {
             ..Default::default()
         });
 
-    let models1 = route_models_with_providers(&conn1, &DiscoveryCache::default(), &providers);
+    let models1 = route_models_with_providers(&conn1, &RemoteCatalogCache::default(), &providers);
     assert!(
         models1.contains(&"deepseek-preset-preview".to_string()),
         "preset include present"
@@ -1739,7 +1748,7 @@ fn adr0199_preset_scope_and_instance_scope_cascade() {
 
     // Second connection with same preset inherits preset include/exclude, but not instance1's deltas
     let conn2 = instance("ds-personal", Some("deepseek"));
-    let models2 = route_models_with_providers(&conn2, &DiscoveryCache::default(), &providers);
+    let models2 = route_models_with_providers(&conn2, &RemoteCatalogCache::default(), &providers);
     assert!(models2.contains(&"deepseek-preset-preview".to_string()));
     assert!(!models2.contains(&"deepseek-chat".to_string()));
     assert!(!models2.contains(&"deepseek-instance-private".to_string()));
@@ -1755,7 +1764,7 @@ fn provider_dialect_rejects_incompatible_remote_protocol_without_panicking() {
         ("qoder", WireProtocol::Responses),
     ] {
         let conn = instance("invalid-wire", Some(provider));
-        let mut cache = DiscoveryCache::default();
+        let mut cache = RemoteCatalogCache::default();
         cache
             .remote_metadata
             .entry(conn.name.clone())
@@ -1793,7 +1802,7 @@ fn provider_dialect_selects_endpoint_after_remote_protocol_override() {
         WireProtocol::ChatCompletions
     );
     let conn = instance("endpoint-order", Some("opencode-go"));
-    let mut cache = DiscoveryCache::default();
+    let mut cache = RemoteCatalogCache::default();
     cache
         .remote_metadata
         .entry(conn.name.clone())

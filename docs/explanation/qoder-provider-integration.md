@@ -26,8 +26,11 @@ and encoding protocol:
   chat-completions wire with three Qoder-specific layers stacked on top
   (body codec, header signature, response envelope).
 
-Qoder publishes no live model list and no public API specification. The
-protocol below was reconstructed from the shipped client binaries.
+Qoder **does** publish a live model list: `GET /algo/api/v2/model/list?Encode=1`
+over the same COSY-signed transport as inference, returning a `scene → [entry]`
+map. It was mistakenly recorded here as absent in an earlier revision and is now
+the authoritative catalog (ADR-0266). The inference protocol below was
+reconstructed from the shipped client binaries.
 
 ---
 
@@ -71,6 +74,7 @@ To extract the signing module from a future version:
 | Surface | International | CN |
 |---|---|---|
 | Inference (COSY SSE) | `https://api1/api2/api3.qoder.sh` (default `api2`) | `https://gateway.qoder.com.cn` |
+| Model catalog (COSY) | same hosts, `GET /algo/api/v2/model/list?Encode=1` | same |
 | OpenAPI (token, userinfo) | `https://openapi.qoder.sh` | `https://openapi.qoder.com.cn` |
 | Device-flow page | `https://qoder.com/device/selectAccounts` | `https://qoder.com.cn/...` |
 | Daily/test (seen in client) | `daily-openapi.qoder.sh`, `test-openapi.qoder.sh` | — |
@@ -84,6 +88,12 @@ POST {base}/algo/api/v2/service/pro/sse/agent_chat_generation
 
 The signed path is the URL pathname **without** the `/algo` prefix and
 without the query: `/api/v2/service/pro/sse/agent_chat_generation`.
+
+The catalog signed path is `/api/v2/model/list` (same rule). One signer serves
+both: the canonical form is identical apart from the path. The catalog request
+**must** carry `Cosy-User`; without it the service returns
+`403 {"code":"101","message":"Signature invalid"}`, even when the signature
+itself is correct. See §5.2.
 
 ### 3.2 Authentication
 
@@ -118,14 +128,13 @@ CN:            e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb
 `_$d` helper: standard base64 then XOR with the repeating key
 `wAhs4UljGP3g`.)
 
-### 3.3 Request identity (typed, provider-owned)
+### 3.3 Request identity (typed, provider-owned, ADR-0267)
 
-Qoder's identity material lives in `muta_contracts::QoderRequestIdentity`,
-attached to `ResolvedAuth.qoder` — deliberately **not** reusing the
-ChatGPT `account_id` or Google `project_id` fields. One instance per
-connection, persisted in the auth store as `TokenSet.qoder`
-(`QoderStoredIdentity`, serde-defaulted so older `auth.toml` files keep
-decoding).
+Qoder's identity material lives in `muta_providers::registry::qoder::QoderRequestIdentity`,
+attached to `ResolvedAuth` via `ExtensionMap` (`auth.extension::<QoderRequestIdentity>()`)
+— deliberately **not** reusing ChatGPT `account_id` or Google `project_id`, and completely
+decoupled from the core contracts crate. One instance per connection, persisted in the auth
+store under `TokenSet.attributes["qoder"]` as `QoderStoredIdentity`.
 
 | Field | Feeds | Persistence rule |
 |---|---|---|
@@ -152,7 +161,7 @@ chat-completions JSON bytes:
 3. Outer-thirds swap: `k = len/3`, output `C‖B‖A` (middle absorbs the
    remainder). Self-inverse.
 
-Implementation: `muta-llm-client/src/protocol/openai/chat_completions/qoder.rs`
+Implementation: `muta-providers/src/registry/qoder/wire/codec.rs`
 (`encode_body` / `decode_body` / `outer_third_swap`).
 
 ### 3.5 COSY signature
@@ -246,19 +255,20 @@ Fetcher: `muta-providers/src/usage/qoder.rs`.
 
 | Concern | Location |
 |---|---|
-| Typed request identity | `muta-contracts/src/auth.rs` (`QoderRequestIdentity`) |
-| Connection-auth variant | `muta-contracts/src/connection_auth.rs` (`ConnectionAuth::QoderOAuth`) |
-| Wire dialect | `muta-contracts/src/catalog.rs` (`OpenAiChatDialect::Qoder`) |
-| OAuth preset + `is_qoder()` | `muta-contracts/src/provider_auth.rs` (`qoder_preset`, `DeviceFlow::Qoder`) |
-| Body codec, signing, envelope | `muta-llm-client/src/protocol/openai/chat_completions/qoder.rs` |
-| Executor routing | `muta-llm-client/src/protocol/openai/chat_completions/mod.rs` (`build_qoder_request`, `send_request` Qoder branch) |
+| Typed request identity | `muta-providers/src/registry/qoder/identity.rs` (`QoderRequestIdentity`) |
+| Connection-auth variant | `muta-contracts/src/connection_auth.rs` (`ConnectionAuth::Subscription { provider: "qoder" }`) |
+| Phased wire pipeline | `muta-providers/src/registry/qoder/pipeline.rs` (`build_qoder_pipeline`) |
+| OAuth preset + Flow | `muta-providers/src/oauth/presets.rs` (`qoder_preset`, `DeviceFlowMode::custom("qoder")`) |
+| Body codec, signing, envelope | `muta-providers/src/registry/qoder/wire/` (`codec.rs`, `signer.rs`, `envelope.rs`) |
+| Stream frame transformer | `muta-providers/src/registry/qoder/wire/stream.rs` (`QoderStreamTransformer`) |
+| Executor routing | Generic `muta-llm-client` via `TransportPipeline` (zero vendor branches) |
 | Device flow + PAT exchange | `muta-providers/src/oauth/qoder.rs` |
 | Credential source (OAuth + PAT) | `muta-providers/src/oauth/credential_source.rs`, `oauth/qoder.rs` (`QoderApiKeyCredentialSource`) |
-| Durable identity store | `muta-providers/src/oauth/store.rs` (`TokenSet.qoder`, `QoderStoredIdentity`) |
-| Login-time identity assembly | `muta-runtime/src/handlers_provider.rs` (`run_oauth` Qoder branch) |
-| Provider preset + usage | `muta-providers/src/registry/qoder.rs`, `usage/qoder.rs` |
+| Durable identity store | `muta-providers/src/oauth/store.rs` (`TokenSet.attributes["qoder"]`) |
+| Login-time identity assembly | `muta-providers/src/oauth/enricher.rs` (`QoderOAuthEnricher`) |
+| Provider preset + usage | `muta-providers/src/registry/qoder/`, `usage/qoder.rs` |
 | TUI template | `apps/terminal/crates/mutx/src/providers.rs` (`id: "qoder"`) |
-| Transport derivation | `muta-agent/src/catalog/derive.rs` |
+| Transport derivation | `muta_providers::build_credential_source` and `build_qoder_pipeline` |
 
 Test suites (all under the packages above, filter `qoder`): 48 tests —
 codec round-trips, signature shape, header presence, executor stamping,
@@ -285,26 +295,94 @@ device-flow state machine (local TCP mock), PAT exchange, usage parsing.
    matrix (Liki4's `infer-user.json` vector is the reference oracle for
    1.1.34 behavior).
 5. **Version alignment**: `Cosy-Version` participates in the signature.
-   When bumping the pinned value, it must change in exactly two places
-   (the header in `request.rs` and the payload in `prepare_request`) —
-   they share the `COSY_VERSION` constant; never fork them.
+   Its value has exactly one home: `IdentitySpec.emulated_version` on the
+   surface (`muta_providers::registry::qoder::surface`). The
+   `version_header` (`Cosy-Version`), the signature payload's `cosyVersion`,
+   and the envelope's `business.version` all read it from there. Never fork
+   it (ADR-0265).
 
-### 5.2 Known-open items (as of 1.1.57)
+### 5.2 Root cause of the live 403 (found and fixed 2026-09-20)
 
-- **`Cosy-ClientIp`**: present in the 1.1.57 WASM data section; trigger
-  conditions unknown. muta omits it; if the server starts requiring it,
-  the shape would be a plain header in `build_qoder_request`.
-- **PAT-line `uid`**: the typed identity is minted with an empty uid on
-  the ApiKey path (no device-token response to read it from). Whether the
-  server accepts an empty `Cosy-User` with a valid PAT is unverified;
-  backfilling from `/api/v1/userinfo` is the planned fix if it does not.
+**The 16-byte AES key must be 16 ASCII characters, not 16 binary bytes.**
+
+The server UTF-8-decodes the RSA-unwrapped `Cosy-Key` and uses the result as the
+AES key/IV for `info`. Mutas hand-rolled `encrypt_info` decoded the persisted
+32-character `machine_key_hex` into 16 **binary** bytes; those bytes are
+normally not valid UTF-8, and the server rejects the whole request with
+`403 {"code":"101","message":"Signature invalid"}`.
+
+Established by replaying hand-built pairs against the live 1.1.58 endpoint,
+with the request shape held constant and only the key bytes varied:
+
+| AES key bytes | Result |
+|---|---|
+| 16 ASCII characters (e.g. `b"a"*16`, `"0123456789abcdef"`) | **200** |
+| 16 bytes of a UTF-8-valid multi-byte string | **200** |
+| 16 binary bytes (`bytes(range(16))`, the decoded stored key, random) | **403** |
+| 16 bytes that are invalid UTF-8 (`0xc8..`, `0xff*16`) | **403** |
+
+Reproducible 12/12 trials each way, interleaved, with a known-good control
+passing throughout (so this is content-dependence, not rate limiting).
+
+The real client's own derivation, recovered by executing its 1.1.58 auth WASM
+(`generate_runtime_auth_fields`) under the reference oracle, is
+`runtimeASCIIKey(uuid) = hex(uuid[..8])` — i.e. **the hex string itself**, 16
+ASCII characters. Mutas persisted key is `hex(b0..b15)`; its first 16 characters
+are `hex(b0..b7)`, byte-identical to the real client's shape. So the fix reads
+the first 16 characters as ASCII, and **existing credentials keep working with
+no re-authorization and no device-identity churn**.
+
+Verified after the fix: mutas own catalog path returns
+`["qfmodel", "qmodel_38max"]` live, and its inference path streams a real
+completion.
+
+### 5.2a Second, separate bug: the SSE stream is nested
+
+Inference now authenticates (200) and the service streams, but the events are
+wrapped:
+
+```text
+data:{"headers":{"Content-Type":["application/json"]},"body":"{\"choices\":[{\"delta\":{...}}]}","statusCodeValue":200,"statusCode":"OK"}
+```
+
+The chat-completions object is a **JSON string inside `body`**, not the top-level
+`data:` payload. Mutas parser reads `data["choices"]` directly, so it yields no
+deltas (an empty completion). This is a decoding gap, not an auth failure, and is
+not yet fixed.
+
+### 5.3 Known-open items (as of 1.1.58)
+
+- **SSE envelope nesting** (§5.2a) — the remaining blocker for usable inference
+  output.
+- **`Cosy-ClientIp`**: present in the client's WASM data section; trigger
+  conditions unknown. muta omits it; live tests show the catalog accepts its
+  absence. If the server starts requiring it, the shape is a plain header in
+  the surface's identity table.
 - **Risk fingerprinting**: Qoder pins device signals to `machine_id` and
   the persisted AES key. The `state_dir/machine_id` file and
   `TokenSet.qoder.machine_key_hex` are load-bearing for account
   continuity; do not regenerate them per process.
-- **Embedded allowlist**: the 1.1.57 WASM carries a 28-uid
+- **Embedded allowlist**: the 1.1.58 WASM carries a 28-uid
   `allowed_user_ids` feature-gate blob; behavior for gated accounts may
   differ.
+
+### 5.2a Verified live with 1.1.58 (2026-09-20)
+
+Confirmed against the live service by replaying byte-exact requests:
+
+- The `agent_chat_generation` **envelope is mandatory**: a flat
+  chat-completions body returns `400 {"code":…,"message":"None flow nodes
+  found for router agent_router"}`; the same request wrapped in the envelope
+  streams `200`. See ADR-0265.
+- The **catalog signature is bound to `Cosy-User`**: with it, `200`; without
+  it (or with an empty value), `403 code 101`. See §5.2.
+- The catalog **response is a plain JSON `scene → [entry]` map** (not
+  encrypted, despite `Encode=1`); `assistant` exposes 25 keys of which only
+  `qmodel_38max` (Qwen3.8-Max) and `qfmodel` (Qwen3.8-Flash) are
+  `enable:true`. The `experts` scene omits `qfmodel` entirely.
+- `Cosy-Version` (now `1.1.58`) and the signed-path derivation are unchanged
+  from 1.1.57; the signature algorithm is confirmed by reproducing the
+  recorded request's signature exactly.
 
 ### 5.3 Extending to the CN line
 
@@ -338,13 +416,11 @@ the §2 recipe.
    JSON; only the envelope differs. Modeling it as an `OpenAiChatDialect`
    kept the change surgical and reused the existing SSE/echo/reasoning
    plumbing.
-2. **Provider-owned identity, no borrowed fields.** The typed
-   `QoderRequestIdentity` exists because the first implementation
-   overloaded `account_id` (ChatGPT's tenant header) for the uid and
-   `project_id` (Google's cloud project) for the machine key. That
-   borrowing is exactly how cross-provider debugging confusion starts;
-   the typed field keeps each protocol's identity material separate and
-   makes the auth store schema self-describing.
+2. **Provider-owned identity, no borrowed fields (ADR-0267).** The typed
+   `QoderRequestIdentity` lives inside `muta-providers` and mounts onto
+   `ResolvedAuth` via `ExtensionMap`, persisted under `TokenSet.attributes["qoder"]`.
+   It completely avoids polluting core contracts while keeping identity
+   material separate and making the auth store schema self-describing.
 3. **PAT over device flow for the common path.** The device flow needs a
    browser round-trip and a 300 s polling window; the PAT path is a paste
    and works as plain ApiKey auth with the COSY identity minted locally.

@@ -152,6 +152,28 @@ prevent redundant retries.
 | **Antigravity** | Google OAuth2 PKCE | Internal `v1internal` Protobuf JSON gateway | Google Cloud Project (`cloudaicompanionProject`) |
 | **ChatGPT Codex** | OpenAI OAuth2 PKCE | Internal Responses gateway | `ChatGPT-Account-Id` tenant header |
 | **GitHub Copilot** | GitHub OAuth App | Copilot session token exchange endpoint | User token exchange |
+| **OpenCode Go** | OpenCode Console device flow (JSON) | Zen relay (`https://opencode.ai/zen/go/v1`) | Console account and workspace orgs |
+
+### OpenCode Go Console Device Flow
+
+OpenCode Go signs in with the OpenCode Console account rather than a pasted API
+key. The grant is a JSON device-authorization flow (`client_id = opencode-cli`),
+not RFC 8628:
+
+- `POST https://opencode.ai/console/auth/device/code` (JSON `{client_id}`)
+  returns `device_code`, `user_code`, `verification_uri_complete`, `expires_in`,
+  and `interval`.
+- `POST https://opencode.ai/console/auth/device/token` (JSON, grant
+  `urn:ietf:params:oauth:grant-type:device_code`) returns the token set or an
+  `authorization_pending` / `slow_down` / `access_denied` / `expired_token`
+  error. The same endpoint rotates the token on `grant_type=refresh_token`.
+- `GET /api/user` and `GET /api/orgs` identify the account and its workspaces;
+  the first org (sorted by name) is recorded as the default, and the full
+  membership is persisted for a later switch.
+
+The inference credential is the console access token, sent as the bearer to the
+Zen relay; the model catalogue remains the keyless `models.opencode.ai`
+endpoint. See [ADR-0268](../adr/0268-opencode-go-console-oauth-subscription.md).
 
 ### ChatGPT Codex Gateway
 

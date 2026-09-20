@@ -228,7 +228,10 @@ where
             continue;
         }
         if code != 404 {
-            return Err(crate::oauth::AuthError::TokenEndpoint { status: code, body: text });
+            return Err(crate::oauth::AuthError::TokenEndpoint {
+                status: code,
+                body: text,
+            });
         }
         sleep(QODER_POLL_INTERVAL_MS + POLLING_SAFETY_MARGIN_MS).await;
     }
@@ -244,7 +247,14 @@ where
     S: Fn(u64) -> Fut + Send + Sync,
     Fut: std::future::Future<Output = ()> + Send,
 {
-    poll_device_token_at(client, DEVICE_POLL_URL, session, sleep, QODER_FLOW_DEADLINE_MS).await
+    poll_device_token_at(
+        client,
+        DEVICE_POLL_URL,
+        session,
+        sleep,
+        QODER_FLOW_DEADLINE_MS,
+    )
+    .await
 }
 
 /// Complete a device-flow login: poll for the device token and return it as
@@ -261,7 +271,13 @@ pub async fn device_login(
         refresh_token: device.refresh_token,
         id_token: None,
         token_type: Some("Bearer".to_string()),
-        expires_in: device.expire_time.map(|ms| if ms > 1_000_000_000_000 { ms / 1000 } else { ms }),
+        expires_in: device.expire_time.map(|ms| {
+            if ms > 1_000_000_000_000 {
+                ms / 1000
+            } else {
+                ms
+            }
+        }),
         scope: None,
         qoder_uid: device.uid,
     })
@@ -305,6 +321,10 @@ pub async fn exchange_inference_token_at(
 /// The device-token refresh endpoint (OpenAPI surface, international line).
 const DEVICE_TOKEN_REFRESH_URL: &str = "https://openapi.qoder.sh/api/v1/deviceToken/refresh";
 
+/// The OpenAPI userinfo endpoint: a plain-bearer `GET` returning the account's
+/// `id` (the uid the signed surfaces carry as `Cosy-User`).
+const USERINFO_URL: &str = "https://openapi.qoder.sh/api/v1/userinfo";
+
 /// Rotate a `dt-` device token with its `drt-` device refresh token
 /// (`POST /api/v1/deviceToken/refresh` with a JSON `refresh_token` body —
 /// verified against the live endpoint: a missing field yields
@@ -315,6 +335,50 @@ pub async fn refresh_device_token(
     refresh_token: &str,
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
     refresh_device_token_at(client, DEVICE_TOKEN_REFRESH_URL, refresh_token).await
+}
+
+/// Resolve the account uid from the OpenAPI userinfo endpoint.
+///
+/// The signed surfaces carry the account uid as `Cosy-User`, and the model
+/// catalog's signature **requires** it (verified live: omitting it yields
+/// `403 code 101` even with a byte-correct signature). The device-token flow
+/// learns the uid from its token response; the personal-access-token flow has
+/// no such response, so the uid is fetched here with a plain bearer — no COSY
+/// signature, per the OpenAPI surface.
+pub async fn fetch_uid(
+    client: &crate::http::Http,
+    bearer: &str,
+) -> Result<String, crate::oauth::AuthError> {
+    fetch_uid_at(client, USERINFO_URL, bearer).await
+}
+
+/// Test-injectable variant with an explicit endpoint.
+pub async fn fetch_uid_at(
+    client: &crate::http::Http,
+    endpoint: &str,
+    bearer: &str,
+) -> Result<String, crate::oauth::AuthError> {
+    let request = crate::http::Request::new(netune::Method::GET, endpoint)
+        .header("accept", "application/json")
+        .header("authorization", format!("Bearer {bearer}"));
+    let response = client
+        .send(request)
+        .await
+        .map_err(|e| crate::oauth::AuthError::Transport(format!("userinfo failed: {e}")))?;
+    if !response.status.is_success() {
+        return Err(crate::oauth::AuthError::TokenEndpoint {
+            status: response.status.as_u16(),
+            body: response.body,
+        });
+    }
+    let value: serde_json::Value = serde_json::from_str(&response.body)
+        .map_err(|e| crate::oauth::AuthError::Decode(format!("userinfo parse failed: {e}")))?;
+    value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| crate::oauth::AuthError::Decode("userinfo response has no id".to_string()))
 }
 
 /// Test-injectable variant with an explicit endpoint.
@@ -347,9 +411,13 @@ pub async fn refresh_device_token_at(
         refresh_token: device.refresh_token,
         id_token: None,
         token_type: Some("Bearer".to_string()),
-        expires_in: device
-            .expire_time
-            .map(|ms| if ms > 1_000_000_000_000 { ms / 1000 } else { ms }),
+        expires_in: device.expire_time.map(|ms| {
+            if ms > 1_000_000_000_000 {
+                ms / 1000
+            } else {
+                ms
+            }
+        }),
         scope: None,
         qoder_uid: device.uid,
     })
@@ -372,25 +440,14 @@ async fn sleep_ms(ms: u64) {
     tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
 }
 
-/// Generate a fresh machine AES key as 32 lowercase hex chars. The key is
-/// generated once per device at login and persisted with the connection —
-/// rotating it would look like device churn to Qoder's risk layer.
-pub fn generate_machine_key_hex() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let mut state = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9E3779B97F4A7C15);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(32);
-    while out.len() < 32 {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        out.push(HEX[((state >> 33) & 0xf) as usize] as char);
-    }
-    out
-}
+/// Generate a fresh machine AES key as 32 lowercase hex characters.
+///
+/// The key is generated once per device at login and persisted with the
+/// connection — rotating it would look like device churn to Qoder's risk
+/// layer. The generator lives beside [`CosyIdentity`] in `muta-llm-client` so
+/// generation and consumption share one definition; this re-export keeps the
+/// credential layer's call site unchanged.
+pub use crate::registry::qoder::generate_machine_key_hex;
 
 /// Credential source for a pasted Qoder personal-access token (`pt-…`).
 ///
@@ -398,12 +455,18 @@ pub fn generate_machine_key_hex() -> String {
 /// demands the full typed request identity (machine key, uid, org scope).
 /// This source owns that material: the machine key is a per-device AES key
 /// persisted beside the credentials (stable across processes — rotating it
-/// would look like device churn), and the uid is resolved once from the
-/// userinfo endpoint, cached in the same slot.
+/// would look like device churn), and the uid is resolved from the OpenAPI
+/// userinfo endpoint and cached in the same slot.
+///
+/// The uid is **required** by the model catalog's signature (the service
+/// rejects a catalog request without `Cosy-User` — see the integration doc
+/// §5.2), so an unresolved uid blocks the catalog sync even though inference tolerates
+/// its absence. Existing credentials minted with an empty uid are backfilled
+/// once, transparently.
 pub struct QoderApiKeyCredentialSource {
     connection_id: String,
     token: SecretString,
-    identity: std::sync::Mutex<Option<muta_contracts::QoderRequestIdentity>>,
+    identity: std::sync::Mutex<Option<crate::registry::qoder::QoderRequestIdentity>>,
 }
 
 impl std::fmt::Debug for QoderApiKeyCredentialSource {
@@ -427,8 +490,14 @@ impl QoderApiKeyCredentialSource {
     /// The per-device identity slot, persisted in the auth store under the
     /// connection id (same file OAuth credentials use — one identity home
     /// per connection).
-    async fn load_or_create_identity(&self) -> Result<muta_contracts::QoderRequestIdentity, String> {
-        if let Some(existing) = self.identity.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    pub(crate) async fn load_or_create_identity(
+        &self,
+    ) -> Result<crate::registry::qoder::QoderRequestIdentity, String> {
+        if let Some(existing) = self
+            .identity
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
         {
             return Ok(existing);
         }
@@ -436,22 +505,24 @@ impl QoderApiKeyCredentialSource {
         if let Some(stored) = store
             .tokens
             .get(&self.connection_id)
-            .and_then(|t| t.qoder.as_ref())
+            .and_then(|t| t.get_json_attr::<crate::registry::qoder::QoderStoredIdentity>("qoder"))
         {
-            let identity = muta_contracts::QoderRequestIdentity {
-                uid: stored.uid.clone(),
-                machine_key_hex: stored.machine_key_hex.clone(),
-                data_policy_agreed: stored.data_policy_agreed,
-                organization_id: stored.organization_id.clone(),
-                organization_tags: stored.organization_tags.clone(),
+            let uid = if stored.uid.is_empty() {
+                self.resolve_and_persist_uid(&stored).await
+            } else {
+                stored.uid.clone()
             };
+            let mut identity = stored.to_request_identity();
+            identity.uid = uid;
             *self.identity.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity.clone());
             return Ok(identity);
         }
-        // First use: mint the device identity and persist it through the
-        // cross-process lock (the store's transactional write path).
-        let identity = muta_contracts::QoderRequestIdentity {
-            uid: String::new(),
+        // First use: mint the device identity, resolve the uid, and persist
+        // both through the cross-process lock (the store's transactional write
+        // path).
+        let uid = self.resolve_uid().await?;
+        let identity = crate::registry::qoder::QoderRequestIdentity {
+            uid: uid.clone(),
             machine_key_hex: SecretString::from(generate_machine_key_hex()),
             data_policy_agreed: true,
             organization_id: None,
@@ -467,37 +538,89 @@ impl QoderApiKeyCredentialSource {
                 access: self.token.clone(),
                 refresh: String::new().into(),
                 expires_ms: i64::MAX,
-                account_id: None,
                 id_token: None,
                 token_type: None,
                 scope: None,
-                project_id: None,
                 user_email: None,
-                qoder: None,
+                attributes: serde_json::Map::new(),
             });
         // Never clobber a live bearer with our placeholder if OAuth rotated
         // concurrently: keep the existing access token when present.
         if entry.access.expose_secret().trim().is_empty() {
             entry.access = self.token.clone();
         }
-        entry.qoder = Some(QoderStoredIdentity {
-            uid: String::new(),
-            machine_key_hex: identity.machine_key_hex.clone(),
-            data_policy_agreed: true,
-            organization_id: None,
-            organization_tags: Vec::new(),
-        });
+        entry.set_json_attr(
+            "qoder",
+            &QoderStoredIdentity {
+                uid: uid.clone(),
+                machine_key_hex: identity.machine_key_hex.clone(),
+                data_policy_agreed: true,
+                organization_id: None,
+                organization_tags: Vec::new(),
+            },
+        );
         locked.set(&self.connection_id, entry);
         locked.save().map_err(|e| e.to_string())?;
         *self.identity.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity.clone());
         Ok(identity)
+    }
+
+    /// Resolve the account uid for this PAT, or `""` if the lookup fails.
+    ///
+    /// A failed lookup is non-fatal here: inference tolerates an absent
+    /// `Cosy-User` (the catalog does not — see §5.2 of the integration doc).
+    /// Callers that need the uid for a signed catalog get an explicit failure
+    /// from the catalog fetch instead.
+    async fn resolve_uid(&self) -> Result<String, String> {
+        let client = crate::http::Http::control_plane()
+            .map_err(|error| format!("could not build the userinfo client: {error}"))?;
+        match fetch_uid(&client, self.token.expose_secret()).await {
+            Ok(uid) => Ok(uid),
+            Err(error) => {
+                tracing::warn!(
+                    connection = %self.connection_id,
+                    %error,
+                    "qoder: could not resolve the account uid; the signed catalog will fail until it is resolved"
+                );
+                Ok(String::new())
+            }
+        }
+    }
+
+    /// Backfill a stored identity's empty uid and persist it.
+    ///
+    /// The signed surfaces require a non-empty uid inside `info` (an empty uid
+    /// yields `403 code 101` even with a correct signature), so an empty uid on
+    /// an existing credential is repaired once and written back. Org scope is
+    /// preserved from the stored record — only the uid is filled in.
+    async fn resolve_and_persist_uid(&self, stored: &QoderStoredIdentity) -> String {
+        let Ok(uid) = self.resolve_uid().await else {
+            return String::new();
+        };
+        if uid.is_empty() {
+            return uid;
+        }
+        if let Ok(mut locked) = AuthStore::lock().await
+            && let Some(mut entry) = locked.get(&self.connection_id).cloned()
+        {
+            let mut updated = stored.clone();
+            updated.uid.clone_from(&uid);
+            entry.set_json_attr("qoder", &updated);
+            locked.set(&self.connection_id, entry);
+            if let Err(error) = locked.save() {
+                tracing::warn!(connection = %self.connection_id, %error, "qoder: could not persist resolved uid");
+            }
+        } else if std::env::var("MUTA_QODER_DEBUG").is_ok() {
+            eprintln!("QODER_UID_PERSIST_SKIPPED connection={}", self.connection_id);
+        }
+        uid
     }
 }
 impl muta_contracts::CredentialSource for QoderApiKeyCredentialSource {
     fn resolve_auth<'a>(&'a self) -> futures::future::BoxFuture<'a, Result<ResolvedAuth, String>> {
         Box::pin(async move {
             let identity = self.load_or_create_identity().await?;
-            Ok(ResolvedAuth::new(self.token.clone()).with_qoder_identity(identity))
+            Ok(ResolvedAuth::new(self.token.clone()).with_extension(identity))
         })
     }
 
@@ -505,7 +628,7 @@ impl muta_contracts::CredentialSource for QoderApiKeyCredentialSource {
         // Static PAT: nothing to rotate; the identity is already minted.
         Box::pin(async move {
             let identity = self.load_or_create_identity().await?;
-            Ok(ResolvedAuth::new(self.token.clone()).with_qoder_identity(identity))
+            Ok(ResolvedAuth::new(self.token.clone()).with_extension(identity))
         })
     }
 
@@ -522,6 +645,33 @@ impl muta_contracts::CredentialSource for QoderApiKeyCredentialSource {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn userinfo_resolves_the_uid_from_the_id_field() {
+        let (addr, _hits, _keep) = spawn_scripted_server(vec![(
+            200,
+            r#"{"id":"9bdb6daa-be3f-45d6-8eee-a1f74dd18553","name":"Ming"}"#.to_string(),
+        )])
+        .await;
+        let client = crate::http::Http::control_plane().unwrap();
+        let url = format!("http://{addr}/api/v1/userinfo");
+        let uid = fetch_uid_at(&client, &url, "dt-token")
+            .await
+            .expect("userinfo resolves");
+        assert_eq!(uid, "9bdb6daa-be3f-45d6-8eee-a1f74dd18553");
+    }
+
+    #[tokio::test]
+    async fn userinfo_without_an_id_fails_closed() {
+        // An empty or absent `id` must not silently mint an empty uid: the
+        // catalog's signature requires `Cosy-User`, so a missing uid is a hard
+        // error rather than a request that will fail upstream.
+        let (addr, _hits, _keep) =
+            spawn_scripted_server(vec![(200, r#"{"name":"Ming"}"#.to_string())]).await;
+        let client = crate::http::Http::control_plane().unwrap();
+        let url = format!("http://{addr}/api/v1/userinfo");
+        assert!(fetch_uid_at(&client, &url, "dt-token").await.is_err());
+    }
+
     #[test]
     fn session_url_carries_the_full_pkce_contract() {
         let session = QoderDeviceSession::new(
@@ -529,7 +679,10 @@ mod tests {
             "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
         );
         let url = session.user_url();
-        assert!(url.starts_with("https://qoder.com/device/selectAccounts?"), "{url}");
+        assert!(
+            url.starts_with("https://qoder.com/device/selectAccounts?"),
+            "{url}"
+        );
         assert!(url.contains("challenge_method=S256"));
         assert!(url.contains("client_id=e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"));
         assert!(url.contains("machine_id=0f8e2b1a"));
@@ -547,7 +700,10 @@ mod tests {
             "https://qoder.cn/device/selectAccounts",
         );
         let url = session.user_url();
-        assert!(url.starts_with("https://qoder.cn/device/selectAccounts?"), "{url}");
+        assert!(
+            url.starts_with("https://qoder.cn/device/selectAccounts?"),
+            "{url}"
+        );
         assert!(url.contains("client_id=e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"));
     }
 
@@ -568,8 +724,7 @@ mod tests {
     async fn poll_surfaces_non_404_errors_immediately() {
         // The owned transport has no per-client base-URL override, so bind a
         // raw TCP server and hand its URL to the injectable endpoint.
-        let (addr, hits, _keep) =
-            spawn_scripted_server(vec![(500, "boom".to_string())]).await;
+        let (addr, hits, _keep) = spawn_scripted_server(vec![(500, "boom".to_string())]).await;
         let session = QoderDeviceSession::new("m", "c");
         let client = crate::http::Http::control_plane().unwrap();
         let url = format!("http://{addr}/api/v1/deviceToken/poll");
@@ -666,9 +821,13 @@ mod tests {
             refresh_token: token.refresh_token,
             id_token: None,
             token_type: Some("Bearer".to_string()),
-            expires_in: token
-                .expire_time
-                .map(|ms| if ms > 1_000_000_000_000 { ms / 1000 } else { ms }),
+            expires_in: token.expire_time.map(|ms| {
+                if ms > 1_000_000_000_000 {
+                    ms / 1000
+                } else {
+                    ms
+                }
+            }),
             scope: None,
             qoder_uid: token.uid,
         };
@@ -694,7 +853,9 @@ mod tests {
         .await;
         let client = crate::http::Http::control_plane().unwrap();
         let url = format!("http://{addr}/api/v1/deviceToken/refresh");
-        let token = refresh_device_token_at(&client, &url, "drt-old").await.unwrap();
+        let token = refresh_device_token_at(&client, &url, "drt-old")
+            .await
+            .unwrap();
         assert_eq!(token.access_token.expose_secret(), "dt-new");
         assert_eq!(
             token.refresh_token.as_ref().map(|r| r.expose_secret()),
@@ -750,9 +911,13 @@ mod tests {
     /// responses, one per connection, repeating the last one indefinitely.
     async fn spawn_scripted_server(
         script: Vec<(u16, String)>,
-    ) -> (std::net::SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>, tokio::task::JoinHandle<()>) {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let hits = Arc::new(AtomicUsize::new(0));
@@ -760,7 +925,9 @@ mod tests {
         let script = Arc::new(tokio::sync::Mutex::new(script));
         let task = tokio::spawn(async move {
             loop {
-                let Ok((mut socket, _)) = listener.accept().await else { break };
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
                 let mut buf = vec![0u8; 2048];
                 let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await;
                 let step = {
@@ -775,7 +942,10 @@ mod tests {
                 let reason = if step.0 == 200 { "OK" } else { "ERR" };
                 let payload = format!(
                     "HTTP/1.1 {} {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                    step.0, reason, step.1.len(), step.1
+                    step.0,
+                    reason,
+                    step.1.len(),
+                    step.1
                 );
                 let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, payload.as_bytes()).await;
                 let _ = tokio::io::AsyncWriteExt::shutdown(&mut socket).await;
@@ -785,6 +955,8 @@ mod tests {
     }
 
     async fn server_single(status: u16, body: &str) -> std::net::SocketAddr {
-        spawn_scripted_server(vec![(status, body.to_string())]).await.0
+        spawn_scripted_server(vec![(status, body.to_string())])
+            .await
+            .0
     }
 }

@@ -142,7 +142,10 @@ async fn chatgpt_responses_chat_uses_streaming_transport_and_dynamic_credentials
         .create_async()
         .await;
 
-    let auth = muta_contracts::ResolvedAuth::new("live-oauth-token").with_account_id("acct-test");
+    let auth = muta_contracts::ResolvedAuth::new("live-oauth-token")
+        .with_extension(muta_contracts::ChatGptAuthMetadata {
+            account_id: "acct-test".to_string(),
+        });
     let provider = OpenAiResponsesProvider::with_credentials(
         std::sync::Arc::new(MockOAuthSource { auth }),
         "gpt-5.6-sol".to_string(),
@@ -827,8 +830,8 @@ async fn fable5_always_on_thinking_ignores_off_override() {
 // and that the returned ids are sorted + de-duplicated.
 
 use muta_providers::{
-    DiscoveryProtocol, ModelDiscoveryOptions, ModelDiscoveryRequest, ModelDiscoveryUpdate,
-    ModelListError, discover_models, list_models,
+    CatalogShape, ModelListError, RemoteCatalogOptions, RemoteCatalogRequest, RemoteCatalogUpdate,
+    fetch_remote_catalog, list_models,
 };
 
 #[tokio::test]
@@ -864,13 +867,15 @@ async fn opencode_go_list_models_parses_private_catalog() {
         .await;
 
     let key = SecretString::from("key-123");
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::OpencodeGo,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::OpencodeGo,
         base_url: &base_url,
         api_key: &key,
         account_id: None,
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
     let models = list_models(req).await.expect("discovery succeeds");
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
@@ -900,13 +905,15 @@ async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
         .await;
 
     let key = SecretString::from("sk-live");
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::OpenAi,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::OpenAi,
         base_url: &root_url,
         api_key: &key,
         account_id: None,
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
     let models = list_models(req).await.expect("discovery succeeds");
     // Sorted + de-duplicated, regardless of the API's ordering or duplicates.
@@ -929,13 +936,15 @@ async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
         .await;
 
     let key = SecretString::default();
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::OpenAi,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::OpenAi,
         base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
     let models = list_models(req).await.expect("keyless discovery succeeds");
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
@@ -967,18 +976,20 @@ async fn codex_list_models_sends_subscription_headers_and_preserves_priority() {
         .await;
 
     let key = SecretString::from("chatgpt-access");
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::Codex,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::Codex,
         base_url: &format!("{}/backend-api/codex", server.url()),
         api_key: &key,
         account_id: Some("acct-test"),
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
-    let update = discover_models(req, ModelDiscoveryOptions { etag: None })
+    let update = fetch_remote_catalog(req, RemoteCatalogOptions { etag: None })
         .await
         .expect("Codex discovery succeeds");
-    let ModelDiscoveryUpdate::Modified { models, etag } = update else {
+    let RemoteCatalogUpdate::Modified { models, etag } = update else {
         panic!("expected a modified catalog");
     };
     assert_eq!(etag.as_deref(), Some("\"catalog-v2\""));
@@ -1006,17 +1017,19 @@ async fn codex_list_models_supports_etag_revalidation() {
         .await;
 
     let key = SecretString::from("chatgpt-access");
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::Codex,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::Codex,
         base_url: &format!("{}/backend-api/codex", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
-    let update = discover_models(
+    let update = fetch_remote_catalog(
         req,
-        ModelDiscoveryOptions {
+        RemoteCatalogOptions {
             etag: Some("\"catalog-v2\""),
         },
     )
@@ -1024,7 +1037,7 @@ async fn codex_list_models_supports_etag_revalidation() {
     .expect("Codex catalog revalidation succeeds");
     assert_eq!(
         update,
-        ModelDiscoveryUpdate::NotModified {
+        RemoteCatalogUpdate::NotModified {
             etag: Some("\"catalog-v2\"".to_string())
         }
     );
@@ -1053,13 +1066,15 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
         .await;
 
     let key = SecretString::from("sk-ant");
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::Anthropic,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::Anthropic,
         base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
     let models = list_models(req)
         .await
@@ -1095,13 +1110,15 @@ async fn google_list_models_sends_key_query_param_and_filters_non_text() {
         .await;
 
     let key = SecretString::from("gem-key");
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::Google,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::Google,
         base_url: &format!("{}/v1beta", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
     let models = list_models(req).await.expect("google discovery succeeds");
     // The embedding-only model is filtered out.
@@ -1120,13 +1137,15 @@ async fn list_models_returns_status_error_on_non_2xx() {
         .await;
 
     let key = SecretString::from("bad");
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::OpenAi,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::OpenAi,
         base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
     match list_models(req).await {
         Err(ModelListError::Status(401, body)) => {
@@ -1151,13 +1170,15 @@ async fn list_models_accepts_authoritative_empty_data_array() {
         .await;
 
     let key = SecretString::from("k");
-    let req = ModelDiscoveryRequest {
-        protocol: DiscoveryProtocol::OpenAi,
+    let req = RemoteCatalogRequest {
+        protocol: CatalogShape::OpenAi,
         base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
         user_agent: None,
         extra_headers: &[],
+        catalog_signing: None,
+        dimensions: &[],
     };
     assert!(list_models(req).await.unwrap().is_empty());
 }
@@ -1372,4 +1393,103 @@ async fn opencode_go_anthropic_wire_request_carries_session_headers() {
         .expect("opencode-go minimax provider chat must succeed")
         .message;
     assert_eq!(msg.content, "minimax response");
+}
+
+#[tokio::test]
+async fn opencode_device_flow_posts_json_and_returns_tokens() {
+    let mut server = Server::new_async().await;
+    let client = muta_providers::http::Http::control_plane().expect("http client");
+
+    let mut cfg = muta_providers::oauth::opencode_preset();
+    cfg.device_authorization_url = format!("{}/auth/device/code", server.url()).into();
+    cfg.device_token_url = format!("{}/auth/device/token", server.url()).into();
+    cfg.token_url = cfg.device_token_url.clone();
+
+    let code_mock = server
+        .mock("POST", "/auth/device/code")
+        .match_header("content-type", "application/json")
+        .match_body(Matcher::Json(serde_json::json!({
+            "client_id": "opencode-cli",
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"device_code":"dev-1","user_code":"ABCD-1234","verification_uri_complete":"https://opencode.ai/console/device?code=ABCD-1234","expires_in":900,"interval":1}"#,
+        )
+        .create_async()
+        .await;
+
+    let device = muta_providers::oauth::request_opencode_device_code(&client, &cfg)
+        .await
+        .expect("device code");
+    assert_eq!(device.user_code, "ABCD-1234");
+    assert_eq!(
+        device.user_url(&cfg),
+        "https://opencode.ai/console/device?code=ABCD-1234"
+    );
+    code_mock.assert_async().await;
+
+    let token_mock = server
+        .mock("POST", "/auth/device/token")
+        .match_header("content-type", "application/json")
+        .match_body(Matcher::Json(serde_json::json!({
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": "dev-1",
+            "client_id": "opencode-cli",
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"access_token":"console-token","refresh_token":"console-refresh","token_type":"Bearer","expires_in":3600}"#,
+        )
+        .create_async()
+        .await;
+
+    let tokens = muta_providers::oauth::poll_opencode_device_code_with(
+        &client,
+        &cfg,
+        &device,
+        |_ms| async {},
+        || 0,
+    )
+    .await
+    .expect("polled tokens");
+    assert_eq!(tokens.access_token.expose_secret(), "console-token");
+    assert_eq!(
+        tokens.refresh_token.as_ref().map(|t| t.expose_secret()),
+        Some("console-refresh")
+    );
+    token_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn opencode_refresh_posts_json_refresh_token() {
+    let mut server = Server::new_async().await;
+    let client = muta_providers::http::Http::control_plane().expect("http client");
+
+    let mut cfg = muta_providers::oauth::opencode_preset();
+    cfg.token_url = format!("{}/auth/device/token", server.url()).into();
+    cfg.device_token_url = cfg.token_url.clone();
+
+    let refresh_mock = server
+        .mock("POST", "/auth/device/token")
+        .match_header("content-type", "application/json")
+        .match_body(Matcher::Json(serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": "console-refresh",
+            "client_id": "opencode-cli",
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"access_token":"rotated","refresh_token":"console-refresh-2","token_type":"Bearer","expires_in":3600}"#,
+        )
+        .create_async()
+        .await;
+
+    let refreshed = muta_providers::oauth::refresh_access_token(&client, &cfg, "console-refresh")
+        .await
+        .expect("refreshed token");
+    assert_eq!(refreshed.access_token.expose_secret(), "rotated");
+    refresh_mock.assert_async().await;
 }

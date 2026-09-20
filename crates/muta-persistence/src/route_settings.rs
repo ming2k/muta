@@ -5,13 +5,13 @@
 //! configuration that no endpoint can re-derive. They therefore live in
 //! SQLite under the `state:route_settings` key (mirrored from the legacy
 //! `$XDG_STATE_HOME/muta/route_settings.json`), separate from
-//! `$XDG_STATE_HOME/muta/models_discovery.json`, whose contents are program-
+//! `$XDG_STATE_HOME/muta/remote_catalog.json`, whose contents are program-
 //! generated and re-derivable on the next live `GET /models` ("reset caches"
 //! must not erase the user's reasoning overrides).
 //!
 //! ## Migration
 //!
-//! Releases before this split kept `route_settings` inside the discovery
+//! Releases before this split kept `route_settings` inside the catalog
 //! cache. [`RouteSettingsStore::load`] folds any such entries into this store
 //! one-shot and idempotently (presence check, not a version flag): the first
 //! load after upgrade moves the map, clears it from the cache file, and a
@@ -28,21 +28,26 @@ use serde::{Deserialize, Serialize};
 use crate::config::RouteSettings;
 use crate::paths;
 
-/// Read the historical `route_settings` map out of a pre-split
-/// `models_discovery.json`. Returns an empty map for a missing file, a
-/// post-split file (no such key), or an unparseable file — migration must
-/// never fail startup.
+/// Read the historical `route_settings` map out of a pre-split catalog file.
+/// Returns an empty map for a missing file, a post-split file (no such key), or
+/// an unparseable file — migration must never fail startup.
 ///
-/// The pre-split file lived at the pre-0.43 cache-dir location
-/// ([`paths::Dirs::legacy_discovery_cache_file`]); adoption into the
-/// current state path drops the unknown `route_settings` key during
-/// deserialization, so this reader prefers the legacy path first and falls
-/// back to the current path for the rare case where adoption ran before this
-/// migration in the same upgrade.
+/// Three historical locations are read, newest name first: the retired state
+/// file (`models_discovery.json`, the pre-rename name of the current
+/// `remote_catalog.json`), then the retired cache-dir file. Only the
+/// `route_settings` key is taken; the catalog payload around it is derivable
+/// and intentionally not migrated (ADR-0203 §29).
 fn read_legacy_cache_route_settings() -> BTreeMap<String, BTreeMap<String, RouteSettings>> {
-    let content = fs::read_to_string(paths::get().legacy_discovery_cache_file())
-        .or_else(|_| fs::read_to_string(paths::get().discovery_cache_file()));
-    let Ok(content) = content else {
+    let dirs = paths::get();
+    let candidates = [
+        dirs.retired_remote_catalog_state_file(),
+        dirs.legacy_remote_catalog_cache_file(),
+        dirs.remote_catalog_cache_file(),
+    ];
+    let Some(content) = candidates
+        .iter()
+        .find_map(|path| fs::read_to_string(path).ok())
+    else {
         return BTreeMap::new();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) else {
@@ -64,7 +69,7 @@ struct RouteSettingsFile {
     /// `connection_id -> model_id -> settings`
     #[serde(alias = "providers")]
     connections: BTreeMap<String, BTreeMap<String, RouteSettings>>,
-    /// `true` once the one-shot fold out of the discovery cache has run.
+    /// `true` once the one-shot fold out of the retired catalog cache has run.
     /// Distinguishes "not yet migrated" from "migrated and empty".
     migrated_from_cache: bool,
 }
@@ -77,9 +82,9 @@ pub struct RouteSettingsStore {
 }
 
 impl RouteSettingsStore {
-    /// Load the store, running the one-shot migration from the discovery
-    /// cache when it has not happened yet. Missing or unparseable file → an
-    /// empty store.
+    /// Load the store, running the one-shot migration out of the retired
+    /// catalog cache when it has not happened yet. Missing or unparseable
+    /// file → an empty store.
     pub fn load() -> Self {
         let mut store = Self::read_file();
         if !store.file.migrated_from_cache {
@@ -123,10 +128,6 @@ impl RouteSettingsStore {
         self.file.migrated_from_cache = true;
         if let Err(e) = self.save() {
             tracing::warn!("could not persist route settings migration: {e}");
-        }
-        let cache = crate::config::DiscoveryCache::load();
-        if let Err(e) = cache.save() {
-            tracing::warn!("could not clear route settings from discovery cache: {e}");
         }
     }
 
@@ -235,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_moves_cache_entries_once_and_clears_the_cache() {
+    fn migration_rescues_user_route_settings_and_leaves_derivable_state_alone() {
         let _guard = crate::paths::TEST_OVERRIDE_GUARD
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -248,21 +249,24 @@ mod tests {
             runtime_dir: None,
         }));
 
-        // Seed the legacy layout the way a pre-split release wrote it: a raw
-        // cache file (at the pre-0.43 cache-dir location) carrying a
-        // `route_settings` key (the typed struct no longer has the field —
-        // that is the point).
-        let legacy_json = serde_json::json!({
+        // Seed the retired pre-rename state file the way an older release wrote
+        // it: a catalog payload plus a `route_settings` key (the typed struct
+        // no longer has the field — that is the point). The `route_settings`
+        // map is **user data** (reasoning overrides) and must be rescued; the
+        // catalog payload around it is derivable and must NOT be migrated
+        // (ADR-0203 §29).
+        let retired_json = serde_json::json!({
+            "connection_models": { "kimi": ["kimi-k2"] },
             "route_settings": {
                 "kimi": {
                     "kimi-k2": { "effort": "medium", "thinking": false }
                 }
             }
         });
-        std::fs::create_dir_all(root.path().join("cache")).unwrap();
+        std::fs::create_dir_all(root.path().join("state")).unwrap();
         std::fs::write(
-            crate::paths::get().legacy_discovery_cache_file(),
-            serde_json::to_string_pretty(&legacy_json).unwrap(),
+            crate::paths::get().retired_remote_catalog_state_file(),
+            serde_json::to_string_pretty(&retired_json).unwrap(),
         )
         .unwrap();
 
@@ -275,17 +279,14 @@ mod tests {
                 capability_overrides: None,
                 prompt_cache: None,
             },
-            "the cache entry must land in the state store"
+            "the user's reasoning override must be rescued from the retired file"
         );
-        let cache_after = crate::config::DiscoveryCache::load();
+        // The derivable catalog payload is NOT carried forward: the current
+        // catalog file was never written from the retired one.
+        let cache_after = crate::config::RemoteCatalogCache::load();
         assert!(
             cache_after.connection_models.is_empty(),
-            "the cache file must have been rewritten without the legacy key"
-        );
-        let raw = std::fs::read_to_string(crate::paths::get().discovery_cache_file()).unwrap();
-        assert!(
-            !raw.contains("route_settings"),
-            "the legacy key must be gone from the cache file: {raw}"
+            "derivable catalog state must not be migrated (ADR-0203 §29)"
         );
 
         // Idempotency: a second load must not re-fold or lose entries.

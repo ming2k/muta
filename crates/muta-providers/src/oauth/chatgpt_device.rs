@@ -178,7 +178,7 @@ async fn sleep_ms(ms: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::provider_auth::CHATGPT;
+    use crate::oauth::presets::chatgpt_preset;
 
     #[test]
     fn interval_ms_defaults_and_parses() {
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn verification_url_points_at_codex_device() {
         assert_eq!(
-            verification_url(&CHATGPT),
+            verification_url(&chatgpt_preset()),
             "https://auth.openai.com/codex/device"
         );
     }

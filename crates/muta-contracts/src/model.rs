@@ -17,7 +17,16 @@ use crate::reasoning::ReasoningSupport;
 /// The exact inference wire protocol used by a route. Provider dialects alter
 /// authentication and envelopes without changing this protocol identity.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize, ts_rs::TS,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    ts_rs::TS,
 )]
 pub enum WireProtocol {
     #[default]
@@ -182,6 +191,14 @@ pub struct RemoteModelMetadata {
     /// (ADR-0065), rather than silently dropped.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort_levels: Option<Vec<crate::effort::EffortLevel>>,
+    /// The catalog the model came from, as the provider names it — Qoder's
+    /// `source` (`"system"` for platform models, `"custom"` for user-added
+    /// ones). Not presentation: a signed surface may carry this value on the
+    /// wire as part of the request's model identity (Qoder's `X-Model-Source`
+    /// and `model_config.source`), so it is round-tripped rather than derived.
+    /// `None` when the endpoint advertises no provenance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_source: Option<String>,
 }
 
 /// Effective capabilities for one provider channel.

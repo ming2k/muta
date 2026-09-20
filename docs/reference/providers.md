@@ -112,7 +112,7 @@ a wire protocol and never an authentication mode. The closed id set lives in
 | `glm-cn` | `chat-completions` | standard plus ZCode identity | coding-plan key |
 | `kimi-code` | `chat-completions` | standard | coding-plan key |
 | `qoder` | `chat-completions` | Qoder | Qoder OAuth (device flow) or pasted `pt-` personal-access token |
-| `opencode-go` | Selected per model: chat-completions, anthropic-messages, or google-gemini | standard relay routes | API key |
+| `opencode-go` | Selected per model: chat-completions, anthropic-messages, or google-gemini | standard relay routes | OpenCode Console OAuth (device flow) |
 | `custom` | `chat-completions` (connection default; a connection may override) | standard | optional API key |
 
 Copilot's live model catalogue is authoritative for the protocol of each model.

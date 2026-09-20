@@ -55,7 +55,7 @@ impl App {
         self.custom_models = template.models.iter().map(|m| m.to_string()).collect();
         self.custom_url_hint = template.url_hint.to_string();
         self.custom_user_agent = template.user_agent.map(str::to_string);
-        self.custom_auth = template.auth;
+        self.custom_auth = template.auth.clone();
         self.custom_provider_id = Some(template.id.to_string());
         self.custom_name.clear();
         self.custom_base_url = template.default_url.map(str::to_string).unwrap_or_default();
@@ -117,11 +117,16 @@ impl App {
         self.custom_fields = vec![CustomField::Name];
         self.custom_field = 0;
         self.custom_edit_id = None;
-        let default_name = match self.custom_auth {
-            muta_contracts::ConnectionAuth::ChatGptOAuth => "ChatGPT Subscription",
-            muta_contracts::ConnectionAuth::CopilotOAuth => "Copilot",
-            muta_contracts::ConnectionAuth::AntigravityOAuth => "Google Antigravity",
-            _ => "xAI",
+        let default_name = match &self.custom_auth {
+            muta_contracts::ConnectionAuth::Subscription { provider } => match provider.as_ref() {
+                "chatgpt" => "ChatGPT Subscription",
+                "copilot" => "Copilot",
+                "google-antigravity" => "Google Antigravity",
+                "qoder" => "Qoder",
+                "opencode" | "opencode-go" => "OpenCode Go",
+                _ => "xAI",
+            },
+            muta_contracts::ConnectionAuth::ApiKey => "Custom",
         };
         self.custom_name = default_name.to_string();
         self.input = default_name.to_string();
@@ -152,7 +157,7 @@ impl App {
             .rows
             .iter()
             .find(|r| r.id == id)
-            .map(|r| r.auth)
+            .map(|r| r.auth.clone())
             .unwrap_or_default()
     }
 
@@ -181,7 +186,7 @@ impl App {
         self.surfaces
             .present_sheet(crate::surfaces::SheetKind::CustomProvider);
         self.custom_edit_id = Some(key);
-        self.custom_fields = edit_fields(curated, auth);
+        self.custom_fields = edit_fields(curated, auth.clone());
         self.custom_field = 0;
         self.custom_protocol_wire = protocol;
         self.custom_client_identity = client_identity;

@@ -42,6 +42,16 @@ pub struct Endpoint {
     /// Optional session identifier for sticky routing / session affinity.
     pub session_id: Option<String>,
     pub(crate) fallback_session_id: Arc<std::sync::OnceLock<String>>,
+    /// The catalog the model came from, as the provider names it (Qoder's
+    /// `source`: `"system"` / `"custom"`). Carried on the wire by dialects
+    /// whose surface declares a `CatalogSource` model carrier. Empty when the
+    /// catalog advertises no provenance.
+    pub catalog_source: String,
+    /// The model's display label from the catalog, when it publishes one.
+    /// Presentation only — it never becomes the wire identity (ADR-0131), but
+    /// a dialect whose surface declares a `DisplayName` carrier stamps it into
+    /// the request envelope's `model_config.display_name`.
+    pub display_name: String,
 }
 
 impl Endpoint {
@@ -60,7 +70,23 @@ impl Endpoint {
             id: id.into(),
             session_id: None,
             fallback_session_id: Arc::new(std::sync::OnceLock::new()),
+            catalog_source: String::new(),
+            display_name: String::new(),
         }
+    }
+
+    /// Declare the model's catalog provenance (the `source` the provider names)
+    /// and its display label. Both are wire-optional: only a dialect whose
+    /// surface declares a matching [`ModelCarrier`](muta_contracts::wire_surface::ModelCarrier)
+    /// binding stamps them.
+    pub fn with_catalog_provenance(
+        mut self,
+        catalog_source: impl Into<String>,
+        display_name: impl Into<String>,
+    ) -> Self {
+        self.catalog_source = catalog_source.into();
+        self.display_name = display_name.into();
+        self
     }
 
     /// Construct an endpoint with a static API key string.

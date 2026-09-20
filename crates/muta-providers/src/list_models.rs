@@ -1,4 +1,4 @@
-//! Live model-list discovery from each provider's API.
+//! Live remote-catalog fetch from each provider's API.
 //!
 //! A connection created from a preset can either mirror the
 //! provider's *compiled-in* model list ([`crate::registry::ModelProviderSpec`])
@@ -14,10 +14,10 @@
 //! ## Source selection
 //!
 //! The preset's `RemoteCatalogSource` or the connection override selects one
-//! source. Endpoint discovery returns advertised metadata for reconciliation;
+//! source. An endpoint catalog returns advertised metadata for reconciliation;
 //! transport, status and schema failures retain the previous connection list.
 //! A valid empty endpoint catalog is authoritative. Sources set to `None`
-//! use the compiled baseline without network discovery.
+//! use the compiled baseline without a network fetch.
 //!
 //! ## Protocol details
 //!
@@ -32,7 +32,7 @@
 //!   — only `generateContent`-capable text models are kept.
 //! - **Google Antigravity (cloudcode)**: `POST {base}/v1internal:fetchAvailableModels`,
 //!   bearer `Authorization` when a key is set — a distinct scheme from the
-//!   Google native surface (see [`DiscoveryProtocol::GoogleCloudCode`]).
+//!   Google native surface (see [`CatalogShape::GoogleCloudCode`]).
 //! - **ChatGPT Codex**: `GET {base}/backend-api/codex/models` with
 //!   `client_version` + `originator` headers.
 //!
@@ -48,14 +48,14 @@ use std::collections::HashSet;
 use muta_contracts::{ReasoningSupport, RemoteModelMetadata, SecretString, WireProtocol};
 use serde_json::Value;
 
-pub use muta_contracts::DiscoveryProtocol;
+pub use muta_contracts::CatalogShape;
 
-/// Everything a live discovery request needs, borrowed from the instance's
+/// Everything a live catalog request needs, borrowed from the instance's
 /// first channel. Fields mirror what a chat request would use so the auth
 /// matches exactly.
-#[derive(Debug, Clone)]
-pub struct ModelDiscoveryRequest<'a> {
-    pub protocol: DiscoveryProtocol,
+#[derive(Clone)]
+pub struct RemoteCatalogRequest<'a> {
+    pub protocol: CatalogShape,
     /// The channel's chat endpoint base URL (e.g.
     /// `https://api.openai.com/v1/chat/completions`). The models path is
     /// derived from it via [`models_endpoint_for`].
@@ -68,20 +68,55 @@ pub struct ModelDiscoveryRequest<'a> {
     /// e.g. GitHub Copilot's `x-initiator` / `Openai-Intent` /
     /// `X-GitHub-Api-Version`. Empty for stock OpenAI/Anthropic/Google.
     /// Applied to every protocol; a provider that needs per-header logic can
-    /// still set them here since discovery is read-only (GET).
+    /// still set them here since the fetch is read-only (GET).
     pub extra_headers: &'a [(&'a str, &'a str)],
+    /// The dialect's catalog signing, when the shape's auth is `Dialect`. The
+    /// catalog sync layer supplies it; this fetcher never names a provider.
+    pub catalog_signing: Option<&'a dyn CatalogSigning>,
+    /// The request dimensions that select *which* catalog the server returns
+    /// ([`CatalogShape::dimensions`]), already resolved with any
+    /// connection-level override. Empty for dimension-free shapes.
+    pub dimensions: &'a [(&'a str, &'a str)],
 }
 
-/// Conditional revalidation inputs for model discovery (RFC 7232).
+/// Conditional revalidation inputs for remote-catalog revalidation (RFC 7232).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ModelDiscoveryOptions<'a> {
+pub struct RemoteCatalogOptions<'a> {
     /// Previously observed response ETag, used for conditional revalidation.
     pub etag: Option<&'a str>,
 }
 
-/// Result of a cache-aware model discovery request.
+/// A catalog request signature (the COSY bundle: authorization, date, key).
+#[derive(Debug, Clone)]
+pub struct CatalogSignature {
+    pub authorization: String,
+    pub date: String,
+    pub key: String,
+}
+
+/// Dialect-signed catalog transport, supplied by the caller.
+///
+/// A shape whose [`CatalogAuth`](muta_contracts::provider_surface::CatalogAuth)
+/// is `Dialect` authenticates with the dialect's own request signing. The
+/// signer and the identity-headers table are supplied as data by the catalog
+/// sync layer (which legitimately knows the provider) so this generic fetcher
+/// contains no provider-name branch — the ADR-0260 invariant.
+pub trait CatalogSigning: Send + Sync {
+    /// The dialect's identity headers (`Cosy-*`, `Login-Version`, …), including
+    /// the version header. Read from the owning dialect's declared surface.
+    fn identity_headers(&self) -> Vec<(String, String)>;
+
+    /// Headers carrying the connection's identity (e.g. `Cosy-User`), beyond
+    /// the static identity table.
+    fn identity_subject_headers(&self) -> Vec<(String, String)>;
+
+    /// Sign a signed-path request (empty body — the catalog is a GET).
+    fn sign(&self, signed_path: &str) -> Result<CatalogSignature, String>;
+}
+
+/// Result of a cache-aware remote-catalog request.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModelDiscoveryUpdate {
+pub enum RemoteCatalogUpdate {
     /// The endpoint returned a new catalog payload.
     Modified {
         models: Vec<DiscoveredModel>,
@@ -183,6 +218,11 @@ pub struct DiscoveredModel {
     /// `think_efforts.valid_efforts`, or Copilot's
     /// `capabilities.supports.reasoning_effort`).
     pub effort_levels: Option<Vec<String>>,
+    /// The catalog the model came from, as the provider names it (Qoder's
+    /// `source`: `"system"` / `"custom"`). Round-tripped rather than derived,
+    /// because a signed surface may carry it on the wire as part of the
+    /// request's model identity.
+    pub catalog_source: Option<String>,
 }
 
 impl DiscoveredModel {
@@ -222,6 +262,7 @@ impl DiscoveredModel {
                     .map(|level| muta_contracts::EffortLevel::parse(level))
                     .collect()
             }),
+            catalog_source: self.catalog_source.clone(),
         }
     }
 }
@@ -243,14 +284,14 @@ fn append_query(url: &str, params: &[(&str, &str)]) -> String {
 
 /// Derive the `GET /models` endpoint from an API root URL.
 ///
-/// Under ADR-0259 (Deterministic Root URL Algebra), discovery paths are derived
-/// directly from the API root: `models_url = root_url + relative_discovery_path`.
+/// Under ADR-0259 (Deterministic Root URL Algebra), catalog paths are derived
+/// directly from the API root: `models_url = root_url + relative_catalog_path`.
 /// Callers pass the provider's API root (never a full inference path); suffix
 /// stripping is forbidden by `[INV-ROUTE-01]`.
 ///
 /// Returns [`ModelListError::BadEndpoint`] only for an invalid base.
 pub fn models_endpoint_for(
-    protocol: DiscoveryProtocol,
+    protocol: CatalogShape,
     base_url: &str,
 ) -> Result<String, ModelListError> {
     let root = muta_contracts::ApiRoot::parse(base_url).map_err(ModelListError::BadEndpoint)?;
@@ -265,11 +306,11 @@ pub fn models_endpoint_for(
 /// source is authoritative and may legitimately report that an account has no
 /// currently available models. Malformed shapes remain parse errors.
 pub async fn list_models(
-    req: ModelDiscoveryRequest<'_>,
+    req: RemoteCatalogRequest<'_>,
 ) -> Result<Vec<DiscoveredModel>, ModelListError> {
-    match discover_models(req, ModelDiscoveryOptions::default()).await? {
-        ModelDiscoveryUpdate::Modified { models, .. } => Ok(models),
-        ModelDiscoveryUpdate::NotModified { .. } => Err(ModelListError::Parse(
+    match fetch_remote_catalog(req, RemoteCatalogOptions::default()).await? {
+        RemoteCatalogUpdate::Modified { models, .. } => Ok(models),
+        RemoteCatalogUpdate::NotModified { .. } => Err(ModelListError::Parse(
             "endpoint returned 304 without a conditional request".to_string(),
         )),
     }
@@ -278,17 +319,51 @@ pub async fn list_models(
 /// Fetch or conditionally revalidate a live model catalog. Unlike
 /// [`list_models`], this retains the response ETag and represents HTTP 304
 /// without forcing callers to discard their cached catalog.
-pub async fn discover_models(
-    req: ModelDiscoveryRequest<'_>,
-    options: ModelDiscoveryOptions<'_>,
-) -> Result<ModelDiscoveryUpdate, ModelListError> {
+pub async fn fetch_remote_catalog(
+    req: RemoteCatalogRequest<'_>,
+    options: RemoteCatalogOptions<'_>,
+) -> Result<RemoteCatalogUpdate, ModelListError> {
     let endpoint = models_endpoint_for(req.protocol, req.base_url)?;
     let user_agent = req.user_agent.unwrap_or(crate::MUTA_USER_AGENT);
 
     let client = crate::http::Http::control_plane().map_err(ModelListError::Http)?;
 
     let response = match req.protocol {
-        DiscoveryProtocol::OpenAi => {
+        CatalogShape::SceneMap => {
+            // The catalog rides the dialect's own request signing. The signer
+            // and the identity headers are supplied by the catalog sync layer as
+            // data, so this fetcher names no provider (ADR-0260).
+            let signing = req.catalog_signing.ok_or_else(|| {
+                ModelListError::Parse(
+                    "the signed catalog shape requires a catalog signer".to_string(),
+                )
+            })?;
+            let signed_path = req.protocol.signed_path().ok_or_else(|| {
+                ModelListError::Parse("catalog shape declares no signed path".to_string())
+            })?;
+            let url = append_query(&endpoint, req.protocol.query());
+            let signed = signing.sign(signed_path).map_err(ModelListError::Parse)?;
+            let mut request = crate::http::Request::new(netune::Method::GET, &url)
+                .header("user-agent", user_agent)
+                .header("authorization", signed.authorization)
+                .header("cosy-date", signed.date)
+                .header("cosy-key", signed.key);
+            for (name, value) in signing.identity_subject_headers() {
+                request = request.header(name.as_str(), value);
+            }
+            for (name, value) in signing.identity_headers() {
+                request = request.header(name.as_str(), value);
+            }
+            for (name, value) in req.extra_headers {
+                request = request.header(*name, *value);
+            }
+            crate::http::Http::control_plane()
+                .map_err(ModelListError::Http)?
+                .send(request)
+                .await
+                .map_err(ModelListError::Http)?
+        }
+        CatalogShape::OpenAi => {
             // OpenAI auth: a bearer when a key is set, NO header when keyless
             // (some relays reject a malformed bearer). Mirrors the chat path.
             let mut request = crate::http::Request::new(netune::Method::GET, &endpoint)
@@ -307,7 +382,7 @@ pub async fn discover_models(
             }
             client.send(request).await.map_err(ModelListError::Http)?
         }
-        DiscoveryProtocol::Codex => {
+        CatalogShape::Codex => {
             // ChatGPT Codex models catalog: requires client_version query param,
             // originator header, and optional ChatGPT-Account-Id header.
             let endpoint = append_query(
@@ -337,7 +412,7 @@ pub async fn discover_models(
             }
             client.send(request).await.map_err(ModelListError::Http)?
         }
-        DiscoveryProtocol::Anthropic => {
+        CatalogShape::Anthropic => {
             // Anthropic auth: x-api-key + the pinned API version. The version
             // header is mandatory on every Anthropic request including the
             // models list endpoint.
@@ -356,7 +431,7 @@ pub async fn discover_models(
             }
             client.send(request).await.map_err(ModelListError::Http)?
         }
-        DiscoveryProtocol::GoogleCloudCode => {
+        CatalogShape::GoogleCloudCode => {
             let mut request = crate::http::Request::new(netune::Method::POST, &endpoint)
                 .header("user-agent", user_agent)
                 .header("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1")
@@ -372,7 +447,7 @@ pub async fn discover_models(
             }
             client.send(request).await.map_err(ModelListError::Http)?
         }
-        DiscoveryProtocol::Google => {
+        CatalogShape::Google => {
             // Google auth: the key is a query param, never a header. A keyless
             // request omits it entirely (Google rejects keyless, but a relay
             // might not require it).
@@ -388,7 +463,7 @@ pub async fn discover_models(
             }
             client.send(request).await.map_err(ModelListError::Http)?
         }
-        DiscoveryProtocol::OpencodeGo => {
+        CatalogShape::OpencodeGo => {
             let mut request = crate::http::Request::new(netune::Method::GET, &endpoint)
                 .header("user-agent", user_agent)
                 .header("accept", "application/json");
@@ -409,7 +484,7 @@ pub async fn discover_models(
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
     if status == http::StatusCode::NOT_MODIFIED {
-        return Ok(ModelDiscoveryUpdate::NotModified {
+        return Ok(RemoteCatalogUpdate::NotModified {
             etag: response_etag.or_else(|| options.etag.map(str::to_string)),
         });
     }
@@ -422,8 +497,8 @@ pub async fn discover_models(
         .map_err(|e| ModelListError::Parse(format!("response is not valid JSON: {e}")))?;
 
     validate_catalog_shape(req.protocol, &json)?;
-    let mut models = parse_models(req.protocol, &json);
-    if req.protocol == DiscoveryProtocol::Codex {
+    let mut models = parse_models_with_dimensions(req.protocol, &json, req.dimensions);
+    if req.protocol == CatalogShape::Codex {
         // Codex's order is semantic (the endpoint's `priority` order), so
         // preserve it while discarding duplicate slugs.
         let mut seen = HashSet::new();
@@ -433,7 +508,7 @@ pub async fn discover_models(
         models.sort_by(|a, b| a.id.cmp(&b.id));
         models.dedup_by(|a, b| a.id == b.id);
     }
-    Ok(ModelDiscoveryUpdate::Modified {
+    Ok(RemoteCatalogUpdate::Modified {
         models,
         etag: response_etag,
     })
@@ -486,50 +561,113 @@ impl CatalogParser for OpencodeGoCatalogParser {
     }
 }
 
-/// Return the typed catalog parser for the given discovery protocol (ADR-0259).
-pub fn parser_for(protocol: DiscoveryProtocol) -> Box<dyn CatalogParser> {
+/// Parser for Qoder's scene-keyed catalog (`{"<scene>": [{"key": …}]}`).
+///
+/// The response is a map from scene name to that scene's model entries. The
+/// requested scene's array is the authoritative list; the parser reads the
+/// scene the connection declared, falling back to `assistant` (the CLI's
+/// default) when the response does not carry it.
+pub struct SceneMapCatalogParser {
+    /// The scene the connection requested.
+    pub scene: String,
+}
+
+impl CatalogParser for SceneMapCatalogParser {
+    fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel> {
+        crate::registry::qoder::parse_scene_catalog(json, &self.scene)
+    }
+}
+
+/// Return the typed catalog parser for the given catalog shape (ADR-0259).
+///
+/// The shape is a parser, not a provider: many providers share one shape and
+/// therefore one parser. `dimensions` supplies the request dimensions a
+/// shape needs to select *which* catalog to read (Qoder's `scene`).
+pub fn parser_for(protocol: CatalogShape) -> Box<dyn CatalogParser> {
+    parser_for_with_dimensions(protocol, &[])
+}
+
+/// Return the typed catalog parser for a shape, given the request dimensions
+/// the connection declared. Shapes that select a sub-catalog by a dimension
+/// read it here; dimension-free shapes ignore the argument.
+pub fn parser_for_with_dimensions(
+    protocol: CatalogShape,
+    dimensions: &[(&str, String)],
+) -> Box<dyn CatalogParser> {
     match protocol {
-        DiscoveryProtocol::OpenAi => Box::new(OpenAiCatalogParser),
-        DiscoveryProtocol::Anthropic => Box::new(AnthropicCatalogParser),
-        DiscoveryProtocol::Google | DiscoveryProtocol::GoogleCloudCode => Box::new(GoogleCatalogParser),
-        DiscoveryProtocol::Codex => Box::new(CodexCatalogParser),
-        DiscoveryProtocol::OpencodeGo => Box::new(OpencodeGoCatalogParser),
+        CatalogShape::OpenAi => Box::new(OpenAiCatalogParser),
+        CatalogShape::Anthropic => Box::new(AnthropicCatalogParser),
+        CatalogShape::Google | CatalogShape::GoogleCloudCode => Box::new(GoogleCatalogParser),
+        CatalogShape::Codex => Box::new(CodexCatalogParser),
+        CatalogShape::OpencodeGo => Box::new(OpencodeGoCatalogParser),
+        CatalogShape::SceneMap => {
+            let scene = dimensions
+                .iter()
+                .find(|(name, _)| *name == "scene")
+                .map(|(_, value)| value.clone())
+                .unwrap_or_else(|| "assistant".to_string());
+            Box::new(SceneMapCatalogParser { scene })
+        }
     }
 }
 
 /// Parse a `GET /models` response body into a list of model entries, per
 /// protocol via the typed CatalogParser pipeline (ADR-0259).
-fn parse_models(protocol: DiscoveryProtocol, json: &Value) -> Vec<DiscoveredModel> {
+///
+/// Test-facing shorthand for the dimension-free shapes; the live path calls
+/// [`parse_models_with_dimensions`] so a shape can read its request dimensions.
+#[cfg(test)]
+fn parse_models(protocol: CatalogShape, json: &Value) -> Vec<DiscoveredModel> {
     parser_for(protocol).parse_json(json)
 }
 
-fn validate_catalog_shape(protocol: DiscoveryProtocol, json: &Value) -> Result<(), ModelListError> {
+/// Parse a catalog response, passing the request dimensions a shape may need
+/// to select its sub-catalog (Qoder's `scene`).
+fn parse_models_with_dimensions(
+    protocol: CatalogShape,
+    json: &Value,
+    dimensions: &[(&str, &str)],
+) -> Vec<DiscoveredModel> {
+    let owned: Vec<(&str, String)> = dimensions
+        .iter()
+        .map(|(name, value)| (*name, (*value).to_string()))
+        .collect();
+    parser_for_with_dimensions(protocol, &owned).parse_json(json)
+}
+
+fn validate_catalog_shape(protocol: CatalogShape, json: &Value) -> Result<(), ModelListError> {
     let valid = match protocol {
-        DiscoveryProtocol::OpenAi | DiscoveryProtocol::Anthropic => {
+        CatalogShape::OpenAi | CatalogShape::Anthropic => {
             json.get("data").is_some_and(Value::is_array)
         }
-        DiscoveryProtocol::Google | DiscoveryProtocol::GoogleCloudCode => json
+        CatalogShape::Google | CatalogShape::GoogleCloudCode => json
             .get("models")
             .is_some_and(|models| models.is_array() || models.is_object()),
-        DiscoveryProtocol::Codex => json.get("models").is_some_and(Value::is_array),
-        DiscoveryProtocol::OpencodeGo => json
+        CatalogShape::Codex => json.get("models").is_some_and(Value::is_array),
+        CatalogShape::OpencodeGo => json
             .get("opencode-go")
             .and_then(|p| p.get("models"))
             .is_some_and(Value::is_object),
+        // A scene map is an object whose values are arrays. An empty object is
+        // structurally valid (an account may have no models in any scene).
+        CatalogShape::SceneMap => json
+            .as_object()
+            .is_some_and(|scenes| scenes.values().all(Value::is_array)),
     };
     valid.then_some(()).ok_or_else(|| {
         ModelListError::Parse(
             match protocol {
-                DiscoveryProtocol::OpenAi | DiscoveryProtocol::Anthropic => {
+                CatalogShape::OpenAi | CatalogShape::Anthropic => {
                     "response is missing the required data array"
                 }
-                DiscoveryProtocol::Google | DiscoveryProtocol::Codex => {
+                CatalogShape::Google | CatalogShape::Codex => {
                     "response is missing the required models collection"
                 }
-                DiscoveryProtocol::GoogleCloudCode => "response is missing the required models map",
-                DiscoveryProtocol::OpencodeGo => {
+                CatalogShape::GoogleCloudCode => "response is missing the required models map",
+                CatalogShape::OpencodeGo => {
                     "response is missing the required opencode-go models map"
                 }
+                CatalogShape::SceneMap => "response is not a scene-keyed map of model arrays",
             }
             .to_string(),
         )
@@ -603,6 +741,7 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                     tool_call: Some(true),
                     vision: Some(vision),
                     effort_levels: Some(effort_levels),
+                    catalog_source: None,
                 },
             ))
         })
@@ -718,6 +857,7 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
                     })
             }),
         effort_levels,
+        catalog_source: None,
     })
 }
 
@@ -813,6 +953,7 @@ fn copilot_model_from_capabilities(
             .and_then(|s| s.get("vision"))
             .and_then(Value::as_bool),
         effort_levels,
+        catalog_source: None,
     })
 }
 
@@ -930,6 +1071,7 @@ fn parse_antigravity_models_map(
             tool_call: Some(true),
             vision,
             effort_levels: None,
+            catalog_source: None,
         };
         if emitted.insert(discovered.id.clone()) {
             out.push(discovered);
@@ -948,12 +1090,12 @@ mod tests {
         let openai_json: serde_json::Value = serde_json::json!({
             "data": [{"id": "model-1"}]
         });
-        let parser = parser_for(DiscoveryProtocol::OpenAi);
+        let parser = parser_for(CatalogShape::OpenAi);
         let models = parser.parse_json(&openai_json);
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "model-1");
 
-        let anthropic_parser = parser_for(DiscoveryProtocol::Anthropic);
+        let anthropic_parser = parser_for(CatalogShape::Anthropic);
         let anthropic_models = anthropic_parser.parse_json(&openai_json);
         assert_eq!(anthropic_models.len(), 1);
         assert_eq!(anthropic_models[0].id, "model-1");
@@ -962,19 +1104,53 @@ mod tests {
     #[test]
     fn catalog_endpoints_append_to_explicit_roots() {
         for (format, root, expected) in [
-            (DiscoveryProtocol::OpenAi, "https://relay.example/team/v1", "https://relay.example/team/v1/models"),
-            (DiscoveryProtocol::Anthropic, "https://relay.example/team/v1/", "https://relay.example/team/v1/models"),
-            (DiscoveryProtocol::Codex, "https://chatgpt.com/backend-api/codex", "https://chatgpt.com/backend-api/codex/models"),
-            (DiscoveryProtocol::Google, "https://relay.example/team/v1beta", "https://relay.example/team/v1beta/models"),
-            (DiscoveryProtocol::GoogleCloudCode, "https://relay.example/team", "https://relay.example/team/v1internal:fetchAvailableModels"),
-            (DiscoveryProtocol::OpencodeGo, "https://models.opencode.ai", "https://models.opencode.ai/api.json"),
+            (
+                CatalogShape::OpenAi,
+                "https://relay.example/team/v1",
+                "https://relay.example/team/v1/models",
+            ),
+            (
+                CatalogShape::Anthropic,
+                "https://relay.example/team/v1/",
+                "https://relay.example/team/v1/models",
+            ),
+            (
+                CatalogShape::Codex,
+                "https://chatgpt.com/backend-api/codex",
+                "https://chatgpt.com/backend-api/codex/models",
+            ),
+            (
+                CatalogShape::Google,
+                "https://relay.example/team/v1beta",
+                "https://relay.example/team/v1beta/models",
+            ),
+            (
+                CatalogShape::GoogleCloudCode,
+                "https://relay.example/team",
+                "https://relay.example/team/v1internal:fetchAvailableModels",
+            ),
+            (
+                CatalogShape::OpencodeGo,
+                "https://models.opencode.ai",
+                "https://models.opencode.ai/api.json",
+            ),
             // A path that happens to resemble an inference endpoint is still a root.
-            (DiscoveryProtocol::OpenAi, "https://relay.example/chat/completions", "https://relay.example/chat/completions/models"),
+            (
+                CatalogShape::OpenAi,
+                "https://relay.example/chat/completions",
+                "https://relay.example/chat/completions/models",
+            ),
         ] {
             assert_eq!(models_endpoint_for(format, root).unwrap(), expected);
         }
-        for invalid in ["", "relative/path", "https://relay.example/v1?key=secret", "https://user:pass@relay.example/v1", "file:///tmp/models"] {
-            assert!(models_endpoint_for(DiscoveryProtocol::OpenAi, invalid).is_err());
+        for invalid in [
+            "",
+            "relative/path",
+            "https://relay.example/v1?key=secret",
+            "https://user:pass@relay.example/v1",
+            "file:///tmp/models",
+        ] {
+            assert!(models_endpoint_for(CatalogShape::OpenAi, invalid).is_err());
         }
     }
 
@@ -993,7 +1169,7 @@ mod tests {
                 "gemini-3.1-pro-high": { "newModelId": "gemini-pro-agent" }
             }
         });
-        let got: Vec<String> = parse_models(DiscoveryProtocol::Google, &json)
+        let got: Vec<String> = parse_models(CatalogShape::Google, &json)
             .into_iter()
             .map(|model| model.id)
             .collect();
@@ -1019,11 +1195,11 @@ mod tests {
     #[test]
     fn rejects_empty_base_url() {
         assert!(matches!(
-            models_endpoint_for(DiscoveryProtocol::OpenAi, ""),
+            models_endpoint_for(CatalogShape::OpenAi, ""),
             Err(ModelListError::BadEndpoint(_))
         ));
         assert!(matches!(
-            models_endpoint_for(DiscoveryProtocol::OpenAi, "   "),
+            models_endpoint_for(CatalogShape::OpenAi, "   "),
             Err(ModelListError::BadEndpoint(_))
         ));
     }
@@ -1037,7 +1213,7 @@ mod tests {
                 { "id": "gpt-5.4-mini", "object": "model" }
             ]
         });
-        let mut got: Vec<String> = parse_models(DiscoveryProtocol::OpenAi, &json)
+        let mut got: Vec<String> = parse_models(CatalogShape::OpenAi, &json)
             .into_iter()
             .map(|model| model.id)
             .collect();
@@ -1071,7 +1247,7 @@ mod tests {
                 }
             ]
         });
-        let models = parse_models(DiscoveryProtocol::Codex, &json);
+        let models = parse_models(CatalogShape::Codex, &json);
         assert_eq!(models[0].id, "hidden-helper");
         assert_eq!(models[0].picker_enabled, Some(false));
         assert_eq!(models[1].id, "gpt-codex");
@@ -1108,7 +1284,7 @@ mod tests {
             }]
         });
 
-        let models = parse_models(DiscoveryProtocol::Codex, &json);
+        let models = parse_models(CatalogShape::Codex, &json);
         let astra = models.first().unwrap();
         assert_eq!(astra.id, "gpt-6-astra");
         assert_eq!(astra.picker_enabled, Some(true));
@@ -1159,7 +1335,7 @@ mod tests {
             ],
             "object": "list"
         });
-        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let models = parse_models(CatalogShape::OpenAi, &json);
         assert_eq!(models.len(), 2);
         let k3 = &models[1];
         assert_eq!(k3.id, "k3");
@@ -1204,7 +1380,7 @@ mod tests {
             ]
         });
 
-        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let models = parse_models(CatalogShape::OpenAi, &json);
         assert_eq!(models.len(), 1);
         let nex = &models[0];
         assert_eq!(nex.context_window, Some(262_144));
@@ -1280,7 +1456,7 @@ mod tests {
                 }
             ]
         });
-        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let models = parse_models(CatalogShape::OpenAi, &json);
         // The embeddings entry is filtered out — only chat models surface.
         assert_eq!(models.len(), 2);
         let gpt5 = models.iter().find(|m| m.id == "gpt-5").unwrap();
@@ -1346,7 +1522,7 @@ mod tests {
             ]
         });
 
-        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let models = parse_models(CatalogShape::OpenAi, &json);
         let claude = models
             .iter()
             .find(|model| model.id == "claude-opus-4.7")
@@ -1388,7 +1564,7 @@ mod tests {
                 { "id": "b", "supports_reasoning": false, "supports_thinking_type": "both" }
             ]
         });
-        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let models = parse_models(CatalogShape::OpenAi, &json);
         assert_eq!(models[0].reasoning, Some(false));
         assert_eq!(models[1].reasoning, Some(true));
     }
@@ -1404,7 +1580,7 @@ mod tests {
                 { "id": "claude-sonnet-5", "display_name": "Claude Sonnet 5" }
             ]
         });
-        let models = parse_models(DiscoveryProtocol::Anthropic, &json);
+        let models = parse_models(CatalogShape::Anthropic, &json);
         let mut got: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
         got.sort();
         assert_eq!(got, vec!["claude-opus-4-8", "claude-sonnet-5"]);
@@ -1423,7 +1599,7 @@ mod tests {
                 { "id": "glm-5.2", "object": "model", "owned_by": "zhipu" }
             ]
         });
-        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let models = parse_models(CatalogShape::OpenAi, &json);
         assert_eq!(models[0].id, "glm-5.2");
         assert_eq!(models[0].name, None);
         assert_eq!(models[0].remote_metadata().name, None);
@@ -1441,7 +1617,7 @@ mod tests {
                 { "id": "glm-5.2", "display_name": "  " }
             ]
         });
-        let models = parse_models(DiscoveryProtocol::OpenAi, &json);
+        let models = parse_models(CatalogShape::OpenAi, &json);
         assert_eq!(models[0].name.as_deref(), Some("k3"));
         assert_eq!(models[0].remote_metadata().name, None);
         assert_eq!(models[1].remote_metadata().name, None);
@@ -1459,7 +1635,7 @@ mod tests {
                 "supportedGenerationMethods": ["generateContent"]
             }]
         });
-        let models = parse_models(DiscoveryProtocol::Google, &json);
+        let models = parse_models(CatalogShape::Google, &json);
         assert_eq!(models[0].id, "gemini-2.5-pro");
         assert_eq!(models[0].name.as_deref(), Some("Gemini 2.5 Pro"));
     }
@@ -1485,7 +1661,7 @@ mod tests {
                 { "name": "models/gemini-3-pro-preview" }
             ]
         });
-        let mut got: Vec<String> = parse_models(DiscoveryProtocol::Google, &json)
+        let mut got: Vec<String> = parse_models(CatalogShape::Google, &json)
             .into_iter()
             .map(|model| model.id)
             .collect();
@@ -1499,22 +1675,19 @@ mod tests {
     #[test]
     fn catalog_shape_validation_distinguishes_empty_from_malformed() {
         assert!(
-            validate_catalog_shape(
-                DiscoveryProtocol::OpenAi,
-                &serde_json::json!({ "data": [] })
-            )
-            .is_ok()
+            validate_catalog_shape(CatalogShape::OpenAi, &serde_json::json!({ "data": [] }))
+                .is_ok()
         );
         assert!(matches!(
             validate_catalog_shape(
-                DiscoveryProtocol::OpenAi,
+                CatalogShape::OpenAi,
                 &serde_json::json!({ "error": "unauthorized" })
             ),
             Err(ModelListError::Parse(_))
         ));
         assert!(matches!(
             validate_catalog_shape(
-                DiscoveryProtocol::Google,
+                CatalogShape::Google,
                 &serde_json::json!({ "error": "bad key" })
             ),
             Err(ModelListError::Parse(_))
@@ -1522,22 +1695,22 @@ mod tests {
     }
 
     #[test]
-    fn discovery_protocol_maps_wire_protocols() {
+    fn catalog_shape_maps_wire_protocols() {
         assert_eq!(
-            DiscoveryProtocol::from_wire_protocol(WireProtocol::AnthropicMessages),
-            DiscoveryProtocol::Anthropic
+            CatalogShape::from_wire_protocol(WireProtocol::AnthropicMessages),
+            CatalogShape::Anthropic
         );
         assert_eq!(
-            DiscoveryProtocol::from_wire_protocol(WireProtocol::GoogleGemini),
-            DiscoveryProtocol::Google
+            CatalogShape::from_wire_protocol(WireProtocol::GoogleGemini),
+            CatalogShape::Google
         );
         assert_eq!(
-            DiscoveryProtocol::from_wire_protocol(WireProtocol::ChatCompletions),
-            DiscoveryProtocol::OpenAi
+            CatalogShape::from_wire_protocol(WireProtocol::ChatCompletions),
+            CatalogShape::OpenAi
         );
         assert_eq!(
-            DiscoveryProtocol::from_wire_protocol(WireProtocol::Responses),
-            DiscoveryProtocol::OpenAi
+            CatalogShape::from_wire_protocol(WireProtocol::Responses),
+            CatalogShape::OpenAi
         );
     }
 }

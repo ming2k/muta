@@ -600,8 +600,8 @@ impl GoogleProvider {
             );
 
             let project = auth
-                .project_id
-                .as_deref()
+                .extension::<muta_contracts::GoogleAuthMetadata>()
+                .map(|m| m.project_id.as_str())
                 .or(self.project_id.as_deref())
                 .unwrap_or("");
             if project.is_empty() {

@@ -1863,7 +1863,7 @@ pub async fn run_tui(
                                     })
                                     .await;
                             }
-                            muta_contracts::ConnectStatus::DiscoveryWarning {
+                            muta_contracts::ConnectStatus::CatalogSyncWarning {
                                 provider,
                                 message,
                             } => {

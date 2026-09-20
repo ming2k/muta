@@ -6,71 +6,128 @@
 
 use crate::SecretString;
 use futures::future::BoxFuture;
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+/// Type-safe extensible property carrier for runtime provider authentication metadata (ADR-0267).
+#[derive(Clone, Default)]
+pub struct ExtensionMap {
+    map: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+}
+
+impl ExtensionMap {
+    /// Create an empty extension map.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert a typed metadata value into the map.
+    pub fn insert<T: Send + Sync + 'static>(&mut self, val: T) {
+        self.map.insert(TypeId::of::<T>(), Arc::new(val));
+    }
+
+    /// Retrieve a reference to a typed metadata value.
+    pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.map
+            .get(&TypeId::of::<T>())
+            .and_then(|b| b.downcast_ref::<T>())
+    }
+
+    /// Remove a typed metadata value from the map.
+    pub fn remove<T: Send + Sync + 'static>(&mut self) -> Option<Arc<T>> {
+        self.map
+            .remove(&TypeId::of::<T>())
+            .and_then(|b| b.downcast::<T>().ok())
+    }
+
+    /// Whether this map contains an extension for the given type ID.
+    pub fn contains_id(&self, type_id: &TypeId) -> bool {
+        self.map.contains_key(type_id)
+    }
+
+    /// Whether this map contains an extension of type `T`.
+    pub fn contains<T: 'static>(&self) -> bool {
+        self.contains_id(&TypeId::of::<T>())
+    }
+
+    /// Whether this map contains no extensions.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    /// Number of extensions stored.
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+/// Preflight contract assertion for components declaring required extension dependencies (ADR-0267).
+pub trait PreflightValidator: Send + Sync {
+    /// Declare the exact extension [`TypeId`]s required by this component.
+    fn required_extensions(&self) -> Vec<TypeId>;
+
+    /// Assert that all required extensions exist in [`ResolvedAuth`].
+    fn validate_auth(&self, auth: &ResolvedAuth) -> Result<(), String> {
+        for type_id in self.required_extensions() {
+            if !auth.extensions.contains_id(&type_id) {
+                return Err(format!("missing required auth extension: {type_id:?}"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for ExtensionMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtensionMap")
+            .field("entries", &self.map.len())
+            .finish()
+    }
+}
+
+impl PartialEq for ExtensionMap {
+    fn eq(&self, other: &Self) -> bool {
+        if self.map.len() != other.map.len() {
+            return false;
+        }
+        self.map.keys().all(|k| other.map.contains_key(k))
+    }
+}
+
+impl Eq for ExtensionMap {}
+
+/// ChatGPT/Codex request metadata (`ChatGPT-Account-Id`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatGptAuthMetadata {
+    pub account_id: String,
+}
+
+/// Google Cloud project metadata (`cloudaicompanionProject` / `x-goog-user-project`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoogleAuthMetadata {
+    pub project_id: String,
+}
+
+/// GitHub Copilot session metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopilotAuthMetadata {
+    pub session_id: String,
+}
+
 /// Resolved authentication credentials and account metadata for an outbound request.
+///
+/// Designed per ADR-0267: core struct contains only generic transport authentication
+/// fields. All provider-specific identity parameters reside in [`ExtensionMap`].
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct ResolvedAuth {
     /// Bearer access token or raw API key.
     pub token: SecretString,
-    /// ChatGPT/Codex account id (`ChatGPT-Account-Id`).
-    pub account_id: Option<String>,
-    /// Google Cloud project id (`cloudaicompanionProject` / `x-goog-user-project`).
-    pub project_id: Option<String>,
     /// User email address if known.
     pub user_email: Option<String>,
-    /// Alibaba Qoder request identity (COSY surface): typed per-provider
-    /// material rather than overloading the ChatGPT/Google fields. `None`
-    /// for every other provider.
-    pub qoder: Option<QoderRequestIdentity>,
-}
-
-/// Alibaba Qoder's request identity: the typed, provider-owned material the
-/// COSY signing layer consumes. One instance per connection; each field is
-/// exactly what the corresponding COSY header/payload slot needs.
-#[derive(Clone, PartialEq, Eq)]
-pub struct QoderRequestIdentity {
-    /// The Qoder account's user id (`Cosy-User` header, payload `uid`).
-    pub uid: String,
-    /// The machine's AES key hex — generated once per device, persisted in
-    /// the auth store, and stable across sessions. Qoder's risk signals pin
-    /// to this identity; a rotating key would look like device churn.
-    pub machine_key_hex: SecretString,
-    /// Whether the user agreed to Qoder's data policy (`Cosy-Data-Policy`).
-    pub data_policy_agreed: bool,
-    /// Organization scope, when the account has one (`Cosy-Organization-Id`).
-    pub organization_id: Option<String>,
-    /// Organization tags, comma-joined in order (`Cosy-Organization-Tags`).
-    pub organization_tags: Vec<String>,
-}
-
-impl QoderRequestIdentity {
-    /// Identity payload plaintext for the AES layer (the `info` field's
-    /// pre-encryption form). This is the exact JSON shape Qoder's client
-    /// encrypts — field order matters to the signature.
-    pub fn identity_payload_json(&self, bearer: &str, email: &str) -> String {
-        serde_json::json!({
-            "uid": self.uid,
-            "aid": "",
-            "name": "Muta",
-            "email": email,
-            "security_oauth_token": bearer,
-        })
-        .to_string()
-    }
-}
-
-impl fmt::Debug for QoderRequestIdentity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("QoderRequestIdentity")
-            .field("uid", &self.uid)
-            .field("machine_key_hex", &"[REDACTED]")
-            .field("data_policy_agreed", &self.data_policy_agreed)
-            .field("organization_id", &self.organization_id)
-            .field("organization_tags", &self.organization_tags)
-            .finish()
-    }
+    /// Open-world typed provider extensions (e.g. ChatGptAuthMetadata, GoogleAuthMetadata).
+    pub extensions: ExtensionMap,
 }
 
 impl ResolvedAuth {
@@ -78,28 +135,19 @@ impl ResolvedAuth {
     pub fn new(token: impl Into<SecretString>) -> Self {
         Self {
             token: token.into(),
-            account_id: None,
-            project_id: None,
             user_email: None,
-            qoder: None,
+            extensions: ExtensionMap::new(),
         }
     }
 
-    /// Attach Qoder request identity (typed, provider-owned).
-    pub fn with_qoder_identity(mut self, identity: QoderRequestIdentity) -> Self {
-        self.qoder = Some(identity);
-        self
+    /// Retrieve a typed provider extension.
+    pub fn extension<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
     }
 
-    /// Set the account id.
-    pub fn with_account_id(mut self, account_id: impl Into<String>) -> Self {
-        self.account_id = Some(account_id.into());
-        self
-    }
-
-    /// Set the project id.
-    pub fn with_project_id(mut self, project_id: impl Into<String>) -> Self {
-        self.project_id = Some(project_id.into());
+    /// Attach a typed provider extension.
+    pub fn with_extension<T: Send + Sync + 'static>(mut self, val: T) -> Self {
+        self.extensions.insert(val);
         self
     }
 
@@ -119,10 +167,8 @@ impl fmt::Debug for ResolvedAuth {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ResolvedAuth")
             .field("token", &"[REDACTED]")
-            .field("account_id", &self.account_id)
-            .field("project_id", &self.project_id)
             .field("user_email", &self.user_email)
-            .field("qoder", &self.qoder)
+            .field("extensions", &self.extensions)
             .finish()
     }
 }
@@ -198,4 +244,28 @@ impl CredentialSource for StaticCredentialSource {
 /// Convenience helper to wrap any secret into an `Arc<dyn CredentialSource>`.
 pub fn static_credential(secret: impl Into<SecretString>) -> Arc<dyn CredentialSource> {
     Arc::new(StaticCredentialSource::new(secret))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct DummyValidator;
+    impl PreflightValidator for DummyValidator {
+        fn required_extensions(&self) -> Vec<TypeId> {
+            vec![TypeId::of::<ChatGptAuthMetadata>()]
+        }
+    }
+
+    #[test]
+    fn preflight_asserts_missing_and_present_extensions() {
+        let auth_without = ResolvedAuth::new("tok");
+        let validator = DummyValidator;
+        assert!(validator.validate_auth(&auth_without).is_err());
+
+        let auth_with = auth_without.with_extension(ChatGptAuthMetadata {
+            account_id: "acct-99".to_string(),
+        });
+        assert!(validator.validate_auth(&auth_with).is_ok());
+    }
 }

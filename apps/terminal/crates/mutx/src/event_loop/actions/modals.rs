@@ -144,13 +144,15 @@ pub(crate) fn handle_submit_custom_provider(app: &mut App) {
                 } else {
                     provider
                 };
+                let auth = app.custom_auth.clone();
+                let client_identity = Some(app.custom_client_identity.clone());
                 app.send_intent(AgentRequest::AddConnection {
                     name,
                     provider: provider_id,
                     api_key,
                     models,
-                    auth: app.custom_auth,
-                    client_identity: Some(app.custom_client_identity.clone()),
+                    auth,
+                    client_identity,
                 });
                 app.restore_chat_after_editor_chain();
                 app.custom_field = 0;
@@ -865,10 +867,7 @@ pub(crate) fn activate_picked_model(app: &mut App, id: String, model: String, ke
     } else if app.provider_row_auth(&id).is_oauth() {
         let auth = app.provider_row_auth(&id);
         let method = auth
-            .oauth_provider_id()
-            .and_then(muta_contracts::provider_auth::config_by_provider_id)
-            .and_then(|config| config.effective_default_login_method())
-            .or_else(|| auth.default_login_method())
+            .default_login_method()
             .unwrap_or(muta_contracts::LoginMethod::Device);
         app.send_intent(AgentRequest::ConnectConnection { name: id, method });
         app.dismiss_surface();

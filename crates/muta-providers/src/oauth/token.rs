@@ -26,7 +26,7 @@ pub const ANTIGRAVITY_ONBOARD_USER_URL: &str =
 /// Endpoint for Antigravity user quota summary inspection.
 pub const ANTIGRAVITY_RETRIEVE_QUOTA_SUMMARY_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
-/// Endpoint for Antigravity available models discovery.
+/// Endpoint for Antigravity available-models catalog fetch.
 pub const ANTIGRAVITY_FETCH_AVAILABLE_MODELS_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 /// Google UserInfo endpoint.
@@ -171,7 +171,7 @@ pub async fn refresh_access_token(
 ) -> Result<TokenResponse, crate::oauth::AuthError> {
     // Qoder's device grant is not RFC 8628: the `drt-` device refresh token
     // rotates the `dt-` device token via a JSON POST on the OpenAPI surface.
-    if cfg.is_qoder() {
+    if super::presets::is_qoder(cfg) {
         return super::qoder::refresh_device_token(client, refresh_token).await;
     }
     let mut params: Vec<(&str, &str)> = vec![
@@ -693,7 +693,7 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use muta_contracts::provider_auth::{CHATGPT, XAI};
+    use crate::oauth::presets::{chatgpt_preset, xai_preset};
 
     #[test]
     fn xai_authorize_url_carries_plan_generic_and_pkce() {
@@ -701,7 +701,8 @@ mod tests {
             verifier: "v".into(),
             challenge: "c".to_string(),
         };
-        let url = build_authorize_url(&XAI, &pkce, "ST", "N", "http://127.0.0.1:56121/callback");
+        let cfg = xai_preset();
+        let url = build_authorize_url(&cfg, &pkce, "ST", "N", "http://127.0.0.1:56121/callback");
         assert!(url.starts_with("https://auth.x.ai/oauth2/authorize?"));
         assert!(url.contains("plan=generic"), "plan=generic must be present");
         assert!(url.contains("referrer=muta"));
@@ -719,8 +720,9 @@ mod tests {
             verifier: "v".into(),
             challenge: "c".to_string(),
         };
+        let cfg = chatgpt_preset();
         let url = build_authorize_url(
-            &CHATGPT,
+            &cfg,
             &pkce,
             "ST",
             "N",

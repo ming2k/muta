@@ -1,24 +1,24 @@
 //! Materializes the runtime `Catalog` from the connection store, the preset
-//! registry, and the discovery cache — never from `config.toml`, which holds
+//! registry, and the catalog cache — never from `config.toml`, which holds
 //! behavior only.
 
 mod derive;
-mod discovery;
 mod picker;
+mod sync;
 
 pub use derive::{derive_channel, derive_entries, derive_entry, resolve_credential, route_models};
-pub use discovery::{
-    ConnectionUpdate, DiscoveryOutcome, discover_connection_models, discover_provider_models,
-    discover_provider_models_streaming, refresh_connection_models_for_etag,
-    sync_fitted_model_registry,
-};
 use picker::active_model_id_for_entry;
 pub use picker::{
     build_picker_state, channel_model_info, prune_stale_models, prune_stale_models_on_disk,
 };
+pub use sync::{
+    CatalogSyncOutcome, ConnectionUpdate, refresh_connection_models_for_etag,
+    sync_connection_catalog, sync_fitted_model_registry, sync_remote_catalog,
+    sync_remote_catalog_streaming,
+};
 
 use muta_contracts::catalog::ProviderEntry;
-use muta_persistence::config::{Config, Credentials, DiscoveryCache};
+use muta_persistence::config::{Config, Credentials, RemoteCatalogCache};
 use muta_persistence::connection_usage::ConnectionUsage;
 use muta_persistence::connections::Connections;
 use muta_persistence::route_settings::RouteSettingsStore;
@@ -30,7 +30,7 @@ mod tests;
 pub struct Stores {
     pub connections: Connections,
     pub instances: Connections,
-    pub cache: DiscoveryCache,
+    pub cache: RemoteCatalogCache,
     pub routes: RouteSettingsStore,
     pub creds: Credentials,
 }
@@ -44,7 +44,7 @@ impl Stores {
         Self {
             instances: connections.clone(),
             connections,
-            cache: DiscoveryCache::load(),
+            cache: RemoteCatalogCache::load(),
             routes: RouteSettingsStore::load(),
             creds: Credentials::load(),
         }

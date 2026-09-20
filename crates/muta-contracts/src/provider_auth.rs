@@ -21,24 +21,35 @@ const fn browser_login_method() -> LoginMethod {
     LoginMethod::Browser
 }
 
-/// Which device-authorization flow a provider speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum DeviceFlow {
+/// Which device-authorization flow mode a provider speaks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DeviceFlowMode {
     /// Standard RFC 8628: form-urlencoded request + poll, the polled token
-    /// endpoint returns access tokens directly (xAI, Google, Copilot).
+    /// endpoint returns access tokens directly.
     #[default]
     Rfc8628,
-    /// OpenAI/ChatGPT: JSON bodies; the poll endpoint returns an
-    /// `authorization_code` + `code_verifier` that are then exchanged at the
-    /// `/oauth/token` endpoint for the token set.
-    ChatGpt,
-    /// Qoder: client-side PKCE pair + nonce + machine id, the browser URL
-    /// itself is the device code (no request step), and the poll endpoint is
-    /// a GET that answers 404 while pending, 200 with the token when
-    /// approved.
-    Qoder,
+    /// Vendor-specific custom device authorization strategy.
+    Custom(Cow<'static, str>),
     /// Device flow is not supported or disabled.
     Disabled,
+}
+
+impl DeviceFlowMode {
+    pub const fn rfc8628() -> Self {
+        Self::Rfc8628
+    }
+
+    pub const fn custom(name: &'static str) -> Self {
+        Self::Custom(Cow::Borrowed(name))
+    }
+
+    pub const fn disabled() -> Self {
+        Self::Disabled
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        matches!(self, Self::Disabled)
+    }
 }
 
 /// Port binding strategy for the local callback listener.
@@ -146,7 +157,7 @@ pub struct OAuthConfig {
     /// Request format for token endpoints.
     pub token_format: TokenRequestFormat,
     /// Which device-authorization flow this provider speaks.
-    pub device_flow: DeviceFlow,
+    pub device_flow: DeviceFlowMode,
     /// The token endpoint URL polled during the device flow.
     pub device_token_url: Cow<'static, str>,
     /// The `redirect_uri` sent when exchanging the device authorization_code (ChatGPT).
@@ -173,7 +184,7 @@ impl OAuthConfig {
     pub fn supports_login_method(&self, method: LoginMethod) -> bool {
         match method {
             LoginMethod::Browser => self.browser_login,
-            LoginMethod::Device => self.device_flow != DeviceFlow::Disabled,
+            LoginMethod::Device => !self.device_flow.is_disabled(),
         }
     }
 
@@ -186,36 +197,6 @@ impl OAuthConfig {
         [LoginMethod::Browser, LoginMethod::Device]
             .into_iter()
             .find(|method| self.supports_login_method(*method))
-    }
-
-    /// Whether this OAuth config speaks the Google Antigravity protocol.
-    pub fn is_antigravity(&self) -> bool {
-        self.provider_id == "google-antigravity"
-            || self.provider_id == "antigravity"
-            || self.provider_id == "antigravity-cli"
-            || self.client_id == GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID
-            || self.client_id == GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID
-            || self.token_url.contains("oauth2.googleapis.com")
-    }
-
-    /// Whether this OAuth config speaks the ChatGPT protocol. The token-URL
-    /// check is what actually identifies the issuer: reconnect flows rewrite
-    /// `provider_id` to the connection id, so the id check alone would silently
-    /// disable ChatGPT-specific behavior (account-id extraction) on those paths.
-    pub fn is_chatgpt(&self) -> bool {
-        self.provider_id == "chatgpt"
-            || self.token_url.contains("auth.openai.com")
-            || self.token_url.contains("auth0.openai.com")
-    }
-
-    /// Whether this OAuth config speaks the GitHub Copilot protocol.
-    pub fn is_copilot(&self) -> bool {
-        self.provider_id == "copilot" || self.token_url.contains("github.com/login/oauth")
-    }
-
-    /// Whether this OAuth config speaks the xAI protocol.
-    pub fn is_xai(&self) -> bool {
-        self.provider_id == "xai" || self.token_url.contains("auth.x.ai")
     }
 
     /// Helper to clone and override client_id.
@@ -298,7 +279,7 @@ impl OAuthConfigBuilder {
                 send_nonce: false,
                 pkce_mode: PkceMode::S256,
                 token_format: TokenRequestFormat::FormUrlEncoded,
-                device_flow: DeviceFlow::Rfc8628,
+                device_flow: DeviceFlowMode::Rfc8628,
                 device_token_url: Cow::Borrowed(""),
                 device_redirect_uri: Cow::Borrowed(""),
             },
@@ -441,7 +422,7 @@ impl OAuthConfigBuilder {
         self
     }
 
-    pub fn device_flow(mut self, flow: DeviceFlow) -> Self {
+    pub fn device_flow(mut self, flow: DeviceFlowMode) -> Self {
         self.cfg.device_flow = flow;
         self
     }
@@ -461,489 +442,34 @@ impl OAuthConfigBuilder {
     }
 }
 
-// Built-in Battle-tested Provider Presets
-
-/// Primary Antigravity CLI OAuth client ID (from agy binary).
-pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID: &str = concat!(
-    "884354919052-",
-    "36trc1jjb3tguiac32ov6cod268c5blh",
-    ".apps.googleusercontent.com"
-);
-
-/// Primary Antigravity CLI OAuth client secret (from agy binary).
-pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET: &str =
-    concat!("GOCSPX-", "9YQWpF7RWDC0QTdj-YxKMwR0ZtsX");
-
-/// Enterprise / Cloud Code Companion OAuth client ID (from agy binary).
-pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID: &str = concat!(
-    "1071006060591-",
-    "tmhssin2h21lcre235vtolojh4g403ep",
-    ".apps.googleusercontent.com"
-);
-
-/// Enterprise / Cloud Code Companion OAuth client secret (from agy binary).
-pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET: &str =
-    concat!("GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf");
-
-/// Google Antigravity (Cloud Code / Enterprise companion) OAuth client config.
-///
-/// Configured with PreferredOrDynamic port fallback to eliminate `AddrInUse` errors.
-pub fn google_antigravity_preset() -> OAuthConfig {
-    OAuthConfig {
-        provider_id: Cow::Borrowed("google-antigravity"),
-        client_id: Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID),
-        client_secret: Some(Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET)),
-        client_auth_method: ClientAuthMethod::RequestBody,
-        authorize_url: Cow::Borrowed("https://accounts.google.com/o/oauth2/v2/auth"),
-        token_url: Cow::Borrowed("https://oauth2.googleapis.com/token"),
-        device_authorization_url: Cow::Borrowed("https://oauth2.googleapis.com/device/code"),
-        grant_type_device: Cow::Borrowed("urn:ietf:params:oauth:grant-type:device_code"),
-        scope: Cow::Borrowed(
-            "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs openid",
-        ),
-        extra_authorize_params: vec![
-            (Cow::Borrowed("access_type"), Cow::Borrowed("offline")),
-            (Cow::Borrowed("prompt"), Cow::Borrowed("consent")),
-            (
-                Cow::Borrowed("include_granted_scopes"),
-                Cow::Borrowed("true"),
-            ),
-        ],
-        extra_token_params: Vec::new(),
-        extra_refresh_params: Vec::new(),
-        extra_headers: Vec::new(),
-        user_agent: Some(Cow::Borrowed(
-            crate::client_identity::ANTIGRAVITY_USER_AGENT,
-        )),
-        browser_login: true,
-        default_login_method: LoginMethod::Browser,
-        oauth_host: Cow::Borrowed("127.0.0.1"),
-        oauth_port: 51121,
-        port_mode: PortMode::PreferredOrDynamic(51121),
-        oauth_path: Cow::Borrowed("/oauth-callback"),
-        redirect_host: Cow::Borrowed("127.0.0.1"),
-        custom_redirect_uri: None,
-        send_nonce: false,
-        pkce_mode: PkceMode::S256,
-        token_format: TokenRequestFormat::FormUrlEncoded,
-        device_flow: DeviceFlow::Disabled,
-        device_token_url: Cow::Borrowed("https://oauth2.googleapis.com/token"),
-        device_redirect_uri: Cow::Borrowed(""),
-    }
-}
-
-/// Google Antigravity Primary CLI OAuth client config (matching agy standalone binary).
-pub fn google_antigravity_cli_preset() -> OAuthConfig {
-    OAuthConfig {
-        provider_id: Cow::Borrowed("antigravity-cli"),
-        client_id: Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID),
-        client_secret: Some(Cow::Borrowed(GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET)),
-        client_auth_method: ClientAuthMethod::RequestBody,
-        authorize_url: Cow::Borrowed("https://accounts.google.com/o/oauth2/v2/auth"),
-        token_url: Cow::Borrowed("https://oauth2.googleapis.com/token"),
-        device_authorization_url: Cow::Borrowed("https://oauth2.googleapis.com/device/code"),
-        grant_type_device: Cow::Borrowed("urn:ietf:params:oauth:grant-type:device_code"),
-        scope: Cow::Borrowed(
-            "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs openid",
-        ),
-        extra_authorize_params: vec![
-            (Cow::Borrowed("access_type"), Cow::Borrowed("offline")),
-            (Cow::Borrowed("prompt"), Cow::Borrowed("consent")),
-            (
-                Cow::Borrowed("include_granted_scopes"),
-                Cow::Borrowed("true"),
-            ),
-        ],
-        extra_token_params: Vec::new(),
-        extra_refresh_params: Vec::new(),
-        extra_headers: Vec::new(),
-        user_agent: Some(Cow::Borrowed(
-            crate::client_identity::ANTIGRAVITY_USER_AGENT,
-        )),
-        browser_login: true,
-        default_login_method: LoginMethod::Browser,
-        oauth_host: Cow::Borrowed("127.0.0.1"),
-        oauth_port: 51121,
-        port_mode: PortMode::PreferredOrDynamic(51121),
-        oauth_path: Cow::Borrowed("/oauth-callback"),
-        redirect_host: Cow::Borrowed("127.0.0.1"),
-        custom_redirect_uri: None,
-        send_nonce: false,
-        pkce_mode: PkceMode::S256,
-        token_format: TokenRequestFormat::FormUrlEncoded,
-        device_flow: DeviceFlow::Disabled,
-        device_token_url: Cow::Borrowed("https://oauth2.googleapis.com/token"),
-        device_redirect_uri: Cow::Borrowed(""),
-    }
-}
-
-/// xAI SuperGrok OAuth client preset (reuses the public Grok-CLI client_id).
-pub fn xai_preset() -> OAuthConfig {
-    OAuthConfig {
-        provider_id: Cow::Borrowed("xai"),
-        client_id: Cow::Borrowed("b1a00492-073a-47ea-816f-4c329264a828"),
-        client_secret: None,
-        client_auth_method: ClientAuthMethod::None,
-        authorize_url: Cow::Borrowed("https://auth.x.ai/oauth2/authorize"),
-        token_url: Cow::Borrowed("https://auth.x.ai/oauth2/token"),
-        device_authorization_url: Cow::Borrowed("https://auth.x.ai/oauth2/device/code"),
-        grant_type_device: Cow::Borrowed("urn:ietf:params:oauth:grant-type:device_code"),
-        scope: Cow::Borrowed("openid profile email offline_access grok-cli:access api:access"),
-        extra_authorize_params: vec![
-            (Cow::Borrowed("plan"), Cow::Borrowed("generic")),
-            (Cow::Borrowed("referrer"), Cow::Borrowed("muta")),
-        ],
-        extra_token_params: Vec::new(),
-        extra_refresh_params: Vec::new(),
-        extra_headers: Vec::new(),
-        user_agent: None,
-        browser_login: true,
-        default_login_method: LoginMethod::Device,
-        oauth_host: Cow::Borrowed("127.0.0.1"),
-        oauth_port: 56121,
-        port_mode: PortMode::Fixed(56121),
-        oauth_path: Cow::Borrowed("/callback"),
-        redirect_host: Cow::Borrowed("127.0.0.1"),
-        custom_redirect_uri: None,
-        send_nonce: true,
-        pkce_mode: PkceMode::S256,
-        token_format: TokenRequestFormat::FormUrlEncoded,
-        device_flow: DeviceFlow::Rfc8628,
-        device_token_url: Cow::Borrowed("https://auth.x.ai/oauth2/token"),
-        device_redirect_uri: Cow::Borrowed(""),
-    }
-}
-
-/// ChatGPT / OpenAI Codex Subscription OAuth client preset.
-pub fn chatgpt_preset() -> OAuthConfig {
-    OAuthConfig {
-        provider_id: Cow::Borrowed("chatgpt"),
-        client_id: Cow::Borrowed("app_EMoamEEZ73f0CkXaXp7hrann"),
-        client_secret: None,
-        client_auth_method: ClientAuthMethod::None,
-        authorize_url: Cow::Borrowed("https://auth.openai.com/oauth/authorize"),
-        token_url: Cow::Borrowed("https://auth.openai.com/oauth/token"),
-        device_authorization_url: Cow::Borrowed(
-            "https://auth.openai.com/api/accounts/deviceauth/usercode",
-        ),
-        grant_type_device: Cow::Borrowed("urn:ietf:params:oauth:grant-type:device_code"),
-        scope: Cow::Borrowed(
-            "openid profile email offline_access api.connectors.read api.connectors.invoke",
-        ),
-        extra_authorize_params: vec![
-            (
-                Cow::Borrowed("id_token_add_organizations"),
-                Cow::Borrowed("true"),
-            ),
-            (
-                Cow::Borrowed("codex_cli_simplified_flow"),
-                Cow::Borrowed("true"),
-            ),
-            (Cow::Borrowed("originator"), Cow::Borrowed("codex_cli_rs")),
-        ],
-        extra_token_params: Vec::new(),
-        extra_refresh_params: Vec::new(),
-        extra_headers: Vec::new(),
-        user_agent: None,
-        browser_login: true,
-        default_login_method: LoginMethod::Browser,
-        oauth_host: Cow::Borrowed("127.0.0.1"),
-        oauth_port: 1455,
-        port_mode: PortMode::Fixed(1455),
-        oauth_path: Cow::Borrowed("/auth/callback"),
-        redirect_host: Cow::Borrowed("localhost"),
-        custom_redirect_uri: None,
-        send_nonce: false,
-        pkce_mode: PkceMode::S256,
-        token_format: TokenRequestFormat::FormUrlEncoded,
-        device_flow: DeviceFlow::ChatGpt,
-        device_token_url: Cow::Borrowed("https://auth.openai.com/api/accounts/deviceauth/token"),
-        device_redirect_uri: Cow::Borrowed("https://auth.openai.com/deviceauth/callback"),
-    }
-}
-
-/// GitHub Copilot subscription OAuth client preset.
-pub fn copilot_preset() -> OAuthConfig {
-    OAuthConfig {
-        provider_id: Cow::Borrowed("copilot"),
-        client_id: Cow::Borrowed("Ov23li8tweQw6odWQebz"),
-        client_secret: None,
-        client_auth_method: ClientAuthMethod::None,
-        authorize_url: Cow::Borrowed("https://github.com/login/oauth/authorize"),
-        token_url: Cow::Borrowed("https://github.com/login/oauth/access_token"),
-        device_authorization_url: Cow::Borrowed("https://github.com/login/device/code"),
-        grant_type_device: Cow::Borrowed("urn:ietf:params:oauth:grant-type:device_code"),
-        scope: Cow::Borrowed("read:user"),
-        extra_authorize_params: Vec::new(),
-        extra_token_params: Vec::new(),
-        extra_refresh_params: Vec::new(),
-        extra_headers: Vec::new(),
-        user_agent: None,
-        browser_login: false,
-        default_login_method: LoginMethod::Device,
-        oauth_host: Cow::Borrowed("127.0.0.1"),
-        oauth_port: 42195,
-        port_mode: PortMode::Fixed(42195),
-        oauth_path: Cow::Borrowed("/callback"),
-        redirect_host: Cow::Borrowed("127.0.0.1"),
-        custom_redirect_uri: None,
-        send_nonce: false,
-        pkce_mode: PkceMode::S256,
-        token_format: TokenRequestFormat::FormUrlEncoded,
-        device_flow: DeviceFlow::Rfc8628,
-        device_token_url: Cow::Borrowed("https://github.com/login/oauth/access_token"),
-        device_redirect_uri: Cow::Borrowed(""),
-    }
-}
-
-/// Alibaba Qoder subscription OAuth client preset.
-///
-/// Qoder's device flow is a Qoder-flavored PKCE protocol, not RFC 8628: the
-/// CLI opens `https://qoder.com/device/selectAccounts?…&client_id=…` (CN:
-/// `https://qoder.com.cn/...` with the CN client id), the user approves, and
-/// the client polls `openapi.qoder.sh/api/v1/deviceToken/poll` with the
-/// `nonce` + `verifier` pair it generated (404 = still pending, 200 = the
-/// `dt-` device token). Because the poll shape differs from RFC 8628, this
-/// preset marks the flow as custom; the device polling loop lives in
-/// `muta-providers::oauth::qoder` rather than the generic RFC 8628 poller.
-/// A pasted personal-access token (`pt-…`) skips OAuth entirely and is
-/// exchanged for a `jt-` inference token at activation.
-pub fn qoder_preset() -> OAuthConfig {
-    OAuthConfig {
-        provider_id: Cow::Borrowed("qoder"),
-        // Qoder CLI device-flow client id — production constant (shared
-        // between international and CN lines; extracted from qodercli
-        // and qoder-worker-runtime; non-prod test/daily variant is
-        // e93fe488-5778-4c35-a6fc-0f54ed7b3139). Not a secret: public clients embed it.
-        client_id: Cow::Borrowed("e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"),
-        client_secret: None,
-        client_auth_method: ClientAuthMethod::None,
-        authorize_url: Cow::Borrowed("https://qoder.com/device/selectAccounts"),
-        token_url: Cow::Borrowed("https://openapi.qoder.sh/api/v1/deviceToken/poll"),
-        device_authorization_url: Cow::Borrowed("https://qoder.com/device/selectAccounts"),
-        grant_type_device: Cow::Borrowed("qoder.device.poll"),
-        scope: Cow::Borrowed(""),
-        extra_authorize_params: Vec::new(),
-        extra_token_params: Vec::new(),
-        extra_refresh_params: Vec::new(),
-        extra_headers: Vec::new(),
-        user_agent: None,
-        browser_login: false,
-        default_login_method: LoginMethod::Device,
-        oauth_host: Cow::Borrowed("127.0.0.1"),
-        oauth_port: 56123,
-        port_mode: PortMode::Fixed(56123),
-        oauth_path: Cow::Borrowed("/callback"),
-        redirect_host: Cow::Borrowed("127.0.0.1"),
-        custom_redirect_uri: None,
-        send_nonce: false,
-        pkce_mode: PkceMode::S256,
-        token_format: TokenRequestFormat::FormUrlEncoded,
-        device_flow: DeviceFlow::Qoder,
-        device_token_url: Cow::Borrowed("https://openapi.qoder.sh/api/v1/deviceToken/poll"),
-        device_redirect_uri: Cow::Borrowed(""),
-    }
-}
-
-/// Whether this OAuth config speaks the Alibaba Qoder protocol. The
-/// token-URL check is what identifies the issuer across reconnect flows
-/// (which rewrite `provider_id`), mirroring the other protocol predicates.
-pub fn is_qoder(config: &OAuthConfig) -> bool {
-    config.provider_id == "qoder"
-        || config.token_url.contains("openapi.qoder.sh")
-        || config.token_url.contains("openapi.qoder.com.cn")
-}
-
-impl OAuthConfig {
-    /// Whether this OAuth config speaks the Alibaba Qoder protocol. The
-    /// token-URL check identifies the issuer across reconnect flows (which
-    /// rewrite `provider_id`), mirroring the other protocol predicates.
-    pub fn is_qoder(&self) -> bool {
-        self.provider_id == "qoder"
-            || self.token_url.contains("openapi.qoder.sh")
-            || self.token_url.contains("openapi.qoder.com.cn")
-    }
-}
-
-// Lazy/Const compatible static accessors
-pub static GOOGLE_ANTIGRAVITY: std::sync::LazyLock<OAuthConfig> =
-    std::sync::LazyLock::new(google_antigravity_preset);
-pub static GOOGLE_ANTIGRAVITY_CLI: std::sync::LazyLock<OAuthConfig> =
-    std::sync::LazyLock::new(google_antigravity_cli_preset);
-pub static XAI: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(xai_preset);
-pub static CHATGPT: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(chatgpt_preset);
-pub static COPILOT: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(copilot_preset);
-pub static QODER: std::sync::LazyLock<OAuthConfig> = std::sync::LazyLock::new(qoder_preset);
-
-/// Resolve a config by its stable OAuth integration id.
-pub fn config_by_provider_id(id: &str) -> Option<OAuthConfig> {
-    match id {
-        "xai" => Some(xai_preset()),
-        "chatgpt" => Some(chatgpt_preset()),
-        "copilot" => Some(copilot_preset()),
-        "google-antigravity" | "antigravity" => Some(google_antigravity_preset()),
-        "antigravity-cli" | "agy" => Some(google_antigravity_cli_preset()),
-        "qoder" => Some(qoder_preset()),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn chatgpt_redirect_uri_uses_the_codex_port() {
-        assert_eq!(
-            CHATGPT.redirect_uri(None),
-            "http://localhost:1455/auth/callback"
-        );
-    }
-
-    #[test]
-    fn antigravity_redirect_uri_supports_dynamic_port() {
-        let cfg = google_antigravity_preset();
-        assert_eq!(
-            cfg.redirect_uri(Some(43125)),
-            "http://127.0.0.1:43125/oauth-callback"
-        );
-    }
-
-    #[test]
-    fn chatgpt_carries_codex_simplified_flow_param() {
-        let cfg = chatgpt_preset();
-        assert!(
-            cfg.extra_authorize_params
-                .iter()
-                .any(|(k, v)| k == "codex_cli_simplified_flow" && v == "true"),
-            "codex_cli_simplified_flow=true must be present"
-        );
-        assert!(
-            cfg.scope
-                .split_whitespace()
-                .any(|scope| scope == "api.connectors.read")
-        );
-        assert!(
-            cfg.scope
-                .split_whitespace()
-                .any(|scope| scope == "api.connectors.invoke")
-        );
-    }
-
-    #[test]
-    fn built_in_login_methods_match_registered_flows() {
-        let chatgpt = chatgpt_preset();
-        assert_eq!(
-            chatgpt.effective_default_login_method(),
-            Some(LoginMethod::Browser)
-        );
-        assert!(chatgpt.supports_login_method(LoginMethod::Browser));
-        assert!(chatgpt.supports_login_method(LoginMethod::Device));
-
-        let copilot = copilot_preset();
-        assert_eq!(
-            copilot.effective_default_login_method(),
-            Some(LoginMethod::Device)
-        );
-        assert!(!copilot.supports_login_method(LoginMethod::Browser));
-        assert!(copilot.supports_login_method(LoginMethod::Device));
-    }
-
-    #[test]
-    fn config_resolves_by_provider_id() {
-        assert_eq!(config_by_provider_id("xai").unwrap().provider_id, "xai");
-        assert_eq!(
-            config_by_provider_id("chatgpt").unwrap().provider_id,
-            "chatgpt"
-        );
-        assert_eq!(
-            config_by_provider_id("copilot").unwrap().provider_id,
-            "copilot"
-        );
-        assert_eq!(
-            config_by_provider_id("google-antigravity")
-                .unwrap()
-                .provider_id,
-            "google-antigravity"
-        );
-        assert_eq!(
-            config_by_provider_id("antigravity").unwrap().provider_id,
-            "google-antigravity"
-        );
-        assert!(config_by_provider_id("nope").is_none());
-    }
-
-    #[test]
-    fn custom_client_builder() {
-        let custom = OAuthConfig::builder("my-enterprise-oauth")
+    fn oauth_config_builder_constructs_valid_config() {
+        let cfg = OAuthConfigBuilder::new("custom-provider")
             .client_id("client-123")
-            .client_secret("secret-abc")
-            .authorize_url("https://auth.company.com/oauth2/auth")
-            .token_url("https://auth.company.com/oauth2/token")
-            .scope("api openid")
-            .extra_authorize_param("tenant", "corporate")
-            .port_mode(PortMode::Dynamic)
+            .authorize_url("https://auth.example.com/oauth/authorize")
+            .token_url("https://auth.example.com/oauth/token")
+            .scope("openid profile")
             .build();
 
-        assert_eq!(custom.provider_id, "my-enterprise-oauth");
-        assert_eq!(custom.client_id, "client-123");
-        assert_eq!(custom.client_secret.as_deref(), Some("secret-abc"));
-        assert_eq!(custom.port_mode, PortMode::Dynamic);
+        assert_eq!(cfg.provider_id, "custom-provider");
+        assert_eq!(cfg.client_id, "client-123");
+        assert_eq!(cfg.authorize_url, "https://auth.example.com/oauth/authorize");
+        assert_eq!(cfg.token_url, "https://auth.example.com/oauth/token");
+        assert_eq!(cfg.scope, "openid profile");
+        assert_eq!(cfg.device_flow, DeviceFlowMode::Rfc8628);
     }
 
     #[test]
-    fn google_antigravity_preset_matches_official_specification() {
-        let cfg = google_antigravity_preset();
-        assert_eq!(cfg.provider_id, "google-antigravity");
-        assert_eq!(cfg.client_id, GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID);
-        assert_eq!(
-            cfg.client_secret.as_deref(),
-            Some(GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET)
-        );
-        assert_eq!(
-            cfg.authorize_url,
-            "https://accounts.google.com/o/oauth2/v2/auth"
-        );
-        assert_eq!(cfg.token_url, "https://oauth2.googleapis.com/token");
-        assert!(
-            cfg.scope
-                .contains("https://www.googleapis.com/auth/cloud-platform")
-        );
-        assert!(
-            cfg.scope
-                .contains("https://www.googleapis.com/auth/userinfo.email")
-        );
-        assert!(cfg.scope.contains("https://www.googleapis.com/auth/cclog"));
-        assert_eq!(cfg.port_mode, PortMode::PreferredOrDynamic(51121));
-        assert_eq!(
-            cfg.user_agent.as_deref(),
-            Some(crate::client_identity::ANTIGRAVITY_USER_AGENT)
-        );
+    fn oauth_config_redirect_uri_computation() {
+        let cfg = OAuthConfigBuilder::new("test-provider")
+            .redirect_host("127.0.0.1")
+            .oauth_path("/callback")
+            .build();
 
-        let cli_cfg = google_antigravity_cli_preset();
-        assert_eq!(cli_cfg.provider_id, "antigravity-cli");
-        assert_eq!(cli_cfg.client_id, GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID);
-        assert_eq!(
-            cli_cfg.client_secret.as_deref(),
-            Some(GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET)
-        );
-        assert!(cli_cfg.is_antigravity());
-
-        // Test client customization / emulation
-        let custom_agy = cfg
-            .with_client_id("custom-gcp-client-id")
-            .with_client_secret("custom-gcp-client-secret")
-            .with_redirect_host("localhost")
-            .with_port_mode(PortMode::Dynamic);
-
-        assert_eq!(custom_agy.client_id, "custom-gcp-client-id");
-        assert_eq!(
-            custom_agy.client_secret.as_deref(),
-            Some("custom-gcp-client-secret")
-        );
-        assert_eq!(
-            custom_agy.redirect_uri(Some(9999)),
-            "http://localhost:9999/oauth-callback"
-        );
+        assert_eq!(cfg.redirect_uri(Some(56121)), "http://127.0.0.1:56121/callback");
     }
 }

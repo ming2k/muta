@@ -4,13 +4,13 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Effort, Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 pub use muta_contracts::model_providers::OPENROUTER_BUILTIN_MODELS;
 
 const NEX_N25_EFFORTS: &[Effort] = &[Effort::None, Effort::Medium, Effort::High];
 
-/// The live OpenRouter catalog replaces this seed after discovery. Keep a
+/// The live OpenRouter catalog replaces this seed after the first sync. Keep a
 /// complete baseline for the requested daily-driver model so it is fully
 /// capable even while offline or before a key has been entered.
 pub const MODELS: &[Model] = &[Model {
@@ -38,7 +38,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     user_agent: None,
     protocol: WireProtocol::ChatCompletions,
     models: OPENROUTER_BUILTIN_MODELS,
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
 };

@@ -16,7 +16,7 @@ use muta_contracts::effort::EFFORT_LOW_HIGH_MAX;
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids the built-in `deepseek` provider serves (V4 Flash, Pro, and
 /// Flash Vision over the Responses API, one key). Each id exists in the model
@@ -92,7 +92,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     user_agent: None,
     protocol: WireProtocol::Responses,
     models: DEEPSEEK_BUILTIN_MODELS,
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
 };

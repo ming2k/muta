@@ -72,7 +72,8 @@ pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};
 
 pub mod auth;
 pub use auth::{
-    CredentialSource, QoderRequestIdentity, ResolvedAuth, StaticCredentialSource, static_credential,
+    ChatGptAuthMetadata, CopilotAuthMetadata, CredentialSource, ExtensionMap, GoogleAuthMetadata,
+    PreflightValidator, ResolvedAuth, StaticCredentialSource, static_credential,
 };
 
 pub mod tool_validation;
@@ -86,6 +87,7 @@ pub mod connection_detail;
 pub mod model_providers;
 pub mod provider_auth;
 pub mod provider_state;
+pub mod wire_surface;
 pub use client_identity::{
     ClientCapabilities, ClientIdentity, ClientPreset, ClientProfile, ClientProfileSpec,
     MUTA_USER_AGENT, OPENCODE_CLIENT_HEADERS, OPENCODE_USER_AGENT, OPENCODE_VERSION,
@@ -202,7 +204,7 @@ pub use catalog::{
     AnthropicMessagesDialect, Channel, GoogleGeminiDialect, GoogleGenerateContentDialect,
     OpenAiChatDialect, OpenAiResponsesDialect, ProviderDialect, ProviderEntry, Transport,
 };
-pub use connection_auth::{ChannelAuth, ConnectionAuth, LoginMethod};
+pub use connection_auth::{ConnectionAuth, LoginMethod};
 pub use connection_detail::{
     BalanceQuota, ConnectionDetail, ConnectionUsageState, PeriodicQuota, ProviderQuotaData,
     ProviderUsage, QuotaWindowBucket, QuotaWindowKind, RateLimitSpec, UsageMetric,
@@ -286,4 +288,4 @@ pub use wire::{
 };
 
 pub mod provider_surface;
-pub use provider_surface::{ApiRoot, DiscoveryProtocol, RemoteCatalogSource};
+pub use provider_surface::{ApiRoot, CatalogShape, RemoteCatalogSource};

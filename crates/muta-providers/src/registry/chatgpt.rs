@@ -4,10 +4,10 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Empty seed: the ChatGPT Subscription backend's model set is fully
-/// discovery-derived from the account's live Codex catalog
+/// catalog-derived from the account's live Codex catalog
 /// (`/backend-api/codex/models`). The static seed never guesses
 /// plan-specific access — the entitlement-aware endpoint is the single source
 /// of truth, and the picker is intentionally empty until that first fetch
@@ -128,14 +128,16 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     id: std::borrow::Cow::Borrowed("openai-subscription"),
     baselines: MODELS,
     root_url: std::borrow::Cow::Borrowed("https://chatgpt.com/backend-api/codex"),
-    user_agent: Some(std::borrow::Cow::Borrowed(muta_contracts::client_identity::CODEX_USER_AGENT)),
-    // The Responses transport is the OpenAI wire family. Discovery uses the
+    user_agent: Some(std::borrow::Cow::Borrowed(
+        muta_contracts::client_identity::CODEX_USER_AGENT,
+    )),
+    // The Responses transport is the OpenAI wire family. Catalog fetch uses the
     // subscription-only `/backend-api/codex/models` catalog rather than the
     // public OpenAI `{data:[...]}` shape; the remote catalog is authoritative
     // for each account and its capability metadata is trusted.
     protocol: WireProtocol::Responses,
     models: CHATGPT_BUILTIN_MODELS,
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::Codex),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::Codex),
     default_client_profile: muta_contracts::ClientPreset::Codex,
     client_profile_sensitive: true,
 };

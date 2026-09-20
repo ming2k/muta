@@ -105,7 +105,7 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
             let client_identity = connection
                 .map(|p| p.client_identity.clone())
                 .unwrap_or_default();
-            let auth = connection.map(|p| p.auth).unwrap_or_default();
+            let auth = connection.map(|p| p.auth.clone()).unwrap_or_default();
             let recency = usage.recency_of(&entry.id);
             ProviderPickerRow {
                 id: entry.id.clone(),

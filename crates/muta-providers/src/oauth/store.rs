@@ -20,55 +20,48 @@ pub struct TokenSet {
     /// Unix epoch milliseconds when the access token expires.
     pub expires_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id_token: Option<SecretString>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_email: Option<String>,
-    /// Qoder request identity, persisted per connection. `None` for every
-    /// other provider. Serde-defaulted so existing `auth.toml` files keep
-    /// decoding; only Qoder connections write this field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub qoder: Option<QoderStoredIdentity>,
+    /// Extensible provider attributes (e.g. account_id, project_id, qoder, etc.)
+    #[serde(default, flatten)]
+    pub attributes: serde_json::Map<String, serde_json::Value>,
 }
 
-/// The durable form of [`crate::auth::QoderRequestIdentity`] — what the auth
-/// store serializes. The machine key is the long-lived device identity; uid
-/// and org scope come from login/userinfo.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct QoderStoredIdentity {
-    pub uid: String,
-    /// AES key hex (32 lowercase hex chars); the device's signing identity.
-    pub machine_key_hex: SecretString,
-    #[serde(default)]
-    pub data_policy_agreed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub organization_id: Option<String>,
-    #[serde(default)]
-    pub organization_tags: Vec<String>,
-}
+pub use crate::registry::qoder::{QoderRequestIdentity, QoderStoredIdentity};
 
 impl TokenSet {
     pub fn is_valid(&self) -> bool {
         !self.access.expose_secret().trim().is_empty()
     }
 
-    /// Lift the stored Qoder identity into the contract's typed request
-    /// identity for `ResolvedAuth`. `None` for non-Qoder connections.
-    pub fn qoder_request_identity(&self) -> Option<muta_contracts::QoderRequestIdentity> {
-        self.qoder.as_ref().map(|stored| muta_contracts::QoderRequestIdentity {
-            uid: stored.uid.clone(),
-            machine_key_hex: stored.machine_key_hex.clone(),
-            data_policy_agreed: stored.data_policy_agreed,
-            organization_id: stored.organization_id.clone(),
-            organization_tags: stored.organization_tags.clone(),
-        })
+    /// Retrieve a string attribute by key.
+    pub fn get_attr(&self, key: &str) -> Option<&str> {
+        self.attributes.get(key).and_then(|v| v.as_str())
+    }
+
+    /// Set a string attribute by key.
+    pub fn set_attr(&mut self, key: impl Into<String>, val: impl Into<String>) {
+        self.attributes
+            .insert(key.into(), serde_json::Value::String(val.into()));
+    }
+
+    /// Retrieve and deserialize a typed JSON attribute by key.
+    pub fn get_json_attr<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        self.attributes
+            .get(key)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+
+    /// Serialize and set a typed JSON attribute by key.
+    pub fn set_json_attr<T: serde::Serialize>(&mut self, key: impl Into<String>, val: &T) {
+        if let Ok(v) = serde_json::to_value(val) {
+            self.attributes.insert(key.into(), v);
+        }
     }
 }
 
@@ -266,14 +259,23 @@ mod tests {
             access: access.into(),
             refresh: format!("{access}-refresh").into(),
             expires_ms: 1_700_000_000_000,
-            account_id: None,
             id_token: None,
             token_type: Some("Bearer".into()),
             scope: None,
-            project_id: None,
             user_email: None,
-            qoder: None,
+            attributes: serde_json::Map::new(),
         }
+    }
+
+    #[test]
+    fn round_trips_custom_attributes() {
+        let mut t = tokens("attr-test");
+        t.set_attr("account_id", "acct-123");
+        t.set_attr("project_id", "proj-456");
+        let serialized = toml::to_string(&t).unwrap();
+        let reparsed: TokenSet = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.get_attr("account_id"), Some("acct-123"));
+        assert_eq!(reparsed.get_attr("project_id"), Some("proj-456"));
     }
 
     #[test]

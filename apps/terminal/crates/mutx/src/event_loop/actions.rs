@@ -151,15 +151,7 @@ fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts:
         return;
     }
 
-    let config = preset
-        .auth
-        .oauth_provider_id()
-        .and_then(muta_contracts::provider_auth::config_by_provider_id);
-    let method = forced_method.or_else(|| {
-        config
-            .as_ref()
-            .and_then(|config| config.effective_default_login_method())
-    });
+    let method = forced_method.or_else(|| preset.auth.default_login_method());
     let Some(method) = method else {
         show_local_toast(
             app,
@@ -169,10 +161,7 @@ fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts:
         );
         return;
     };
-    if config
-        .as_ref()
-        .is_none_or(|config| !config.supports_login_method(method))
-    {
+    if !preset.auth.supports_login_method(method) {
         show_local_toast(
             app,
             match method {
@@ -192,7 +181,7 @@ fn select_connection_preset(app: &mut App, forced_method: Option<muta_contracts:
     app.begin_oauth_add(preset, method);
     app.send_intent(AgentRequest::AuthorizeOAuth {
         method,
-        auth: preset.auth,
+        auth: preset.auth.clone(),
     });
 }
 

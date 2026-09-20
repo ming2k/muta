@@ -66,11 +66,17 @@ pub struct ModelProviders {
     pub model_providers: BTreeMap<String, ModelScopeConfig>,
 }
 
-fn schema_version() -> u32 { 1 }
+fn schema_version() -> u32 {
+    1
+}
 
 impl Default for ModelProviders {
     fn default() -> Self {
-        Self { version: schema_version(), providers: BTreeMap::new(), model_providers: BTreeMap::new() }
+        Self {
+            version: schema_version(),
+            providers: BTreeMap::new(),
+            model_providers: BTreeMap::new(),
+        }
     }
 }
 
@@ -89,7 +95,9 @@ impl ModelProviders {
     pub fn try_load() -> Result<Self, String> {
         let content = match std::fs::read_to_string(Self::path()) {
             Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
             Err(error) => return Err(error.to_string()),
         };
         Self::parse(&content)
@@ -99,7 +107,10 @@ impl ModelProviders {
     pub fn parse(content: &str) -> Result<Self, String> {
         let mut value: toml::Value = toml::from_str(content).map_err(|e| e.to_string())?;
         if value.get("version").is_none() {
-            if let Some(providers) = value.get_mut("providers").and_then(toml::Value::as_table_mut) {
+            if let Some(providers) = value
+                .get_mut("providers")
+                .and_then(toml::Value::as_table_mut)
+            {
                 for (_, provider) in providers.iter_mut() {
                     let table = provider.as_table_mut().ok_or("provider must be a table")?;
                     if let Some(format) = table.remove("catalog_format") {
@@ -108,9 +119,14 @@ impl ModelProviders {
                             muta_contracts::RemoteCatalogSource::None
                         } else {
                             muta_contracts::RemoteCatalogSource::Endpoint(
-                                serde_json::from_value(serde_json::Value::String(format.into())).map_err(|e| e.to_string())?)
+                                serde_json::from_value(serde_json::Value::String(format.into()))
+                                    .map_err(|e| e.to_string())?,
+                            )
                         };
-                        table.insert("catalog".into(), toml::Value::try_from(catalog).map_err(|e| e.to_string())?);
+                        table.insert(
+                            "catalog".into(),
+                            toml::Value::try_from(catalog).map_err(|e| e.to_string())?,
+                        );
                     }
                     if let Some(root) = table.get("root_url").and_then(toml::Value::as_str) {
                         let root = migrate_endpoint_root(root);
@@ -118,7 +134,10 @@ impl ModelProviders {
                     }
                 }
             }
-            value.as_table_mut().ok_or("provider store must be a table")?.insert("version".into(), toml::Value::Integer(1));
+            value
+                .as_table_mut()
+                .ok_or("provider store must be a table")?
+                .insert("version".into(), toml::Value::Integer(1));
         }
         let parsed: Self = value.try_into().map_err(|e| e.to_string())?;
         parsed.validate()?;
@@ -126,22 +145,41 @@ impl ModelProviders {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != schema_version() { return Err(format!("unsupported provider schema version {}", self.version)); }
+        if self.version != schema_version() {
+            return Err(format!(
+                "unsupported provider schema version {}",
+                self.version
+            ));
+        }
         for (id, provider) in &self.providers {
-            if id.is_empty() || id.trim() != id { return Err("provider id must be nonempty and trimmed".into()); }
+            if id.is_empty() || id.trim() != id {
+                return Err("provider id must be nonempty and trimmed".into());
+            }
             if muta_contracts::model_providers::is_known_model_provider(id) {
                 return Err(format!("provider `{id}` collides with a built-in provider"));
             }
             muta_contracts::ApiRoot::parse(&provider.root_url)?;
-            if let Some(cache) = &provider.prompt_cache { cache.validate()?; }
-            if let Some(root) = &provider.catalog_root_url { muta_contracts::ApiRoot::parse(root)?; }
-            let mut wires = std::collections::HashSet::new();
-            for (wire, root) in &provider.protocol_roots {
-                if !wires.insert(*wire) { return Err(format!("duplicate protocol root for {wire}")); }
+            if let Some(cache) = &provider.prompt_cache {
+                cache.validate()?;
+            }
+            if let Some(root) = &provider.catalog_root_url {
                 muta_contracts::ApiRoot::parse(root)?;
             }
-            if !provider.dialect.unwrap_or_default().supports(provider.default_protocol.unwrap_or(muta_contracts::WireProtocol::ChatCompletions)) {
-                return Err(format!("provider `{id}` has an incompatible default protocol"));
+            let mut wires = std::collections::HashSet::new();
+            for (wire, root) in &provider.protocol_roots {
+                if !wires.insert(*wire) {
+                    return Err(format!("duplicate protocol root for {wire}"));
+                }
+                muta_contracts::ApiRoot::parse(root)?;
+            }
+            if !provider.dialect.unwrap_or_default().supports(
+                provider
+                    .default_protocol
+                    .unwrap_or(muta_contracts::WireProtocol::ChatCompletions),
+            ) {
+                return Err(format!(
+                    "provider `{id}` has an incompatible default protocol"
+                ));
             }
         }
         Ok(())
@@ -187,8 +225,15 @@ impl ModelProviders {
 /// Versioned provider roots are never inferred from their final path segment.
 pub(crate) fn migrate_endpoint_root(endpoint: &str) -> String {
     let endpoint = endpoint.trim().trim_end_matches('/');
-    for suffix in ["/chat/completions", "/responses", "/messages", "/v1internal"] {
-        if let Some(root) = endpoint.strip_suffix(suffix) { return root.to_string(); }
+    for suffix in [
+        "/chat/completions",
+        "/responses",
+        "/messages",
+        "/v1internal",
+    ] {
+        if let Some(root) = endpoint.strip_suffix(suffix) {
+            return root.to_string();
+        }
     }
     endpoint.to_string()
 }
@@ -264,11 +309,14 @@ mod tests {
                 default_protocol: Some(muta_contracts::WireProtocol::ChatCompletions),
                 client_profile: Some(muta_contracts::ClientPreset::Cursor),
                 user_agent: None,
-                catalog: Some(muta_contracts::RemoteCatalogSource::Endpoint(muta_contracts::DiscoveryProtocol::OpenAi)),
+                catalog: Some(muta_contracts::RemoteCatalogSource::Endpoint(
+                    muta_contracts::CatalogShape::OpenAi,
+                )),
                 dialect: Some(muta_contracts::ProviderDialect::DeepSeek),
                 protocol_roots: vec![],
                 catalog_root_url: None,
-                prompt_cache: None, client_profile_sensitive: false,
+                prompt_cache: None,
+                client_profile_sensitive: false,
             },
         );
 

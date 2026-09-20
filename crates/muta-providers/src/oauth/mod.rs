@@ -15,6 +15,7 @@ pub mod chatgpt_device;
 pub mod credential_source;
 pub mod device;
 pub mod manual;
+pub mod opencode_device;
 pub mod pkce;
 pub mod qoder;
 pub mod store;
@@ -27,17 +28,46 @@ pub use chatgpt_device::{
     request_device_code as request_chatgpt_device_code,
     verification_url as chatgpt_verification_url,
 };
+pub mod enricher;
+pub mod presets;
 pub use credential_source::OAuthCredentialSource;
 pub use device::{DeviceCodeResponse, poll_device_code, request_device_code};
+pub use enricher::*;
 pub use manual::parse_authorization_response;
 pub use muta_contracts::provider_auth::{
-    CHATGPT, COPILOT, ClientAuthMethod, DeviceFlow, GOOGLE_ANTIGRAVITY, GOOGLE_ANTIGRAVITY_CLI,
-    OAuthConfig, OAuthConfigBuilder, PkceMode, PortMode, TokenRequestFormat, XAI, chatgpt_preset,
-    config_by_provider_id, copilot_preset, google_antigravity_cli_preset,
-    google_antigravity_preset, is_qoder, qoder_preset, xai_preset,
+    ClientAuthMethod, DeviceFlowMode, OAuthConfig, OAuthConfigBuilder, PkceMode, PortMode,
+    TokenRequestFormat,
+};
+pub use opencode_device::{
+    OpencodeDeviceCode, fetch_orgs as fetch_opencode_orgs, fetch_user as fetch_opencode_user,
+    poll_device_code as poll_opencode_device_code,
+    poll_device_code_with as poll_opencode_device_code_with,
+    request_device_code as request_opencode_device_code,
 };
 pub use pkce::{PkceCodes, new_nonce, new_state};
+pub use presets::*;
+pub use qoder::QoderApiKeyCredentialSource;
 pub use store::{AuthStore, AuthStoreError, LockedAuthStore, QoderStoredIdentity, TokenSet};
+
+/// The persisted Qoder request identity for a connection, when one exists.
+///
+/// The uid backfill lives in the credential sources (both
+/// [`QoderApiKeyCredentialSource`] and the generic
+/// [`OAuthCredentialSource`](super::OAuthCredentialSource), which Qoder's
+/// `QoderOAuth` connections use). This accessor is a read used by the catalog
+/// layer after that resolution has run; a still-empty uid means resolution
+/// failed, and the signed fetch fails closed with the upstream's own error.
+///
+/// `None` when the connection has no stored Qoder identity.
+pub async fn stored_qoder_request_identity(
+    connection_id: &str,
+) -> Option<crate::registry::qoder::QoderRequestIdentity> {
+    AuthStore::load()
+        .ok()?
+        .get(connection_id)?
+        .get_json_attr::<crate::registry::qoder::QoderStoredIdentity>("qoder")
+        .map(|q| q.to_request_identity())
+}
 pub use token::{
     ACCESS_TOKEN_REFRESH_SKEW_MS, ANTIGRAVITY_LOAD_CODE_ASSIST_URL, ANTIGRAVITY_ONBOARD_USER_URL,
     ANTIGRAVITY_USER_AGENT, GOOGLE_USERINFO_URL, GoogleUserInfo, TokenResponse,
@@ -151,6 +181,10 @@ enum OAuthLoginFlow {
         config: OAuthConfig,
         device: ChatGptDeviceCode,
     },
+    OpencodeDevice {
+        config: OAuthConfig,
+        device: OpencodeDeviceCode,
+    },
     QoderDevice {
         session: crate::oauth::qoder::QoderDeviceSession,
     },
@@ -179,6 +213,12 @@ impl OAuthLoginSession {
                 .await
                 .map_err(|_| AuthError::Timeout)?
             }
+            OAuthLoginFlow::OpencodeDevice { config, device } => tokio::time::timeout(
+                DEVICE_LOGIN_TIMEOUT,
+                poll_opencode_device_code(&self.client, &config, &device),
+            )
+            .await
+            .map_err(|_| AuthError::Timeout)?,
             OAuthLoginFlow::QoderDevice { session } => {
                 tokio::time::timeout(DEVICE_LOGIN_TIMEOUT, async {
                     // Poll → the `dt-` device token. That token IS the
@@ -198,14 +238,40 @@ impl OAuthLoginSession {
     }
 }
 
+/// Construct a fully enriched [`TokenSet`] from a successful OAuth login response.
+pub async fn build_token_set_from_login(
+    oauth: &OAuth,
+    connection_label: &str,
+    tokens: TokenResponse,
+    now_ms: i64,
+) -> TokenSet {
+    let fallback = TokenSet {
+        access: tokens.access_token.clone(),
+        refresh: tokens.refresh_token.clone().unwrap_or_default(),
+        expires_ms: 0,
+        id_token: tokens.id_token.clone(),
+        token_type: tokens.token_type.clone(),
+        scope: tokens.scope.clone(),
+        user_email: None,
+        attributes: serde_json::Map::new(),
+    };
+    build_token_set_with_enricher(
+        oauth.client(),
+        oauth.config(),
+        connection_label,
+        tokens,
+        now_ms,
+    )
+    .await
+    .unwrap_or(fallback)
+}
+
 /// A stable per-machine identifier for the Qoder device flow. Qoder pins its
 /// risk signals to this value, so it must persist across runs; it lives in
 /// the state directory next to the credential file (`machine_id`, 0600 by
 /// umask).
 fn machine_id_for_flow() -> String {
-    let path = muta_persistence::paths::get()
-        .state_dir
-        .join("machine_id");
+    let path = muta_persistence::paths::get().state_dir.join("machine_id");
     if let Ok(existing) = std::fs::read_to_string(&path) {
         let id = existing.trim();
         if !id.is_empty() {
@@ -254,6 +320,11 @@ impl OAuth {
         }
     }
 
+    /// Human-facing message for a failed login, applying vendor-specific framing.
+    pub fn format_login_error(&self, error: &AuthError) -> String {
+        enricher_for_config(&self.config).format_login_error(error)
+    }
+
     /// Convenience constructor for Google Antigravity.
     pub fn google_antigravity() -> Self {
         Self::new(google_antigravity_preset())
@@ -277,6 +348,11 @@ impl OAuth {
     /// Convenience constructor for Alibaba Qoder.
     pub fn qoder() -> Self {
         Self::new(qoder_preset())
+    }
+
+    /// Convenience constructor for the OpenCode Console account.
+    pub fn opencode() -> Self {
+        Self::new(opencode_preset())
     }
 
     /// The provider config this OAuth instance authenticates against.
@@ -319,8 +395,8 @@ impl OAuth {
                 };
                 (prompt, OAuthLoginFlow::Browser(login))
             }
-            LoginMethod::Device => match self.config.device_flow {
-                muta_contracts::provider_auth::DeviceFlow::Rfc8628 => {
+            LoginMethod::Device => match &self.config.device_flow {
+                DeviceFlowMode::Rfc8628 => {
                     let device = request_device_code(&self.client, &self.config).await?;
                     let prompt = OAuthLoginPrompt {
                         method,
@@ -337,47 +413,72 @@ impl OAuth {
                         },
                     )
                 }
-                muta_contracts::provider_auth::DeviceFlow::ChatGpt => {
-                    let device = request_chatgpt_device_code(&self.client, &self.config).await?;
-                    let prompt = OAuthLoginPrompt {
-                        method,
-                        url: device.user_url(&self.config),
-                        user_code: Some(device.user_code.clone()),
-                        message: "Open the URL on any device and enter the code to authorize."
-                            .to_string(),
-                    };
-                    (
-                        prompt,
-                        OAuthLoginFlow::ChatGptDevice {
-                            config: self.config.clone(),
-                            device,
-                        },
-                    )
+                DeviceFlowMode::Custom(flow) => {
+                    match flow.as_ref() {
+                        "chatgpt" => {
+                            let device =
+                                request_chatgpt_device_code(&self.client, &self.config).await?;
+                            let prompt = OAuthLoginPrompt {
+                                method,
+                                url: device.user_url(&self.config),
+                                user_code: Some(device.user_code.clone()),
+                                message:
+                                    "Open the URL on any device and enter the code to authorize."
+                                        .to_string(),
+                            };
+                            (
+                                prompt,
+                                OAuthLoginFlow::ChatGptDevice {
+                                    config: self.config.clone(),
+                                    device,
+                                },
+                            )
+                        }
+                        "opencode" => {
+                            let device = request_opencode_device_code(&self.client, &self.config)
+                                .await?;
+                            let prompt = OAuthLoginPrompt {
+                                method,
+                                url: device.user_url(&self.config),
+                                user_code: Some(device.user_code.clone()),
+                                message:
+                                    "Open the URL on any device and enter the code to authorize."
+                                        .to_string(),
+                            };
+                            (
+                                prompt,
+                                OAuthLoginFlow::OpencodeDevice {
+                                    config: self.config.clone(),
+                                    device,
+                                },
+                            )
+                        }
+                        "qoder" => {
+                            let machine_id = machine_id_for_flow();
+                            let session =
+                                crate::oauth::qoder::QoderDeviceSession::with_authorize_url(
+                                    &machine_id,
+                                    self.config.client_id.as_ref(),
+                                    self.config.authorize_url.as_ref(),
+                                );
+                            let prompt = OAuthLoginPrompt {
+                                method,
+                                url: session.user_url(),
+                                user_code: None,
+                                message:
+                                    "Open the URL and approve this device in your Qoder account."
+                                        .to_string(),
+                            };
+                            (prompt, OAuthLoginFlow::QoderDevice { session })
+                        }
+                        other => {
+                            return Err(AuthError::DeviceCode(format!(
+                                "custom device flow '{other}' not found"
+                            )));
+                        }
+                    }
                 }
-                muta_contracts::provider_auth::DeviceFlow::Qoder => {
-                    // Qoder has no device-code request step: the client-side
-                    // PKCE pair + nonce IS the correlation key. The machine id
-                    // keys the server-side fingerprint — reuse the
-                    // connection-scoped machine id the credential source
-                    // persists (a stable per-process uuid here is only a
-                    // placeholder until the token set carries the real one).
-                    let machine_id = machine_id_for_flow();
-                    let session = crate::oauth::qoder::QoderDeviceSession::with_authorize_url(
-                        &machine_id,
-                        self.config.client_id.as_ref(),
-                        self.config.authorize_url.as_ref(),
-                    );
-                    let prompt = OAuthLoginPrompt {
-                        method,
-                        url: session.user_url(),
-                        // Qoder shows no short user_code; the URL is the act.
-                        user_code: None,
-                        message: "Open the URL and approve this device in your Qoder account."
-                            .to_string(),
-                    };
-                    (prompt, OAuthLoginFlow::QoderDevice { session })
-                }
-                muta_contracts::provider_auth::DeviceFlow::Disabled => {
+                DeviceFlowMode::Disabled => {
                     unreachable!("support checked above")
                 }
             },
@@ -495,58 +596,21 @@ impl OAuth {
             now,
         );
 
-        let mut account_id = if self.config.is_chatgpt() {
-            refreshed
-                .id_token
-                .as_ref()
-                .map(SecretString::expose_secret)
-                .or(Some(refreshed.access_token.expose_secret()))
-                .and_then(chatgpt_account_id)
-                .or(stored.account_id.clone())
-        } else {
-            stored.account_id.clone()
-        };
-
-        let mut project_id = stored.project_id.clone();
-        let mut user_email = stored.user_email.clone();
-
-        if self.config.is_antigravity() {
-            if (project_id.is_none() || account_id.is_none())
-                && let Ok(project) = resolve_antigravity_project(
-                    &self.client,
-                    refreshed.access_token.expose_secret(),
-                )
-                .await
-                && !project.is_empty()
-            {
-                project_id = Some(project.clone());
-                if account_id.is_none() {
-                    account_id = Some(project);
-                }
-            }
-            if user_email.is_none()
-                && let Ok(info) =
-                    fetch_google_userinfo(&self.client, refreshed.access_token.expose_secret())
-                        .await
-            {
-                user_email = info.email;
-            }
-        }
-
-        let tokens = TokenSet {
+        let mut tokens = TokenSet {
             access: refreshed.access_token.clone(),
             refresh: new_refresh,
             expires_ms,
-            account_id,
-            id_token: refreshed.id_token.clone().or(stored.id_token),
-            token_type: refreshed.token_type.clone().or(stored.token_type),
-            scope: refreshed.scope.clone().or(stored.scope),
-            project_id,
-            user_email,
-            // Qoder identity is durable device/account material — refreshes
-            // rotate the bearer, never the machine key.
-            qoder: stored.qoder.clone(),
+            id_token: refreshed.id_token.clone().or(stored.id_token.clone()),
+            token_type: refreshed.token_type.clone().or(stored.token_type.clone()),
+            scope: refreshed.scope.clone().or(stored.scope.clone()),
+            user_email: stored.user_email.clone(),
+            attributes: stored.attributes.clone(),
         };
+
+        let enricher = enricher_for_config(&self.config);
+        enricher
+            .on_refresh_success(&self.client, &stored, &refreshed, &mut tokens)
+            .await?;
 
         *inner = Some(tokens.clone());
         let mut slot = self

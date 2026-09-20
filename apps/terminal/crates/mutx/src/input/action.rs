@@ -135,7 +135,7 @@ pub enum InputAction {
     /// Open the Connections list (`/connections`) — the provider-instance
     /// management surface.
     OpenConnections,
-    /// Refresh / rediscover available models for discovery-enabled providers from upstream.
+    /// Refresh available models for catalog-enabled providers from upstream.
     RefreshProviderModels,
     /// Open the curated preset chooser (`a` in the Connections modal).
     OpenPresetChooser,

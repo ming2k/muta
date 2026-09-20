@@ -279,9 +279,12 @@ impl OpenAiResponsesProvider {
         let copilot = self.dialect == muta_contracts::OpenAiResponsesDialect::Copilot;
         let chatgpt = self.dialect == muta_contracts::OpenAiResponsesDialect::ChatGpt;
         let is_copilot_vision = copilot && request::has_input_image(body);
+        let account_id = auth
+            .extension::<muta_contracts::ChatGptAuthMetadata>()
+            .map(|m| m.account_id.as_str());
         for (name, value) in request::headers(
             auth.token.expose_secret(),
-            auth.account_id.as_deref(),
+            account_id,
             copilot,
             chatgpt,
         ) {
@@ -336,11 +339,14 @@ impl OpenAiResponsesProvider {
             .resolve_auth()
             .await
             .map_err(|e| ProviderError::authentication(self.label(), e))?;
+        let acct_id = auth
+            .extension::<muta_contracts::ChatGptAuthMetadata>()
+            .map(|m| m.account_id.as_str());
         let mut turn_state = turn_context.slot(format!(
             "codex:{}:{}:{:?}",
             self.endpoint.base_url(),
             self.endpoint.model,
-            auth.account_id
+            acct_id
         ));
         let mut req = self
             .build_request_for_auth(body, &auth, turn_state.get().map(String::as_str))
@@ -362,12 +368,15 @@ impl OpenAiResponsesProvider {
                 .force_refresh_auth_after(&auth.token)
                 .await
                 .map_err(|error| ProviderError::authentication(self.label(), error))?;
-            if refreshed_auth.account_id != auth.account_id {
+            let refreshed_acct = refreshed_auth
+                .extension::<muta_contracts::ChatGptAuthMetadata>()
+                .map(|m| m.account_id.as_str());
+            if refreshed_acct != acct_id {
                 turn_state = turn_context.slot(format!(
                     "codex:{}:{}:{:?}",
                     self.endpoint.base_url(),
                     self.endpoint.model,
-                    refreshed_auth.account_id
+                    refreshed_acct
                 ));
             }
             let mut retry_req = self
@@ -800,10 +809,18 @@ mod stream_protocol_tests {
         struct RefreshingAuth(&'static str);
         impl CredentialSource for RefreshingAuth {
             fn resolve_auth(&self) -> BoxFuture<'_, Result<ResolvedAuth, String>> {
-                Box::pin(async { Ok(ResolvedAuth::new("old").with_account_id("account-a")) })
+                Box::pin(async {
+                    Ok(ResolvedAuth::new("old").with_extension(muta_contracts::ChatGptAuthMetadata {
+                        account_id: "account-a".to_string(),
+                    }))
+                })
             }
             fn force_refresh(&self) -> BoxFuture<'_, Result<ResolvedAuth, String>> {
-                Box::pin(async { Ok(ResolvedAuth::new("new").with_account_id(self.0)) })
+                Box::pin(async {
+                    Ok(ResolvedAuth::new("new").with_extension(muta_contracts::ChatGptAuthMetadata {
+                        account_id: self.0.to_string(),
+                    }))
+                })
             }
             fn is_oauth(&self) -> bool {
                 true

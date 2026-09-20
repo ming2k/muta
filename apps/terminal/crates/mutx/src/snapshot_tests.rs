@@ -696,11 +696,11 @@ fn render_transcript_grid(messages: &[TranscriptMessage], width: u16, height: u1
     render_transcript_frame(messages, width, height, 0, None).grid
 }
 
-/// A discovery warning (model-list refresh failure) renders as a notification
+/// A catalog-sync warning (model-list refresh failure) renders as a notification
 /// entry: severity header row, gap, then the wrapped body — never as a bare
 /// un-styled text line.
 #[test]
-fn discovery_warning_notice_renders_as_entry() {
+fn catalog_sync_warning_notice_renders_as_entry() {
     let raw = "aa: could not refresh the model list (model-list HTTP request failed: \
                error sending request for url (https://api.deepseek.com/v1/models)). \
                Showing the previous list.";

@@ -51,7 +51,7 @@ channels. Global model identity does not determine a provider's wire route.
 | Layer | Origin | Lifetime | Authority |
 |-------|--------|----------|-----------|
 | **3. Compiled** | Provider registry tables in `muta-providers` | Shipped with the binary | Offline floor; always present for a preset |
-| **2. Remote** | One pluggable network source per connection | In-memory plus `models_discovery.json` | Authoritative for membership when a source is configured |
+| **2. Remote** | One pluggable network source per connection | In-memory plus `remote_catalog.json` | Authoritative for membership when a source is configured |
 | **1. User** | `connections.toml`, `model_providers.toml`, favorites, route settings | User-owned, persisted | Sovereign; wins every tie |
 
 Layer 3 lives beside each provider as two tables: a `MODELS` baseline (the
@@ -222,11 +222,12 @@ publish a meaningful priority order, which is preserved.
 ### 5.4 Request identity and validator scoping
 
 An ETag is valid only for the complete request identity: source kind, endpoint,
-discovery protocol, client-version string, and the emulated client identity
-headers. The identity is hashed and stored beside the validator. When any
-component changes, the stored validator is discarded and the next fetch is
-unconditional. This prevents a catalog fetched for one client emulation profile
-from being treated as current after the profile changes.
+catalog shape, client-version string, the emulated client identity headers, and
+the resolved catalog dimensions (ADR-0266). The identity is hashed and stored
+beside the validator. When any component changes, the stored validator is
+discarded and the next fetch is unconditional. This prevents a catalog fetched
+for one client emulation profile — or one scene — from being treated as current
+after the profile or dimension changes.
 
 ### 5.5 Orchestration and write policy
 
@@ -251,7 +252,7 @@ connection status rather than as a silent list change.
 
 ### 5.6 Persistence
 
-Discovered state lives in `models_discovery.json` under the state directory,
+Discovered state lives in `remote_catalog.json` under the state directory,
 not the cache directory: discovered ids, ETag revalidation state, and
 advertised capability fields are program-generated state the user expects to
 survive a restart rather than regenerable scratch data. Routes are derived from
@@ -401,7 +402,62 @@ sentence over the running code.
 | ADR-0199 describes a default `Baseline ∩ Discovery` intersection | Open admission (`all`) is the default for custom providers and for any provider with a remote catalog source; intersection is opt-in |
 | ADR-0203 §4 says the unknown-model floor is text-only with vision disabled | The floor disables tool calling and keeps the permissive vision routing policy (ADR-0230) |
 | ADR-0203 §10 describes a four-tier sort with curated baseline order and a pinned active pair | Presentation is three sections ordered by wire id or recency; the active pair is not pinned |
-| ADR-0203 retires the word "discovery" | The code, the wire types, and the persisted file name still use it |
+| ADR-0203 retires the word "discovery" | **Resolved.** ADR-0266 delivered the full rename: `CatalogShape` (was `DiscoveryProtocol`), `RemoteCatalogCache`, `CatalogSyncOutcome`, `CatalogSyncWarning`, `sync_remote_catalog`, the `catalog::sync` module, and the `remote_catalog.json` state file. The word remains only where ADR-0203 §2 says it is correct — service/peer/skill/tool registration — and as frozen on-disk names read by one-shot user-data migration |
+
+## 8a. Catalog shapes and dimensions (ADR-0266)
+
+A catalog is described by a `CatalogShape` (a closed set of response parsers —
+`OpenAi`, `Anthropic`, `Google`, `GoogleCloudCode`, `Codex`, `OpencodeGo`,
+`SceneMap`), not a provider-specific variant. The shape carries its own
+`path()`, `query()`, `auth()`, `signed_path()`, and `dimensions()`, so a provider
+that reuses a shape inherits all of them with no new Rust code.
+
+| Shape | Path | Auth | Dimensions |
+|-------|------|------|------------|
+| `OpenAi` (default) | `models` | bearer | — |
+| `SceneMap` (Qoder) | `algo/api/v2/model/list` | dialect signature | `scene` (`assistant`) |
+
+`CatalogAuth::Dialect` means the catalog authenticates with the dialect's own
+inference signing; one signer serves both the inference path and the catalog
+path. The shape's `signed_path()` is the only difference between the two
+canonical forms.
+
+**Dimensions select a variant of one catalog.** `CatalogShape::dimensions()`
+declares them; `Connection::catalog_dimensions` overrides them by name; the
+resolved set is folded into the discovery identity hash, so `scene=assistant`
+and `scene=experts` cache independently. This is not a second catalog source —
+`[INV-CATALOG-02]` holds (see ADR-0266).
+
+## 8b. Wire surfaces (ADR-0265)
+
+A dialect key resolves to a `DialectSurface` (declared in `muta-contracts`):
+its inference path and query, its identity (emulated version, version header,
+static headers), its request envelope, and its model-identity carriers.
+
+| Concern | Single home | Readers |
+|---------|-------------|---------|
+| Emulated client version | `IdentitySpec.emulated_version` | the `version_header`, the signature payload, the envelope `business.version` |
+| Identity headers | `IdentitySpec::{headers, version_header}` via `headers_with_version()` | the inference executor and the catalog signer — **both** call `headers_with_version()` |
+| Model identity slots | `InferenceSpec.model_bindings` | `qoder_envelope::apply_model_bindings` — the **one** reader, for every carrier kind |
+| Request envelope | `InferenceSpec.envelope` (`Flat` \| `AgentChat`) | the request builder |
+
+The model-identity value is always the channel's wire id verbatim; a carrier
+declares *where* it appears, never *what* it is (ADR-0131). No request-composition
+path branches on a provider name beyond resolving the dialect key to its surface
+(ADR-0260).
+
+**Three rules that keep this true** (each had a drift defect during
+implementation, now guarded by tests):
+
+1. Every reader of the identity headers calls `headers_with_version()`, never
+   the raw `headers` table — the version header is not optional.
+2. No path writes a model-identity slot directly; `apply_model_bindings` is the
+   only writer, so a `model_config.key` or `X-Model-Key` cannot be set behind
+   the declaration's back.
+3. A dialect has exactly one header-declaration site (its surface). The generic
+   chat-completions header table (`request::headers`) carries **no** Qoder
+   branch, because the executor never routes Qoder through it.
+
 
 ## 9. Historical lineage and founding ADRs
 

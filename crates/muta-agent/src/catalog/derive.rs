@@ -5,7 +5,7 @@
 //! client identity + optional overrides). This module derives the concrete
 //! routes — one per model, each with its transport/endpoint/credential/
 //! reasoning — from that declaration plus the model provider registry and the
-//! discovery cache. Nothing here is written back; the stores stay the single
+//! catalog cache. Nothing here is written back; the stores stay the single
 //! source of truth and two connections to the same provider never duplicate or
 //! drift a route set.
 //!
@@ -17,10 +17,10 @@
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::model::CapabilityOverrides;
 use muta_contracts::{
-    ClientProfile, ConnectionAuth, ConnectionFilterPolicy, Effort, NamedFilterPolicy,
+    ClientProfile, ConnectionFilterPolicy, Effort, NamedFilterPolicy,
     ProviderDialect, ReasoningMode, SecretString, WireProtocol,
 };
-use muta_persistence::config::{Credentials, DiscoveryCache};
+use muta_persistence::config::{Credentials, RemoteCatalogCache};
 use muta_persistence::connections::Connection;
 use muta_persistence::connections::Connections;
 use muta_persistence::model_providers::ModelProviders;
@@ -30,7 +30,7 @@ use muta_providers::{RemoteCatalogSource, model_provider_spec};
 /// Derive every entry from the connections store, in declaration order.
 pub fn derive_entries(
     connections: &Connections,
-    cache: &DiscoveryCache,
+    cache: &RemoteCatalogCache,
     routes: &RouteSettingsStore,
     creds: &Credentials,
 ) -> Vec<ProviderEntry> {
@@ -44,7 +44,7 @@ pub fn derive_entries(
 /// Derive one entry from one connection.
 pub fn derive_entry(
     connection: &Connection,
-    cache: &DiscoveryCache,
+    cache: &RemoteCatalogCache,
     routes: &RouteSettingsStore,
     creds: &Credentials,
 ) -> ProviderEntry {
@@ -69,10 +69,10 @@ pub fn derive_entry(
 
 /// The model ids a connection serves, in picker order (ADR-0199, ADR-0201).
 /// Evaluates the 3-step Set Delta Algebra:
-/// 1. S_base = (Baseline ∩ Discovery) or snapshot for the provider.
+/// 1. S_base = (Baseline ∩ RemoteCatalog) or snapshot for the provider.
 /// 2. S_provider = (S_base ∪ Provider.include) \ Provider.exclude
 /// 3. S_effective = (S_provider ∪ Connection.include) \ Connection.exclude
-pub fn route_models(connection: &Connection, cache: &DiscoveryCache) -> Vec<String> {
+pub fn route_models(connection: &Connection, cache: &RemoteCatalogCache) -> Vec<String> {
     let providers = ModelProviders::load();
     route_models_with_providers(connection, cache, &providers)
 }
@@ -80,7 +80,7 @@ pub fn route_models(connection: &Connection, cache: &DiscoveryCache) -> Vec<Stri
 /// Route models evaluated with explicit model provider configurations.
 pub fn route_models_with_providers(
     connection: &Connection,
-    cache: &DiscoveryCache,
+    cache: &RemoteCatalogCache,
     providers: &ModelProviders,
 ) -> Vec<String> {
     let Some(spec) = model_provider_spec(&connection.provider) else {
@@ -143,12 +143,12 @@ pub fn route_models_with_providers(
 pub fn derive_channel(
     connection: &Connection,
     model: &str,
-    cache: &DiscoveryCache,
+    cache: &RemoteCatalogCache,
     routes: &RouteSettingsStore,
     creds: &Credentials,
 ) -> Result<Channel, muta_contracts::ProviderError> {
     // 4-layer descending capability cascade (ADR-0199):
-    // Connection Overrides > Provider Overrides > Discovery Advertised Metadata > Baseline Registry Spec
+    // Connection Overrides > Provider Overrides > Remote-Catalog Advertised Metadata > Baseline Registry Spec
     let providers = ModelProviders::load();
     let provider_scope = providers.get(&connection.provider);
 
@@ -205,31 +205,12 @@ pub fn derive_channel(
         _ => ReasoningMode::Adaptive,
     });
 
-    let credentials: std::sync::Arc<dyn muta_contracts::CredentialSource> =
-        if connection.auth.is_oauth() {
-            std::sync::Arc::new(muta_providers::oauth::OAuthCredentialSource::new(
-                &connection.name,
-                connection.auth,
-            ))
-        } else if connection.auth == ConnectionAuth::QoderOAuth {
-            // A pasted Qoder personal-access token (`pt-…`) runs as ApiKey
-            // auth on the COSY surface. Its request identity is Qoder's own
-            // typed material: a stable per-device AES key persisted next to
-            // the credentials (regenerating it per process would look like
-            // device churn), and the uid from the PAT-exchange userinfo.
-            std::sync::Arc::new(
-                muta_providers::oauth::qoder::QoderApiKeyCredentialSource::new(
-                    &connection.name,
-                    resolve_credential(connection, creds),
-                ),
-            )
-        } else {
-            let api_key = resolve_credential(connection, creds);
-            muta_contracts::static_credential(api_key)
-        };
-
     let (protocol, base_url, client_profile, dialect) =
         base_route(connection, model, remote.as_ref())?;
+
+    let api_key = resolve_credential(connection, creds);
+    let credentials = muta_providers::build_credential_source(connection, api_key, dialect);
+
     let transport = match protocol {
         WireProtocol::GoogleGemini => Transport::Google {
             base_url,
@@ -309,7 +290,9 @@ fn base_route(
 
     Ok((
         protocol,
-        spec.endpoint(protocol).map_err(|error| muta_contracts::ProviderError::invalid_request(&connection.provider, error))?,
+        spec.endpoint(protocol).map_err(|error| {
+            muta_contracts::ProviderError::invalid_request(&connection.provider, error)
+        })?,
         client_profile,
         spec.dialect,
     ))
