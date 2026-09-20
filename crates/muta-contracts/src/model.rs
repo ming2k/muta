@@ -152,6 +152,12 @@ pub struct RemoteModelMetadata {
     /// the channel's configured transport remains authoritative.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<WireProtocol>,
+    /// Provider-advertised **API root** override for this model (e.g. OpenCode
+    /// Console's per-model `provider.api`). The wire suffix is still appended
+    /// by the ADR-0259 root algebra for [`Self::protocol`]; absent means the
+    /// provider spec's route for that protocol holds (ADR-0269).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     /// Provider's model-family label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub family: Option<String>,
@@ -199,6 +205,15 @@ pub struct RemoteModelMetadata {
     /// `None` when the endpoint advertises no provenance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog_source: Option<String>,
+    /// The provider's model-picker enablement for this model — Qoder's
+    /// `enable:false` marks a subscription-locked model the catalog lists but
+    /// this account may not run (the official CLI's `/model` menu renders such
+    /// entries greyed-out). `Some(false)` locks the model: pickers surface it
+    /// dimmed and it must not register as inference-capable; `None` — the
+    /// common case, since most providers advertise no such field — means
+    /// undeclared and therefore enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picker_enabled: Option<bool>,
 }
 
 /// Effective capabilities for one provider channel.

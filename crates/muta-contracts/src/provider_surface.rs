@@ -51,7 +51,12 @@ pub enum CatalogShape {
     Google,
     GoogleCloudCode,
     Codex,
-    OpencodeGo,
+    /// OpenCode Console account catalog: `{"config":{"provider":{"opencode":
+    /// {"api","npm","models":{…}}}}}` over plain bearer + `x-org-id`
+    /// workspace scoping (ADR-0269). The response carries per-model
+    /// `provider:{npm,api}` routing overrides, so this catalog is also the
+    /// inference routing authority for the account.
+    OpencodeConsole,
     /// Qoder's scene-keyed map: `{"<scene>": [{"key": …}]}` over the signed
     /// transport. The catalog rides the same COSY signing as inference, and
     /// `scene` selects which catalog the server returns.
@@ -74,7 +79,7 @@ impl CatalogShape {
     pub fn path(self) -> &'static str {
         match self {
             Self::GoogleCloudCode => "v1internal:fetchAvailableModels",
-            Self::OpencodeGo => "api.json",
+            Self::OpencodeConsole => "api/config",
             Self::SceneMap => "algo/api/v2/model/list",
             _ => "models",
         }

@@ -1,6 +1,6 @@
 # 0268. OpenCode Go as an OpenCode Console OAuth Subscription: JSON Device-Authorization Grant, Declarative Preset, and Load-Time Credential Migration
 
-- **Status:** Accepted
+- **Status:** Accepted, partially superseded by [ADR-0269](0269-opencode-console-catalog-and-routing-authority-with-workspace-scoping.md) (the relay routes, `models.opencode.ai` catalogue, and the deferred `/api/config` and org-selection items)
 - **Date:** 2026-09-20
 - **Implementation:** `muta-contracts`, `muta-providers`, `muta-persistence`, `mutx`
 - **Builds on:** [ADR-0201](0201-model-provider-service-surface-and-connection-identity.md), [ADR-0258](0258-first-class-declarative-model-providers-and-connection-pipe-purity.md), [ADR-0267](0267-transport-middleware-pipeline-and-extensible-credential-architecture.md)

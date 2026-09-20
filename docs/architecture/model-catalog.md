@@ -403,11 +403,12 @@ sentence over the running code.
 | ADR-0203 §4 says the unknown-model floor is text-only with vision disabled | The floor disables tool calling and keeps the permissive vision routing policy (ADR-0230) |
 | ADR-0203 §10 describes a four-tier sort with curated baseline order and a pinned active pair | Presentation is three sections ordered by wire id or recency; the active pair is not pinned |
 | ADR-0203 retires the word "discovery" | **Resolved.** ADR-0266 delivered the full rename: `CatalogShape` (was `DiscoveryProtocol`), `RemoteCatalogCache`, `CatalogSyncOutcome`, `CatalogSyncWarning`, `sync_remote_catalog`, the `catalog::sync` module, and the `remote_catalog.json` state file. The word remains only where ADR-0203 §2 says it is correct — service/peer/skill/tool registration — and as frozen on-disk names read by one-shot user-data migration |
+| ADR-0268 kept the compiled OpenCode Go routes and the keyless `models.opencode.ai` catalogue, deferring `/api/config` | **Resolved.** ADR-0269 made the authenticated Console `api/config` the authority for OpenCode Go: it declares each model's protocol and API root, which `RemoteModelMetadata.endpoint` carries into the ADR-0259 route algebra |
 
 ## 8a. Catalog shapes and dimensions (ADR-0266)
 
 A catalog is described by a `CatalogShape` (a closed set of response parsers —
-`OpenAi`, `Anthropic`, `Google`, `GoogleCloudCode`, `Codex`, `OpencodeGo`,
+`OpenAi`, `Anthropic`, `Google`, `GoogleCloudCode`, `Codex`, `OpencodeConsole`,
 `SceneMap`), not a provider-specific variant. The shape carries its own
 `path()`, `query()`, `auth()`, `signed_path()`, and `dimensions()`, so a provider
 that reuses a shape inherits all of them with no new Rust code.
@@ -415,6 +416,7 @@ that reuses a shape inherits all of them with no new Rust code.
 | Shape | Path | Auth | Dimensions |
 |-------|------|------|------------|
 | `OpenAi` (default) | `models` | bearer | — |
+| `OpencodeConsole` (OpenCode Go) | `api/config` | bearer + `x-org-id` | — |
 | `SceneMap` (Qoder) | `algo/api/v2/model/list` | dialect signature | `scene` (`assistant`) |
 
 `CatalogAuth::Dialect` means the catalog authenticates with the dialect's own

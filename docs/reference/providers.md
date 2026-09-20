@@ -112,13 +112,14 @@ a wire protocol and never an authentication mode. The closed id set lives in
 | `glm-cn` | `chat-completions` | standard plus ZCode identity | coding-plan key |
 | `kimi-code` | `chat-completions` | standard | coding-plan key |
 | `qoder` | `chat-completions` | Qoder | Qoder OAuth (device flow) or pasted `pt-` personal-access token |
-| `opencode-go` | Selected per model: chat-completions, anthropic-messages, or google-gemini | standard relay routes | OpenCode Console OAuth (device flow) |
+| `opencode-go` | Advertised per model: `chat-completions`, `responses`, `anthropic-messages`, or `google-gemini` | Console inference roots (`inference/{openai,anthropic,google}`) | OpenCode Console OAuth (device flow) |
 | `custom` | `chat-completions` (connection default; a connection may override) | standard | optional API key |
 
 Copilot's live model catalogue is authoritative for the protocol of each model.
 A Copilot model advertising an unsupported Google protocol is rejected rather
-than projected onto another API. OpenCode Go uses the registered baseline
-protocol for each model to choose its relay endpoint.
+than projected onto another API. OpenCode Go's authenticated Console catalogue
+is authoritative for both the protocol and the API root of each model, falling
+back to the registered baseline only while the account catalogue is unavailable.
 
 ## Prompt-cache capability matrix
 

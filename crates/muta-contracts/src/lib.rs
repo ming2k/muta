@@ -73,7 +73,8 @@ pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};
 pub mod auth;
 pub use auth::{
     ChatGptAuthMetadata, CopilotAuthMetadata, CredentialSource, ExtensionMap, GoogleAuthMetadata,
-    PreflightValidator, ResolvedAuth, StaticCredentialSource, static_credential,
+    OpencodeAuthMetadata, PreflightValidator, ResolvedAuth, StaticCredentialSource,
+    static_credential,
 };
 
 pub mod tool_validation;

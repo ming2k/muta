@@ -35,6 +35,10 @@
 //!   Google native surface (see [`CatalogShape::GoogleCloudCode`]).
 //! - **ChatGPT Codex**: `GET {base}/backend-api/codex/models` with
 //!   `client_version` + `originator` headers.
+//! - **OpenCode Console**: `GET {root}/api/config` with bearer session token +
+//!   `x-org-id` workspace header; body `{config: {provider: {opencode:
+//!   {npm, models}}}}`, where each model may override its wire (`provider.npm`)
+//!   and inference root (`provider.api`).
 //!
 //! ## Endpoint derivation
 //!
@@ -63,6 +67,9 @@ pub struct RemoteCatalogRequest<'a> {
     pub api_key: &'a SecretString,
     /// Optional account ID associated with OAuth tokens (e.g. ChatGPT-Account-Id).
     pub account_id: Option<&'a str>,
+    /// Optional workspace/org ID for org-scoped catalogs (OpenCode Console's
+    /// `x-org-id`, ADR-0269). `None` sends no org header.
+    pub org_id: Option<&'a str>,
     pub user_agent: Option<&'a str>,
     /// Extra request headers a provider requires beyond standard auth —
     /// e.g. GitHub Copilot's `x-initiator` / `Openai-Intent` /
@@ -189,6 +196,11 @@ pub struct DiscoveredModel {
     /// Copilot model can use Messages, Responses, or Chat Completions while the
     /// same id elsewhere uses another route.
     pub protocol: Option<WireProtocol>,
+    /// Provider-advertised **API root** override for this model (OpenCode
+    /// Console's per-model `provider.api`). Route building appends the wire
+    /// suffix through the shared ADR-0259 algebra, so this is a root, never a
+    /// full endpoint (ADR-0269).
+    pub endpoint: Option<String>,
     /// Provider model family, when advertised.
     pub family: Option<String>,
     /// Human-readable label the endpoint publishes for this model, when it
@@ -232,6 +244,7 @@ impl DiscoveredModel {
     pub fn remote_metadata(&self) -> RemoteModelMetadata {
         RemoteModelMetadata {
             protocol: self.protocol,
+            endpoint: self.endpoint.clone(),
             family: self.family.clone(),
             name: self
                 .name
@@ -263,6 +276,7 @@ impl DiscoveredModel {
                     .collect()
             }),
             catalog_source: self.catalog_source.clone(),
+            picker_enabled: self.picker_enabled,
         }
     }
 }
@@ -463,10 +477,23 @@ pub async fn fetch_remote_catalog(
             }
             client.send(request).await.map_err(ModelListError::Http)?
         }
-        CatalogShape::OpencodeGo => {
+        CatalogShape::OpencodeConsole => {
+            // The Console catalog is account-scoped: a bearer session token
+            // plus the `x-org-id` workspace header — the catalog's own spelling,
+            // distinct from the inference surface's `x-opencode-org-id`. The
+            // server answers 400 `OrgRequired` without an org selection.
             let mut request = crate::http::Request::new(netune::Method::GET, &endpoint)
                 .header("user-agent", user_agent)
                 .header("accept", "application/json");
+            if !req.api_key.expose_secret().trim().is_empty() {
+                request = request.header(
+                    "authorization",
+                    format!("Bearer {}", req.api_key.expose_secret()),
+                );
+            }
+            if let Some(org_id) = req.org_id {
+                request = request.header("x-org-id", org_id);
+            }
             if let Some(etag) = options.etag {
                 request = request.header("if-none-match", etag);
             }
@@ -554,10 +581,10 @@ impl CatalogParser for CodexCatalogParser {
     }
 }
 
-pub struct OpencodeGoCatalogParser;
-impl CatalogParser for OpencodeGoCatalogParser {
+pub struct OpencodeConsoleCatalogParser;
+impl CatalogParser for OpencodeConsoleCatalogParser {
     fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel> {
-        crate::registry::opencode_go::parse_catalog(json)
+        crate::registry::opencode_go::parse_config_catalog(json)
     }
 }
 
@@ -599,7 +626,7 @@ pub fn parser_for_with_dimensions(
         CatalogShape::Anthropic => Box::new(AnthropicCatalogParser),
         CatalogShape::Google | CatalogShape::GoogleCloudCode => Box::new(GoogleCatalogParser),
         CatalogShape::Codex => Box::new(CodexCatalogParser),
-        CatalogShape::OpencodeGo => Box::new(OpencodeGoCatalogParser),
+        CatalogShape::OpencodeConsole => Box::new(OpencodeConsoleCatalogParser),
         CatalogShape::SceneMap => {
             let scene = dimensions
                 .iter()
@@ -644,9 +671,11 @@ fn validate_catalog_shape(protocol: CatalogShape, json: &Value) -> Result<(), Mo
             .get("models")
             .is_some_and(|models| models.is_array() || models.is_object()),
         CatalogShape::Codex => json.get("models").is_some_and(Value::is_array),
-        CatalogShape::OpencodeGo => json
-            .get("opencode-go")
-            .and_then(|p| p.get("models"))
+        CatalogShape::OpencodeConsole => json
+            .get("config")
+            .and_then(|config| config.get("provider"))
+            .and_then(|providers| providers.get("opencode"))
+            .and_then(|provider| provider.get("models"))
             .is_some_and(Value::is_object),
         // A scene map is an object whose values are arrays. An empty object is
         // structurally valid (an account may have no models in any scene).
@@ -664,8 +693,8 @@ fn validate_catalog_shape(protocol: CatalogShape, json: &Value) -> Result<(), Mo
                     "response is missing the required models collection"
                 }
                 CatalogShape::GoogleCloudCode => "response is missing the required models map",
-                CatalogShape::OpencodeGo => {
-                    "response is missing the required opencode-go models map"
+                CatalogShape::OpencodeConsole => {
+                    "response is missing the required config.provider.opencode models map"
                 }
                 CatalogShape::SceneMap => "response is not a scene-keyed map of model arrays",
             }
@@ -724,6 +753,7 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                     id,
                     picker_enabled: Some(listed),
                     protocol: Some(WireProtocol::Responses),
+                    endpoint: None,
                     family: None,
                     name: entry
                         .get("display_name")
@@ -813,6 +843,7 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
         id,
         picker_enabled: None,
         protocol: None,
+        endpoint: None,
         family: None,
         // Anthropic publishes `display_name`, Kimi `display_name`, and
         // OpenRouter a plain `name`; the stock OpenAI `/models` shape carries
@@ -927,6 +958,7 @@ fn copilot_model_from_capabilities(
         id,
         picker_enabled: entry.get("model_picker_enabled").and_then(Value::as_bool),
         protocol,
+        endpoint: None,
         family: capabilities
             .get("family")
             .and_then(Value::as_str)
@@ -1058,6 +1090,7 @@ fn parse_antigravity_models_map(
             id: model_id.clone(),
             picker_enabled: Some(true),
             protocol: None,
+            endpoint: None,
             family: Some("google".to_string()),
             name: mdata
                 .get("displayName")
@@ -1130,9 +1163,9 @@ mod tests {
                 "https://relay.example/team/v1internal:fetchAvailableModels",
             ),
             (
-                CatalogShape::OpencodeGo,
-                "https://models.opencode.ai",
-                "https://models.opencode.ai/api.json",
+                CatalogShape::OpencodeConsole,
+                "https://opencode.ai/console",
+                "https://opencode.ai/console/api/config",
             ),
             // A path that happens to resemble an inference endpoint is still a root.
             (

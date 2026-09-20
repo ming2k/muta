@@ -263,6 +263,13 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
         .iter()
         .filter_map(|lvl| lvl.as_known())
         .collect();
+    // The provider's own picker enablement for this model, round-tripped from
+    // the remote catalog. `Some(false)` marks a locked (subscription-gated)
+    // model the picker renders greyed-out and must not activate.
+    let picker_enabled = channel
+        .remote
+        .as_ref()
+        .and_then(|remote| remote.picker_enabled);
     match &channel.transport {
         Transport::Anthropic {
             effort, thinking, ..
@@ -286,6 +293,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 vision,
                 context_window,
                 max_output_tokens,
+                picker_enabled,
             }
         }
         Transport::OpenAi { effort, .. } => {
@@ -309,6 +317,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 vision,
                 context_window,
                 max_output_tokens,
+                picker_enabled,
             }
         }
         Transport::OpenAiResponses { effort, .. } => {
@@ -327,6 +336,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 vision,
                 context_window,
                 max_output_tokens,
+                picker_enabled,
             }
         }
         Transport::Google { effort, .. } => {
@@ -352,6 +362,7 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 vision,
                 context_window,
                 max_output_tokens,
+                picker_enabled,
             }
         }
     }
@@ -408,6 +419,26 @@ mod tests {
         // every endpoint that does not advertise a capability field.
         let info = channel_model_info(&openai_channel("unknown-relay-model", None));
         assert_eq!(info.vision, None);
+    }
+
+    #[test]
+    fn channel_model_info_surfaces_the_providers_lock_declaration() {
+        // Qoder catalogs list subscription-locked models with `enable:false`;
+        // the row must carry that so pickers render it greyed-out (official
+        // `/model` parity) and refuse activation.
+        let locked = muta_contracts::RemoteModelMetadata {
+            picker_enabled: Some(false),
+            ..Default::default()
+        };
+        assert_eq!(
+            channel_model_info(&openai_channel("gmodel", Some(locked))).picker_enabled,
+            Some(false)
+        );
+        // Undeclared stays undeclared — never coerced to enabled *or* locked.
+        assert_eq!(
+            channel_model_info(&openai_channel("qfmodel", None)).picker_enabled,
+            None
+        );
     }
 
     #[test]

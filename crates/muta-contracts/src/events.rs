@@ -1785,6 +1785,15 @@ pub struct ProviderModelInfo {
     /// Maximum output generation tokens for this route when declared or overridden.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    /// Whether the provider's catalog enables this model for this account
+    /// (Qoder's `enable`, three-valued like `vision` per ADR-0230). `Some(false)`
+    /// means the provider locked the model — the picker must render it
+    /// greyed-out and must not activate it (the server would refuse it);
+    /// `None` means *undeclared*, which older snapshots and every provider
+    /// without such a field deserialize to, so a frontend must treat it as
+    /// enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picker_enabled: Option<bool>,
 }
 
 impl ProviderModelInfo {

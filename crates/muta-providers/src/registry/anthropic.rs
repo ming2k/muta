@@ -188,7 +188,7 @@ mod tests {
         let provider = AnthropicMessagesProvider::with_base_url_and_user_agent(
             "k".to_string(),
             "minimax-m3".to_string(),
-            "https://opencode.ai/zen/go/v1/messages",
+            "https://opencode.ai/inference/anthropic/v1/messages",
             "agent",
         )
         .with_max_tokens(anthropic_model_max_tokens("minimax-m3").unwrap());

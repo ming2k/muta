@@ -18,6 +18,8 @@
     effort: string | null;
     thinking: boolean | null;
     active: boolean;
+    /** Provider-declared lock (`picker_enabled: false`): visible but inert. */
+    locked: boolean;
   }
 
   /** Flatten the picker snapshot into one row per served model. */
@@ -36,6 +38,7 @@
           effort: info?.effort ?? null,
           thinking: info?.thinking ?? null,
           active: row.id === snapshot.default_id && row.model === model,
+          locked: info?.picker_enabled === false,
         });
       }
     }
@@ -55,7 +58,7 @@
   });
 
   function choose(entry: ModelEntry) {
-    if (!entry.provider.key_ready) return;
+    if (!entry.provider.key_ready || entry.locked) return;
     daemon.setDefaultModel(entry.id);
     onclose();
   }
@@ -88,11 +91,13 @@
           <button
             class="model-row"
             class:active={entry.active}
-            class:unavailable={!entry.provider.key_ready}
+            class:unavailable={!entry.provider.key_ready || entry.locked}
             onclick={() => choose(entry)}
-            title={entry.provider.key_ready
-              ? `${entry.provider.name} — click to switch`
-              : `${entry.provider.name} — no API key configured`}
+            title={entry.locked
+              ? `${entry.provider.name} — locked for the current plan`
+              : entry.provider.key_ready
+                ? `${entry.provider.name} — click to switch`
+                : `${entry.provider.name} — no API key configured`}
           >
             <span class="star" class:favorite={entry.favorite}>{entry.favorite ? "★" : ""}</span>
             <span class="model-name" class:wire={!entry.name}>{entry.name ?? entry.id}</span>
@@ -109,6 +114,9 @@
               {/if}
               {#if !entry.provider.key_ready}
                 <span class="flag no-key">{t("noApiKey")}</span>
+              {/if}
+              {#if entry.locked}
+                <span class="flag locked">{t("locked")}</span>
               {/if}
               {#if entry.active}
                 <span class="flag current">{t("current")}</span>
@@ -278,6 +286,12 @@
   .flag.no-key {
     color: var(--accent-danger);
     border-color: var(--accent-danger);
+    background: transparent;
+  }
+
+  .flag.locked {
+    color: var(--text-muted);
+    border-color: var(--line-strong);
     background: transparent;
   }
 

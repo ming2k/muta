@@ -1336,7 +1336,17 @@ context_window: number,
 /**
  * Maximum output generation tokens for this route when declared or overridden.
  */
-max_output_tokens?: number | null, };
+max_output_tokens?: number | null, 
+/**
+ * Whether the provider's catalog enables this model for this account
+ * (Qoder's `enable`, three-valued like `vision` per ADR-0230). `Some(false)`
+ * means the provider locked the model — the picker must render it
+ * greyed-out and must not activate it (the server would refuse it);
+ * `None` means *undeclared*, which older snapshots and every provider
+ * without such a field deserialize to, so a frontend must treat it as
+ * enabled.
+ */
+picker_enabled?: boolean | null, };
 
 /**
  * One row of provider-picker state sent from the harness to the TUI. Carries

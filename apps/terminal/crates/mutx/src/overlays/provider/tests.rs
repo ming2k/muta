@@ -582,18 +582,21 @@ fn preset_chooser_highlights_the_focused_row_with_a_background_fill() {
 /// so all three sections render and RECENT has a meaningful internal
 /// order (gpt-5.5 newer than claude-opus-4-8).
 fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
-    let info = |model: &str, favorite: bool, used: Option<u64>| muta_contracts::ProviderModelInfo {
-        model: model.to_string(),
-        name: None,
-        protocol: String::new(),
-        effort: None,
-        thinking: None,
-        effort_levels: Vec::new(),
-        favorite,
-        last_used_ms: used,
-        vision: Some(false),
-        context_window: 128_000,
-        max_output_tokens: None,
+    let info = |model: &str, favorite: bool, used: Option<u64>, locked: bool| {
+        muta_contracts::ProviderModelInfo {
+            model: model.to_string(),
+            name: None,
+            protocol: String::new(),
+            effort: None,
+            thinking: None,
+            effort_levels: Vec::new(),
+            favorite,
+            last_used_ms: used,
+            vision: Some(false),
+            context_window: 128_000,
+            max_output_tokens: None,
+            picker_enabled: Some(locked),
+        }
     };
     let row = |id: &str, name: &str, models: Vec<muta_contracts::ProviderModelInfo>| {
         muta_contracts::ProviderPickerRow {
@@ -619,19 +622,19 @@ fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
                 "openai",
                 "OpenAI",
                 vec![
-                    info("gpt-5.5", false, Some(1_700_000_000_000)),
-                    info("gpt-5.4", false, None),
+                    info("gpt-5.5", false, Some(1_700_000_000_000), false),
+                    info("gpt-5.4", false, None, false),
                 ],
             ),
             row(
                 "anthropic",
                 "Anthropic",
                 vec![
-                    info("claude-sonnet-5", true, Some(1_500_000_000_000)),
-                    info("claude-opus-4-8", false, Some(1_600_000_000_000)),
+                    info("claude-sonnet-5", true, Some(1_500_000_000_000), false),
+                    info("claude-opus-4-8", false, Some(1_600_000_000_000), false),
                 ],
             ),
-            row("google", "Google", vec![info("gemini-3-pro", false, None)]),
+            row("google", "Google", vec![info("gemini-3-pro", false, None, false)]),
         ],
     }
 }
@@ -692,6 +695,76 @@ fn models_modal_renders_three_labeled_sections() {
     assert!(favorites < sonnet && sonnet < recent);
     assert!(recent < gpt55 && gpt55 < opus && opus < all);
     assert!(all < gemini && gemini < gpt54);
+}
+
+#[test]
+fn models_modal_lists_provider_locked_rows_greyed_with_a_lock_tag() {
+    // Qoder parity: the server catalog lists subscription-locked models, the
+    // official `/model` menu renders them greyed-out, and muta's picker now
+    // does the same — the row stays visible (so the account can see what an
+    // upgrade unlocks) with a leading `locked` tag instead of being dropped.
+    let theme = Theme::default();
+    let mut picker = sectioned_snapshot();
+    let info = |model: &str, picker_enabled: Option<bool>| muta_contracts::ProviderModelInfo {
+        model: model.to_string(),
+        name: None,
+        protocol: String::new(),
+        effort: None,
+        thinking: None,
+        effort_levels: Vec::new(),
+        favorite: false,
+        last_used_ms: None,
+        vision: Some(false),
+        context_window: 128_000,
+        max_output_tokens: None,
+        picker_enabled,
+    };
+    picker.rows.push(muta_contracts::ProviderPickerRow {
+        id: "qoder".into(),
+        name: "Qoder".into(),
+        model: "gmodel".into(),
+        models: vec!["qfmodel".into(), "gmodel".into()],
+        model_info: vec![info("qfmodel", Some(true)), info("gmodel", Some(false))],
+        builtin: true,
+        protocol: String::new(),
+        base_url: String::new(),
+        key_ready: true,
+        provider: String::new(),
+        client_identity: Default::default(),
+        last_used_ms: None,
+        auth: Default::default(),
+    });
+    let ranked = crate::providers::models_flat_filtered_from(&picker, "openai", "gpt-5.5", "");
+    assert!(ranked.iter().any(|r| r.model == "gmodel" && !r.picker_enabled));
+    assert!(ranked.iter().any(|r| r.model == "qfmodel" && r.picker_enabled));
+    let mut terminal = mutx_engine::TestTerminal::new(72, 28);
+    terminal.draw(|f| {
+        let mut scroll = 0;
+        draw_models_modal(
+            f,
+            crate::overlays::provider::models::ModelsModalProps {
+                models: &ranked,
+                current_provider: "openai",
+                current_model: "gpt-5.5",
+                modal_index: ranked
+                    .iter()
+                    .position(|r| r.model == "gmodel")
+                    .expect("locked row present"),
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: true,
+                search: false,
+                show_caret: true,
+                refreshing: false,
+                spinner_phase: 0,
+            },
+            &theme,
+        );
+    });
+    let text = buffer_text(&terminal);
+    assert!(text.contains("gmodel"), "locked row is listed");
+    assert!(text.contains("locked"), "lock tag renders");
 }
 
 #[test]
@@ -1464,6 +1537,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 vision: Some(false),
                 context_window: 1_000_000,
                 max_output_tokens: None,
+                picker_enabled: None,
             },
             muta_contracts::ProviderModelInfo {
                 model: "gemini-3.1-pro".to_string(),
@@ -1477,6 +1551,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 vision: Some(false),
                 context_window: 1_000_000,
                 max_output_tokens: None,
+                picker_enabled: None,
             },
             muta_contracts::ProviderModelInfo {
                 model: "claude-3-7-sonnet".to_string(),
@@ -1490,6 +1565,7 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 vision: Some(false),
                 context_window: 200_000,
                 max_output_tokens: None,
+                picker_enabled: None,
             },
         ],
         active_model: Some("gemini-3.7-flash".to_string()),

@@ -248,9 +248,10 @@ pub fn model_provider_spec(id: &str) -> Option<Arc<ModelProviderSpec>> {
 /// Returns `(protocol, base_url, user_agent)` where `protocol` is one of the
 /// wire-protocol labels `"chat-completions"` / `"responses"` / `"anthropic-messages"` /
 /// `"google-gemini"`. Most providers serve every model over one endpoint; the
-/// `opencode-go` relay routes models by their registered wire format (OpenAI
-/// chat / Anthropic `/messages` / Google `/v1beta`), so its base URL and
-/// protocol vary per model. `None` means the provider id is unknown.
+/// `opencode-go` Console surface routes models across several inference roots
+/// (OpenAI chat / Responses / Anthropic `/messages` / Google `/v1beta`), so its
+/// base URL and protocol vary per model. `None` means the provider id is
+/// unknown.
 pub fn route_for_model(
     provider_id: &str,
     model_id: &str,
@@ -300,26 +301,36 @@ impl ModelProviderSpec {
 
     /// Convert a provider root to the exact endpoint representation required by the wire adapter.
     pub fn endpoint(&self, protocol: muta_contracts::WireProtocol) -> Result<String, String> {
-        use muta_contracts::{ApiRoot, ProviderDialect, WireProtocol};
         let root = self
             .protocol_roots
             .iter()
             .find(|(wire, _)| *wire == protocol)
             .map(|(_, root)| root.as_ref())
             .unwrap_or(&self.root_url);
-        let root = ApiRoot::parse(root)?;
-        Ok(match (protocol, self.dialect) {
-            (WireProtocol::GoogleGemini, _) | (_, ProviderDialect::Qoder) => {
-                root.as_str().to_string()
-            }
-            (WireProtocol::ChatCompletions, _) => root.append("chat/completions"),
-            (WireProtocol::Responses, _) => root.append("responses"),
-            (WireProtocol::AnthropicMessages, _) => root.append("messages"),
-        })
+        let root = muta_contracts::ApiRoot::parse(root)?;
+        Ok(endpoint_for(self.dialect, &root, protocol))
     }
 
     pub fn catalog_root(&self) -> &str {
         self.catalog_root_url.as_deref().unwrap_or(&self.root_url)
+    }
+}
+
+/// Apply the ADR-0259 suffix algebra to one parsed root for a protocol and
+/// dialect. Catalog-advertised per-model root overrides (ADR-0269) route
+/// through here exactly like the spec's compiled-in roots, so both surfaces
+/// share one algebra.
+pub fn endpoint_for(
+    dialect: muta_contracts::ProviderDialect,
+    root: &muta_contracts::ApiRoot,
+    protocol: muta_contracts::WireProtocol,
+) -> String {
+    use muta_contracts::{ProviderDialect, WireProtocol};
+    match (protocol, dialect) {
+        (WireProtocol::GoogleGemini, _) | (_, ProviderDialect::Qoder) => root.as_str().to_string(),
+        (WireProtocol::ChatCompletions, _) => root.append("chat/completions"),
+        (WireProtocol::Responses, _) => root.append("responses"),
+        (WireProtocol::AnthropicMessages, _) => root.append("messages"),
     }
 }
 
@@ -680,12 +691,47 @@ mod spec_tests {
     }
 
     #[test]
-    fn opencode_go_baselines_route_anthropic_models() {
-        for id in ["minimax-m2.5", "minimax-m2.7", "minimax-m3"] {
-            let (wire, endpoint, _) = route_for_model("opencode-go", id).unwrap();
-            assert_eq!(wire, muta_contracts::WireProtocol::AnthropicMessages);
-            assert_eq!(endpoint, "https://opencode.ai/zen/go/v1/messages");
-        }
+    fn opencode_go_baselines_route_by_console_surface() {
+        // ADR-0269: the account catalog is the routing authority. On the
+        // Console surface MiniMax is openai-compatible chat, while Qwen 3.5/3.6
+        // ride the Anthropic /messages surface.
+        let (wire, endpoint, _) = route_for_model("opencode-go", "minimax-m3").unwrap();
+        assert_eq!(wire, muta_contracts::WireProtocol::ChatCompletions);
+        assert_eq!(
+            endpoint,
+            "https://opencode.ai/inference/openai/v1/chat/completions"
+        );
+        let (wire, endpoint, _) = route_for_model("opencode-go", "qwen3.6-plus").unwrap();
+        assert_eq!(wire, muta_contracts::WireProtocol::AnthropicMessages);
+        assert_eq!(
+            endpoint,
+            "https://opencode.ai/inference/anthropic/v1/messages"
+        );
+    }
+
+    #[test]
+    fn endpoint_for_applies_root_algebra_per_protocol() {
+        // The catalog-advertised root override shares one algebra with the
+        // compiled spec roots (ADR-0259 + ADR-0269).
+        use muta_contracts::{ApiRoot, ProviderDialect, WireProtocol};
+        let root = ApiRoot::parse("https://opencode.ai/inference/anthropic/v1").unwrap();
+        assert_eq!(
+            endpoint_for(
+                ProviderDialect::Standard,
+                &root,
+                WireProtocol::AnthropicMessages
+            ),
+            "https://opencode.ai/inference/anthropic/v1/messages"
+        );
+        let google_root = ApiRoot::parse("https://opencode.ai/inference/google/v1beta").unwrap();
+        assert_eq!(
+            endpoint_for(
+                ProviderDialect::Standard,
+                &google_root,
+                WireProtocol::GoogleGemini
+            ),
+            "https://opencode.ai/inference/google/v1beta"
+        );
     }
 }
 
@@ -779,21 +825,21 @@ mod build_tests {
 
     #[test]
     fn build_provider_dispatches_anthropic_transport() {
-        // opencode-go's MiniMax/Qwen models reach an Anthropic /messages
+        // opencode-go's Claude/Qwen models reach an Anthropic /messages
         // endpoint; the catalog builds an Anthropic transport for them, and
         // build_provider_for_channel must dispatch it to the messages provider.
         let channel = Channel {
-            id: "minimax-m3".to_string(),
-            label: "MiniMax M3".to_string(),
+            id: "qwen3.6-plus".to_string(),
+            label: "Qwen3.6 Plus".to_string(),
             transport: Transport::Anthropic {
-                base_url: "https://opencode.ai/zen/go/v1/messages".to_string(),
+                base_url: "https://opencode.ai/inference/anthropic/v1/messages".to_string(),
                 client_profile: muta_contracts::ClientProfile::from("agent"),
                 effort: None,
                 thinking: None,
                 dialect: Default::default(),
             },
             credentials: muta_contracts::static_credential("go-key"),
-            model: "minimax-m3".to_string(),
+            model: "qwen3.6-plus".to_string(),
             remote: None,
             user_overrides: None,
             prompt_cache_preference: muta_contracts::PromptCachePreference::default(),
@@ -801,7 +847,7 @@ mod build_tests {
         };
         let provider = build_provider_for_channel(&channel, "opencode-go", None);
         assert_eq!(provider.provider_id(), "opencode-go");
-        assert_eq!(provider.model(), "minimax-m3");
+        assert_eq!(provider.model(), "qwen3.6-plus");
     }
 
     #[test]

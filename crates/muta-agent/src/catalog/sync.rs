@@ -107,7 +107,7 @@ const fn catalog_shape_id(protocol: CatalogShape) -> &'static str {
         CatalogShape::Google => "google",
         CatalogShape::GoogleCloudCode => "google-cloud-code",
         CatalogShape::Codex => "codex",
-        CatalogShape::OpencodeGo => "opencode-go",
+        CatalogShape::OpencodeConsole => "opencode-console",
         CatalogShape::SceneMap => "scene-map",
     }
 }
@@ -179,6 +179,9 @@ async fn fetch_models(job: CatalogSyncJob) -> CatalogFetchResult {
                 account_id: auth
                     .extension::<muta_contracts::ChatGptAuthMetadata>()
                     .map(|m| m.account_id.as_str()),
+                org_id: auth
+                    .extension::<muta_contracts::OpencodeAuthMetadata>()
+                    .map(|m| m.org_id.as_str()),
                 user_agent: Some(client_profile.user_agent()),
                 extra_headers: &extra_headers,
                 catalog_signing,
@@ -416,14 +419,15 @@ fn apply_fetched(
                 cache.fitted_models.insert(connection.name.clone(), fitted);
                 changed = true;
             }
-            let supported: Vec<String> = models
-                .iter()
-                .filter(|model| model.picker_enabled != Some(false))
-                .map(|model| model.id.clone())
-                .collect();
+            // Locked models (`picker_enabled: Some(false)`) stay in the
+            // connection's catalog view and metadata so the picker can render
+            // them greyed-out (official CLI `/model` parity), but they never
+            // register in the fitted overlay: the model registry is the
+            // inference-capable set, and a locked model must not resolve for
+            // inference.
+            let supported: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
             let remote_metadata: std::collections::BTreeMap<String, _> = models
                 .iter()
-                .filter(|model| model.picker_enabled != Some(false))
                 .map(|model| (model.id.clone(), model.remote_metadata()))
                 .collect();
             if cache.remote_metadata.get(&connection.name) != Some(&remote_metadata) {
@@ -626,5 +630,84 @@ fn fitted_model_info(model: &muta_providers::DiscoveredModel) -> FittedModelInfo
         reasoning: model.reasoning.unwrap_or(false),
         vision: model.vision,
         efforts: model.effort_levels.clone().unwrap_or_default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use muta_providers::DiscoveredModel;
+
+    fn discovered(id: &str, picker_enabled: Option<bool>) -> DiscoveredModel {
+        DiscoveredModel {
+            id: id.to_string(),
+            picker_enabled,
+            protocol: None,
+            endpoint: None,
+            family: Some("qwen".to_string()),
+            name: Some(id.to_string()),
+            context_window: Some(200_000),
+            max_output_tokens: None,
+            reasoning: Some(true),
+            thinking: Some(muta_contracts::ReasoningSupport::ReasoningContent),
+            tool_call: Some(true),
+            vision: Some(true),
+            effort_levels: None,
+            catalog_source: Some("system".to_string()),
+        }
+    }
+
+    /// Qoder's server catalog lists subscription-locked models (`enable:false`)
+    /// greyed-out in the official `/model` menu. The fold must keep them in the
+    /// connection's catalog view (visible, inert) while the fitted overlay —
+    /// the inference-capable registry — stays enabled-only.
+    #[test]
+    fn locked_models_stay_visible_but_do_not_register_for_inference() {
+        let mut cache = RemoteCatalogCache::default();
+        // Pre-sorted like the generic fetcher emits them (id-ascending).
+        let models = vec![
+            discovered("gmodel", Some(false)),
+            discovered("mmodel", None),
+            discovered("qtest-max", Some(true)),
+        ];
+        let fetched = CatalogFetchResult {
+            connection: muta_persistence::connections::Connection {
+                name: "qoder-test".to_string(),
+                ..Default::default()
+            },
+            source_identity: "sha256:test".to_string(),
+            update: Ok(RemoteCatalogUpdate::Modified {
+                models,
+                etag: Some("\"v1\"".to_string()),
+            }),
+        };
+        let (changed, error) = apply_fetched(&mut cache, fetched, 0);
+        assert!(changed);
+        assert!(error.is_none());
+
+        let served = &cache.connection_models["qoder-test"];
+        assert_eq!(
+            served,
+            &[
+                "gmodel".to_string(),
+                "mmodel".to_string(),
+                "qtest-max".to_string(),
+            ],
+            "locked models stay in the picker's catalog view"
+        );
+        let metadata = &cache.remote_metadata["qoder-test"];
+        assert_eq!(
+            metadata["gmodel"].picker_enabled,
+            Some(false),
+            "the lock declaration round-trips to the picker surface"
+        );
+        assert_eq!(metadata["mmodel"].picker_enabled, None);
+        let fitted = &cache.fitted_models["qoder-test"];
+        assert!(
+            !fitted.contains_key("gmodel"),
+            "a locked model must never register as inference-capable"
+        );
+        assert!(fitted.contains_key("qtest-max"));
+        assert!(fitted.contains_key("mmodel"));
     }
 }

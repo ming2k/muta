@@ -40,7 +40,8 @@ the corresponding value.
 | Reasoning representation | Replaces the baseline thinking type when present |
 | Tool calling and vision | An explicit `true` or `false` replaces the baseline |
 | Effort levels | A present list replaces the baseline; an empty list disables effort control. See [Reasoning effort](effort.md) for the per-provider ladder and resolution chain |
-| Endpoint | Selects the provider channel's inference surface only |
+| Wire protocol | Selects the provider channel's inference surface only |
+| API root | Replaces the provider's compiled root for that model; the request URL is still composed by the root algebra of [ADR-0259](../adr/0259-deterministic-root-url-algebra-and-model-level-wire-protocol-inheritance.md) |
 
 An omitted remote field is not a negative capability. It retains the static
 baseline so partial provider responses do not erase useful local knowledge.
@@ -90,6 +91,26 @@ the selectable set and each selectable model's route.
 Copilot discovery sends the OAuth bearer and Copilot client identity headers.
 The response therefore reflects the logged-in account's entitlements rather
 than a generic static plan assumption.
+
+## OpenCode Console
+
+OpenCode Go reads `config.provider.opencode` from the authenticated Console
+`api/config` endpoint, so the account selects both the wire protocol and the API
+root of each model.
+
+| Remote field | muta behavior |
+|--------------|-----------------|
+| `provider.npm` of the model (or the provider default) | `@ai-sdk/anthropic` → Anthropic Messages, `@ai-sdk/google` → Google `generateContent`, `@ai-sdk/openai` → Responses, `@ai-sdk/openai-compatible` → Chat Completions; an unrecognized package advertises no protocol |
+| `provider.api` of the model | Advertised API root, stored as the metadata endpoint and composed with the protocol suffix |
+| map key | The wire model id; the entry itself publishes no `id` |
+| `reasoning_options` | Absent means no effort declaration, so the baseline ladder survives |
+
+Discovery sends the OAuth bearer with the `x-org-id` workspace header; inference
+sends the same bearer with `x-opencode-org-id`. The two spellings are upstream
+contract. A Console request that omits the workspace fails with 403 before
+reaching the model, and an underfunded workspace fails with 402 after
+authentication succeeds. See
+[ADR-0269](../adr/0269-opencode-console-catalog-and-routing-authority-with-workspace-scoping.md).
 
 ## Persistence
 

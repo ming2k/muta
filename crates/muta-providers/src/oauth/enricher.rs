@@ -301,9 +301,9 @@ impl OAuthTokenEnricher for OpencodeOAuthEnricher {
 
     async fn on_refresh_success(
         &self,
-        _client: &crate::http::Http,
+        client: &crate::http::Http,
         stored: &TokenSet,
-        _refreshed: &TokenResponse,
+        refreshed: &TokenResponse,
         token_set: &mut TokenSet,
     ) -> Result<(), AuthError> {
         for key in ["account_id", "org_id", "org_name"] {
@@ -317,6 +317,25 @@ impl OAuthTokenEnricher for OpencodeOAuthEnricher {
             token_set.set_json_attr("opencode_orgs", &orgs);
         }
         token_set.user_email = stored.user_email.clone();
+        // Credentials minted before org resolution (or with an empty org list)
+        // carry no `org_id`, which silently strands every Console surface on
+        // `Workspace selection required`. Refetch once with the fresh token so
+        // the healed attribute persists with the rotated credential.
+        if token_set.get_attr("org_id").is_none()
+            && let Ok(mut orgs) =
+                fetch_orgs(client, &self.server, refreshed.access_token.expose_secret()).await
+        {
+            orgs.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+            token_set.set_json_attr("opencode_orgs", &orgs);
+            if let Some(org) = orgs.first() {
+                if !org.id.is_empty() {
+                    token_set.set_attr("org_id", org.id.clone());
+                }
+                if !org.name.is_empty() {
+                    token_set.set_attr("org_name", org.name.clone());
+                }
+            }
+        }
         Ok(())
     }
 }

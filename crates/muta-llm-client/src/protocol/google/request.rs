@@ -7,14 +7,15 @@
 //! `async`, no I/O — these are testable in isolation.
 //!
 //! Google's wire shape:
-//! - URL: `{base}/models/{model}:generateContent?key={key}`
-//!   (streaming: `:streamGenerateContent?alt=sse&key={key}`). The key is a
-//!   query param, never a header — unlike OpenAI/Anthropic.
+//! - URL: `{base}/models/{model}:generateContent` (streaming adds
+//!   `:streamGenerateContent?alt=sse`).
+//! - Auth: a plain API key rides in the `?key=` query param. A workspace-scoped
+//!   console bearer is header-only (`x-goog-api-key`, ADR-0269) — the relay
+//!   rejects it as a query param, and a token in a URL reaches access logs.
 //! - Body:
 //!   `{contents: [{role, parts}], systemInstruction?: {parts:[{text}]}, tools?}`.
 //! - Roles are only `user` and `model` (assistant). Tool calls are assistant
 //!   `functionCall` parts; tool results are user `functionResponse` parts.
-//! - Auth: none beyond the `?key=` query param.
 
 use muta_contracts::{Message, Role};
 use serde_json::{Value, json};
@@ -740,14 +741,20 @@ fn tool_response_payload(text: &str) -> Value {
     }
 }
 
-/// The non-streaming generateContent URL: key passed as a query param.
-pub fn url(base_url: &str, model: &str, api_key: &str) -> String {
-    format!("{base_url}/models/{model}:generateContent?key={api_key}")
+/// The non-streaming generateContent URL. `api_key` is embedded as a query
+/// param only for a plain API-key credential; an org-scoped credential is
+/// header-carried and the URL stays keyless (ADR-0269).
+pub fn url(base_url: &str, model: &str, api_key: Option<&str>) -> String {
+    let query = api_key.map(|key| format!("?key={key}")).unwrap_or_default();
+    format!("{base_url}/models/{model}:generateContent{query}")
 }
 
 /// The streaming streamGenerateContent URL (SSE framing via `alt=sse`).
-pub fn stream_url(base_url: &str, model: &str, api_key: &str) -> String {
-    format!("{base_url}/models/{model}:streamGenerateContent?alt=sse&key={api_key}")
+pub fn stream_url(base_url: &str, model: &str, api_key: Option<&str>) -> String {
+    let query = api_key
+        .map(|key| format!("?alt=sse&key={key}"))
+        .unwrap_or_else(|| "?alt=sse".to_string());
+    format!("{base_url}/models/{model}:streamGenerateContent{query}")
 }
 
 /// The maximum `thinkingBudget` a Gemini 2.5 model accepts, in tokens — the cap

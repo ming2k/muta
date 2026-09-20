@@ -253,13 +253,13 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
     ConnectionTemplate {
         id: "opencode-go",
         label: "OpenCode Go",
-        description: "OpenCode.ai subscription relay with cloud-accelerated coding and agent models; sign in with your OpenCode account.",
+        description: "OpenCode Console subscription for cloud coding and agent models; sign in with your OpenCode account.",
         protocol: WireProtocol::ChatCompletions,
         models: muta_contracts::model_providers::OPENCODE_GO_MODELS,
         needs_url: false,
-        url_hint: "https://opencode.ai/zen/go/v1/chat/completions",
+        url_hint: "https://opencode.ai/inference/openai/v1/chat/completions",
         needs_model: false,
-        default_url: Some("https://opencode.ai/zen/go/v1/chat/completions"),
+        default_url: Some("https://opencode.ai/inference/openai/v1/chat/completions"),
         user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::subscription_const("opencode"),
     },
@@ -480,6 +480,11 @@ pub struct RankedModel {
     pub last_used_ms: Option<u64>,
     /// Context window limit in tokens (ADR-0182).
     pub context_window: usize,
+    /// Whether the provider's catalog enables this model for this account.
+    /// `false` marks a locked (subscription-gated) model: the row renders
+    /// greyed-out with a `locked` tag and activation is refused — the daemon
+    /// passes the provider's own declaration through (`None` = enabled).
+    pub picker_enabled: bool,
     /// The fuzzy match against the row's **rendered label** (the provider's
     /// name when it publishes one, else the wire id), or `None` in browse mode
     /// (empty query) — and also when the row was included only via an alias
@@ -696,6 +701,7 @@ pub fn models_flat_filtered_from(
                 favorite: info.favorite,
                 last_used_ms: info.last_used_ms,
                 context_window: info.context_window,
+                picker_enabled: info.picker_enabled.unwrap_or(true),
                 m,
                 match_id,
                 match_name,
@@ -863,6 +869,7 @@ mod tests {
             vision: Some(false),
             context_window: 128_000,
             max_output_tokens: None,
+            picker_enabled: None,
         }
     }
 

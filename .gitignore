@@ -65,3 +65,5 @@ lerna-debug.log*
 
 # runtime session databases
 crates/muta-runtime/sessions/
+
+.qoder/

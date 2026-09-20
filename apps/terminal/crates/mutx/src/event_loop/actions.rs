@@ -282,9 +282,20 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             let key_ready = |app: &App, id: &str| app.key_status.get(id).copied().unwrap_or(true);
             let target = if app.active_dialog() == Some(DialogKind::Models) {
                 let rows = app.models_flat_filtered();
-                rows.get(app.modal_index)
-                    .or_else(|| rows.first())
-                    .map(|row| (row.provider_id.clone(), row.model.clone()))
+                let picked = rows.get(app.modal_index).or_else(|| rows.first());
+                // A provider-locked model (`picker_enabled: false`) mirrors the
+                // official CLI's greyed-out menu row: refuse activation with a
+                // toast instead of sending a request the server must refuse.
+                if picked.is_some_and(|row| !row.picker_enabled) {
+                    crate::event_loop::sync::show_local_toast(
+                        app,
+                        "This model is locked for the current plan",
+                        true,
+                        std::time::Duration::from_millis(2000),
+                    );
+                    return ActionFlow::Handled;
+                }
+                picked.map(|row| (row.provider_id.clone(), row.model.clone()))
             } else {
                 None
             };

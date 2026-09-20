@@ -258,13 +258,25 @@ pub(crate) fn model_list_body(
             ModelBodyLine::Row(row) => {
                 let rm = &models[row];
                 let is_selected = row == modal_index;
-                let style = choice_style(ChoiceTone::Filled, is_selected, theme);
+                let locked = !rm.picker_enabled;
+                let style = choice_style(ChoiceTone::Filled, is_selected && !locked, theme);
 
                 let tag = match (rm.thinking, rm.effort.as_deref()) {
                     (Some(true), Some(effort)) => format!("think on {effort}"),
                     (Some(true), None) => "think on".to_string(),
                     (None, Some(effort)) => effort.to_string(),
                     _ => String::new(),
+                };
+                // The provider's own lock declaration leads the tag row so the
+                // reason a row is inert reads first (official `/model` parity).
+                let tag = if locked {
+                    if tag.is_empty() {
+                        "locked".to_string()
+                    } else {
+                        format!("locked · {tag}")
+                    }
+                } else {
+                    tag
                 };
 
                 // 1. Model ID: Primary column, always bold, bright.

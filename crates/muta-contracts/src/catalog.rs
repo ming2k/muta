@@ -426,12 +426,14 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
             "ZAI Code (CN)",
             "Zhipu BigModel / Z.AI coding plan (CN, GLM-5.3)",
         ),
-        // OpenCode Go — opencode.ai's low-cost relay. One provider id hosts many
-        // models (GLM/Kimi/DeepSeek/MiMo via OpenAI format, MiniMax/Qwen via
-        // Anthropic /messages protocol); the per-model [`WireProtocol`] in the model
-        // registry selects the transport. Both formats share one
-        // `OPENCODE_API_KEY`.
-        "opencode-go" => ("OpenCode Go", "opencode.ai relay (multi-model)"),
+        // OpenCode — opencode.ai's Console subscription surface. One provider
+        // id hosts many models; the account catalog (`/console/api/config`)
+        // routes each one: Claude/Qwen over the Anthropic /messages surface,
+        // Gemini over the Google surface, GPT/Codex over the OpenAI Responses
+        // surface, and the remaining openai-compatible set (GLM/Kimi/DeepSeek/
+        // MiniMax/…) over chat completions. All surfaces share one console
+        // bearer credential, scoped to a workspace by `x-opencode-org-id`.
+        "opencode-go" => ("OpenCode Go", "OpenCode Console subscription (multi-model)"),
         // Anthropic — Claude family over the `/messages` API (configurable base
         // URL; defaults to the official endpoint).
         "anthropic" => ("Anthropic", "Claude models"),
@@ -512,7 +514,7 @@ mod tests {
         // The Anthropic /messages transport is a cloud transport: it must
         // report needing a key, and an empty key must not be "ready".
         let needs_key = Transport::Anthropic {
-            base_url: "https://opencode.ai/zen/go/v1/messages".to_string(),
+            base_url: "https://opencode.ai/inference/anthropic/v1/messages".to_string(),
             client_profile: crate::ClientProfile::from("agent"),
             effort: None,
             thinking: None,
@@ -525,7 +527,7 @@ mod tests {
             id: "default".to_string(),
             label: "OpenCode Go (Messages)".to_string(),
             transport: Transport::Anthropic {
-                base_url: "https://opencode.ai/zen/go/v1/messages".to_string(),
+                base_url: "https://opencode.ai/inference/anthropic/v1/messages".to_string(),
                 client_profile: crate::ClientProfile::from("agent"),
                 effort: None,
                 thinking: None,
@@ -555,7 +557,8 @@ mod tests {
                     id: "glm-5.2".to_string(),
                     label: "GLM-5.2".to_string(),
                     transport: Transport::OpenAi {
-                        base_url: "https://opencode.ai/zen/go/v1/chat/completions".to_string(),
+                        base_url: "https://opencode.ai/inference/openai/v1/chat/completions"
+                            .to_string(),
                         client_profile: crate::ClientProfile::from("agent"),
                         effort: None,
                         dialect: Default::default(),
@@ -568,17 +571,17 @@ mod tests {
                     prompt_cache: PromptCacheCapabilities::unsupported(),
                 },
                 Channel {
-                    id: "minimax-m3".to_string(),
-                    label: "MiniMax M3".to_string(),
+                    id: "claude-opus-5".to_string(),
+                    label: "Claude Opus 5".to_string(),
                     transport: Transport::Anthropic {
-                        base_url: "https://opencode.ai/zen/go/v1/messages".to_string(),
+                        base_url: "https://opencode.ai/inference/anthropic/v1/messages".to_string(),
                         client_profile: crate::ClientProfile::from("agent"),
                         effort: None,
                         thinking: None,
                         dialect: Default::default(),
                     },
                     credentials: crate::static_credential("k"),
-                    model: "minimax-m3".to_string(),
+                    model: "claude-opus-5".to_string(),
                     remote: None,
                     user_overrides: None,
                     prompt_cache_preference: PromptCachePreference::default(),
@@ -593,8 +596,8 @@ mod tests {
         assert!(matches!(glm.transport, Transport::OpenAi { .. }));
         // Anthropic-format model resolves to the Anthropic channel.
         let mm = entry
-            .channel_for_model("minimax-m3")
-            .expect("minimax-m3 channel");
+            .channel_for_model("claude-opus-5")
+            .expect("claude-opus-5 channel");
         assert!(matches!(mm.transport, Transport::Anthropic { .. }));
         // An unknown model id resolves to nothing.
         assert!(entry.channel_for_model("nope").is_none());

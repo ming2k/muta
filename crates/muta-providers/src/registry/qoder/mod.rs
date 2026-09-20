@@ -173,14 +173,14 @@ fn discovered_from_scene_entry(entry: &Value) -> Option<super::super::Discovered
     if key.is_empty() {
         return None;
     }
+    // `enable:false` is subscription-locked, not absent: the official CLI's
+    // `/model` menu lists such entries greyed-out, so the entry is kept with
+    // `picker_enabled: Some(false)` and only pickers/registry gate on it.
     let picker_enabled = match entry.get("enable") {
         Some(Value::Bool(enabled)) => Some(*enabled),
         Some(Value::Number(number)) => Some(number.as_i64().unwrap_or(0) != 0),
         _ => None,
     };
-    if picker_enabled == Some(false) {
-        return None;
-    }
     let context_window = entry
         .get("context_config")
         .and_then(Value::as_object)
@@ -203,6 +203,7 @@ fn discovered_from_scene_entry(entry: &Value) -> Option<super::super::Discovered
         id: key,
         picker_enabled,
         protocol: None,
+        endpoint: None,
         family: entry
             .get("family")
             .and_then(Value::as_str)
@@ -237,12 +238,75 @@ fn discovered_from_scene_entry(entry: &Value) -> Option<super::super::Discovered
 #[cfg(test)]
 mod tests {
     use super::MODEL_PROVIDER_SPEC as SPEC;
+    use super::{parse_scene_catalog, QODER_MODELS};
     use muta_contracts::WireProtocol;
+    use serde_json::json;
 
     #[test]
     fn spec_resolves_and_serves_the_chat_wire() {
         assert_eq!(SPEC.id, "qoder");
         assert_eq!(SPEC.protocol, WireProtocol::ChatCompletions);
         assert_eq!(SPEC.baselines.len(), 2);
+    }
+
+    /// The official CLI's `/model` menu lists subscription-locked entries
+    /// greyed-out, so `enable:false` is a kept, marked entry — never a drop.
+    /// Mirrors the decrypted server catalog (17 `assistant` entries, 2 enabled).
+    #[test]
+    fn scene_catalog_keeps_locked_entries_marked() {
+        let json = json!({
+            "assistant": [
+                {
+                    "key": "qmodel_38max",
+                    "display_name": "Qwen3.8-Max",
+                    "enable": true,
+                    "is_default": true,
+                    "is_reasoning": true,
+                    "is_vl": true,
+                    "source": "system"
+                },
+                {
+                    "key": "gmodel",
+                    "display_name": "GLM-5.3",
+                    "enable": false,
+                    "is_reasoning": true,
+                    "is_vl": true,
+                    "source": "system"
+                },
+                {
+                    "key": "kmodel",
+                    "display_name": "Kimi-K2.8-Preview",
+                    "enable": 0,
+                    "is_vl": true,
+                    "source": "system"
+                },
+                {
+                    "key": "auto",
+                    "display_name": "Auto",
+                    "is_vl": true,
+                    "source": "system"
+                }
+            ]
+        });
+        let models = parse_scene_catalog(&json, "assistant");
+        assert_eq!(models.len(), 4, "locked entries must not be dropped");
+        let by_id = |id: &str| {
+            models
+                .iter()
+                .find(|model| model.id == id)
+                .unwrap_or_else(|| panic!("{id} present"))
+        };
+        assert_eq!(by_id("qmodel_38max").picker_enabled, Some(true));
+        assert_eq!(by_id("gmodel").picker_enabled, Some(false));
+        assert_eq!(by_id("kmodel").picker_enabled, Some(false));
+        // Absent `enable` is undeclared, not locked.
+        assert_eq!(by_id("auto").picker_enabled, None);
+        assert_eq!(by_id("gmodel").name.as_deref(), Some("GLM-5.3"));
+    }
+
+    #[test]
+    fn baselines_stay_the_two_platform_flagships() {
+        let ids: Vec<&str> = QODER_MODELS.iter().map(|model| model.id).collect();
+        assert_eq!(ids, ["qmodel_38max", "qfmodel"]);
     }
 }

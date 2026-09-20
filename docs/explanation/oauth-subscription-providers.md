@@ -152,7 +152,7 @@ prevent redundant retries.
 | **Antigravity** | Google OAuth2 PKCE | Internal `v1internal` Protobuf JSON gateway | Google Cloud Project (`cloudaicompanionProject`) |
 | **ChatGPT Codex** | OpenAI OAuth2 PKCE | Internal Responses gateway | `ChatGPT-Account-Id` tenant header |
 | **GitHub Copilot** | GitHub OAuth App | Copilot session token exchange endpoint | User token exchange |
-| **OpenCode Go** | OpenCode Console device flow (JSON) | Zen relay (`https://opencode.ai/zen/go/v1`) | Console account and workspace orgs |
+| **OpenCode Go** | OpenCode Console device flow (JSON) | Console inference roots, multi-protocol (`/inference/{openai,anthropic,google}`) | Workspace org header on catalog and inference |
 
 ### OpenCode Go Console Device Flow
 
@@ -171,9 +171,14 @@ not RFC 8628:
   the first org (sorted by name) is recorded as the default, and the full
   membership is persisted for a later switch.
 
-The inference credential is the console access token, sent as the bearer to the
-Zen relay; the model catalogue remains the keyless `models.opencode.ai`
-endpoint. See [ADR-0268](../adr/0268-opencode-go-console-oauth-subscription.md).
+The same console access token authenticates inference and discovery. Inference
+runs against the Console inference roots, each request carrying the selected
+workspace as `x-opencode-org-id`; discovery reads the account's own
+`GET https://opencode.ai/console/api/config` (bearer plus `x-org-id`), which is
+the authority for which models exist and which root and wire protocol each one
+uses. [ADR-0268](../adr/0268-opencode-go-console-oauth-subscription.md)
+established the grant; [ADR-0269](../adr/0269-opencode-console-catalog-and-routing-authority-with-workspace-scoping.md)
+moved the routes and the catalogue onto that same account.
 
 ### ChatGPT Codex Gateway
 

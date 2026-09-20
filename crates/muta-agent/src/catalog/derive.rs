@@ -252,8 +252,9 @@ pub fn derive_channel(
     })
 }
 
-/// Model protocol metadata overrides the provider-scoped baseline and default.
-/// Endpoint and dialect belong to the provider, independently of credentials.
+/// Model protocol metadata overrides the provider-scoped baseline and default,
+/// and a catalog-advertised root override replaces the spec's route for that
+/// protocol (ADR-0269). Dialect and credentials remain provider-owned.
 fn base_route(
     connection: &Connection,
     model: &str,
@@ -288,14 +289,24 @@ fn base_route(
         ClientProfile::Native
     };
 
-    Ok((
-        protocol,
-        spec.endpoint(protocol).map_err(|error| {
+    // The advertised root is an **API root**, not a full endpoint: the suffix
+    // is appended by the same ADR-0259 algebra the compiled spec uses.
+    let base_url = match remote.and_then(|r| r.endpoint.as_deref()) {
+        Some(root) => {
+            let root = muta_contracts::ApiRoot::parse(root).map_err(|error| {
+                muta_contracts::ProviderError::invalid_request(
+                    &connection.provider,
+                    format!("catalog-advertised root for model `{model}`: {error}"),
+                )
+            })?;
+            muta_providers::endpoint_for(spec.dialect, &root, protocol)
+        }
+        None => spec.endpoint(protocol).map_err(|error| {
             muta_contracts::ProviderError::invalid_request(&connection.provider, error)
         })?,
-        client_profile,
-        spec.dialect,
-    ))
+    };
+
+    Ok((protocol, base_url, client_profile, spec.dialect))
 }
 
 /// Resolve the sparse connection override over the provider's recommended

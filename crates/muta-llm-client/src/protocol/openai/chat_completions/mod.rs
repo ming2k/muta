@@ -200,7 +200,7 @@ impl OpenAiChatCompletionsProvider {
         req = self
             .endpoint
             .attach_session_affinity_headers(req, self.prompt_cache.routing_key());
-        req
+        self.endpoint.attach_auth_scoped_headers(req, auth)
     }
 
     /// Build a Qoder COSY-signed request from the chat-completions JSON.
@@ -670,7 +670,7 @@ mod tests {
         let provider = OpenAiChatCompletionsProvider::with_base_url_and_user_agent(
             "test-key".to_string(),
             "glm-5.2".to_string(),
-            "https://opencode.ai/zen/go/v1/chat/completions",
+            "https://opencode.ai/inference/openai/v1/chat/completions",
             crate::OPENCODE_USER_AGENT,
         )
         .with_id("opencode-go".to_string())
@@ -703,6 +703,35 @@ mod tests {
         assert_eq!(
             headers.get("user-agent").unwrap().to_str().unwrap(),
             crate::OPENCODE_USER_AGENT
+        );
+        assert!(
+            headers.get("x-opencode-org-id").is_none(),
+            "a keyless credential must not claim a workspace"
+        );
+    }
+
+    #[test]
+    fn workspace_scoped_credential_carries_the_org_header() {
+        let provider = OpenAiChatCompletionsProvider::with_base_url(
+            "st-token".to_string(),
+            "glm-5.2".to_string(),
+            "https://opencode.ai/inference/openai/v1/chat/completions",
+        );
+        let auth = muta_contracts::ResolvedAuth::new("st-token").with_extension(
+            muta_contracts::OpencodeAuthMetadata {
+                org_id: "wrk_workspace_1".to_string(),
+            },
+        );
+        let req = provider
+            .build_request_for_auth(&serde_json::json!({"model": "glm-5.2"}), &auth)
+            .build("Test")
+            .unwrap();
+        assert_eq!(
+            req.headers
+                .get("x-opencode-org-id")
+                .and_then(|v| v.to_str().ok())
+                .unwrap(),
+            "wrk_workspace_1"
         );
     }
 }

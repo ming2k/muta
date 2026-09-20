@@ -2,10 +2,11 @@
 //!
 //! A thin executor over the pure [`request`] and [`response`] layers plus the
 //! shared transport helpers. Google's transport is distinctive in two ways:
-//! the API key rides as a `?key=` query param (never a header), and the base
-//! URL is versioned (`.../v1beta`) with the per-call model path appended at
-//! request time. Everything else reuses the shared SSE decoder and HTTP
-//! helpers.
+//! the credential carrier depends on the credential (a plain API key rides as
+//! a `?key=` query param, an org-scoped console token as `x-goog-api-key`), and
+//! the base URL is versioned (`.../v1beta`) with the per-call model path
+//! appended at request time. Everything else reuses the shared SSE decoder and
+//! HTTP helpers.
 //!
 //! Module layout (mirrors the OpenAI and Anthropic providers):
 //! - [`request`] — body / url construction (pure, no I/O)
@@ -515,6 +516,9 @@ impl GoogleProvider {
         auth: &muta_contracts::ResolvedAuth,
     ) -> (String, http::header::HeaderMap, serde_json::Value) {
         let key = auth.token.expose_secret();
+        let org_scoped = auth
+            .extension::<muta_contracts::OpencodeAuthMetadata>()
+            .is_some();
         let include_thoughts = self.capabilities.reasoning() && !omit_thinking;
         let thinking = if omit_thinking {
             None
@@ -566,7 +570,16 @@ impl GoogleProvider {
         let affinity_headers = self
             .endpoint
             .session_affinity_headers(self.prompt_cache.routing_key());
-        for (k, v) in client_headers.chain(affinity_headers) {
+        let scoped_headers = self.endpoint.auth_scoped_headers(auth);
+        // An org-scoped credential is a workspace bearer token, not an API key:
+        // the Console relay rejects it in a query string (ADR-0269 probe P2), so
+        // it travels in the header Google's own clients use.
+        let credential_header = org_scoped.then(|| ("x-goog-api-key", key.to_string()));
+        for (k, v) in client_headers
+            .chain(affinity_headers)
+            .chain(scoped_headers)
+            .chain(credential_header)
+        {
             if let (Ok(hname), Ok(hval)) = (
                 http::header::HeaderName::from_bytes(k.as_bytes()),
                 http::header::HeaderValue::from_str(&v),
@@ -621,10 +634,11 @@ impl GoogleProvider {
 
             (url, headers, wrapped_body)
         } else {
+            let query_key = (!org_scoped && !key.is_empty()).then_some(key);
             let url = if is_stream {
-                request::stream_url(&self.endpoint.base_url, &self.endpoint.model, key)
+                request::stream_url(&self.endpoint.base_url, &self.endpoint.model, query_key)
             } else {
-                request::url(&self.endpoint.base_url, &self.endpoint.model, key)
+                request::url(&self.endpoint.base_url, &self.endpoint.model, query_key)
             };
             (url, headers, raw_body)
         }
@@ -928,5 +942,55 @@ mod tests {
         );
         let (_, _, without) = p.prepare_request(ModelRequest::new(Vec::new()), true, true);
         assert!(without["generationConfig"]["thinkingConfig"].is_null());
+    }
+
+    #[test]
+    fn plain_api_key_travels_in_the_query_string() {
+        let p = GoogleProvider::with_base_url(
+            "AIza-key".to_string(),
+            "gemini-3-flash".to_string(),
+            "https://generativelanguage.googleapis.com/v1beta",
+        );
+        let auth = muta_contracts::ResolvedAuth::new("AIza-key");
+        let (url, headers, _) =
+            p.prepare_request_for_auth(ModelRequest::new(Vec::new()), false, true, &auth);
+        assert!(url.ends_with(":generateContent?key=AIza-key"), "{url}");
+        assert!(!headers.contains_key("x-goog-api-key"));
+        assert!(!headers.contains_key("x-opencode-org-id"));
+    }
+
+    #[test]
+    fn workspace_scoped_credential_switches_the_carrier_and_scopes_the_org() {
+        // ADR-0269 probe P2: the Console relay rejects `?key=` outright, so an
+        // org-scoped bearer must reach it as a header — and never in a URL that
+        // upstream access logs would capture.
+        let p = GoogleProvider::with_base_url(
+            "st-token".to_string(),
+            "gemini-3-flash".to_string(),
+            "https://opencode.ai/inference/google/v1beta",
+        );
+        let auth = muta_contracts::ResolvedAuth::new("st-token").with_extension(
+            muta_contracts::OpencodeAuthMetadata {
+                org_id: "wrk_workspace_1".to_string(),
+            },
+        );
+        let (url, headers, _) =
+            p.prepare_request_for_auth(ModelRequest::new(Vec::new()), true, true, &auth);
+        assert!(!url.contains("key="), "token leaked into the URL: {url}");
+        assert!(url.ends_with(":streamGenerateContent?alt=sse"), "{url}");
+        assert_eq!(
+            headers
+                .get("x-goog-api-key")
+                .and_then(|v| v.to_str().ok())
+                .expect("header-carried credential"),
+            "st-token"
+        );
+        assert_eq!(
+            headers
+                .get("x-opencode-org-id")
+                .and_then(|v| v.to_str().ok())
+                .expect("workspace header present"),
+            "wrk_workspace_1"
+        );
     }
 }

@@ -198,7 +198,7 @@ impl AnthropicMessagesProvider {
         req = self
             .endpoint
             .attach_session_affinity_headers(req, self.prompt_cache.routing_key());
-        req
+        self.endpoint.attach_auth_scoped_headers(req, auth)
     }
 
     /// Send a request with automatic token resolution, timeout stamping,

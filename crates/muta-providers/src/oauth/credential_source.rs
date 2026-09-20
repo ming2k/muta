@@ -87,6 +87,19 @@ impl OAuthCredentialSource {
                 project_id: proj.to_string(),
             });
         }
+        // OpenCode Console routes every inference surface through a workspace;
+        // the stored `org_id` attribute becomes the typed metadata that the
+        // senders read for `x-opencode-org-id` (ADR-0269). Attached only for
+        // the opencode subscription, mirroring the ChatGPT metadata rule.
+        if matches!(
+            self.auth.subscription_provider(),
+            Some("opencode" | "opencode-go")
+        ) && let Some(org_id) = tokens.get_attr("org_id")
+        {
+            auth = auth.with_extension(muta_contracts::OpencodeAuthMetadata {
+                org_id: org_id.to_string(),
+            });
+        }
         if let Some(email) = &tokens.user_email {
             auth = auth.with_user_email(email.clone());
         }
@@ -380,6 +393,34 @@ mod tests {
                 .extension::<muta_contracts::ChatGptAuthMetadata>()
                 .is_none(),
             "opencode must not be projected as a ChatGPT/Codex credential"
+        );
+        assert_eq!(
+            resolved
+                .extension::<muta_contracts::OpencodeAuthMetadata>()
+                .map(|m| m.org_id.as_str()),
+            Some("org-1"),
+            "the stored org_id must project onto the typed Console workspace metadata"
+        );
+
+        // A credential stored before org resolution existed carries no org_id:
+        // no metadata attached, and no invented default.
+        let bare = source.resolved(&tokens("console-access"));
+        assert!(
+            bare.extension::<muta_contracts::OpencodeAuthMetadata>()
+                .is_none()
+        );
+
+        // The projection is opencode-scoped: a ChatGPT connection carrying an
+        // `org_id` attribute gets no Console metadata.
+        let chatgpt =
+            OAuthCredentialSource::new("chatgpt-sub", ConnectionAuth::subscription("chatgpt"));
+        let mut foreign = tokens("chatgpt-access");
+        foreign.set_attr("org_id", "org-1");
+        assert!(
+            chatgpt
+                .resolved(&foreign)
+                .extension::<muta_contracts::OpencodeAuthMetadata>()
+                .is_none()
         );
     }
 

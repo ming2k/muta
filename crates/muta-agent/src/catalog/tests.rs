@@ -629,8 +629,8 @@ fn deepseek_route_is_the_responses_transport() {
 
 #[test]
 fn opencode_go_routes_models_by_wire_format() {
-    // The opencode-go relay serves models over different wire formats; the
-    // derivation routes each by its registered format.
+    // The Console surface serves models over different wire formats; the
+    // derivation routes each by its registered (or catalog-advertised) format.
     let go = instance("opencode-go", Some("opencode-go"));
     let glm = derive_channel(
         &go,
@@ -641,7 +641,7 @@ fn opencode_go_routes_models_by_wire_format() {
     )
     .unwrap();
     assert!(
-        matches!(&glm.transport, Transport::OpenAi { base_url, client_profile, .. } if base_url == "https://opencode.ai/zen/go/v1/chat/completions" && *client_profile == muta_contracts::ClientProfile::OpenCode),
+        matches!(&glm.transport, Transport::OpenAi { base_url, client_profile, .. } if base_url == "https://opencode.ai/inference/openai/v1/chat/completions" && *client_profile == muta_contracts::ClientProfile::OpenCode),
         "glm-5.2 must route to OpenAI chat-completions with OpenCode client profile"
     );
     let minimax = derive_channel(
@@ -653,15 +653,27 @@ fn opencode_go_routes_models_by_wire_format() {
     )
     .unwrap();
     assert!(
-        matches!(&minimax.transport, Transport::Anthropic { base_url, .. } if base_url == "https://opencode.ai/zen/go/v1/messages"),
-        "minimax-m3 must route to Anthropic /messages"
+        matches!(&minimax.transport, Transport::OpenAi { base_url, .. } if base_url == "https://opencode.ai/inference/openai/v1/chat/completions"),
+        "minimax-m3 is openai-compatible on the Console surface (ADR-0269)"
+    );
+    let qwen = derive_channel(
+        &go,
+        "qwen3.6-plus",
+        &RemoteCatalogCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&qwen.transport, Transport::Anthropic { base_url, .. } if base_url == "https://opencode.ai/inference/anthropic/v1/messages"),
+        "qwen3.6-plus must route to the Anthropic /messages surface"
     );
     // route_for_model agrees (the standalone resolver used by the sync).
     assert_eq!(
-        route_for_model("opencode-go", "minimax-m3").map(|(p, b, _)| (p, b)),
+        route_for_model("opencode-go", "qwen3.6-plus").map(|(p, b, _)| (p, b)),
         Some((
             WireProtocol::AnthropicMessages,
-            "https://opencode.ai/zen/go/v1/messages".to_string()
+            "https://opencode.ai/inference/anthropic/v1/messages".to_string()
         ))
     );
 }
@@ -1116,60 +1128,130 @@ async fn antigravity_oauth_live_catalog_sync_materializes_tiered_generations() {
 }
 
 #[tokio::test]
-async fn opencode_go_source_materializes_catalog_models() {
-    // The opencode-go preset's live catalog is the models.opencode.ai private
-    // directory (not the relay's own /models). The sync resolves the
-    // catalog and materializes ids the client baseline does not
-    // know (e.g. glm-5.3) via the remote-catalog overlay (ADR-0203).
+async fn opencode_console_catalog_materializes_per_model_routes() {
+    // The Console `/api/config` response is the account's catalog AND routing
+    // authority (ADR-0269): each advertised id materializes with its
+    // per-model wire protocol and, when overridden, its inference root. The
+    // compiled `opencode-go` preset targets the real Console, so the same
+    // shape is served here by a mockito-backed user-declared provider.
     let _sandbox = sandboxed_paths();
-    let instances = Connections {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/api/config")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+                "config": {
+                    "provider": {
+                        "opencode": {
+                            "npm": "@ai-sdk/openai-compatible",
+                            "api": "https://opencode.ai/inference/openai/v1",
+                            "models": {
+                                "minimax-m3": { "name": "MiniMax-M3", "reasoning": true, "tool_call": true },
+                                "glm-5.3": { "name": "GLM-5.3", "reasoning": true, "tool_call": true },
+                                "claude-opus-5": {
+                                    "name": "Claude Opus 5",
+                                    "reasoning": true,
+                                    "tool_call": true,
+                                    "provider": {
+                                        "npm": "@ai-sdk/anthropic",
+                                        "api": "https://opencode.ai/inference/anthropic/v1"
+                                    }
+                                },
+                                "gemini-3.5-flash": {
+                                    "name": "Gemini 3.5 Flash",
+                                    "provider": {
+                                        "npm": "@ai-sdk/google",
+                                        "api": "https://opencode.ai/inference/google/v1beta"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .create_async()
+        .await;
+
+    let provider_id = "test-mock-opencode-console";
+    register_mock_provider(
+        provider_id,
+        &server.url(),
+        WireProtocol::ChatCompletions,
+        &[],
+        muta_providers::CatalogShape::OpencodeConsole,
+    );
+    Connections {
         connections: vec![Connection {
-            name: "opencode-go".to_string(),
-            provider: "opencode-go".to_string(),
+            name: "console".to_string(),
+            provider: provider_id.to_string(),
             ..Default::default()
         }],
-    };
-    instances.save().unwrap();
+    }
+    .save()
+    .unwrap();
 
-    let outcome = sync_remote_catalog().await;
+    let outcome = sync_connection_catalog("console").await;
     assert!(
-        outcome.changed,
-        "opencode-go catalog sync must record a change"
-    );
-    assert!(
-        outcome.failures.is_empty(),
-        "failures: {:?}",
-        outcome.failures
+        outcome.changed && outcome.failures.is_empty(),
+        "console catalog sync must succeed: {outcome:?}"
     );
 
     let cache = RemoteCatalogCache::load();
     let models = cache
         .connection_models
-        .get("opencode-go")
+        .get("console")
         .expect("catalog lands in the cache");
-    assert!(
-        models.contains(&"glm-5.3".to_string()),
-        "a relay model unknown to the client baseline must be materialized"
+    assert_eq!(
+        models,
+        &vec![
+            "claude-opus-5".to_string(),
+            "gemini-3.5-flash".to_string(),
+            "glm-5.3".to_string(),
+            "minimax-m3".to_string()
+        ],
+        "every advertised id is materialized, sorted by id"
     );
-    assert!(
-        models.contains(&"kimi-k3".to_string()),
-        "kimi-k3 (models.dev only) must be materialized"
+    let remote = cache.remote_metadata.get("console").unwrap();
+    // No per-model override → provider-default npm → chat, no root override.
+    assert_eq!(
+        remote["minimax-m3"].protocol,
+        Some(WireProtocol::ChatCompletions)
     );
-    // The wire-override table routes the minimax family to Anthropic /messages
-    // even though the fitted registry would default them to OpenAI chat.
-    let fitted = cache.fitted_models.get("opencode-go").unwrap();
-    assert!(
-        fitted.contains_key("hy3"),
-        "an unknown catalog model must be fitted (e.g. hy3)"
+    assert_eq!(remote["minimax-m3"].endpoint, None);
+    // npm → wire, api → advertised root, round-tripped through the cache.
+    assert_eq!(
+        remote["claude-opus-5"].protocol,
+        Some(WireProtocol::AnthropicMessages)
     );
-    assert!(
-        models.contains(&"minimax-m3".to_string()),
-        "a baseline-known catalog model stays served"
+    assert_eq!(
+        remote["claude-opus-5"].endpoint.as_deref(),
+        Some("https://opencode.ai/inference/anthropic/v1")
     );
-    let route = muta_providers::route_for_model("opencode-go", "minimax-m3")
-        .expect("wire override routes minimax");
-    assert_eq!(route.0, muta_contracts::WireProtocol::AnthropicMessages);
-    assert!(route.1.contains("/v1/messages"));
+    assert_eq!(
+        remote["gemini-3.5-flash"].protocol,
+        Some(WireProtocol::GoogleGemini)
+    );
+
+    // Derivation honors the advertised root: the Anthropic model builds its
+    // transport against the Console Anthropic surface, not the spec default.
+    let conn = instance("console", Some(provider_id));
+    let channel = derive_channel(
+        &conn,
+        "claude-opus-5",
+        &cache,
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&channel.transport, Transport::Anthropic { base_url, .. }
+            if base_url == "https://opencode.ai/inference/anthropic/v1/messages"),
+        "advertised root must select the Anthropic surface, got {:?}",
+        channel.transport
+    );
 }
 
 #[tokio::test]
@@ -1824,6 +1906,61 @@ fn provider_dialect_selects_endpoint_after_remote_protocol_override() {
     .unwrap();
     assert!(
         matches!(channel.transport, Transport::Anthropic { ref base_url, .. }
-        if base_url == "https://opencode.ai/zen/go/v1/messages")
+        if base_url == "https://opencode.ai/inference/anthropic/v1/messages")
     );
+}
+
+#[test]
+fn catalog_advertised_root_replaces_the_compiled_spec_route() {
+    // ADR-0269: a per-model `endpoint` root from the account catalog overrides
+    // the spec's route, with the suffix still appended by the ADR-0259 algebra.
+    let _sandbox = sandboxed_paths();
+    let conn = instance("root-override", Some("opencode-go"));
+    let mut cache = RemoteCatalogCache::default();
+    cache
+        .remote_metadata
+        .entry(conn.name.clone())
+        .or_default()
+        .insert(
+            "glm-5.3".into(),
+            muta_contracts::RemoteModelMetadata {
+                protocol: Some(WireProtocol::GoogleGemini),
+                endpoint: Some("https://opencode.ai/inference/google/v1beta".to_string()),
+                ..Default::default()
+            },
+        );
+    let channel = derive_channel(
+        &conn,
+        "glm-5.3",
+        &cache,
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap();
+    // The Google protocol carries no suffix: the advertised root is verbatim.
+    assert!(
+        matches!(channel.transport, Transport::Google { ref base_url, .. }
+        if base_url == "https://opencode.ai/inference/google/v1beta"),
+        "advertised root must ride the shared suffix algebra, got {:?}",
+        channel.transport
+    );
+
+    // An invalid advertised root is a readable routing error, not a panic or a
+    // silent fall-through to the spec route.
+    cache
+        .remote_metadata
+        .get_mut(conn.name.as_str())
+        .unwrap()
+        .get_mut("glm-5.3")
+        .unwrap()
+        .endpoint = Some("not a url".to_string());
+    let error = derive_channel(
+        &conn,
+        "glm-5.3",
+        &cache,
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap_err();
+    assert!(error.message().contains("catalog-advertised root"));
 }

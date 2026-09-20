@@ -1,6 +1,10 @@
-//! The `opencode-go` provider preset: the opencode.ai/zen/go relay's
-//! OpenAI-compatible catalogue, served via the private models.opencode.ai catalog
-//! (`CatalogShape::OpencodeGo`).
+//! The `opencode-go` provider preset: the OpenCode **Console** subscription
+//! surface (`opencode.ai/inference/…`), cataloged and routed by the
+//! account-scoped `/console/api/config` catalog
+//! ([`CatalogShape::OpencodeConsole`], ADR-0269). The catalog advertises the
+//! served models *and* their routing: a per-model `provider.{npm,api}` override
+//! selects the wire protocol and inference root, so the live catalog — not a
+//! compiled relay guess — is authoritative for both.
 
 use muta_contracts::effort::{EFFORT_GLM_5, EFFORT_LOW_HIGH_MAX};
 use muta_contracts::reasoning::ReasoningSupport;
@@ -173,7 +177,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::AnthropicMessages,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
@@ -184,11 +188,14 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::AnthropicMessages,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
-    // MiniMax (opencode-go, Anthropic /messages format)
+    // MiniMax (opencode-go, openai-compatible chat on the Console surface)
+    // The zen-era relay served MiniMax over Anthropic /messages; the Console
+    // account catalog advertises no provider override for it, which pins the
+    // `@ai-sdk/openai-compatible` default — chat completions (ADR-0269).
     Model {
         id: "minimax-m3",
         family: "minimax",
@@ -196,7 +203,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::AnthropicMessages,
+        protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
@@ -207,7 +214,7 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
@@ -218,14 +225,14 @@ pub const MODELS: &[Model] = &[
         thinking: ReasoningSupport::ReasoningContent,
         tool_call: true,
         vision: false,
-        protocol: WireProtocol::ChatCompletions,
+        protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         effort_levels: muta_contracts::effort::EFFORT_COMMON,
     },
-    // Qwen (opencode-go, OpenAI /chat/completions format)
-    // models.dev records qwen3.* as `@ai-sdk/openai-compatible` under
-    // opencode-go; this baseline table mirrors that so the offline
-    // fallback path matches the live catalog.
+    // Qwen (opencode-go) — the Console catalog routes qwen3.5-plus/3.6-plus
+    // through `@ai-sdk/anthropic`; the older qwen3.7 entries were
+    // `@ai-sdk/openai-compatible` zen-era listings and stay on chat
+    // completions until the live catalog says otherwise.
     Model {
         id: "qwen3.7-max",
         family: "qwen",
@@ -254,25 +261,33 @@ inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     dialect: muta_contracts::ProviderDialect::Standard,
-    protocol_roots: std::borrow::Cow::Borrowed(&[(
-        WireProtocol::GoogleGemini,
-        std::borrow::Cow::Borrowed("https://opencode.ai/zen/go/v1beta"),
-    )]),
-    catalog_root_url: Some(std::borrow::Cow::Borrowed("https://models.opencode.ai")),
+    protocol_roots: std::borrow::Cow::Borrowed(&[
+        (
+            WireProtocol::AnthropicMessages,
+            std::borrow::Cow::Borrowed("https://opencode.ai/inference/anthropic/v1"),
+        ),
+        (
+            WireProtocol::GoogleGemini,
+            std::borrow::Cow::Borrowed("https://opencode.ai/inference/google/v1beta"),
+        ),
+    ]),
+    catalog_root_url: Some(std::borrow::Cow::Borrowed("https://opencode.ai/console")),
     prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
     id: std::borrow::Cow::Borrowed("opencode-go"),
     baselines: MODELS,
-    // Endpoints are per-model by wire format (see `route_for_model`); the
-    // instance-level default is the OpenAI chat-completions surface.
-    root_url: std::borrow::Cow::Borrowed("https://opencode.ai/zen/go/v1"),
+    // Per-model routes come from the account catalog (protocol + optional
+    // root override); the default root serves OpenAI chat/responses surfaces
+    // and any model the catalog does not override.
+    root_url: std::borrow::Cow::Borrowed("https://opencode.ai/inference/openai/v1"),
     user_agent: Some(std::borrow::Cow::Borrowed(
         muta_contracts::client_identity::OPENCODE_USER_AGENT,
     )),
     protocol: WireProtocol::ChatCompletions,
-    // The served set comes from the relay's private models.opencode.ai catalog.
-    // Every advertised id is materialized with its catalog metadata, so a newly
-    // shipped relay model appears with zero client changes.
-    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::OpencodeGo),
+    // The served set comes from the Console account catalog. Every advertised
+    // id is materialized with its catalog metadata — including per-model wire
+    // and root overrides — so a newly shipped model appears with zero client
+    // changes (ADR-0269).
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::OpencodeConsole),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
     models: OPENCODE_GO_MODELS,
@@ -280,11 +295,19 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
 
 #[derive(Debug, Clone, Deserialize)]
 struct DevProvider {
+    /// The provider-default npm; models without a `provider` override ride it.
+    #[serde(default)]
+    npm: Option<String>,
+    #[serde(default)]
     models: BTreeMap<String, DevModel>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct DevModel {
+    /// models.dev carries the id inside the entry; the Console config keys
+    /// the entries by id and omits the field, so it defaults and the parser
+    /// fills it from the map key.
+    #[serde(default)]
     id: String,
     #[serde(default)]
     name: String,
@@ -300,6 +323,31 @@ struct DevModel {
     limit: DevLimit,
     #[serde(default)]
     modalities: DevModalities,
+    /// Per-model routing override: npm selects the wire protocol, api is an
+    /// inference **root** override (ADR-0269).
+    #[serde(default)]
+    provider: Option<DevModelProvider>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct DevModelProvider {
+    #[serde(default)]
+    npm: Option<String>,
+    #[serde(default)]
+    api: Option<String>,
+}
+
+/// The `@ai-sdk/*` package the Console catalog names per model selects the
+/// wire protocol. Unknown npm → `None` (no override; the spec default holds),
+/// never a guess.
+fn protocol_for_npm(npm: &str) -> Option<WireProtocol> {
+    match npm {
+        "@ai-sdk/anthropic" => Some(WireProtocol::AnthropicMessages),
+        "@ai-sdk/google" => Some(WireProtocol::GoogleGemini),
+        "@ai-sdk/openai" => Some(WireProtocol::Responses),
+        "@ai-sdk/openai-compatible" => Some(WireProtocol::ChatCompletions),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -326,20 +374,38 @@ struct DevModalities {
     output: Vec<String>,
 }
 
-pub(crate) fn parse_catalog(json: &serde_json::Value) -> Vec<crate::list_models::DiscoveredModel> {
-    let Some(provider_json) = json.get("opencode-go") else {
+/// Extract the account catalog from a Console `/api/config` response:
+/// `{"config":{"provider":{"opencode":{npm, models:{…}}}}}` (ADR-0269).
+pub(crate) fn parse_config_catalog(
+    json: &serde_json::Value,
+) -> Vec<crate::list_models::DiscoveredModel> {
+    let Some(provider_json) = json
+        .get("config")
+        .and_then(|config| config.get("provider"))
+        .and_then(|providers| providers.get("opencode"))
+    else {
         return Vec::new();
     };
     let Ok(provider) = serde_json::from_value::<DevProvider>(provider_json.clone()) else {
         return Vec::new();
     };
-    let mut models: Vec<_> = provider.models.into_values().map(from_dev_model).collect();
+    let default_protocol = provider.npm.as_deref().and_then(protocol_for_npm);
+    let mut models: Vec<_> = provider
+        .models
+        .into_iter()
+        .map(|(key, model)| from_dev_model(key, model, default_protocol))
+        .collect();
     models.sort_by(|a, b| a.id.cmp(&b.id));
     models.dedup_by(|a, b| a.id == b.id);
     models
 }
 
-fn from_dev_model(m: DevModel) -> crate::list_models::DiscoveredModel {
+fn from_dev_model(
+    key: String,
+    m: DevModel,
+    default_protocol: Option<WireProtocol>,
+) -> crate::list_models::DiscoveredModel {
+    let id = if m.id.trim().is_empty() { key } else { m.id };
     let modalities_in = &m.modalities.input;
     let reasoning = Some(m.reasoning);
     let thinking = Some(if m.reasoning {
@@ -354,10 +420,20 @@ fn from_dev_model(m: DevModel) -> crate::list_models::DiscoveredModel {
         .flat_map(|opt| opt.values.iter().flatten())
         .cloned()
         .collect::<Vec<_>>();
+    // The model's own npm override selects the wire; without one the
+    // provider-default npm applies; an npm outside the known set declares
+    // nothing (the spec route holds) rather than guessing.
+    let protocol = m
+        .provider
+        .as_ref()
+        .and_then(|p| p.npm.as_deref())
+        .and_then(protocol_for_npm)
+        .or(default_protocol);
     crate::list_models::DiscoveredModel {
-        id: m.id,
+        id,
         picker_enabled: None,
-        protocol: None,
+        protocol,
+        endpoint: m.provider.as_ref().and_then(|p| p.api.clone()),
         family: m.family.clone(),
         name: (!m.name.trim().is_empty()).then(|| m.name.clone()),
         context_window: m.limit.context.map(|c| c as usize),
@@ -370,7 +446,9 @@ fn from_dev_model(m: DevModel) -> crate::list_models::DiscoveredModel {
         } else {
             Some(modalities_in.iter().any(|m| m == "image"))
         },
-        effort_levels: Some(effort_levels),
+        // The Console config advertises no effort vocabulary; undeclared keeps
+        // the baseline ladder, an empty vec would explicitly negate it.
+        effort_levels: (!effort_levels.is_empty()).then_some(effort_levels),
         catalog_source: None,
     }
 }
@@ -402,12 +480,13 @@ mod tests {
                 input: vec!["text".to_string()],
                 output: vec!["text".to_string()],
             },
+            provider: None,
         }
     }
 
     #[test]
     fn maps_capabilities_and_effort_ladder() {
-        let dm = from_dev_model(sample_model());
+        let dm = from_dev_model("k".to_string(), sample_model(), None);
         assert_eq!(dm.id, "glm-5.3");
         assert_eq!(dm.family.as_deref(), Some("glm"));
         assert_eq!(dm.context_window, Some(1_000_000));
@@ -425,32 +504,87 @@ mod tests {
             ])
         );
         assert_eq!(dm.protocol, None);
+        assert_eq!(dm.endpoint, None);
     }
 
     #[test]
     fn vision_is_derived_from_input_modalities() {
         let mut m = sample_model();
         m.modalities.input = vec!["text".to_string(), "image".to_string()];
-        assert_eq!(from_dev_model(m).vision, Some(true));
+        assert_eq!(from_dev_model("k".to_string(), m, None).vision, Some(true));
     }
 
     #[test]
-    fn parses_catalog_json_for_opencode_go() {
+    fn parses_console_config_catalog_with_routing_overrides() {
         let raw = serde_json::json!({
-            "opencode-go": {
-                "models": {
-                    "m1": {
-                        "id": "m1",
-                        "name": "Model 1",
-                        "reasoning": false,
-                        "tool_call": true
+            "config": {
+                "provider": {
+                    "opencode": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "models": {
+                            "m1": {
+                                "name": "Model 1",
+                                "reasoning": false,
+                                "tool_call": true
+                            },
+                            "c1": {
+                                "name": "Claude 1",
+                                "reasoning": true,
+                                "tool_call": true,
+                                "provider": {
+                                    "npm": "@ai-sdk/anthropic",
+                                    "api": "https://opencode.ai/inference/anthropic/v1"
+                                }
+                            },
+                            "g1": {
+                                "name": "GPT 1",
+                                "provider": { "npm": "@ai-sdk/openai" }
+                            },
+                            "u1": {
+                                "name": "Unknown npm",
+                                "provider": { "npm": "@ai-sdk/mystery" }
+                            }
+                        }
                     }
                 }
             }
         });
-        let models = parse_catalog(&raw);
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].id, "m1");
-        assert_eq!(models[0].name.as_deref(), Some("Model 1"));
+        let models = parse_config_catalog(&raw);
+        assert_eq!(models.len(), 4);
+        // Keyed entries carry no `id` field; the map key is the wire id.
+        let ids: Vec<_> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["c1", "g1", "m1", "u1"]);
+        let find = |id: &str| models.iter().find(|m| m.id == id).unwrap();
+        // No per-model override → the provider-default npm selects the wire.
+        assert_eq!(find("m1").protocol, Some(WireProtocol::ChatCompletions));
+        assert_eq!(find("m1").endpoint, None);
+        // npm selects the wire; api overrides the inference root.
+        assert_eq!(find("c1").protocol, Some(WireProtocol::AnthropicMessages));
+        assert_eq!(
+            find("c1").endpoint.as_deref(),
+            Some("https://opencode.ai/inference/anthropic/v1")
+        );
+        assert_eq!(find("g1").protocol, Some(WireProtocol::Responses));
+        assert_eq!(find("g1").endpoint, None);
+        // An unknown npm declares no wire instead of guessing one; the
+        // api/root defaults still apply at route time.
+        assert_eq!(find("u1").protocol, Some(WireProtocol::ChatCompletions));
+        // Console config carries no effort vocabulary: undeclared, so the
+        // static baseline ladder survives instead of being negated.
+        assert_eq!(find("m1").effort_levels, None);
+    }
+
+    #[test]
+    fn empty_models_map_is_an_empty_catalog() {
+        let raw = serde_json::json!({
+            "config": { "provider": { "opencode": { "npm": "@ai-sdk/openai-compatible", "models": {} } } }
+        });
+        assert!(parse_config_catalog(&raw).is_empty());
+    }
+
+    #[test]
+    fn non_console_shape_parses_to_nothing() {
+        let raw = serde_json::json!({ "opencode-go": { "models": {} } });
+        assert!(parse_config_catalog(&raw).is_empty());
     }
 }

@@ -322,7 +322,7 @@ impl OpenAiResponsesProvider {
         req = self
             .endpoint
             .attach_session_affinity_headers(req, self.prompt_cache.routing_key());
-        req
+        self.endpoint.attach_auth_scoped_headers(req, auth)
     }
 
     /// Send a request with automatic token resolution, timeout stamping,
@@ -954,6 +954,31 @@ mod stream_protocol_tests {
         assert_eq!(
             provider.continuation_mode(),
             muta_contracts::ContinuationMode::OpaqueReplay
+        );
+    }
+
+    #[test]
+    fn workspace_scoped_credential_carries_the_org_header() {
+        let provider = OpenAiResponsesProvider::from_static_key(
+            "st-token".to_string(),
+            "gpt-5.2".to_string(),
+            "https://opencode.ai/inference/openai/v1/responses",
+        );
+        let auth = muta_contracts::ResolvedAuth::new("st-token").with_extension(
+            muta_contracts::OpencodeAuthMetadata {
+                org_id: "wrk_workspace_1".to_string(),
+            },
+        );
+        let req = provider
+            .build_request_for_auth(&serde_json::json!({"model": "gpt-5.2"}), &auth, None)
+            .build("OpenAI")
+            .expect("request builds");
+        assert_eq!(
+            req.headers
+                .get("x-opencode-org-id")
+                .and_then(|value| value.to_str().ok())
+                .expect("workspace header present"),
+            "wrk_workspace_1"
         );
     }
 }

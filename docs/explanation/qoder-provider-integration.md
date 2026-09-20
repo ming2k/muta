@@ -383,6 +383,21 @@ Confirmed against the live service by replaying byte-exact requests:
 - `Cosy-Version` (now `1.1.58`) and the signed-path derivation are unchanged
   from 1.1.57; the signature algorithm is confirmed by reproducing the
   recorded request's signature exactly.
+- The **full server catalog shape** (decrypted from the CLI's
+  `catalog-v6` cache, which the client encrypts with the embedded WASM
+  `model_cache_encrypt`): nine scenes (`assistant`, `chat`, `quest`, `qwork`,
+  `experts`, `qwake`, `app`, `nap`, `inline`) plus empty `byok_*` maps; each
+  populated scene carries 17 entries (`auto`/`ultimate`/`performance`/
+  `efficient` function switches, `smodel` Sonus, `cmodel` Cantus,
+  `qmodel_38max`, `qfmodel`, `qmodel_latest`, `qmodel`, `kmodel_latest`,
+  `kmodel`, `gmodel`, `gfmodel`, `dmodel`, `dfmodel`, `mmodel`). For a free
+  account only the two flagships are `enable:true`; everything else is
+  subscription-locked. The official CLI's `--list-models` prints exactly the
+  two enabled entries, while its interactive `/model` menu lists all 17
+  greyed-out (`isGreyedOut: enable === false`). muta mirrors both behaviors:
+  `--list-models` parity is the inference-capable set, and the picker
+  surfaces locked entries dimmed with a `locked` tag (round-tripped as
+  `picker_enabled`).
 
 ### 5.3 Extending to the CN line
 

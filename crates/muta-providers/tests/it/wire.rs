@@ -835,29 +835,40 @@ use muta_providers::{
 };
 
 #[tokio::test]
-async fn opencode_go_list_models_parses_private_catalog() {
+async fn opencode_console_list_models_sends_bearer_and_org_and_parses_config() {
     let mut server = Server::new_async().await;
-    // The catalog root is the API root; discovery appends the protocol path.
+    // The catalog root is `https://opencode.ai/console`-shaped; discovery
+    // appends the shape path `api/config` (ADR-0269).
     let base_url = server.url();
     let _mock = server
-        .mock("GET", "/api.json")
+        .mock("GET", "/api/config")
+        .match_header("authorization", "Bearer st-live")
+        .match_header("x-org-id", "wrk-org-1")
         .with_status(200)
         .with_header("content-type", "application/json")
         .with_body(
             r#"{
-                "opencode-go": {
-                    "models": {
-                        "glm-5.3": {
-                            "id": "glm-5.3",
-                            "name": "GLM-5.3",
-                            "reasoning": true,
-                            "tool_call": true
-                        },
-                        "deepseek-flash": {
-                            "id": "deepseek-flash",
-                            "name": "DeepSeek Flash",
-                            "reasoning": true,
-                            "tool_call": true
+                "config": {
+                    "provider": {
+                        "opencode": {
+                            "npm": "@ai-sdk/openai-compatible",
+                            "api": "https://opencode.ai/inference/openai/v1",
+                            "models": {
+                                "glm-5.2": {
+                                    "name": "GLM-5.2",
+                                    "reasoning": true,
+                                    "tool_call": true
+                                },
+                                "claude-opus-5": {
+                                    "name": "Claude Opus 5",
+                                    "reasoning": true,
+                                    "tool_call": true,
+                                    "provider": {
+                                        "npm": "@ai-sdk/anthropic",
+                                        "api": "https://opencode.ai/inference/anthropic/v1"
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -866,12 +877,13 @@ async fn opencode_go_list_models_parses_private_catalog() {
         .create_async()
         .await;
 
-    let key = SecretString::from("key-123");
+    let key = SecretString::from("st-live");
     let req = RemoteCatalogRequest {
-        protocol: CatalogShape::OpencodeGo,
+        protocol: CatalogShape::OpencodeConsole,
         base_url: &base_url,
         api_key: &key,
         account_id: None,
+        org_id: Some("wrk-org-1"),
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -879,7 +891,23 @@ async fn opencode_go_list_models_parses_private_catalog() {
     };
     let models = list_models(req).await.expect("discovery succeeds");
     let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
-    assert_eq!(ids, vec!["deepseek-flash", "glm-5.3"]);
+    assert_eq!(ids, vec!["claude-opus-5", "glm-5.2"]);
+    // Per-model routing rides the catalog: npm → wire, api → root override.
+    let glm = models.iter().find(|m| m.id == "glm-5.2").unwrap();
+    assert_eq!(
+        glm.protocol,
+        Some(muta_contracts::WireProtocol::ChatCompletions)
+    );
+    assert_eq!(glm.endpoint, None);
+    let claude = models.iter().find(|m| m.id == "claude-opus-5").unwrap();
+    assert_eq!(
+        claude.protocol,
+        Some(muta_contracts::WireProtocol::AnthropicMessages)
+    );
+    assert_eq!(
+        claude.endpoint.as_deref(),
+        Some("https://opencode.ai/inference/anthropic/v1")
+    );
 }
 
 #[tokio::test]
@@ -910,6 +938,7 @@ async fn openai_list_models_sends_bearer_and_returns_sorted_unique_ids() {
         base_url: &root_url,
         api_key: &key,
         account_id: None,
+        org_id: None,
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -941,6 +970,7 @@ async fn openai_list_models_keyless_relay_sends_no_bearer_header() {
         base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
+        org_id: None,
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -981,6 +1011,7 @@ async fn codex_list_models_sends_subscription_headers_and_preserves_priority() {
         base_url: &format!("{}/backend-api/codex", server.url()),
         api_key: &key,
         account_id: Some("acct-test"),
+        org_id: None,
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -1022,6 +1053,7 @@ async fn codex_list_models_supports_etag_revalidation() {
         base_url: &format!("{}/backend-api/codex", server.url()),
         api_key: &key,
         account_id: None,
+        org_id: None,
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -1071,6 +1103,7 @@ async fn anthropic_list_models_sends_api_key_and_version_headers() {
         base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
+        org_id: None,
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -1115,6 +1148,7 @@ async fn google_list_models_sends_key_query_param_and_filters_non_text() {
         base_url: &format!("{}/v1beta", server.url()),
         api_key: &key,
         account_id: None,
+        org_id: None,
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -1142,6 +1176,7 @@ async fn list_models_returns_status_error_on_non_2xx() {
         base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
+        org_id: None,
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -1175,6 +1210,7 @@ async fn list_models_accepts_authoritative_empty_data_array() {
         base_url: &format!("{}/v1", server.url()),
         api_key: &key,
         account_id: None,
+        org_id: None,
         user_agent: None,
         extra_headers: &[],
         catalog_signing: None,
@@ -1305,10 +1341,10 @@ async fn oauth_browser_login_validates_oidc_nonce() {
 #[tokio::test]
 async fn opencode_go_wire_request_carries_session_and_client_headers() {
     let mut server = Server::new_async().await;
-    let url = format!("{}/zen/go/v1/chat/completions", server.url());
+    let url = format!("{}/inference/openai/v1/chat/completions", server.url());
 
     let _mock = server
-        .mock("POST", "/zen/go/v1/chat/completions")
+        .mock("POST", "/inference/openai/v1/chat/completions")
         .match_header("x-opencode-session", "ses_wire_affinity_999")
         .match_header("x-opencode-client", "cli")
         .match_header(
@@ -1351,10 +1387,10 @@ async fn opencode_go_wire_request_carries_session_and_client_headers() {
 #[tokio::test]
 async fn opencode_go_anthropic_wire_request_carries_session_headers() {
     let mut server = Server::new_async().await;
-    let url = format!("{}/zen/go/v1/messages", server.url());
+    let url = format!("{}/inference/anthropic/v1/messages", server.url());
 
     let _mock = server
-        .mock("POST", "/zen/go/v1/messages")
+        .mock("POST", "/inference/anthropic/v1/messages")
         .match_header("x-opencode-session", "ses_anthropic_wire_777")
         .match_header("x-opencode-client", "cli")
         .match_header(
@@ -1363,13 +1399,13 @@ async fn opencode_go_anthropic_wire_request_carries_session_headers() {
         )
         .with_status(200)
         .with_header("content-type", "application/json")
-        .with_body(r#"{"content":[{"type":"text","text":"minimax response"}]}"#)
+        .with_body(r#"{"content":[{"type":"text","text":"qwen3.6-plus response"}]}"#)
         .create_async()
         .await;
 
     let channel = Channel {
-        id: "minimax-m3".into(),
-        label: "MiniMax M3".into(),
+        id: "qwen3.6-plus".into(),
+        label: "Qwen3.6 Plus".into(),
         transport: Transport::Anthropic {
             base_url: url,
             client_profile: muta_contracts::ClientProfile::OpenCode,
@@ -1378,7 +1414,7 @@ async fn opencode_go_anthropic_wire_request_carries_session_headers() {
             dialect: Default::default(),
         },
         credentials: muta_contracts::static_credential("opencode-token"),
-        model: "minimax-m3".into(),
+        model: "qwen3.6-plus".into(),
         remote: None,
         user_overrides: None,
         prompt_cache: muta_contracts::PromptCacheCapabilities::unsupported(),
@@ -1390,9 +1426,9 @@ async fn opencode_go_anthropic_wire_request_carries_session_headers() {
     let msg = provider
         .chat(vec![Message::new(Role::User, "hello")].into())
         .await
-        .expect("opencode-go minimax provider chat must succeed")
+        .expect("opencode-go anthropic-wire provider chat must succeed")
         .message;
-    assert_eq!(msg.content, "minimax response");
+    assert_eq!(msg.content, "qwen3.6-plus response");
 }
 
 #[tokio::test]

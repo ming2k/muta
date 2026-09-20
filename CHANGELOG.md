@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Locked catalog models are now visible, not dropped** (Qoder parity with
+  the official CLI's interactive `/model` menu). The Qoder server catalog
+  lists subscription-locked models with `enable:false`; muta previously
+  discarded them, which made the picker show only the two unlocked flagships.
+  Discovered entries now keep their lock declaration as
+  `RemoteModelMetadata.picker_enabled` / `ProviderModelInfo.picker_enabled`
+  (three-valued per ADR-0230): pickers render locked models greyed-out with a
+  `locked` tag and refuse activation (web and TUI), while the fitted overlay —
+  the inference-capable registry — stays enabled-only.
+- Reverse-engineering ground truth (from the official client's encrypted
+  `catalog-v6` cache, decrypted via its embedded WASM): the server returns
+  nine scenes × 17 entries; for a free account only `qmodel_38max` and
+  `qfmodel` are enabled. The official `--list-models` prints exactly those
+  two — muta's inference surface was already in parity.
+
+### Changed
+
+- **OpenCode Go takes its catalog and routing from the OpenCode Console account
+  (ADR-0269).** Discovery now reads the authenticated
+  `GET https://opencode.ai/console/api/config`, which declares each model's wire
+  protocol (`provider.npm`) and API root (`provider.api`); inference runs against
+  the Console roots `inference/{openai/v1,anthropic/v1,google/v1beta}`. The
+  legacy zen/go relay and the keyless `models.opencode.ai` feed are removed from
+  this surface, `CatalogShape::OpencodeGo` is replaced by `OpencodeConsole`
+  (serialized `opencode-console`, invalidating cached entries through the catalog
+  identity hash), and `RemoteModelMetadata` gains an additive `endpoint` root
+  override that flows through the ADR-0259 URL algebra. Every catalog and
+  inference request carries the credential's workspace, sourced from
+  `OpencodeAuthMetadata` rather than a provider-name branch.
+  **Breaking-adjacent:** a user-declared provider in `model_providers.toml` that
+  pinned `format = "opencode-go"` as its catalog shape must be updated to
+  `opencode-console`; it now fails to load with a readable shape error.
+- **A Google request carries its credential where the surface expects it.** An
+  org-scoped console token travels in `x-goog-api-key` and the URL stays keyless;
+  a plain API key keeps the documented `?key=` query param.
+- The MiniMax baselines (`minimax-m2.5`, `m2.7`, `m3`) move from Anthropic
+  `/messages` to Chat Completions, matching what the Console account advertises.
+
+### Fixed
+
+- `opencode-go` connections signed in through OpenCode Console no longer fail
+  every model with `OpenAI HTTP 401 Unauthorized — Invalid API key`: the console
+  bearer was being sent to the retired zen/go relay. Requests now reach the
+  model, or stop at the account's own billing gate (upstream 402) when the
+  workspace has no funds.
+- A Console request that omitted its workspace no longer dies at 403 `Workspace
+  selection is required`; the org id is projected onto every wire from the
+  resolved credential.
+- OpenCode OAuth credentials stored before the org was recorded self-heal: the
+  refresh enricher refetches the workspace membership when `org_id` is absent,
+  so an existing login recovers without a re-authentication.
+
 ## [0.50.5] - 2026-10-22
 
 ### Added
