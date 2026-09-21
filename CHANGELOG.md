@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.7] - 2026-09-21
+
+### Changed
+
+- **Decoupled reasoning effort ladders from core contracts (ADR-0270).**
+  Model-specific and vendor-specific effort constants (`EFFORT_CLAUDE_*`,
+  `EFFORT_OPENAI_*`, `EFFORT_GLM_*`, `EFFORT_XAI_*`, etc.) have been removed
+  from `muta-contracts` and relocated to `muta-providers::registry::effort_ladders`.
+  `muta-contracts` retains only domain abstractions (`Effort`, `EffortLevel`) and
+  the neutral fallback `COMMON_LADDER`.
+- **Partitioned OpenCode surfaces and presets.**
+  Separated `opencode` (Console OAuth), `opencode-zen` (Zen API Key), and
+  `opencode-go` (Zen Go relay API Key) into distinct templates and baselines,
+  restoring proper credential and transport semantics across the OpenCode suite.
+
 ## [0.50.6] - 2026-09-20
 
 ### Added
@@ -7653,7 +7668,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.6...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.7...HEAD
+[0.50.7]: https://github.com/ming2k/muta/compare/v0.50.6...v0.50.7
 [0.50.6]: https://github.com/ming2k/muta/compare/v0.50.5...v0.50.6
 [0.50.5]: https://github.com/ming2k/muta/compare/v0.50.4...v0.50.5
 [0.50.4]: https://github.com/ming2k/muta/compare/v0.50.3...v0.50.4
