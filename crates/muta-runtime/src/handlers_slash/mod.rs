@@ -1,5 +1,6 @@
 //! The `AgentRequest::SlashCommand` dispatcher and domain sub-handlers.
 
+pub mod commands;
 pub mod dispatch;
 pub mod record;
 pub mod security_ops;

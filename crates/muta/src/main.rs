@@ -18,9 +18,22 @@ use cli::{CliArgs, DaemonAction, McpAction, Mode};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Worker-thread stack size for the daemon.
+///
+/// The daemon runs a deep, dynamically composed async call tree (connection →
+/// session driver → slash dispatch → handler → agent → tools → provider). Tokio
+/// workers default to a 2 MiB stack, and unoptimized (debug) builds inflate
+/// async `poll` frames because rustc does not reuse stack slots across a large
+/// state machine — a single monolithic dispatcher once needed ~1.6 MiB on its
+/// own. Size the stack deliberately so frame growth in any one handler can
+/// never abort the daemon; 8 MiB matches the Linux main-thread default and
+/// leaves ample headroom over the current worst case (~0.5 MiB).
+const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _tracing_guard = muta_runtime::startup::init_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(WORKER_STACK_BYTES)
         .enable_all()
         .build()?;
     let result = runtime.block_on(run());
