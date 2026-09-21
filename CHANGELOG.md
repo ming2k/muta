@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.8] - 2026-09-21
+
+### Added
+
+- **Golden-wire integration tests for Qoder's shaped pipeline (ADR-0271).**
+  They observe the *planned* outbound request — URL, header set, and body bytes
+  — exactly as the executor would send it, closing the gap that let the
+  0.50.5→0.50.7 phase-level tests stay green while production 404'd.
+- **OpenCode provider integration notes**
+  (`docs/explanation/opencode-provider-integration.md`): the three OpenCode
+  service surfaces, how each authenticates, the catalog and inference roots,
+  model routing, and how to re-verify the integration upstream.
+
+### Fixed
+
+- **Qoder requests 404'd after the transport-pipeline refactor (ADR-0271).**
+  The `TransportPipeline` was decorative: `prepare_body`, `sign_request`, and
+  the URL rewrite existed with zero call sites, so every Qoder request went out
+  as a flat chat-completions POST to the bare provider root. `OutboundPlan` now
+  mandates request planning and routes the shaped request through the pipeline
+  on a single send path.
+- **The daemon aborted on any slash command in debug builds.** The monolithic
+  `handlers_slash::dispatch` (1782 lines, 31 arms) compiled to a ~1.6 MiB async
+  poll frame — rustc does not reuse stack slots across a large state machine —
+  which overflowed the daemon's default 2 MiB Tokio worker stack and aborted the
+  process, surfacing as the TUI dying while "loading session <id>…". The
+  dispatcher is now a thin router plus 25 per-command handlers (worst debug
+  frame ~0.5 MiB), and the daemon sizes its worker stack explicitly (8 MiB).
+
 ## [0.50.7] - 2026-09-21
 
 ### Changed
@@ -7668,7 +7697,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.7...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.8...HEAD
+[0.50.8]: https://github.com/ming2k/muta/compare/v0.50.7...v0.50.8
 [0.50.7]: https://github.com/ming2k/muta/compare/v0.50.6...v0.50.7
 [0.50.6]: https://github.com/ming2k/muta/compare/v0.50.5...v0.50.6
 [0.50.5]: https://github.com/ming2k/muta/compare/v0.50.4...v0.50.5
