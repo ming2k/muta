@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.9] - 2026-09-21
+
 ### Added
 
 - **`deepseek-v4.1-flash` on OpenCode Go resolves with its capabilities.** No
@@ -20,6 +22,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its offline seed — Chat Completions, 1M context, image inputs, and the relay's
   `low`/`high`/`max` effort ladder — with registry tests covering every DeepSeek
   catalog id the endpoint table lists.
+- **Qoder's inference endpoint is now server-elected (ADR-0272).** The three
+  international hosts (`api1/api2/api3.qoder.sh`) are role-distinct — `api2` is
+  the security cluster and its per-cluster daily billing counter is what
+  surfaced as `403 code 110 "Billing daily count exceeded"` on muta requests
+  while the official CLI (elected `api3`) kept working. The center region map
+  (`center.qoder.sh/algo/api/v5/service/region/endpoints`, plain Bearer,
+  QoderEncoding response) is synced once per credential — riding the existing
+  uid-repair critical section for OAuth credentials and the identity mint for
+  personal-access tokens — and the decoded `inferNodes[0].url` is adopted only
+  after a strict https `*.qoder.sh` allowlist check, persisted as
+  `QoderStoredIdentity.infer_endpoint` (`serde` default keeps existing auth
+  stores). The inference signer derives its URL from the elected endpoint
+  (`RequestSignerPhase::request_url` now carries the resolved auth for exactly
+  this purpose), the catalog fetch root follows the same host, and the pinned
+  root (`api3`) remains the fallback — failure never diminishes a connection
+  (ADR-0227). A live smoke (`cargo run -p muta-providers --example
+  qoder_live_smoke`) pins the full wire end to end; scripted-server tests
+  cover election success, soft-failure fallback, plain-JSON shape-drift
+  rejection, and off-domain allowlist refusals.
 
 ### Removed
 
@@ -48,6 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a truncated fragment of the only typeable handle would read as a different
   model — and the label is never shortened to fund it. Search highlighting now
   follows the drawn column instead of whichever field matched first.
+- **The Qoder live smoke grabbed the wrong bearer.** `grab("access = ")` took
+  the first `access =` line in `auth.toml` — another provider's token (e.g. a
+  ChatGPT JWT) — poisoning the run. The grab is now scoped to the
+  `[tokens.qod]` section. (Side finding: the server accepted requests with a
+  foreign bearer, confirming COSY auth anchors on uid + machine key, which is
+  what made the cluster-level 110 diagnosable.)
 
 ## [0.50.8] - 2026-09-21
 
@@ -7739,7 +7766,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.8...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.9...HEAD
+[0.50.9]: https://github.com/ming2k/muta/compare/v0.50.8...v0.50.9
 [0.50.8]: https://github.com/ming2k/muta/compare/v0.50.7...v0.50.8
 [0.50.7]: https://github.com/ming2k/muta/compare/v0.50.6...v0.50.7
 [0.50.6]: https://github.com/ming2k/muta/compare/v0.50.5...v0.50.6
