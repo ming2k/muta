@@ -251,17 +251,43 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ConnectionTemplate {
-        id: "opencode-go",
-        label: "OpenCode Go",
-        description: "OpenCode Console subscription for cloud coding and agent models; sign in with your OpenCode account.",
+        id: "opencode",
+        label: "OpenCode",
+        description: "OpenCode Console account for coding and agent models; sign in with your OpenCode account.",
         protocol: WireProtocol::ChatCompletions,
-        models: muta_contracts::model_providers::OPENCODE_GO_MODELS,
+        models: muta_contracts::model_providers::OPENCODE_CONSOLE_MODELS,
         needs_url: false,
         url_hint: "https://opencode.ai/inference/openai/v1/chat/completions",
         needs_model: false,
         default_url: Some("https://opencode.ai/inference/openai/v1/chat/completions"),
         user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
         auth: muta_contracts::ConnectionAuth::subscription_const("opencode"),
+    },
+    ConnectionTemplate {
+        id: "opencode-go",
+        label: "OpenCode Go",
+        description: "OpenCode Go $10/mo subscription for open coding models; sign in with your OpenCode Go API key.",
+        protocol: WireProtocol::ChatCompletions,
+        models: muta_contracts::model_providers::OPENCODE_GO_MODELS,
+        needs_url: false,
+        url_hint: "https://opencode.ai/zen/go/v1/chat/completions",
+        needs_model: false,
+        default_url: Some("https://opencode.ai/zen/go/v1/chat/completions"),
+        user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
+        auth: muta_contracts::ConnectionAuth::ApiKey,
+    },
+    ConnectionTemplate {
+        id: "opencode-zen",
+        label: "OpenCode Zen",
+        description: "OpenCode Zen relay with pay-as-you-go billing for frontier coding models; sign in with your OpenCode API key.",
+        protocol: WireProtocol::ChatCompletions,
+        models: muta_contracts::model_providers::OPENCODE_ZEN_MODELS,
+        needs_url: false,
+        url_hint: "https://opencode.ai/zen/v1/chat/completions",
+        needs_model: false,
+        default_url: Some("https://opencode.ai/zen/v1/chat/completions"),
+        user_agent: Some(muta_contracts::client_identity::OPENCODE_USER_AGENT),
+        auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ConnectionTemplate {
         id: "openrouter",
@@ -1309,7 +1335,9 @@ mod tests {
             "Google Antigravity",
             "Kimi Code",
             "ZAI Code (CN)",
+            "OpenCode",
             "OpenCode Go",
+            "OpenCode Zen",
             "OpenRouter",
             "Qoder",
         ];
@@ -1324,6 +1352,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn opencode_zen_template_is_key_authenticated_on_the_zen_relay() {
+        let tmpl = PROVIDER_PRESETS
+            .iter()
+            .find(|t| t.id == "opencode-zen")
+            .expect("opencode-zen template offered in the chooser");
+        assert_eq!(tmpl.label, "OpenCode Zen");
+        assert_eq!(tmpl.protocol, WireProtocol::ChatCompletions);
+        assert_eq!(
+            tmpl.models,
+            muta_contracts::model_providers::OPENCODE_ZEN_MODELS
+        );
+        assert_eq!(
+            tmpl.default_url,
+            Some("https://opencode.ai/zen/v1/chat/completions")
+        );
+        assert_eq!(tmpl.auth, ConnectionAuth::ApiKey);
+        assert!(!tmpl.oauth_first(), "the Zen relay signs in with an API key");
+        assert_eq!(tmpl.fields(), vec![CustomField::Name, CustomField::Token]);
     }
 
     #[test]
@@ -1563,6 +1612,8 @@ mod tests {
                 "openai" => Some(muta_contracts::model_providers::OPENAI_BUILTIN_MODELS),
                 "openrouter" => Some(muta_contracts::model_providers::OPENROUTER_BUILTIN_MODELS),
                 "opencode-go" => Some(muta_contracts::model_providers::OPENCODE_GO_MODELS),
+                "opencode-zen" => Some(muta_contracts::model_providers::OPENCODE_ZEN_MODELS),
+                "opencode" => Some(muta_contracts::model_providers::OPENCODE_CONSOLE_MODELS),
                 "glm-cn" => Some(muta_contracts::model_providers::ZAI_CODE_MODELS),
                 "xai" => Some(muta_contracts::model_providers::XAI_BUILTIN_MODELS),
                 _ => None,

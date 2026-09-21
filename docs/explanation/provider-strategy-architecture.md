@@ -146,9 +146,9 @@ Providers implement reasoning controls differently:
   indicates hidden or summarized internal thinking.
 - **Effort Ladders**:
   - **Claude**: Discretized tiers (`Low`, `Medium`, `High`, `Max`).
-  - **Gemini**: Quantitative token budgets (`EFFORT_GEMINI_BUDGET`) or discrete
-    levels (`EFFORT_GEMINI_LEVEL`).
-  - **OpenAI**: Lowercase discrete tiers (`low`, `medium`, `high`).
+  - **Gemini**: Quantitative token budgets (`effort_ladders::GEMINI_BUDGET`) or discrete
+    levels (`effort_ladders::GEMINI_LEVEL`).
+  - **OpenAI**: Lowercase discrete tiers (`low`, `medium`, `high`, `xhigh`, `max`).
   - **Kimi**: Dynamic platform rungs read from endpoint capability arrays.
 
 The catalog clamps user-requested effort levels to the highest supported tier

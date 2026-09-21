@@ -4,6 +4,8 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
+use super::effort_ladders;
+
 pub const MODELS: &[Model] = &[
     Model {
         id: "GLM-5.2",
@@ -14,7 +16,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_GLM_5,
+        effort_levels: effort_ladders::GLM_5,
     },
     Model {
         id: "Deepseek-v4-flash",
@@ -25,7 +27,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_LOW_HIGH_MAX,
+        effort_levels: effort_ladders::LOW_HIGH_MAX,
     },
 ];
 

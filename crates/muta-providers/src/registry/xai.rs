@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// xAI Grok models over OpenAI-compatible chat completions (SuperGrok OAuth or
 /// `XAI_API_KEY`).
@@ -24,7 +24,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_XAI_GROK,
+        effort_levels: effort_ladders::XAI_GROK,
     },
     Model {
         id: "grok-4.20",
@@ -35,7 +35,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_XAI_GROK,
+        effort_levels: effort_ladders::XAI_GROK,
     },
     Model {
         id: "grok-4.3",
@@ -46,7 +46,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_XAI_GROK,
+        effort_levels: effort_ladders::XAI_GROK,
     },
     Model {
         id: "grok-build-0.1",
@@ -57,7 +57,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_XAI_GROK,
+        effort_levels: effort_ladders::XAI_GROK,
     },
 ];
 

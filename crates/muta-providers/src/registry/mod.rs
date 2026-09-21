@@ -21,10 +21,13 @@ mod chatgpt;
 mod copilot;
 mod custom_baselines;
 mod deepseek;
+pub mod effort_ladders;
 mod google;
 mod kimi;
 mod openai;
+pub(crate) mod opencode;
 pub(crate) mod opencode_go;
+pub(crate) mod opencode_zen;
 mod openrouter;
 pub(crate) mod qoder;
 mod xai;
@@ -38,7 +41,9 @@ pub use deepseek::DEEPSEEK_BUILTIN_MODELS;
 pub use google::GOOGLE_BUILTIN_MODELS;
 pub use kimi::KIMI_CODE_MODELS;
 pub use openai::OPENAI_BUILTIN_MODELS;
+pub use opencode::OPENCODE_CONSOLE_MODELS;
 pub use opencode_go::OPENCODE_GO_MODELS;
+pub use opencode_zen::OPENCODE_ZEN_MODELS;
 pub use openrouter::OPENROUTER_BUILTIN_MODELS;
 pub use xai::XAI_BUILTIN_MODELS;
 pub use zai::ZAI_CODE_MODELS;
@@ -143,7 +148,9 @@ pub const MODEL_PROVIDER_SPECS: &[ModelProviderSpec] = &[
     kimi::MODEL_PROVIDER_SPEC,
     zai::MODEL_PROVIDER_SPEC,
     qoder::MODEL_PROVIDER_SPEC,
+    opencode::MODEL_PROVIDER_SPEC,
     opencode_go::MODEL_PROVIDER_SPEC,
+    opencode_zen::MODEL_PROVIDER_SPEC,
     antigravity_oauth::MODEL_PROVIDER_SPEC,
 ];
 
@@ -691,22 +698,45 @@ mod spec_tests {
     }
 
     #[test]
-    fn opencode_go_baselines_route_by_console_surface() {
-        // ADR-0269: the account catalog is the routing authority. On the
-        // Console surface MiniMax is openai-compatible chat, while Qwen 3.5/3.6
-        // ride the Anthropic /messages surface.
-        let (wire, endpoint, _) = route_for_model("opencode-go", "minimax-m3").unwrap();
+    fn opencode_baselines_route_by_console_surface() {
+        let (wire, endpoint, _) = route_for_model("opencode", "deepseek-v4-flash").unwrap();
         assert_eq!(wire, muta_contracts::WireProtocol::ChatCompletions);
         assert_eq!(
             endpoint,
             "https://opencode.ai/inference/openai/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn opencode_go_baselines_route_by_zen_go_surface() {
+        let (wire, endpoint, _) = route_for_model("opencode-go", "minimax-m3").unwrap();
+        assert_eq!(wire, muta_contracts::WireProtocol::AnthropicMessages);
+        assert_eq!(
+            endpoint,
+            "https://opencode.ai/zen/go/v1/messages"
+        );
         let (wire, endpoint, _) = route_for_model("opencode-go", "qwen3.6-plus").unwrap();
         assert_eq!(wire, muta_contracts::WireProtocol::AnthropicMessages);
         assert_eq!(
             endpoint,
-            "https://opencode.ai/inference/anthropic/v1/messages"
+            "https://opencode.ai/zen/go/v1/messages"
         );
+        let (wire, endpoint, _) = route_for_model("opencode-go", "glm-5.2").unwrap();
+        assert_eq!(wire, muta_contracts::WireProtocol::ChatCompletions);
+        assert_eq!(
+            endpoint,
+            "https://opencode.ai/zen/go/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn opencode_zen_baselines_route_by_zen_surface() {
+        let (wire, endpoint, _) = route_for_model("opencode-zen", "claude-sonnet-4-6").unwrap();
+        assert_eq!(wire, muta_contracts::WireProtocol::AnthropicMessages);
+        assert_eq!(endpoint, "https://opencode.ai/zen/v1/messages");
+        let (wire, endpoint, _) = route_for_model("opencode-zen", "glm-5.2").unwrap();
+        assert_eq!(wire, muta_contracts::WireProtocol::ChatCompletions);
+        assert_eq!(endpoint, "https://opencode.ai/zen/v1/chat/completions");
     }
 
     #[test]

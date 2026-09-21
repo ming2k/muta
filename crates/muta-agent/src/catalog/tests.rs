@@ -629,8 +629,6 @@ fn deepseek_route_is_the_responses_transport() {
 
 #[test]
 fn opencode_go_routes_models_by_wire_format() {
-    // The Console surface serves models over different wire formats; the
-    // derivation routes each by its registered (or catalog-advertised) format.
     let go = instance("opencode-go", Some("opencode-go"));
     let glm = derive_channel(
         &go,
@@ -641,8 +639,8 @@ fn opencode_go_routes_models_by_wire_format() {
     )
     .unwrap();
     assert!(
-        matches!(&glm.transport, Transport::OpenAi { base_url, client_profile, .. } if base_url == "https://opencode.ai/inference/openai/v1/chat/completions" && *client_profile == muta_contracts::ClientProfile::OpenCode),
-        "glm-5.2 must route to OpenAI chat-completions with OpenCode client profile"
+        matches!(&glm.transport, Transport::OpenAi { base_url, client_profile, .. } if base_url == "https://opencode.ai/zen/go/v1/chat/completions" && *client_profile == muta_contracts::ClientProfile::OpenCode),
+        "glm-5.2 must route to OpenAI chat-completions on zen/go relay with OpenCode client profile"
     );
     let minimax = derive_channel(
         &go,
@@ -653,8 +651,8 @@ fn opencode_go_routes_models_by_wire_format() {
     )
     .unwrap();
     assert!(
-        matches!(&minimax.transport, Transport::OpenAi { base_url, .. } if base_url == "https://opencode.ai/inference/openai/v1/chat/completions"),
-        "minimax-m3 is openai-compatible on the Console surface (ADR-0269)"
+        matches!(&minimax.transport, Transport::Anthropic { base_url, .. } if base_url == "https://opencode.ai/zen/go/v1/messages"),
+        "minimax-m3 must route to Anthropic /messages surface on zen/go relay"
     );
     let qwen = derive_channel(
         &go,
@@ -665,12 +663,47 @@ fn opencode_go_routes_models_by_wire_format() {
     )
     .unwrap();
     assert!(
-        matches!(&qwen.transport, Transport::Anthropic { base_url, .. } if base_url == "https://opencode.ai/inference/anthropic/v1/messages"),
-        "qwen3.6-plus must route to the Anthropic /messages surface"
+        matches!(&qwen.transport, Transport::Anthropic { base_url, .. } if base_url == "https://opencode.ai/zen/go/v1/messages"),
+        "qwen3.6-plus must route to the Anthropic /messages surface on zen/go relay"
     );
-    // route_for_model agrees (the standalone resolver used by the sync).
     assert_eq!(
         route_for_model("opencode-go", "qwen3.6-plus").map(|(p, b, _)| (p, b)),
+        Some((
+            WireProtocol::AnthropicMessages,
+            "https://opencode.ai/zen/go/v1/messages".to_string()
+        ))
+    );
+}
+
+#[test]
+fn opencode_console_routes_models_by_wire_format() {
+    let console = instance("opencode", Some("opencode"));
+    let deepseek = derive_channel(
+        &console,
+        "deepseek-v4-flash",
+        &RemoteCatalogCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&deepseek.transport, Transport::OpenAi { base_url, client_profile, .. } if base_url == "https://opencode.ai/inference/openai/v1/chat/completions" && *client_profile == muta_contracts::ClientProfile::OpenCode),
+        "deepseek-v4-flash must route to OpenAI chat-completions on Console inference surface"
+    );
+    let claude = derive_channel(
+        &console,
+        "claude-sonnet-4-6",
+        &RemoteCatalogCache::default(),
+        &RouteSettingsStore::default(),
+        &Credentials::default(),
+    )
+    .unwrap();
+    assert!(
+        matches!(&claude.transport, Transport::Anthropic { base_url, .. } if base_url == "https://opencode.ai/inference/anthropic/v1/messages"),
+        "claude-sonnet-4-6 must route to the Anthropic /messages surface on Console inference surface"
+    );
+    assert_eq!(
+        route_for_model("opencode", "claude-sonnet-4-6").map(|(p, b, _)| (p, b)),
         Some((
             WireProtocol::AnthropicMessages,
             "https://opencode.ai/inference/anthropic/v1/messages".to_string()
@@ -1878,19 +1911,19 @@ fn provider_dialect_rejects_incompatible_remote_protocol_without_panicking() {
 fn provider_dialect_selects_endpoint_after_remote_protocol_override() {
     let _sandbox = sandboxed_paths();
     assert_eq!(
-        muta_providers::model_provider_spec("opencode-go")
+        muta_providers::model_provider_spec("opencode")
             .unwrap()
-            .model_protocol("glm-5.3"),
+            .model_protocol("glm-5.2"),
         WireProtocol::ChatCompletions
     );
-    let conn = instance("endpoint-order", Some("opencode-go"));
+    let conn = instance("endpoint-order", Some("opencode"));
     let mut cache = RemoteCatalogCache::default();
     cache
         .remote_metadata
         .entry(conn.name.clone())
         .or_default()
         .insert(
-            "glm-5.3".into(),
+            "glm-5.2".into(),
             muta_contracts::RemoteModelMetadata {
                 protocol: Some(WireProtocol::AnthropicMessages),
                 ..Default::default()
@@ -1898,7 +1931,7 @@ fn provider_dialect_selects_endpoint_after_remote_protocol_override() {
         );
     let channel = derive_channel(
         &conn,
-        "glm-5.3",
+        "glm-5.2",
         &cache,
         &RouteSettingsStore::default(),
         &Credentials::default(),
@@ -1915,7 +1948,7 @@ fn catalog_advertised_root_replaces_the_compiled_spec_route() {
     // ADR-0269: a per-model `endpoint` root from the account catalog overrides
     // the spec's route, with the suffix still appended by the ADR-0259 algebra.
     let _sandbox = sandboxed_paths();
-    let conn = instance("root-override", Some("opencode-go"));
+    let conn = instance("root-override", Some("opencode"));
     let mut cache = RemoteCatalogCache::default();
     cache
         .remote_metadata

@@ -31,41 +31,27 @@
 //! [`Effort`] controls **depth only** and is orthogonal to the reasoning on/off
 //! switch ([`crate::reasoning::ReasoningMode`]); see [`crate::reasoning`].
 //!
-//! # Layer B — baseline value-sets (the `EFFORT_*` consts below)
+//! # Layer B — model capability ladders and discovery
 //!
 //! [`Effort`] is the *vocabulary*; a model still needs to know *which rungs it
 //! accepts*. That per-model ladder is a **capability**, and — like every other
 //! capability (context window, reasoning, vision) — it resolves through one
-//! precedence chain (ADR-0065):
+//! precedence chain (ADR-0065, ADR-0270):
 //!
 //! ```text
 //! live discovery (a preset whose RemoteCatalogSource carries effort tiers)
 //!        ↓  only Kimi & Copilot advertise tiers here
-//! static baseline  ←  the EFFORT_* consts in this module
+//! static baseline  ←  model capability ladders in `muta-providers::registry::effort_ladders`
 //!        ↓  the compiled-in fallback when upstream advertises nothing
-//! &[]  (non-reasoning model, or a protocol with no depth field)
+//! COMMON_LADDER / &[]  (generic conservative fallback / non-reasoning model)
 //! ```
 //!
-//! **The consts are baselines, never the authority when upstream advertises.**
-//! Only two providers advertise effort tiers in their live `/models`
-//! (`think_efforts.valid_efforts` for Kimi K3, `supports.reasoning_effort` for
-//! Copilot); for them the live list wins and the const is just the seed before
-//! the first fetch. Every other provider's `/models` is a bare `{id, object,
-//! owned_by}` list with **no capability fields** — for them the const *is* the
-//! effective ladder, sourced from that provider's prose docs. A const's doc
-//! states which case applies, with a citation, so a maintainer never mistakes a
-//! baseline for a live-advertised authority.
+//! Specific model family capability ladders (`CLAUDE_*`, `OPENAI_GPT_*`, `GLM_*`, etc.)
+//! are housed in the provider registry (`muta-providers::registry::effort_ladders`).
+//! This module defines only the universal abstract vocabulary and the vendor-neutral
+//! conservative fallback [`COMMON_LADDER`].
 //!
-//! The consts are named by the **family whose models share a value-set**
-//! (`EFFORT_CLAUDE_FULL`, `EFFORT_OPENAI_GPT_5_6`, `EFFORT_GEMINI_LEVEL` …)
-//! because the value-set genuinely varies per family even within one API spec
-//! (GPT ≤5.5 tops out at `xhigh`, GPT-5.6 adds `max`; Gemini 3.x is enum-based,
-//! Gemini 2.5 is budget-based). A rung-set shared unchanged across families
-//! gets a rung-set name (`EFFORT_LOW_HIGH_MAX`, `EFFORT_COMMON`) rather than a
-//! duplicated brand alias — split into per-family consts only when the sets
-//! actually diverge (YAGNI).
-//!
-//! **The vocabulary is open, not closed.** The seven rungs are the words
+//! **The vocabulary is open, not closed.** The rungs are the words
 //! providers use, not a ceiling: a provider may advertise a tier the vocabulary
 //! does not name. [`EffortLevel`] is the open companion type — `Known(Effort)`
 //! or `Other(String)` — carried on the runtime view
@@ -420,132 +406,37 @@ const fn nonzero(tokens: u64) -> i64 {
 // tiers (so the baseline is just a pre-fetch seed) or advertises nothing (so
 // the baseline *is* the effective ladder, sourced from prose docs).
 
-/// **Upstream advertises nothing** — effective ladder, sourced from prose.
-/// `low`/`medium`/`high`: the conservative set for any model whose higher
-/// tiers (`xhigh`/`max`) are unknown — third-party Anthropic-compatible relays
-/// serving non-Claude models. Sending an unadvertised tier to such an upstream
-/// risks a 400, so this safe subset is the default.
-pub const EFFORT_COMMON: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High];
-
-/// **Upstream advertises nothing** — effective ladder, sourced from Anthropic's
-/// `output_config.effort` docs (platform.claude.com/docs/effort). The full
-/// `low..=max` range including `xhigh`, honored by the models that accept every
-/// tier: Claude Opus 4.8 / 4.7 (and Fable 5 / Mythos 5). `xhigh` is *not*
-/// universal — Opus/Sonnet 4.6 reject it (use [`EFFORT_CLAUDE_NO_XHIGH`]).
-pub const EFFORT_CLAUDE_FULL: &[Effort] = &[
-    Effort::Low,
-    Effort::Medium,
-    Effort::High,
-    Effort::Xhigh,
-    Effort::Max,
-];
-
-/// **Upstream advertises nothing** — effective ladder, sourced from Anthropic's
-/// effort docs. `low`/`medium`/`high`/`max`: Claude Sonnet 4.6 and Opus 4.6,
-/// which honor `max` but **not** `xhigh` (that is limited to Opus 4.8 / 4.7 and
-/// the Fable/Mythos line). Requesting `xhigh` here clamps down to `high`.
-pub const EFFORT_CLAUDE_NO_XHIGH: &[Effort] =
-    &[Effort::Low, Effort::Medium, Effort::High, Effort::Max];
-
-/// **Upstream advertises nothing** — effective ladder, sourced from OpenAI's
-/// reasoning guide (developers.openai.com/api/docs/guides/reasoning). GPT ≤5.5:
-/// `none`/`minimal`/`low`/`medium`/`high`/`xhigh`. `max` is **not** a value this
-/// tier accepts — GPT-5.6 ([`EFFORT_OPENAI_GPT_5_6`]) is the first to add it.
-pub const EFFORT_OPENAI_GPT: &[Effort] = &[
-    Effort::None,
-    Effort::Minimal,
-    Effort::Low,
-    Effort::Medium,
-    Effort::High,
-    Effort::Xhigh,
-];
-
-/// **Upstream advertises nothing** — effective ladder, sourced from OpenAI's
-/// reasoning guide. GPT-5.6 (Sol/Terra/Luna): the first OpenAI family to expose
-/// `max`. Earlier GPT-5.x ([`EFFORT_OPENAI_GPT`]) top out at `xhigh`.
-pub const EFFORT_OPENAI_GPT_5_6: &[Effort] = &[
-    Effort::None,
-    Effort::Minimal,
-    Effort::Low,
-    Effort::Medium,
-    Effort::High,
-    Effort::Xhigh,
-    Effort::Max,
-];
-
-/// Effective ladder for OpenAI GPT-6 (Astra): `low`/`medium`/`high`/`xhigh`/`max`/`ultra`.
-pub const EFFORT_OPENAI_GPT_6: &[Effort] = &[
-    Effort::Low,
-    Effort::Medium,
-    Effort::High,
-    Effort::Xhigh,
-    Effort::Max,
-    Effort::Ultra,
-];
-
-/// **Upstream advertises nothing** — effective ladder, sourced from xAI's
-/// reasoning docs (docs.x.ai/developers/model-capabilities/text/reasoning).
-/// Grok 4.x: `none`/`low`/`medium`/`high` (4.3 honors `none`; 4.5+ cannot
-/// disable reasoning).
-pub const EFFORT_XAI_GROK: &[Effort] = &[Effort::None, Effort::Low, Effort::Medium, Effort::High];
-
-/// `low`/`high`/`max` — a rung set shared unchanged across two families, so it
-/// gets a rung-set name rather than a duplicated brand alias (split into
-/// per-family consts only if the sets ever diverge). The two families differ in
-/// **how their ladders are resolved**:
+/// Universal conservative fallback ladder: `low`/`medium`/`high` (ADR-0270).
 ///
-/// - **Moonshot Kimi K3** (`k3`) — **upstream advertises** tiers via
-///   `think_efforts.valid_efforts` on its live `/models`
-///   (platform.kimi.ai/docs/api/models-overview). This const is the pre-fetch
-///   **seed**; `register_fitted_models` (ADR-0065) refreshes it from the live
-///   list at startup. A valid catalog that omits K3 removes that model from the
-///   connection; a fetch failure retains the last valid result. K3 always
-///   reasons; depth is tunable (default `max`).
-/// - **DeepSeek** (`deepseek-v4-pro` / `-flash`) — **upstream advertises
-///   nothing**: its `/models` is a bare `{id, object, owned_by}` list
-///   (api-docs.deepseek.com/api/list-models), so this const *is* the effective
-///   ladder, sourced from the chat-completions request-schema enum
-///   (api-docs.deepseek.com/api/create-chat-completion: `low`/`high`/`max`,
-///   default `high`; `medium`/`xhigh` are compat aliases that remap to `high`).
-pub const EFFORT_LOW_HIGH_MAX: &[Effort] = &[Effort::Low, Effort::High, Effort::Max];
-
-/// **Upstream advertises nothing** — effective ladder, sourced from Z.AI's
-/// chat-completion reference (docs.z.ai/api-reference/llm/chat-completion).
-/// GLM-5.2 / GLM-5.3 — the GLM models that honor `reasoning_effort` (default `max`);
-/// GLM-4.x uses a `thinking` on/off object with no depth field, so they keep an
-/// empty ladder. Z.AI maps compat rungs (`low`/`medium`→`high`, `xhigh`→`max`,
-/// `none`/`minimal`→skip thinking), making `low`/`high`/`xhigh`/`max` the
-/// effective depth set.
-pub const EFFORT_GLM_5: &[Effort] = &[Effort::Low, Effort::High, Effort::Xhigh, Effort::Max];
-
-/// **Upstream advertises nothing** — effective ladder, sourced from Google's
-/// thinking docs (ai.google.dev/gemini-api/docs/generate-content/thinking).
-/// Gemini **3.x** maps onto `thinkingConfig.thinkingLevel`: exactly
-/// `minimal`/`low`/`medium`/`high` — no `none`/`xhigh`/`max`, and it cannot
-/// fully disable thinking (`minimal` is the floor; Gemini 3.1 Pro does not even
-/// support `minimal`, clamping up to `low`). A `max`/`xhigh` request clamps
-/// down to `high`.
-pub const EFFORT_GEMINI_LEVEL: &[Effort] =
-    &[Effort::Minimal, Effort::Low, Effort::Medium, Effort::High];
-
-/// **Upstream advertises nothing** — effective ladder, sourced from Google's
-/// thinking docs. Gemini **2.5** maps onto a `thinkingConfig.thinkingBudget`
-/// integer bucket (Flash: `0`–`24576`, Pro: `128`–`32768`, `-1` = dynamic),
-/// translated from each [`Effort`] rung by [`Effort::gemini_thinking_budget`].
-/// `None` is deliberately excluded: `0` (off) is honored by Flash but rejected
-/// by Pro (floor `128`), so off is model-specific and handled in the protocol
-/// layer rather than advertised here.
-pub const EFFORT_GEMINI_BUDGET: &[Effort] = &[
-    Effort::Minimal,
-    Effort::Low,
-    Effort::Medium,
-    Effort::High,
-    Effort::Max,
-];
+/// Safe default subset for any model whose deeper tiers (`xhigh`/`max`) are
+/// unknown. Concrete vendor/model family capability ladders are maintained in
+/// `muta-providers::registry::effort_ladders`.
+pub const COMMON_LADDER: &[Effort] = &[Effort::Low, Effort::Medium, Effort::High];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_FULL: &[Effort] = &[
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::Xhigh,
+        Effort::Max,
+    ];
+    const TEST_GAPPED: &[Effort] = &[Effort::Low, Effort::High, Effort::Max];
+    const TEST_LEVEL: &[Effort] = &[
+        Effort::Minimal,
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+    ];
+    const TEST_GLM: &[Effort] = &[
+        Effort::Low,
+        Effort::High,
+        Effort::Xhigh,
+        Effort::Max,
+    ];
 
     #[test]
     fn parse_round_trips() {
@@ -572,45 +463,39 @@ mod tests {
     #[test]
     fn clamp_downgrades_unsupported_tier() {
         // xhigh on a model that tops out at high → high.
-        assert_eq!(Effort::Xhigh.clamp_to(EFFORT_COMMON), Effort::High);
+        assert_eq!(Effort::Xhigh.clamp_to(COMMON_LADDER), Effort::High);
         // max on a full-tier model stays max.
-        assert_eq!(Effort::Max.clamp_to(EFFORT_CLAUDE_FULL), Effort::Max);
+        assert_eq!(Effort::Max.clamp_to(TEST_FULL), Effort::Max);
         // low is honored everywhere.
-        assert_eq!(Effort::Low.clamp_to(EFFORT_COMMON), Effort::Low);
+        assert_eq!(Effort::Low.clamp_to(COMMON_LADDER), Effort::Low);
     }
 
     #[test]
     fn clamp_snaps_up_to_shallowest_supported_tier() {
-        // Kimi K3's ladder skips `medium`: a legacy `medium` override snaps
-        // up to `low` rather than emitting an unsupported wire value.
-        assert_eq!(Effort::Medium.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::Low);
-        // high is on K3's ladder and stays; max is honored too.
-        assert_eq!(Effort::High.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::High);
-        assert_eq!(Effort::Max.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::Max);
+        // A ladder that skips `medium`: a `medium` override snaps up to `low`.
+        assert_eq!(Effort::Medium.clamp_to(TEST_GAPPED), Effort::Low);
+        // high is on the ladder and stays; max is honored too.
+        assert_eq!(Effort::High.clamp_to(TEST_GAPPED), Effort::High);
+        assert_eq!(Effort::Max.clamp_to(TEST_GAPPED), Effort::Max);
         // An empty ladder keeps the historical wire-default fallback.
         assert_eq!(Effort::Low.clamp_to(&[]), Effort::High);
     }
 
     #[test]
-    fn gemini_level_ladder_clamps_deep_rungs_down() {
-        // Gemini 3.x tops out at `high`; xhigh/max clamp down, never escape.
-        assert_eq!(Effort::Max.clamp_to(EFFORT_GEMINI_LEVEL), Effort::High);
-        assert_eq!(Effort::Xhigh.clamp_to(EFFORT_GEMINI_LEVEL), Effort::High);
-        // minimal is the floor on most 3.x models and is honored.
-        assert_eq!(
-            Effort::Minimal.clamp_to(EFFORT_GEMINI_LEVEL),
-            Effort::Minimal
-        );
+    fn level_ladder_clamps_deep_rungs_down() {
+        // Level ladder tops out at `high`; xhigh/max clamp down, never escape.
+        assert_eq!(Effort::Max.clamp_to(TEST_LEVEL), Effort::High);
+        assert_eq!(Effort::Xhigh.clamp_to(TEST_LEVEL), Effort::High);
+        // minimal is the floor and is honored.
+        assert_eq!(Effort::Minimal.clamp_to(TEST_LEVEL), Effort::Minimal);
     }
 
     #[test]
-    fn deepseek_and_glm_ladders_clamp() {
-        // DeepSeek maps medium→high (its ladder skips medium), xhigh→high.
-        assert_eq!(Effort::Medium.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::Low);
-        assert_eq!(Effort::Xhigh.clamp_to(EFFORT_LOW_HIGH_MAX), Effort::High);
-        // GLM-5.2 honors xhigh (Z.AI maps xhigh→max, but xhigh is on-ladder).
-        assert_eq!(Effort::Xhigh.clamp_to(EFFORT_GLM_5), Effort::Xhigh);
-        assert_eq!(Effort::Medium.clamp_to(EFFORT_GLM_5), Effort::Low);
+    fn gapped_ladders_clamp() {
+        assert_eq!(Effort::Medium.clamp_to(TEST_GAPPED), Effort::Low);
+        assert_eq!(Effort::Xhigh.clamp_to(TEST_GAPPED), Effort::High);
+        assert_eq!(Effort::Xhigh.clamp_to(TEST_GLM), Effort::Xhigh);
+        assert_eq!(Effort::Medium.clamp_to(TEST_GLM), Effort::Low);
     }
 
     #[test]

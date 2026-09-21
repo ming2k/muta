@@ -433,7 +433,11 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
         // surface, and the remaining openai-compatible set (GLM/Kimi/DeepSeek/
         // MiniMax/…) over chat completions. All surfaces share one console
         // bearer credential, scoped to a workspace by `x-opencode-org-id`.
-        "opencode-go" => ("OpenCode Go", "OpenCode Console subscription (multi-model)"),
+        "opencode" => ("OpenCode", "OpenCode Console account (multi-model)"),
+        // OpenCode Zen — the key-authenticated public relay surface
+        // (`/zen/v1`), distinct from the account-scoped Console surface above.
+        "opencode-zen" => ("OpenCode Zen", "OpenCode Zen relay (API key)"),
+        "opencode-go" => ("OpenCode Go", "OpenCode Go relay (API key)"),
         // Anthropic — Claude family over the `/messages` API (configurable base
         // URL; defaults to the official endpoint).
         "anthropic" => ("Anthropic", "Claude models"),

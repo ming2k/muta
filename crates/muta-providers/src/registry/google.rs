@@ -1,10 +1,9 @@
 //! The built-in `google` provider preset: the native Google API, one key.
 
-use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// The Gemini model ids the built-in `google` provider serves (native Google
 /// API, one key). Each id exists in the model registry. The set is the
@@ -32,7 +31,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.7-flash",
@@ -43,7 +42,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.5-flash",
@@ -54,7 +53,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-pro-preview",
@@ -65,7 +64,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-flash-preview",
@@ -76,7 +75,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.1-pro-preview",
@@ -87,7 +86,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         // Custom-tools variant of 3.1 Pro Preview; serves the same REST surface.
@@ -99,7 +98,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-2.5-flash",
@@ -110,7 +109,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_BUDGET,
+        effort_levels: effort_ladders::GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-pro",
@@ -121,7 +120,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_BUDGET,
+        effort_levels: effort_ladders::GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-flash-lite",

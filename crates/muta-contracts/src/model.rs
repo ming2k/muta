@@ -122,11 +122,8 @@ pub struct Model {
     /// The reasoning-effort levels this model honors, ascending. Used as the
     /// clamp range when a user requests an effort the model doesn't support.
     /// `&[]` means effort control does not apply (non-reasoning models, or
-    /// protocols without an effort field). First-party Claude models carry
-    /// [`crate::effort::EFFORT_CLAUDE_FULL`]; models behind
-    /// Anthropic-compatible relays with unknown effort support carry
-    /// [`crate::effort::EFFORT_COMMON`] (conservative); non-reasoning / non-
-    /// Anthropic-protocol models carry `&[]`.
+    /// protocols without an effort field). Models with unknown effort tiers
+    /// default to [`crate::effort::COMMON_LADDER`]; non-reasoning models carry `&[]`.
     pub effort_levels: &'static [crate::effort::Effort],
 }
 
@@ -1113,7 +1110,7 @@ mod tests {
             vision: true,
             protocol: WireProtocol::ChatCompletions,
             model_guidance: "",
-            effort_levels: crate::effort::EFFORT_COMMON,
+            effort_levels: crate::effort::COMMON_LADDER,
         },
         Model {
             id: "fixture-beta",
@@ -1154,7 +1151,7 @@ mod tests {
         // writes are process-global), so assert the baseline value only when
         // no override landed; the override case is covered there.
         assert!(
-            m.effort_levels == crate::effort::EFFORT_COMMON
+            m.effort_levels == crate::effort::COMMON_LADDER
                 || m.effort_levels == [crate::effort::Effort::Max].as_slice(),
             "unexpected ladder: {:?}",
             m.effort_levels

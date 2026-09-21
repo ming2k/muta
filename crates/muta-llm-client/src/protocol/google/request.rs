@@ -52,9 +52,8 @@ pub enum GoogleThinking {
 /// this Gemini model expects, clamping it to the model's supported levels.
 ///
 /// The model's **effort ladder** decides which surface applies: a
-/// `thinkingLevel` ladder ([`muta_contracts::effort::EFFORT_GEMINI_LEVEL`]) maps each rung
-/// to a level enum; a `thinkingBudget` ladder
-/// ([`muta_contracts::effort::EFFORT_GEMINI_BUDGET`]) maps each rung to a token bucket
+/// `thinkingLevel` ladder (e.g. `minimal..=high`) maps each rung
+/// to a level enum; a `thinkingBudget` ladder (including `max`) maps each rung to a token bucket
 /// (the bucket cap is `max_budget`, e.g. `24576` for Gemini 2.5 Flash or
 /// `32768` for Pro). Returns `None` when there is nothing to stamp — an empty
 /// ladder (non-reasoning / unknown model) or an unset override — leaving the
@@ -1086,8 +1085,14 @@ mod tests {
     fn resolve_thinking_level_for_gemini_3x() {
         // Gemini 3.x uses a level ladder; each rung maps to thinkingLevel,
         // clamping down from unsupported depths.
-        use muta_contracts::effort::{EFFORT_GEMINI_LEVEL, Effort};
-        let level: Vec<muta_contracts::EffortLevel> = EFFORT_GEMINI_LEVEL
+        use muta_contracts::effort::Effort;
+        let gemini_level: &[Effort] = &[
+            Effort::Minimal,
+            Effort::Low,
+            Effort::Medium,
+            Effort::High,
+        ];
+        let level: Vec<muta_contracts::EffortLevel> = gemini_level
             .iter()
             .copied()
             .map(Into::into)
@@ -1113,8 +1118,15 @@ mod tests {
     fn resolve_thinking_budget_for_gemini_2_5() {
         // Gemini 2.5 uses a budget ladder; rungs map to token buckets against
         // the model's max (Flash: 24576).
-        use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, Effort};
-        let budget: Vec<muta_contracts::EffortLevel> = EFFORT_GEMINI_BUDGET
+        use muta_contracts::effort::Effort;
+        let gemini_budget: &[Effort] = &[
+            Effort::Minimal,
+            Effort::Low,
+            Effort::Medium,
+            Effort::High,
+            Effort::Max,
+        ];
+        let budget: Vec<muta_contracts::EffortLevel> = gemini_budget
             .iter()
             .copied()
             .map(Into::into)

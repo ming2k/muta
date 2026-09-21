@@ -292,18 +292,18 @@ impl RawConnection {
 }
 
 /// ADR-0268: OpenCode Go is an OpenCode Console account surface, authenticated
-/// exclusively by the OAuth device flow. A connection persisted under the
-/// retired API-key template is rewritten on load so no key-based path lingers;
-/// its now-inert `credentials.toml` entry is left untouched (it is unreachable
-/// once `auth` is a subscription), and the connection prompts for sign-in on
-/// next activation.
+/// OpenCode Go connects to the zen/go relay using an API key (`OPENCODE_API_KEY`).
+/// Connections mistakenly configured with OpenCode Console OAuth are restored
+/// to `ApiKey` on load so they authenticate properly.
 fn migrate_connection_auth(provider: &str, auth: ConnectionAuth) -> ConnectionAuth {
-    if provider == "opencode-go" && auth == ConnectionAuth::ApiKey {
+    if provider == "opencode-go"
+        && matches!(&auth, ConnectionAuth::Subscription { provider } if provider == "opencode")
+    {
         tracing::info!(
             provider,
-            "migrating opencode-go connection to OpenCode Console OAuth (ADR-0268)"
+            "restoring opencode-go connection to ApiKey"
         );
-        ConnectionAuth::subscription("opencode")
+        ConnectionAuth::ApiKey
     } else {
         auth
     }
@@ -612,13 +612,13 @@ context_window = 500000
     }
 
     #[test]
-    fn opencode_go_api_key_connection_migrates_to_console_oauth() {
+    fn opencode_go_subscription_connection_migrates_to_api_key() {
         let raw: RawConnections = toml::from_str(
             r#"
 [[connections]]
 name = "opencode-go"
 provider = "opencode-go"
-auth = "api-key"
+auth = { type = "subscription", provider = "opencode" }
 "#,
         )
         .unwrap();
@@ -631,8 +631,8 @@ auth = "api-key"
             .unwrap();
         assert_eq!(
             conn.auth,
-            ConnectionAuth::subscription("opencode"),
-            "opencode-go must load as an OpenCode Console OAuth connection (ADR-0268)"
+            ConnectionAuth::ApiKey,
+            "opencode-go must load as an ApiKey connection"
         );
     }
 

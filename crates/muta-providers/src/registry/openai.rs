@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids the built-in `openai` provider serves over the OpenAI
 /// chat-completions API, one key (`OPENAI_API_KEY`). Mirrors OpenAI's current
@@ -28,7 +28,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_6,
+        effort_levels: effort_ladders::OPENAI_GPT_6,
     },
     // GPT-5.6 (OpenAI)
     // The 2026-06-26 flagship family with OpenAI's tier naming scheme:
@@ -36,7 +36,7 @@ pub const MODELS: &[Model] = &[
     // `gpt-5.6` is an alias that routes to `gpt-5.6-sol`. All speak the
     // standard OpenAI chat-completions API and reason via `reasoning_content`.
     // GPT-5.6 honors the `max` effort level, so these carry the 5.6-specific
-    // effort set rather than the xhigh-capped `EFFORT_OPENAI_GPT`.
+    // effort set rather than the xhigh-capped `OPENAI_GPT`.
     // OpenAI has not published the context window; use the GPT-5.5-class 1M
     // window conservatively for all three tiers and the alias.
     Model {
@@ -48,7 +48,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: effort_ladders::OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-sol",
@@ -59,7 +59,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: effort_ladders::OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-terra",
@@ -70,7 +70,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: effort_ladders::OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-luna",
@@ -81,7 +81,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: effort_ladders::OPENAI_GPT_5_6,
     },
     // GPT (OpenAI)
     // The current frontier chat family served over the OpenAI chat-completions
@@ -97,7 +97,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4",
@@ -108,7 +108,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
     Model {
         id: "gpt-5.4-mini",
@@ -119,7 +119,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
     // Legacy GPT-4o family — no longer in OpenAI's frontier chat lineup (it
     // remains only behind the TTS/transcribe specialized models) but kept
@@ -155,7 +155,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2",
@@ -166,7 +166,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2-chat-latest",
@@ -177,7 +177,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
     Model {
         id: "gpt-5.2-pro",
@@ -188,7 +188,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
 ];
 

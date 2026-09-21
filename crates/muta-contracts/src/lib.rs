@@ -94,10 +94,7 @@ pub use client_identity::{
     MUTA_USER_AGENT, OPENCODE_CLIENT_HEADERS, OPENCODE_USER_AGENT, OPENCODE_VERSION,
 };
 pub mod effort;
-pub use effort::{
-    EFFORT_CLAUDE_FULL, EFFORT_CLAUDE_NO_XHIGH, EFFORT_COMMON, EFFORT_OPENAI_GPT, Effort,
-    EffortLevel,
-};
+pub use effort::{COMMON_LADDER, Effort, EffortLevel};
 pub mod reasoning;
 pub use reasoning::{ReasoningMode, ReasoningSupport};
 pub mod dynamic;

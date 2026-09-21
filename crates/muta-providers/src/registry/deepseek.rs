@@ -12,11 +12,10 @@
 //! the Responses transport. Chat-completions remains available upstream, but
 //! is no longer what the preset seeds.
 
-use muta_contracts::effort::EFFORT_LOW_HIGH_MAX;
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids the built-in `deepseek` provider serves (V4 Flash, Pro, and
 /// Flash Vision over the Responses API, one key). Each id exists in the model
@@ -37,7 +36,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: EFFORT_LOW_HIGH_MAX,
+        effort_levels: effort_ladders::LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-pro",
@@ -48,7 +47,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: EFFORT_LOW_HIGH_MAX,
+        effort_levels: effort_ladders::LOW_HIGH_MAX,
     },
     Model {
         id: "deepseek-v4-flash-vision-exp",
@@ -59,7 +58,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: EFFORT_LOW_HIGH_MAX,
+        effort_levels: effort_ladders::LOW_HIGH_MAX,
     },
 ];
 

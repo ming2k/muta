@@ -1,11 +1,10 @@
 //! The `zai-code` provider template and its legacy registry preset: Z.AI /
 //! Zhipu BigModel coding-plan platform (`open.bigmodel.cn/api/coding/paas/v4`).
 
-use muta_contracts::effort::EFFORT_GLM_5;
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Z.AI's coding-plan endpoint, in display/activation
 /// order — the first entry is the initial active channel. `glm-5.3-flash`
@@ -34,7 +33,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: EFFORT_GLM_5,
+        effort_levels: effort_ladders::GLM_5,
     },
     Model {
         // GLM-5.3-Flash — the GLM-5 family's first natively multimodal model
@@ -51,7 +50,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: EFFORT_GLM_5,
+        effort_levels: effort_ladders::GLM_5,
     },
     Model {
         id: "glm-5.2",
@@ -62,7 +61,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: EFFORT_GLM_5,
+        effort_levels: effort_ladders::GLM_5,
     },
     Model {
         id: "glm-5.1",

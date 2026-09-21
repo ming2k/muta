@@ -567,7 +567,7 @@ fn non_default_effort_is_stamped_into_output_config() {
 #[test]
 fn effort_clamps_to_model_support_levels() {
     let cfg = ThinkingConfig::default().with_effort(Effort::Xhigh);
-    let common: Vec<muta_contracts::EffortLevel> = muta_contracts::EFFORT_COMMON
+    let common: Vec<muta_contracts::EffortLevel> = muta_contracts::COMMON_LADDER
         .iter()
         .copied()
         .map(Into::into)
@@ -578,7 +578,14 @@ fn effort_clamps_to_model_support_levels() {
         Some(Effort::High),
         "xhigh clamps to high on a common-only model"
     );
-    let claude: Vec<muta_contracts::EffortLevel> = muta_contracts::EFFORT_CLAUDE_FULL
+    let claude_levels: &[Effort] = &[
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::Xhigh,
+        Effort::Max,
+    ];
+    let claude: Vec<muta_contracts::EffortLevel> = claude_levels
         .iter()
         .copied()
         .map(Into::into)

@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Empty seed: the ChatGPT Subscription backend's model set is fully
 /// catalog-derived from the account's live Codex catalog
@@ -34,7 +34,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_6,
+        effort_levels: effort_ladders::OPENAI_GPT_6,
     },
     Model {
         id: "gpt-5.6-sol",
@@ -45,7 +45,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: effort_ladders::OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-terra",
@@ -56,7 +56,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: effort_ladders::OPENAI_GPT_5_6,
     },
     Model {
         id: "gpt-5.6-luna",
@@ -67,7 +67,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
+        effort_levels: effort_ladders::OPENAI_GPT_5_6,
     },
     // Non-seeded models retained solely as metadata for ids returned by the
     // account-specific live Codex catalog.
@@ -80,7 +80,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
     Model {
         id: "gpt-5.3-codex-spark",
@@ -91,7 +91,7 @@ pub const MODELS: &[Model] = &[
         vision: false,
         protocol: WireProtocol::Responses,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+        effort_levels: effort_ladders::OPENAI_GPT,
     },
 ];
 

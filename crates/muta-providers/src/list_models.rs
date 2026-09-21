@@ -584,7 +584,7 @@ impl CatalogParser for CodexCatalogParser {
 pub struct OpencodeConsoleCatalogParser;
 impl CatalogParser for OpencodeConsoleCatalogParser {
     fn parse_json(&self, json: &Value) -> Vec<DiscoveredModel> {
-        crate::registry::opencode_go::parse_config_catalog(json)
+        crate::registry::opencode::parse_config_catalog(json)
     }
 }
 

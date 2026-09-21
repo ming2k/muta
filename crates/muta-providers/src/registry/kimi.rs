@@ -4,7 +4,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Moonshot's Kimi Code endpoint, in display/activation
 /// order — the first entry is the initial active channel. `k3` is the
@@ -46,7 +46,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::ChatCompletions,
         model_guidance: "",
-        effort_levels: muta_contracts::effort::EFFORT_LOW_HIGH_MAX,
+        effort_levels: effort_ladders::LOW_HIGH_MAX,
     },
     Model {
         id: "kimi-k2.7-code",

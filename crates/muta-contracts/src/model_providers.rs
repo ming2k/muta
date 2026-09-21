@@ -71,6 +71,21 @@ pub const OPENCODE_GO_MODELS: &[&str] = &[
     "deepseek-v4-flash",
 ];
 
+pub const OPENCODE_CONSOLE_MODELS: &[&str] = &[
+    "claude-sonnet-4-6",
+    "deepseek-v4-flash",
+    "glm-5.2",
+];
+
+/// OpenCode Zen relay seeds. The key-authenticated `/zen/v1` surface publishes
+/// a public `/zen/v1/models` catalog, which is authoritative; this is the
+/// offline seed before the first refresh.
+pub const OPENCODE_ZEN_MODELS: &[&str] = &[
+    "claude-sonnet-4-6",
+    "deepseek-v4-flash",
+    "glm-5.2",
+];
+
 pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.3", "glm-5.3-flash", "glm-5.2"];
 
 pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
@@ -105,6 +120,8 @@ pub const MODEL_PROVIDER_IDS: &[&str] = &[
     "glm-cn",
     "kimi-code",
     "openrouter",
+    "opencode",
+    "opencode-zen",
     "opencode-go",
     "qoder",
 ];
@@ -144,6 +161,7 @@ pub fn model_provider_label(id: &str) -> &'static str {
         "google-antigravity" => "Google Antigravity",
         "kimi-code" => "Kimi Code",
         "openai" => "OpenAI Platform",
+        "opencode-zen" => "OpenCode Zen",
         "opencode-go" => "OpenCode Go",
         "openrouter" => "OpenRouter",
         "glm-cn" => "ZAI Code (CN)",

@@ -6,8 +6,9 @@ knob — a **depth** control, distinct from the on/off reasoning switch (see
 speaks exposes some form of it; muta abstracts them all onto one concept.
 
 This page is the single reference for the concept, the per-provider mapping,
-and how the effective ladder for a model is resolved. The implementation lives
-in `crates/muta-contracts/src/effort.rs`.
+and how the effective ladder for a model is resolved. The domain abstraction lives
+in `crates/muta-contracts/src/effort.rs` and model capability baselines in
+`crates/muta-providers/src/registry/effort_ladders.rs` (ADR-0270).
 
 ## The abstraction
 
@@ -55,7 +56,7 @@ ladder for a channel is resolved through one precedence chain (ADR-0203):
 live discovery (a preset whose RemoteCatalogSource carries effort tiers)
        │   only Kimi K3 and Copilot advertise tiers here
        ▼
-static baseline   ←   the EFFORT_* consts, the compiled-in fallback
+static baseline   ←   the `effort_ladders::*` consts in `muta-providers`, the compiled-in fallback
        │
        ▼
 &[]   (non-reasoning model, or a protocol with no depth field)
@@ -70,7 +71,7 @@ their `/models` returns:
 | Moonshot Kimi K3 | ✅ `think_efforts.valid_efforts` | pre-fetch seed (refreshed live) |
 | GitHub Copilot | ✅ `supports.reasoning_effort` | pre-fetch seed (refreshed live) |
 | OpenAI / xAI / DeepSeek / Z.AI / Google | ❌ bare `{id, object, owned_by}` list | **the effective ladder** (from prose docs) |
-| Anthropic-compatible relay (unknown model) | ❌ | conservative `EFFORT_COMMON` |
+| Anthropic-compatible relay (unknown model) | ❌ | conservative `COMMON` |
 
 So for most providers the compiled-in baseline *is* the ladder — there is no
 live value to read. DeepSeek is a clear example: its `/models` returns only an

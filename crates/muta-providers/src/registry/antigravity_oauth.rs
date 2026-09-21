@@ -1,11 +1,10 @@
 //! The `antigravity-oauth` provider preset: Google-native models served
 //! via Google Antigravity OAuth subscription.
 
-use muta_contracts::effort::{EFFORT_GEMINI_BUDGET, EFFORT_GEMINI_LEVEL};
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Models served by Google Antigravity OAuth (Google One AI Premium / Pro).
 ///
@@ -27,7 +26,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.7-flash-tiered",
@@ -38,7 +37,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.7-flash-high",
@@ -49,7 +48,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.7-flash-medium",
@@ -60,7 +59,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.7-flash-low",
@@ -71,7 +70,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.6-flash-high",
@@ -82,7 +81,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.6-flash-medium",
@@ -93,7 +92,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.6-flash-low",
@@ -104,7 +103,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3-flash-agent",
@@ -137,7 +136,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_LEVEL,
+        effort_levels: effort_ladders::GEMINI_LEVEL,
     },
     Model {
         id: "gemini-3.1-pro-high",
@@ -181,7 +180,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_BUDGET,
+        effort_levels: effort_ladders::GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-flash-thinking",
@@ -192,7 +191,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_BUDGET,
+        effort_levels: effort_ladders::GEMINI_BUDGET,
     },
     Model {
         id: "gemini-2.5-pro",
@@ -203,7 +202,7 @@ pub const MODELS: &[Model] = &[
         vision: true,
         protocol: WireProtocol::GoogleGemini,
         model_guidance: "",
-        effort_levels: EFFORT_GEMINI_BUDGET,
+        effort_levels: effort_ladders::GEMINI_BUDGET,
     },
     Model {
         id: "gemini-3.1-flash-lite",

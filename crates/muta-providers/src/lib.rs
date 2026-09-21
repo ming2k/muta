@@ -14,6 +14,7 @@ mod list_models;
 pub mod oauth;
 mod registry;
 pub mod usage;
+pub use registry::effort_ladders;
 
 pub use registry::{QoderCatalogSigning, build_catalog_signer};
 
@@ -33,8 +34,9 @@ pub use oauth::OAuthCredentialSource;
 pub use registry::{
     ANTHROPIC_BUILTIN_MODELS, ANTIGRAVITY_OAUTH_MODELS, CHATGPT_BUILTIN_MODELS,
     COPILOT_SEED_MODELS, DEEPSEEK_BUILTIN_MODELS, GOOGLE_BUILTIN_MODELS, KIMI_CODE_MODELS,
-    MODEL_PROVIDER_SPECS, ModelProviderSpec, OPENAI_BUILTIN_MODELS, OPENCODE_GO_MODELS,
-    OPENROUTER_BUILTIN_MODELS, PromptCachePolicy, RemoteCatalogSource, XAI_BUILTIN_MODELS,
+    MODEL_PROVIDER_SPECS, ModelProviderSpec, OPENAI_BUILTIN_MODELS, OPENCODE_CONSOLE_MODELS,
+    OPENCODE_GO_MODELS, OPENCODE_ZEN_MODELS, OPENROUTER_BUILTIN_MODELS, PromptCachePolicy,
+    RemoteCatalogSource, XAI_BUILTIN_MODELS,
     ZAI_CODE_MODELS, build_provider_for_channel, endpoint_for, model_provider_spec,
     register_user_declared_provider, route_for_model, sync_user_declared_providers_from_disk,
     unsupported_prompt_cache, user_declared_provider_spec,

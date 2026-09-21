@@ -6,7 +6,7 @@
 use muta_contracts::reasoning::ReasoningSupport;
 use muta_contracts::{Model, WireProtocol};
 
-use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// Per-model `max_tokens` for the Anthropic `/messages` surface. The Messages
 /// API requires `max_tokens`; capping the response at the model's registered
@@ -68,7 +68,7 @@ pub const MODELS: &[Model] = &[
         protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         // Opus 4.8 honors the full effort range including `xhigh`/`max`.
-        effort_levels: muta_contracts::effort::EFFORT_CLAUDE_FULL,
+        effort_levels: effort_ladders::CLAUDE_FULL,
     },
     Model {
         id: "claude-sonnet-4-6",
@@ -80,7 +80,7 @@ pub const MODELS: &[Model] = &[
         protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         // Sonnet 4.6 honors `max` but NOT `xhigh` (xhigh is Opus 4.8/4.7 only).
-        effort_levels: muta_contracts::effort::EFFORT_CLAUDE_NO_XHIGH,
+        effort_levels: effort_ladders::CLAUDE_NO_XHIGH,
     },
     Model {
         id: "claude-fable-5",
@@ -97,7 +97,7 @@ pub const MODELS: &[Model] = &[
         protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         // Fable 5 honors the full effort range including `xhigh`/`max`.
-        effort_levels: muta_contracts::effort::EFFORT_CLAUDE_FULL,
+        effort_levels: effort_ladders::CLAUDE_FULL,
     },
     Model {
         id: "claude-sonnet-5",
@@ -114,8 +114,8 @@ pub const MODELS: &[Model] = &[
         protocol: WireProtocol::AnthropicMessages,
         model_guidance: "",
         // Sonnet 5 honors the full range INCLUDING `xhigh` — the key difference
-        // from Sonnet 4.6, which rejects `xhigh` (see EFFORT_CLAUDE_NO_XHIGH).
-        effort_levels: muta_contracts::effort::EFFORT_CLAUDE_FULL,
+        // from Sonnet 4.6, which rejects `xhigh` (see CLAUDE_NO_XHIGH).
+        effort_levels: effort_ladders::CLAUDE_FULL,
     },
     Model {
         id: "claude-haiku-4-5-20251001",

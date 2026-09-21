@@ -891,7 +891,13 @@ mod tests {
         let capabilities = {
             let mut caps = p_caps("gemini-3.7-flash");
             caps.thinking = muta_contracts::reasoning::ReasoningSupport::ReasoningContent;
-            caps.effort_levels = muta_contracts::effort::EFFORT_GEMINI_LEVEL
+            let levels = [
+                muta_contracts::Effort::Minimal,
+                muta_contracts::Effort::Low,
+                muta_contracts::Effort::Medium,
+                muta_contracts::Effort::High,
+            ];
+            caps.effort_levels = levels
                 .iter()
                 .copied()
                 .map(Into::into)
@@ -925,7 +931,14 @@ mod tests {
         let capabilities = {
             let mut caps = p_caps("gemini-2.5-pro");
             caps.thinking = muta_contracts::reasoning::ReasoningSupport::ReasoningContent;
-            caps.effort_levels = muta_contracts::effort::EFFORT_GEMINI_BUDGET
+            let budget_levels = [
+                muta_contracts::Effort::Minimal,
+                muta_contracts::Effort::Low,
+                muta_contracts::Effort::Medium,
+                muta_contracts::Effort::High,
+                muta_contracts::Effort::Max,
+            ];
+            caps.effort_levels = budget_levels
                 .iter()
                 .copied()
                 .map(Into::into)

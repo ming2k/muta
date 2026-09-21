@@ -78,9 +78,41 @@ pub use protocol::openai::{
 /// is no collision with providers' own inventory submissions.
 #[cfg(test)]
 mod test_baselines {
+    use muta_contracts::effort::Effort;
     use muta_contracts::model::BaselineModels;
     use muta_contracts::reasoning::ReasoningSupport;
     use muta_contracts::{Model, WireProtocol};
+
+    const CLAUDE_FULL: &[Effort] = &[
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::Xhigh,
+        Effort::Max,
+    ];
+    const CLAUDE_NO_XHIGH: &[Effort] = &[
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::Max,
+    ];
+    const OPENAI_GPT: &[Effort] = &[
+        Effort::None,
+        Effort::Minimal,
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::Xhigh,
+    ];
+    const OPENAI_GPT_5_6: &[Effort] = &[
+        Effort::None,
+        Effort::Minimal,
+        Effort::Low,
+        Effort::Medium,
+        Effort::High,
+        Effort::Xhigh,
+        Effort::Max,
+    ];
 
     const CLAUDE_BASELINES: &[Model] = &[
         Model {
@@ -92,7 +124,7 @@ mod test_baselines {
             vision: true,
             protocol: WireProtocol::AnthropicMessages,
             model_guidance: "",
-            effort_levels: muta_contracts::effort::EFFORT_CLAUDE_FULL,
+            effort_levels: CLAUDE_FULL,
         },
         Model {
             id: "claude-sonnet-4-6",
@@ -103,7 +135,7 @@ mod test_baselines {
             vision: true,
             protocol: WireProtocol::AnthropicMessages,
             model_guidance: "",
-            effort_levels: muta_contracts::effort::EFFORT_CLAUDE_NO_XHIGH,
+            effort_levels: CLAUDE_NO_XHIGH,
         },
         Model {
             id: "claude-haiku-4-5-20251001",
@@ -128,7 +160,7 @@ mod test_baselines {
             vision: true,
             protocol: WireProtocol::ChatCompletions,
             model_guidance: "",
-            effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT,
+            effort_levels: OPENAI_GPT,
         },
         Model {
             id: "gpt-5.6-sol",
@@ -139,7 +171,7 @@ mod test_baselines {
             vision: true,
             protocol: WireProtocol::ChatCompletions,
             model_guidance: "",
-            effort_levels: muta_contracts::effort::EFFORT_OPENAI_GPT_5_6,
+            effort_levels: OPENAI_GPT_5_6,
         },
     ];
 
