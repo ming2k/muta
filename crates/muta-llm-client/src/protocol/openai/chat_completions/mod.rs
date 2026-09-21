@@ -140,6 +140,22 @@ impl OpenAiChatCompletionsProvider {
 
     pub fn with_dialect(mut self, dialect: muta_contracts::OpenAiChatDialect) -> Self {
         self.dialect = dialect;
+        // The default pass-through pipeline owns the plain wire's dialect-
+        // attributed headers (Copilot client headers, OpenRouter attribution);
+        // `request::headers` remains the single declaration site and is
+        // consulted per-request with the resolved bearer. A pipeline attached
+        // later via `with_pipeline` replaces this one wholesale (ADR-0271).
+        self.pipeline = Arc::new(
+            crate::pipeline::TransportPipeline::default().with_pass_through_headers(
+                move |token| {
+                    request::headers(token, dialect)
+                        .into_iter()
+                        .filter(|(name, _)| *name != "Authorization")
+                        .map(|(name, value)| (name.to_string(), value))
+                        .collect()
+                },
+            ),
+        );
         self
     }
 
@@ -172,9 +188,13 @@ impl OpenAiChatCompletionsProvider {
         }
     }
 
-    /// Apply the per-request auth + user-agent headers to a request builder.
-    /// In Qoder dialect the bearer is the exchange token and the body is the
-    /// already-QoderEncoding-encoded string (see `build_qoder_request`).
+    /// Apply the executor-owned envelope to a planned request: endpoint
+    /// client-profile headers, session affinity, and auth-derived scoping.
+    ///
+    /// Wire headers (bearer, dialect signatures) come from the pipeline's
+    /// [`OutboundPlan`](crate::pipeline::OutboundPlan) — the executor never
+    /// decides the wire shape (ADR-0271). Kept `pub(crate)` for wire tests.
+    #[allow(dead_code)]
     fn build_request_for_auth(
         &self,
         body: &serde_json::Value,
@@ -203,26 +223,12 @@ impl OpenAiChatCompletionsProvider {
         self.endpoint.attach_auth_scoped_headers(req, auth)
     }
 
-    /// Build a Qoder COSY-signed request from the chat-completions JSON.
-    ///
-    /// The request shape is driven entirely by the dialect's declared
-    /// [`DialectSurface`](muta_contracts::wire_surface::DialectSurface):
-    ///
-    /// - the URL comes from [`muta_contracts::qoder_surface::INFERENCE_PATH`]
-    ///   and its fixed query;
-    /// - the body is wrapped in the surface's declared envelope (Qoder's
-    ///   `agent_chat_generation` envelope — a flat body is rejected by the
-    ///   upstream agent router);
-    /// - the model identity is stamped into every slot the surface's
-    ///   [`ModelBinding`](muta_contracts::wire_surface::ModelBinding) list
-    ///   declares (`X-Model-Key`, `X-Model-Source`, `model_config.*`);
-    /// - the emulated client version is read from the surface, so the header,
-    ///   the signature payload, and the envelope's `business.version` agree by
-    ///   construction.
-    ///
-    /// No provider-name branch appears here; the surface table is the only
-    /// source of Qoder's wire shape (ADR-0260).
     /// Attach an external phased transport pipeline to this provider.
+    ///
+    /// The pipeline plans the complete outbound request (URL, body bytes,
+    /// header set) via [`TransportPipeline::plan_request`]; this provider only
+    /// executes plans (ADR-0271). Attaching a shaped pipeline is what turns a
+    /// plain chat-completions provider into a signed-surface one.
     pub fn with_pipeline(mut self, pipeline: crate::pipeline::TransportPipeline) -> Self {
         self.pipeline = std::sync::Arc::new(pipeline);
         self
@@ -230,6 +236,12 @@ impl OpenAiChatCompletionsProvider {
 
     /// Send a request with automatic token resolution, timeout stamping,
     /// and reactive force-refresh on HTTP 401 Unauthorized for OAuth channels.
+    ///
+    /// The wire is never built here: the attached pipeline plans the complete
+    /// outbound request ([`OutboundPlan`](crate::pipeline::OutboundPlan)) and
+    /// the executor only executes it (ADR-0271 §1). There is no branch on
+    /// wire shape — a pass-through pipeline plans the plain chat-completions
+    /// wire, a shaped pipeline plans its dialect's wire.
     async fn send_request(
         &self,
         body: &serde_json::Value,
@@ -244,9 +256,7 @@ impl OpenAiChatCompletionsProvider {
 
         self.pipeline.preflight_assert(&auth)?;
 
-        let mut req = self
-            .build_request_for_auth(body, &auth)
-            .with_telemetry(telemetry.clone());
+        let mut req = self.execute_plan(body, &auth, telemetry)?;
         if !is_stream {
             req = req.timeout(self.client.request_timeout());
         }
@@ -264,9 +274,7 @@ impl OpenAiChatCompletionsProvider {
                 .force_refresh_auth_after(&auth.token)
                 .await
                 .map_err(|error| ProviderError::authentication(self.label(), error))?;
-            let mut retry_req = self
-                .build_request_for_auth(body, &refreshed_auth)
-                .with_telemetry(telemetry.clone());
+            let mut retry_req = self.execute_plan(body, &refreshed_auth, telemetry)?;
             if !is_stream {
                 retry_req = retry_req.timeout(self.client.request_timeout());
             }
@@ -274,6 +282,45 @@ impl OpenAiChatCompletionsProvider {
         }
 
         ensure_success(response, self.label(), Some(&self.endpoint.model)).await
+    }
+
+    /// Plan the outbound request via the pipeline and stamp the executor-owned
+    /// envelope (method, user agent, client-profile headers, auth-scoped
+    /// headers, session affinity, body, telemetry).
+    ///
+    /// Header ownership split (ADR-0271 §1): the plan stamps dialect wire
+    /// headers (bearer, COSY signature set); the executor stamps endpoint
+    /// profile headers and auth-derived scoping headers — the latter are
+    /// typed-`ResolvedAuth` projections shared by every protocol, not dialect
+    /// wire.
+    ///
+    /// Public so golden-wire integration tests ([INV-WIRE-01], ADR-0271) in
+    /// downstream crates can observe the exact outbound request.
+    pub fn execute_plan(
+        &self,
+        body: &serde_json::Value,
+        auth: &ResolvedAuth,
+        telemetry: &muta_contracts::TransportTelemetry,
+    ) -> Result<crate::request::RequestBuilder, ProviderError> {
+        let plan = self
+            .pipeline
+            .plan_request(self.endpoint.base_url(), body, auth)?;
+        let seed = crate::request::RequestBuilder::new(http::Method::POST, plan.url)
+            .header(http::header::USER_AGENT, self.endpoint.user_agent());
+        let stamped = (plan.stamp_headers)(seed)?;
+        let mut req = stamped
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(plan.body);
+        for (name, value) in self.endpoint.headers() {
+            req = req.header(name, value);
+        }
+        req = self
+            .endpoint
+            .attach_session_affinity_headers(req, self.prompt_cache.routing_key());
+        Ok(self
+            .endpoint
+            .attach_auth_scoped_headers(req, auth)
+            .with_telemetry(telemetry.clone()))
     }
 }
 
@@ -734,4 +781,8 @@ mod tests {
             "wrk_workspace_1"
         );
     }
+
+    // Golden-wire tests live in muta-providers (`registry::qoder::wire_golden`)
+    // — the only crate that can reference both the executor and the Qoder wire
+    // implementation without inverting the dependency graph (ADR-0271).
 }

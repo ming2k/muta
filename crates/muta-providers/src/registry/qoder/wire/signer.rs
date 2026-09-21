@@ -270,10 +270,19 @@ impl PreflightValidator for CosyTransportSigner {
 }
 
 impl RequestSignerPhase for CosyTransportSigner {
+    fn clone_box_signer(&self) -> Box<dyn RequestSignerPhase> {
+        Box::new(self.clone())
+    }
+
+    /// The inference URL: the surface's declared path and fixed query over
+    /// the connection's base URL.
+    fn request_url(&self, base_url: &str) -> String {
+        inference_url(base_url)
+    }
+
     fn sign_request(
         &self,
         mut req: RequestBuilder,
-        signed_path: &str,
         body_bytes: &[u8],
         auth: &ResolvedAuth,
     ) -> Result<RequestBuilder, ProviderError> {
@@ -308,7 +317,7 @@ impl RequestSignerPhase for CosyTransportSigner {
             &identity_json,
             &qoder_id.uid,
             encoded_body,
-            signed_path,
+            SIGNED_PATH,
             now_secs,
         );
 

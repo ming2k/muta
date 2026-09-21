@@ -4,7 +4,7 @@ use muta_contracts::Effort;
 use muta_contracts::model::ModelCapabilities;
 use muta_contracts::wire_surface::{AgentChatSpec, IdentityValue, ModelBinding, ModelCarrier};
 use muta_contracts::ProviderError;
-use muta_llm_client::pipeline::EnvelopePhase;
+use muta_llm_client::pipeline::{EnvelopePhase, ReshapedEnvelope};
 use serde_json::{Map, Value, json};
 
 use super::super::surface::{AGENT_CHAT, COSY_VERSION, MODEL_BINDINGS};
@@ -151,7 +151,10 @@ pub fn wrap(body: &Value, spec: &AgentChatSpec, input: &EnvelopeInput<'_>) -> Va
 pub struct QoderAgentEnvelope;
 
 impl EnvelopePhase for QoderAgentEnvelope {
-    fn reshape_body(&self, body: &serde_json::Value) -> Result<serde_json::Value, ProviderError> {
+    fn reshape_body(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<ReshapedEnvelope, ProviderError> {
         let model = body.get("model").and_then(Value::as_str).unwrap_or("qoder3");
         let first_text = first_user_text(body);
         let now_ms = std::time::SystemTime::now()
@@ -177,6 +180,16 @@ impl EnvelopePhase for QoderAgentEnvelope {
             first_user_text: first_text,
         };
 
-        Ok(wrap(body, &AGENT_CHAT, &input))
+        let wrapped = wrap(body, &AGENT_CHAT, &input);
+        // One identity resolution feeds both artifacts: the body slots were
+        // just stamped from `input`, so the header carriers resolve from the
+        // same values — consistent by construction.
+        let (identity_headers, _) =
+            apply_model_bindings(MODEL_BINDINGS, &input, &mut Value::Null);
+
+        Ok(ReshapedEnvelope {
+            body: wrapped,
+            identity_headers,
+        })
     }
 }

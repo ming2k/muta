@@ -41,6 +41,9 @@ pub use registry::{
     register_user_declared_provider, route_for_model, sync_user_declared_providers_from_disk,
     unsupported_prompt_cache, user_declared_provider_spec,
 };
+/// Public: the Qoder dialect's wire surface, for golden-wire integration
+/// tests ([INV-WIRE-01], ADR-0271) and downstream dialect tooling.
+pub use registry::qoder;
 pub use usage::{
     AntigravityUsageFetcher, DeepSeekUsageFetcher, KimiUsageFetcher, OpenRouterUsageFetcher,
     ProviderUsageFetcher, SiliconFlowUsageFetcher, fetch_provider_usage,

@@ -112,14 +112,19 @@ a wire protocol and never an authentication mode. The closed id set lives in
 | `glm-cn` | `chat-completions` | standard plus ZCode identity | coding-plan key |
 | `kimi-code` | `chat-completions` | standard | coding-plan key |
 | `qoder` | `chat-completions` | Qoder | Qoder OAuth (device flow) or pasted `pt-` personal-access token |
-| `opencode-go` | Advertised per model: `chat-completions`, `responses`, `anthropic-messages`, or `google-gemini` | Console inference roots (`inference/{openai,anthropic,google}`) | OpenCode Console OAuth (device flow) |
+| `opencode` | Advertised per model: `chat-completions`, `responses`, `anthropic-messages`, or `google-gemini` | Console account inference roots (`inference/{openai,anthropic,google}`) | OpenCode Console OAuth (device flow) |
+| `opencode-zen` | `chat-completions`; the compiled baseline pins non-chat models by id | standard | `OPENCODE_API_KEY` |
+| `opencode-go` | `chat-completions`; the compiled baseline pins non-chat models by id | standard | `OPENCODE_API_KEY` |
 | `custom` | `chat-completions` (connection default; a connection may override) | standard | optional API key |
 
 Copilot's live model catalogue is authoritative for the protocol of each model.
 A Copilot model advertising an unsupported Google protocol is rejected rather
-than projected onto another API. OpenCode Go's authenticated Console catalogue
-is authoritative for both the protocol and the API root of each model, falling
-back to the registered baseline only while the account catalogue is unavailable.
+than projected onto another API. OpenCode's authenticated Console catalogue is
+authoritative for both the protocol and the API root of each model, falling back
+to the registered baseline only while the account catalogue is unavailable. The
+public OpenCode Zen and Go relay catalogues carry model ids only, so their
+per-model protocol comes from the compiled baseline; see
+[OpenCode provider integration](../explanation/opencode-provider-integration.md).
 
 ## Prompt-cache capability matrix
 
@@ -137,7 +142,7 @@ upstream service may offer.
 | Google provider models | implicit | none | reads |
 | DeepSeek provider models | implicit | none | provider-specific hits and misses |
 | Kimi Code models | implicit | none | provider-specific reads |
-| xAI, ChatGPT subscription, Copilot, GLM CN, OpenRouter, OpenCode Go, Antigravity, and `custom` routes | unsupported | none | none declared |
+| xAI, ChatGPT subscription, Copilot, GLM CN, OpenRouter, OpenCode, OpenCode Zen, OpenCode Go, Antigravity, and `custom` routes | unsupported | none | none declared |
 
 “Unsupported” means Muta sends no cache control and rejects a non-default cache
 preference for that route. It does not claim that the upstream never performs

@@ -67,5 +67,6 @@ wire-level contract with model servers, and the terminal rendering surface.
 | [Provider multi-strategy architecture](provider-strategy-architecture.md) | The six core strategy dimensions adapting muta across heterogeneous model providers and inference protocols |
 | [OAuth2 subscription providers](oauth-subscription-providers.md) | Architecture, PKCE lifecycle, token rotation, and internal protocols for subscription integrations (Antigravity, Codex, Copilot) |
 | [Qoder provider integration](qoder-provider-integration.md) | Reverse-engineering provenance, the COSY signing protocol (body codec, signature, header presence matrix), typed request identity, and the maintenance runbook for the Qoder subscription integration |
+| [OpenCode provider integration](opencode-provider-integration.md) | The three OpenCode surfaces (Console account OAuth, Zen relay key, Go relay key), their catalogs and routing authority, workspace scoping, and the maintenance runbook |
 | [Client profiles and connection emulation](client-profiles.md) | How muta models, resolves, and injects caller client profiles and companion headers across upstream inference endpoints |
 | [Guided decoding](guided-decoding.md) | Constrained decoding, FSM compilation, and chat templates — the layer that guarantees valid tool calls |

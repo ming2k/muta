@@ -44,7 +44,7 @@ pub const QODER_MODELS: &[Model] = &[
 
 inventory::submit!(muta_contracts::model::BaselineModels(QODER_MODELS));
 
-pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
+pub const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     dialect: muta_contracts::ProviderDialect::Qoder,
     protocol_roots: std::borrow::Cow::Borrowed(&[]),
     catalog_root_url: None,
@@ -63,7 +63,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
 };
 
 /// Sign a catalog request with the connection's COSY identity.
-pub(crate) fn sign_catalog_request(
+pub fn sign_catalog_request(
     identity: &QoderRequestIdentity,
     bearer: &str,
     signed_path: &str,
@@ -139,7 +139,7 @@ impl super::super::CatalogSigning for QoderCatalogSigning {
 }
 
 /// Parse Qoder's scene-keyed catalog into the requested scene's models.
-pub(crate) fn parse_scene_catalog(json: &Value, scene: &str) -> Vec<super::super::DiscoveredModel> {
+pub fn parse_scene_catalog(json: &Value, scene: &str) -> Vec<super::super::DiscoveredModel> {
     let Some(scenes) = json.as_object() else {
         return Vec::new();
     };

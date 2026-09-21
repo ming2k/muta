@@ -29,7 +29,10 @@ pub(crate) mod opencode;
 pub(crate) mod opencode_go;
 pub(crate) mod opencode_zen;
 mod openrouter;
-pub(crate) mod qoder;
+/// Public: the Qoder dialect's wire implementation is exercised by muta-llm-client's
+/// golden-wire tests ([INV-WIRE-01], ADR-0271), which need the pipeline builder
+/// and the codec's decode half.
+pub mod qoder;
 mod xai;
 mod zai;
 

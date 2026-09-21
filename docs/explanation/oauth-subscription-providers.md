@@ -152,13 +152,15 @@ prevent redundant retries.
 | **Antigravity** | Google OAuth2 PKCE | Internal `v1internal` Protobuf JSON gateway | Google Cloud Project (`cloudaicompanionProject`) |
 | **ChatGPT Codex** | OpenAI OAuth2 PKCE | Internal Responses gateway | `ChatGPT-Account-Id` tenant header |
 | **GitHub Copilot** | GitHub OAuth App | Copilot session token exchange endpoint | User token exchange |
-| **OpenCode Go** | OpenCode Console device flow (JSON) | Console inference roots, multi-protocol (`/inference/{openai,anthropic,google}`) | Workspace org header on catalog and inference |
+| **OpenCode Console** | OpenCode Console device flow (JSON) | Console inference roots, multi-protocol (`/inference/{openai,anthropic,google}`) | Workspace org header on catalog and inference |
 
-### OpenCode Go Console Device Flow
+### OpenCode Console Device Flow
 
-OpenCode Go signs in with the OpenCode Console account rather than a pasted API
-key. The grant is a JSON device-authorization flow (`client_id = opencode-cli`),
-not RFC 8628:
+The `opencode` provider signs in with the OpenCode Console account rather than a
+pasted API key. (The Zen and Go relays are separate, key-authenticated
+providers; see [OpenCode provider integration](opencode-provider-integration.md)
+for all three surfaces.) The grant is a JSON device-authorization flow
+(`client_id = opencode-cli`), not RFC 8628:
 
 - `POST https://opencode.ai/console/auth/device/code` (JSON `{client_id}`)
   returns `device_code`, `user_code`, `verification_uri_complete`, `expires_in`,
