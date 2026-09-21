@@ -309,9 +309,9 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         protocol: WireProtocol::ChatCompletions,
         models: muta_contracts::model_providers::QODER_MODELS,
         needs_url: false,
-        url_hint: "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
+        url_hint: "https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation",
         needs_model: false,
-        default_url: Some("https://api2.qoder.sh"),
+        default_url: Some("https://api3.qoder.sh"),
         user_agent: None,
         auth: muta_contracts::ConnectionAuth::subscription_const("qoder"),
     },
@@ -511,17 +511,15 @@ pub struct RankedModel {
     /// greyed-out with a `locked` tag and activation is refused — the daemon
     /// passes the provider's own declaration through (`None` = enabled).
     pub picker_enabled: bool,
-    /// The fuzzy match against the row's **rendered label** (the provider's
-    /// name when it publishes one, else the wire id), or `None` in browse mode
-    /// (empty query) — and also when the row was included only via an alias
-    /// match (its PROVIDER name, or the wire id behind a name label) rather
-    /// than the drawn label, in which case there is nothing to highlight.
-    pub m: Option<fuzzy::FuzzyMatch>,
-    /// Subsequence match against the wire model ID (`model`).
+    /// Subsequence match against the wire model ID (`model`). The renderer
+    /// highlights the ID column with these positions, and uses them for the
+    /// leading label column only when the row has no separate name to draw.
     pub match_id: Option<fuzzy::FuzzyMatch>,
-    /// Subsequence match against the human-readable model name (`name`), if present.
+    /// Subsequence match against the human-readable model name (`name`), if
+    /// present — the positions that highlight the leading label column.
     pub match_name: Option<fuzzy::FuzzyMatch>,
-    /// Subsequence match against the provider connection label (`provider_label`).
+    /// Subsequence match against the provider connection label
+    /// (`provider_label`).
     pub match_connection: Option<fuzzy::FuzzyMatch>,
 }
 
@@ -713,8 +711,6 @@ pub fn models_flat_filtered_from(
                 (id_m, name_m, conn_m)
             };
 
-            let m = match_id.clone().or_else(|| match_name.clone());
-
             candidates.push(RankedModel {
                 section: ModelSection::All,
                 provider_id: prow.id.clone(),
@@ -728,7 +724,6 @@ pub fn models_flat_filtered_from(
                 last_used_ms: info.last_used_ms,
                 context_window: info.context_window,
                 picker_enabled: info.picker_enabled.unwrap_or(true),
-                m,
                 match_id,
                 match_name,
                 match_connection,
@@ -1211,7 +1206,10 @@ mod tests {
         let rows = models_flat_filtered_from(&snapshot, "", "", "opus");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].model, "claude-opus-4-8");
-        assert!(rows[0].m.is_some(), "id match carries highlight");
+        assert!(
+            rows[0].match_id.is_some(),
+            "an id match carries the id column's highlight"
+        );
     }
 
     #[test]
@@ -1505,14 +1503,16 @@ mod tests {
     #[test]
     fn flat_fuzzy_by_provider_name_includes_its_models_unhighlighted() {
         // "relay" matches no model id but DOES match the "My Relay"
-        // provider name: that provider's models are included with `m = None`
-        // (rendered without highlight), while other providers drop out.
+        // provider name: that provider's models are included with no model
+        // match at all (rendered without highlight), while other providers
+        // drop out.
         let snapshot = sample();
         let rows = models_flat_filtered_from(&snapshot, "", "", "relay");
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.provider_id == "my-relay"));
         assert!(
-            rows.iter().all(|r| r.m.is_none()),
+            rows.iter()
+                .all(|r| r.match_id.is_none() && r.match_name.is_none()),
             "provider-name fallback rows are unhighlighted"
         );
     }
@@ -1520,9 +1520,10 @@ mod tests {
     #[test]
     fn flat_fuzzy_matches_the_name_label_and_keeps_the_id_as_an_alias() {
         // A relay's wire id (`deepseek-flash`) says nothing about "V4.1", and a
-        // name-first list leads with the name — so the query is matched against
-        // the RENDERED label and the highlight indexes that label. The id stays
-        // reachable as an alias (unhighlighted, since it is not what is drawn).
+        // name-first list leads with the name — so a name query highlights the
+        // label column. The id stays reachable as an alias, and because the id
+        // is drawn too (its own column), an id query highlights the ID column
+        // rather than leaving the row unhighlighted.
         let mut snapshot = sample();
         for prow in &mut snapshot.rows {
             if prow.id == "my-relay" {
@@ -1533,20 +1534,23 @@ mod tests {
             }
         }
 
-        // The marketed name matches the drawn label → highlighted.
+        // The marketed name matches the leading label column → highlighted.
         let rows = models_flat_filtered_from(&snapshot, "", "", "v4.1");
         assert_eq!(rows.len(), 1, "only the labelled model matches: {rows:?}");
         assert_eq!(rows[0].model, "deepseek-flash", "the id stays the identity");
         assert_eq!(rows[0].name.as_deref(), Some("DeepSeek V4.1 Flash"));
         assert!(
-            rows[0].m.is_some(),
-            "the highlight indexes the rendered label"
+            rows[0].match_name.is_some() && rows[0].match_id.is_none(),
+            "a name query highlights the label column only"
         );
 
         // The wire id finds the row and highlights the ID column.
         let rows = models_flat_filtered_from(&snapshot, "", "", "deepseek-flash");
         assert_eq!(rows.len(), 1, "the id matches: {rows:?}");
-        assert!(rows[0].match_id.is_some(), "id matches and is highlighted");
+        assert!(
+            rows[0].match_id.is_some() && rows[0].match_name.is_none(),
+            "an id query highlights the id column only"
+        );
 
         let rows = models_flat_filtered_from(&snapshot, "", "", "v9.9");
         assert!(rows.is_empty(), "no row matches: {rows:?}");

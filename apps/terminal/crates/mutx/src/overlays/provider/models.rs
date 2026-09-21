@@ -21,6 +21,16 @@ use crate::primitives::{
 use crate::providers::{ModelBodyLine, RankedModel, models_body_lines};
 use crate::render::Theme;
 
+/// The minimum columns the secondary **wire-id** column must have available
+/// before it renders at all. Below this a wire id degenerates into an
+/// unreadable fragment, and a fragment of the only string the user can type is
+/// worse than no string: the row then leads with the label alone, the mirror of
+/// a row whose provider published no label at all. The floor is deliberately
+/// above a bare fragment — `deep…` would read as a different model rather than
+/// as an abbreviation of `deepseek-flash`. (Restores the pre-multi-field-search
+/// `MIN_SUFFIX_BUDGET` floor, which the id-first column layout dropped.)
+const MIN_ID_COLUMN_WIDTH: usize = 10;
+
 /// Properties for rendering the Models modal.
 pub struct ModelsModalProps<'a> {
     pub models: &'a [RankedModel],
@@ -238,11 +248,23 @@ pub(crate) fn model_list_body(
         ))
     };
 
-    // Calculate dynamic ID column width based on the visible models
-    // to preserve tabular alignment across all rows.
+    // Identity column width, shared by every row so the list stays tabular.
+    // Sizing keys on the *rendered label* — the provider's own name when it
+    // publishes one, else the wire id — because that is what leads the row.
+    // The label owns this region; the wire id it names is anchored in the
+    // column beside it, and that column drops for the whole list when the
+    // region cannot fund a readable id (docs/reference/tui/modals.md:
+    // name-first, id-fallback).
     let identity_budget = (body_width * 3 / 5).max(1);
-    let max_id_len = models.iter().map(|m| m.model.width()).max().unwrap_or(20);
-    let id_col_width = max_id_len.clamp(18, identity_budget.saturating_sub(10).max(18));
+    let label_width = |m: &RankedModel| m.name.as_deref().unwrap_or(m.model.as_str()).width();
+    let max_label_len = models.iter().map(label_width).max().unwrap_or(20);
+    // Never below 18 (so a short-label list still reads as a column) and never
+    // above the region (so `clamp` cannot invert its bounds on a tiny body).
+    let label_col_cap = identity_budget.max(18);
+    let label_col_width = max_label_len.clamp(18, label_col_cap);
+    let id_col = label_col_width + 2;
+    let id_budget = identity_budget.saturating_sub(id_col);
+    let show_id_column = id_budget >= MIN_ID_COLUMN_WIDTH;
 
     for line in geometry {
         match line {
@@ -279,11 +301,31 @@ pub(crate) fn model_list_body(
                     tag
                 };
 
-                // 1. Model ID: Primary column, always bold, bright.
-                let id_text = truncate_ellipsis(&rm.model, id_col_width);
-                let id_matched = match_set(rm.match_id.as_ref());
-                let id_group = RowGroup::fixed().matched_text(
-                    &id_text,
+                // 1. Provider label — the row's PRIMARY column, always bold.
+                // The provider's own name for the model (`Qwen3.8-Flash`) is
+                // what the row reads as; it falls back to the wire id when the
+                // catalog publishes no label (the stock OpenAI/Gemini case), so
+                // the column is never empty. Identity itself is unaffected by
+                // what is drawn: activation, favorites, hiding and every config
+                // surface still key on `rm.model` (docs/reference/tui/modals.md
+                // "name-first, id-fallback"; ADR-0131 — the display name is
+                // presentation, never the wire value).
+                let display = rm.name.as_deref().unwrap_or(rm.model.as_str());
+                let distinct_name = rm.name.as_deref().filter(|name| *name != rm.model.as_str());
+                let label_text = truncate_ellipsis(display, label_col_width);
+                // Highlighting indexes what is drawn, per column: a labelled row
+                // highlights its name via `match_name`, an unlabelled one its id
+                // via `match_id`. A row kept alive by the *other* field (or by
+                // the connection name) renders unhighlighted, because its
+                // `match_*` is then `None` — never a mis-indexed `m`, whose
+                // positions belong to whichever field matched first.
+                let label_matched = match_set(if distinct_name.is_some() {
+                    rm.match_name.as_ref()
+                } else {
+                    rm.match_id.as_ref()
+                });
+                let label_group = RowGroup::fixed().matched_text(
+                    &label_text,
                     Style::default()
                         .bg(style.bg)
                         .fg(style.fg)
@@ -292,33 +334,34 @@ pub(crate) fn model_list_body(
                         .bg(style.bg)
                         .fg(if is_selected { style.fg } else { theme.brand() })
                         .add_modifier(Modifier::BOLD),
-                    &id_matched,
+                    &label_matched,
                     0,
                 );
 
-                let mut list_row = ListRow::new(style, body_width).group(id_group);
+                let mut list_row = ListRow::new(style, body_width).group(label_group);
 
-                // 2. Model Name: Secondary column, dimmed, anchored at column (id_col_width + 2).
-                let distinct_name = rm.name.as_deref().filter(|name| *name != rm.model.as_str());
-
-                let name_col = id_col_width + 2;
-                let name_budget = identity_budget.saturating_sub(name_col);
-                if let Some(name) = distinct_name
-                    && name_budget >= 6
-                {
-                    let name_text = truncate_ellipsis(name, name_budget);
-                    let name_matched = match_set(rm.match_name.as_ref());
-                    let name_group = RowGroup::column(name_col).matched_text(
-                        &name_text,
+                // 2. Wire ID — the SECONDARY column, dimmed, anchored at
+                // (label_col_width + 2), and only when a name label leads: an
+                // unlabelled row already draws the id in column 1. The id must
+                // never hide behind the name — it is the string that goes on the
+                // wire and into `hidden_models`/favorites/route settings — but
+                // it drops entirely when the identity column cannot fund a
+                // readable width, since a useless mid-word truncation of the
+                // only typeable handle is worse than its absence.
+                if distinct_name.is_some() && show_id_column {
+                    let id_text = truncate_ellipsis(&rm.model, id_budget);
+                    let id_matched = match_set(rm.match_id.as_ref());
+                    let id_group = RowGroup::column(id_col).matched_text(
+                        &id_text,
                         Style::default().bg(style.bg).fg(style.dim),
                         Style::default()
                             .bg(style.bg)
                             .fg(if is_selected { style.fg } else { theme.brand() })
                             .add_modifier(Modifier::BOLD),
-                        &name_matched,
+                        &id_matched,
                         0,
                     );
-                    list_row = list_row.group(name_group);
+                    list_row = list_row.group(id_group);
                 }
 
                 // 3. Connection Name: Starts at ratio(3, 5), dimmed, with connection match highlighting.

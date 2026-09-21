@@ -519,7 +519,11 @@ fn build_first_party_source(
     spec: &ModelProviderSpec,
     protocol: CatalogShape,
 ) -> Option<CatalogFetchSource> {
-    let base_url = spec.catalog_root().to_string();
+    // The elected endpoint when the provider's stored identity carries one
+    // (Qoder's server-issued region map, §3.1a); every other provider keeps
+    // the compiled spec root — the hook returning `None` is the ordinary path.
+    let base_url = muta_providers::catalog_root_for_connection(&connection.name)
+        .unwrap_or_else(|| spec.catalog_root().to_string());
     let client_profile = if connection.client_identity != muta_contracts::ClientIdentity::Native {
         connection.client_identity.clone()
     } else if spec.default_client_profile != muta_contracts::ClientPreset::Native {

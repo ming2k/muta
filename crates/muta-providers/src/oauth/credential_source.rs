@@ -171,7 +171,8 @@ impl OAuthCredentialSource {
         }
     }
 
-    /// Backfill a Qoder credential's empty uid, acquiring the store lock.
+    /// Backfill a Qoder credential's empty uid **and** elect the inference
+    /// endpoint, acquiring the store lock.
     ///
     /// The `resolve_auth` fast path (a live token) still needs the repair, so
     /// this wrapper takes the lock and delegates to
@@ -186,11 +187,17 @@ impl OAuthCredentialSource {
             qoder_uid = ?qoder_id.as_ref().map(|q| &q.uid),
             "QODER_ENSURE_ENTER"
         );
-        if !is_qoder || qoder_id.is_none_or(|q| !q.uid.is_empty()) {
+        if !is_qoder {
+            return Ok(stored);
+        }
+        let uid_unresolved = qoder_id.as_ref().is_none_or(|q| q.uid.is_empty());
+        let endpoint_unsynced = qoder_id.as_ref().is_some_and(|q| q.infer_endpoint.is_none());
+        if !uid_unresolved && !endpoint_unsynced {
             return Ok(stored);
         }
         let mut store = AuthStore::lock().await.map_err(|error| error.to_string())?;
-        self.ensure_qoder_uid(&mut store, stored).await
+        let stored = self.ensure_qoder_uid(&mut store, stored).await?;
+        self.ensure_qoder_endpoint(&mut store, stored).await
     }
 
     /// Backfill a Qoder credential's empty uid and persist it.
@@ -231,6 +238,67 @@ impl OAuthCredentialSource {
         store.set(&self.connection_id, updated.clone());
         store.save().map_err(|error| error.to_string())?;
         Ok(updated)
+    }
+
+    /// Sync the server-elected inference endpoint once and persist it.
+    ///
+    /// `api1/api2/api3.qoder.sh` are not interchangeable (the integration
+    /// doc §3.1a: `api2` is the security cluster; the daily billing counter
+    /// that rejects inference with `403 code 110` lives there), and the
+    /// official client adopts the endpoint the center surface assigns. This
+    /// runs once per credential — an explicit `None` on the stored identity
+    /// means "not synced yet"; a successful sync persists the endpoint, and
+    /// any sync failure leaves it `None` so the pinned
+    /// `MODEL_PROVIDER_SPEC.root_url` stays authoritative (ADR-0227:
+    /// failure never diminishes a connection).
+    async fn ensure_qoder_endpoint(
+        &self,
+        store: &mut LockedAuthStore,
+        stored: TokenSet,
+    ) -> Result<TokenSet, String> {
+        if self.auth.subscription_provider() != Some("qoder") {
+            return Ok(stored);
+        }
+        let Some(mut identity) =
+            stored.get_json_attr::<crate::registry::qoder::QoderStoredIdentity>("qoder")
+        else {
+            return Ok(stored);
+        };
+        if identity.infer_endpoint.is_some() {
+            return Ok(stored);
+        }
+        let Ok(client) = crate::http::Http::control_plane() else {
+            tracing::warn!(connection = %self.connection_id, "qoder: no control-plane client for endpoint election");
+            return Ok(stored);
+        };
+        match crate::registry::qoder::elect_infer_endpoint(&client, stored.access.expose_secret())
+            .await
+        {
+            Ok(elected) => {
+                tracing::info!(
+                    connection = %self.connection_id,
+                    endpoint = %elected,
+                    "qoder: elected the inference endpoint from the center region map"
+                );
+                identity.infer_endpoint = Some(elected);
+                let mut updated = stored.clone();
+                updated.set_json_attr("qoder", &identity);
+                store.set(&self.connection_id, updated.clone());
+                store.save().map_err(|error| error.to_string())?;
+                Ok(updated)
+            }
+            Err(error) => {
+                // Non-fatal by design: the pin still routes inference. Log at
+                // debug level — a center outage must not spam the log on every
+                // resolve, and the next empty-identity repair retries.
+                tracing::debug!(
+                    connection = %self.connection_id,
+                    error = %error,
+                    "qoder: endpoint election failed; using the pinned inference root"
+                );
+                Ok(stored)
+            }
+        }
     }
 }
 

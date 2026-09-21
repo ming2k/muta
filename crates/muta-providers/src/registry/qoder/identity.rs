@@ -19,9 +19,20 @@ pub struct QoderRequestIdentity {
     pub organization_id: Option<String>,
     /// Organization tags, comma-joined in order (`Cosy-Organization-Tags`).
     pub organization_tags: Vec<String>,
+    /// The inference endpoint the server elected for this account
+    /// (`https://api*.qoder.sh`), from the center region-endpoints sync —
+    /// see the integration doc §3.1a. `None` = never synced; callers fall
+    /// back to the pinned `MODEL_PROVIDER_SPEC.root_url`.
+    pub infer_endpoint: Option<String>,
 }
 
 impl QoderRequestIdentity {
+    /// The inference root this identity carries: the elected endpoint when
+    /// one was synced, else the caller-provided (pinned) base URL.
+    pub fn infer_root<'a>(&'a self, pinned: &'a str) -> &'a str {
+        self.infer_endpoint.as_deref().unwrap_or(pinned)
+    }
+
     /// Identity payload plaintext for the AES layer (the `info` field's
     /// pre-encryption form).
     pub fn identity_payload_json(&self, bearer: &str, email: &str) -> String {
@@ -44,6 +55,7 @@ impl fmt::Debug for QoderRequestIdentity {
             .field("data_policy_agreed", &self.data_policy_agreed)
             .field("organization_id", &self.organization_id)
             .field("organization_tags", &self.organization_tags)
+            .field("infer_endpoint", &self.infer_endpoint)
             .finish()
     }
 }
@@ -60,6 +72,11 @@ pub struct QoderStoredIdentity {
     pub organization_id: Option<String>,
     #[serde(default)]
     pub organization_tags: Vec<String>,
+    /// Server-elected inference endpoint (`https://api*.qoder.sh`), synced
+    /// once from the center surface. Absent on pre-election credentials —
+    /// `default` keeps the auth store backward-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infer_endpoint: Option<String>,
 }
 
 impl QoderStoredIdentity {
@@ -71,6 +88,7 @@ impl QoderStoredIdentity {
             data_policy_agreed: self.data_policy_agreed,
             organization_id: self.organization_id.clone(),
             organization_tags: self.organization_tags.clone(),
+            infer_endpoint: self.infer_endpoint.clone(),
         }
     }
 }

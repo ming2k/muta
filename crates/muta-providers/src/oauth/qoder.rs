@@ -514,6 +514,12 @@ impl QoderApiKeyCredentialSource {
             };
             let mut identity = stored.to_request_identity();
             identity.uid = uid;
+            // Best-effort one-shot election: a credential created before the
+            // election existed carries `infer_endpoint: None`. A failed sync
+            // leaves it None (pinned root stays authoritative, §3.1a).
+            if identity.infer_endpoint.is_none() {
+                identity.infer_endpoint = self.elect_and_persist_endpoint(&identity).await;
+            }
             *self.identity.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity.clone());
             return Ok(identity);
         }
@@ -527,6 +533,7 @@ impl QoderApiKeyCredentialSource {
             data_policy_agreed: true,
             organization_id: None,
             organization_tags: Vec::new(),
+            infer_endpoint: None,
         };
         let mut locked = AuthStore::lock()
             .await
@@ -557,12 +564,48 @@ impl QoderApiKeyCredentialSource {
                 data_policy_agreed: true,
                 organization_id: None,
                 organization_tags: Vec::new(),
+                infer_endpoint: None,
             },
         );
         locked.set(&self.connection_id, entry);
         locked.save().map_err(|e| e.to_string())?;
+        // One-shot endpoint election for the freshly minted identity.
+        let mut identity = identity;
+        identity.infer_endpoint = self.elect_and_persist_endpoint(&identity).await;
         *self.identity.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity.clone());
         Ok(identity)
+    }
+
+    /// Elect the inference endpoint from the center region map and persist it
+    /// beside the stored identity (best-effort; `None` on any failure keeps
+    /// the pinned `MODEL_PROVIDER_SPEC.root_url` authoritative — §3.1a).
+    async fn elect_and_persist_endpoint(
+        &self,
+        identity: &crate::registry::qoder::QoderRequestIdentity,
+    ) -> Option<String> {
+        if identity.infer_endpoint.is_some() {
+            return identity.infer_endpoint.clone();
+        }
+        let Ok(client) = crate::http::Http::control_plane() else {
+            return None;
+        };
+        let elected =
+            crate::registry::qoder::elect_infer_endpoint(&client, self.token.expose_secret())
+                .await
+                .ok()?;
+        if let Ok(mut locked) = AuthStore::lock().await
+            && let Some(mut entry) = locked.get(&self.connection_id).cloned()
+            && let Some(mut stored) =
+                entry.get_json_attr::<QoderStoredIdentity>("qoder")
+        {
+            stored.infer_endpoint = Some(elected.clone());
+            entry.set_json_attr("qoder", &stored);
+            locked.set(&self.connection_id, entry);
+            if let Err(error) = locked.save() {
+                tracing::warn!(connection = %self.connection_id, %error, "qoder: could not persist the elected endpoint");
+            }
+        }
+        Some(elected)
     }
 
     /// Resolve the account uid for this PAT, or `""` if the lookup fails.

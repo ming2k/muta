@@ -73,11 +73,12 @@ To extract the signing module from a future version:
 
 | Surface | International | CN |
 |---|---|---|
-| Inference (COSY SSE) | `https://api1/api2/api3.qoder.sh` (default `api2`) | `https://gateway.qoder.com.cn` |
+| Inference (COSY SSE) | `https://api1/api2/api3.qoder.sh` (**elected**, see §3.1a — currently `api3`) | `https://gateway.qoder.com.cn` |
 | Model catalog (COSY) | same hosts, `GET /algo/api/v2/model/list?Encode=1` | same |
 | OpenAPI (token, userinfo) | `https://openapi.qoder.sh` | `https://openapi.qoder.com.cn` |
 | Device-flow page | `https://qoder.com/device/selectAccounts` | `https://qoder.com.cn/...` |
-| Daily/test (seen in client) | `daily-openapi.qoder.sh`, `test-openapi.qoder.sh` | — |
+| Endpoint election | `https://center.qoder.sh/algo/api/v{3,5}/service/region/endpoints` (plain Bearer, QoderEncoding response) | — |
+| Daily/test (seen in client) | `daily-api2.qoder.sh`, `test-api2.qoder.sh`, `test-openapi.qoder.sh` | — |
 
 Inference URL (query constants are part of the contract):
 
@@ -94,6 +95,60 @@ both: the canonical form is identical apart from the path. The catalog request
 **must** carry `Cosy-User`; without it the service returns
 `403 {"code":"101","message":"Signature invalid"}`, even when the signature
 itself is correct. See §5.2.
+
+#### 3.1a Inference endpoint election (verified live 2026-09-21)
+
+`api1/api2/api3.qoder.sh` are **not interchangeable**, and the server tells
+the client which one to use. The official CLI syncs at startup:
+
+1. `GET https://center.qoder.sh/algo/api/v5/service/region/endpoints`
+   (v3 also serves the same shape) with a **plain Bearer** — no COSY
+   signature required.
+2. The response body is QoderEncoding-encoded (same codec as §3.4 —
+   outer-thirds swap + alphabet remap, then base64). Decoded, it is a
+   plain role → endpoint map:
+   ```json
+   {"inferNodes":[{"url":"https://api3.qoder.sh","type":"public"}],
+    "security":[{"url":"https://api2.qoder.sh","type":"public"}],
+    "openapiNodes":[{"url":"https://openapi.qoder.sh","type":"public"}],
+    "centerNodes":[...], "codebase":[...], "remoteAgent":[...],
+    "nesNodes":[...], "fallbackIpMap":{}, "fallbackDomainMap":{}}
+   ```
+3. The client caches it in `~/.qoder/.cache/endpoint-cache.json` and
+   elects `inferNodes[0]` for `agent_chat_generation`.
+
+**Host roles are distinct**: `api2` is the *security* cluster, `api3` (and
+`api1`) are the inference nodes. muta originally pinned `api2` — the wrong
+cluster — and its per-cluster daily billing counter
+(`403 code 110 "Billing daily count exceeded"`, envelope in §3.7) is what
+surfaced as the "qodercli unlimited / muta limited" symptom on 2026-09-21:
+identical credentials and identical wire bytes passed against `api1`/`api3`
+and failed against `api2`, ~10/10 trials each way, while `qodercli` (elected
+`api3`) kept working throughout. muta now pins `api3`, the server-issued
+inference endpoint, in
+`muta_providers::registry::qoder::MODEL_PROVIDER_SPEC`.
+
+A fuller election implementation (sync-on-login, cache the elected endpoint
+in the connection's auth attributes, fall back to the pinned constant) is
+deliberately deferred: the region map currently hard-assigns `api3` and the
+recovery recipe below is cheaper than the added surface. If inference
+starts failing cluster-wide, re-run the sync above and diff `inferNodes`
+against the pinned constant before suspecting the wire.
+
+**Implemented (ADR-0272, 2026-09-21).** The election now runs as part of
+muta's credential resolution: the center map is synced once per connection
+(OAuth credentials ride the uid-repair critical section; PAT credentials
+ride the identity mint), the decoded `inferNodes[0].url` is adopted only
+after the strict https `*.qoder.sh` allowlist check, and it is persisted in
+the stored identity (`QoderStoredIdentity.infer_endpoint`,
+`TokenSet.attributes["qoder"]`). The inference signer derives its URL from
+the elected endpoint (`RequestSignerPhase::request_url` now carries the
+resolved auth for exactly this purpose), the catalog fetch root follows the
+same host, and any sync failure leaves the pin
+(`MODEL_PROVIDER_SPEC.root_url`, currently `api3`) authoritative —
+failure never diminishes a connection (ADR-0227). The sync recipe above is
+now automated; re-running it manually remains the diagnosis step when both
+the election and the pin fail together.
 
 ### 3.2 Authentication
 
@@ -143,6 +198,7 @@ store under `TokenSet.attributes["qoder"]` as `QoderStoredIdentity`.
 | `data_policy_agreed` | `Cosy-Data-Policy` (`agree`/`disagree`) | set at login |
 | `organization_id` | `Cosy-Organization-Id` (omitted when empty) | from userinfo, when the account has one |
 | `organization_tags` | `Cosy-Organization-Tags` (comma-joined, order preserved) | from userinfo |
+| `infer_endpoint` | inference/catalog transport host (§3.1a election) | synced once from the center region map; `None` (serde default) keeps the pinned spec root authoritative |
 
 The machine key also exists in a standalone persisted file
 (`state_dir/machine_id`) for the device-flow correlation id.
@@ -238,7 +294,9 @@ data:{"headers":{"Content-Type":["application/json"]},"body":"<chat.completion.c
   authoritative close is the SSE event `event:finish` with duration
   metadata (`{"firstTokenDuration":…,"totalDuration":…,"serverDuration":…}`).
 - Error codes seen in the wild: `103` = duplicate `request_id` (never
-  auto-retry a COSY request — the UUID must be regenerated), `112` =
+  auto-retry a COSY request — the UUID must be regenerated), `110` =
+  per-cluster daily billing counter exceeded (see §3.1a — cluster
+  selection matters; it is **not** an account-wide paywall), `112` =
   quota/paywall.
 
 ### 3.8 Usage / quota
@@ -283,18 +341,25 @@ device-flow state machine (local TCP mock), PAT exchange, usage parsing.
 1. **Which layer failed?** A `401` on the OpenAPI surface is auth; a
    `403`/`statusCodeValue: 403` envelope is quota/paywall; a decode error
    in the response path is protocol drift.
-2. **Auth first**: verify the token with
+2. **Which cluster failed?** `code 110` ("Billing daily count exceeded")
+   is a **per-cluster daily counter**. Reproduce the identical request
+   against `api3` and `api1` before touching anything else (the
+   `qoder_live_smoke` example takes a one-line base-URL edit). If another
+   inference node accepts it, the elected endpoint drifted — re-sync
+   `center.qoder.sh/algo/api/v5/service/region/endpoints` (§3.1a) and
+   repoint the pin.
+3. **Auth first**: verify the token with
    `GET /api/v1/userinfo` (plain bearer, no COSY). If userinfo works but
    inference fails, the signature layer drifted.
-3. **Signature drift**: extract the newest client (see §2 recipe), carve
+4. **Signature drift**: extract the newest client (see §2 recipe), carve
    the auth WASM, and diff its data-section strings against §3. Watch for:
    header-name changes, `Cosy-Version` value bumps, new conditional
    headers, alphabet changes in the QoderEncoding table.
-4. **Header presence**: the 20/21/22-header matrix in §3.6 is
+5. **Header presence**: the 20/21/22-header matrix in §3.6 is
    server-sensitive. If the server starts rejecting, re-run the fixture
    matrix (Liki4's `infer-user.json` vector is the reference oracle for
    1.1.34 behavior).
-5. **Version alignment**: `Cosy-Version` participates in the signature.
+6. **Version alignment**: `Cosy-Version` participates in the signature.
    Its value has exactly one home: `IdentitySpec.emulated_version` on the
    surface (`muta_providers::registry::qoder::surface`). The
    `version_header` (`Cosy-Version`), the signature payload's `cosyVersion`,
@@ -358,6 +423,14 @@ not yet fixed.
   conditions unknown. muta omits it; live tests show the catalog accepts its
   absence. If the server starts requiring it, the shape is a plain header in
   the surface's identity table.
+- **Endpoint election** (§3.1a): implemented per ADR-0272 — the center
+  region map is synced once per credential, the elected `inferNodes[0].url`
+  is allowlisted (`https://*.qoder.sh`) and persisted in the stored
+  identity, and both the inference signer and the catalog root consume it
+  with the pin (`api3`) as fallback. If Qoder's region map re-points
+  `inferNodes`, no code change is needed; the pin and the
+  `qoder_live_smoke` example (same constant, one line) only matter when
+  the election has not synced yet.
 - **Risk fingerprinting**: Qoder pins device signals to `machine_id` and
   the persisted AES key. The `state_dir/machine_id` file and
   `TokenSet.qoder.machine_key_hex` are load-bearing for account

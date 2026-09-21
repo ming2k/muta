@@ -16,7 +16,7 @@ mod registry;
 pub mod usage;
 pub use registry::effort_ladders;
 
-pub use registry::{QoderCatalogSigning, build_catalog_signer};
+pub use registry::{QoderCatalogSigning, build_catalog_signer, catalog_root_for_connection};
 
 pub use list_models::{
     CatalogParser, CatalogShape, CatalogSignature, CatalogSigning, DiscoveredModel, ModelListError,

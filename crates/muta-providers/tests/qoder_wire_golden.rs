@@ -44,6 +44,7 @@ fn qoder_test_identity() -> QoderRequestIdentity {
         data_policy_agreed: true,
         organization_id: None,
         organization_tags: Vec::new(),
+        infer_endpoint: None,
     }
 }
 
@@ -84,12 +85,42 @@ fn qoder_golden_wire_url_is_the_surface_inference_url() {
     let req = planned_request(&qoder_wire_provider(), &auth).build("QoderGoldenWire").expect("build");
 
     // The surface's inference path + fixed query — NOT the bare root (the
-    // regression: a flat JSON POST to https://api2.qoder.sh/ → HTTP 404).
+    // regression: a flat JSON POST to the root → HTTP 404). The base URL is
+    // an arbitrary stand-in here: the real pin lives in MODEL_PROVIDER_SPEC
+    // (currently https://api3.qoder.sh — see docs §3.1a).
     assert_eq!(
         req.url,
         "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation\
          ?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
     );
+}
+
+/// The identity's server-elected endpoint (center region map, §3.1a)
+/// overrides the executor's pinned base URL — the signature binds the
+/// request to whichever host serves it.
+#[test]
+fn elected_endpoint_overrides_the_pinned_base_url() {
+    let elected = "https://api3.qoder.sh".to_string();
+    let identity = QoderRequestIdentity {
+        infer_endpoint: Some(elected.clone()),
+        ..qoder_test_identity()
+    };
+    let auth = ResolvedAuth::new("exchange-token-1").with_extension(identity);
+    let req = planned_request(&qoder_wire_provider(), &auth).build("QoderGoldenWire").expect("build");
+    assert!(req.url.starts_with(&format!("{elected}/algo/api/v2/service/pro/sse/agent_chat_generation")), "url: {}", req.url);
+    // The COSY signature still validates against the same identity — the
+    // body and header set are unchanged by the host override.
+    let authorization = req.headers.get("authorization").unwrap().to_str().unwrap();
+    assert!(authorization.starts_with("Bearer COSY."), "{authorization}");
+}
+
+/// No election synced (`infer_endpoint: None`) keeps the executor's base
+/// URL — the pinned `MODEL_PROVIDER_SPEC.root_url` stays authoritative.
+#[test]
+fn missing_election_falls_back_to_the_pinned_base() {
+    let auth = ResolvedAuth::new("exchange-token-1").with_extension(qoder_test_identity());
+    let req = planned_request(&qoder_wire_provider(), &auth).build("QoderGoldenWire").expect("build");
+    assert!(req.url.starts_with("https://api2.qoder.sh/algo/api/v2/service/pro/sse"), "url: {}", req.url);
 }
 
 #[test]

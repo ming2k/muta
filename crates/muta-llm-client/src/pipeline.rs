@@ -47,13 +47,18 @@ pub trait RequestSignerPhase: Send + Sync {
     /// header-stamping copy ([`OutboundPlan::stamp_headers`]).
     fn clone_box_signer(&self) -> Box<dyn RequestSignerPhase>;
 
-    /// The request URL for this surface, derived from the executor's base URL.
+    /// The request URL for this surface, derived from the executor's base URL
+    /// and the resolved auth.
     ///
     /// Signed surfaces usually POST to a declared inference path rather than
     /// the plain base URL, so the signer — which already owns the surface's
     /// signed-path contract — also owns the URL rewrite (ADR-0271 §2). The
-    /// default keeps the executor's URL.
-    fn request_url(&self, base_url: &str) -> String {
+    /// auth argument lets a provider-owned identity carry a server-elected
+    /// transport endpoint (e.g. Qoder's region map, integration doc §3.1a)
+    /// that overrides the executor's pinned base. The default keeps the
+    /// executor's URL.
+    fn request_url(&self, base_url: &str, auth: &ResolvedAuth) -> String {
+        let _ = auth;
         base_url.to_string()
     }
 
@@ -121,7 +126,7 @@ impl TransportPipeline {
         // Phase 3: the signer owns the URL and the header set.
         match &self.signer_phase {
             Some(signer) => {
-                let url = signer.request_url(base_url);
+                let url = signer.request_url(base_url, auth);
                 let signer = signer.clone_box_signer();
                 let auth = auth.clone();
                 let body_for_headers = body_bytes.clone();

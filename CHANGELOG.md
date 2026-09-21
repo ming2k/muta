@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`deepseek-v4.1-flash` on OpenCode Go resolves with its capabilities.** No
+  compiled baseline knew the id — and the Go relay's `/models` payload carries
+  ids only (`docs/explanation/opencode-provider-integration.md` §4.2), so the
+  model resolved through the conservative fallback: no reasoning-effort ladder
+  (the picker showed no effort control, unlike `glm-5.2`/`glm-5.3-flash`, whose
+  entries the `glm-cn` baseline registers) and a 128k context window instead of
+  1M. A baseline entry pinned against the endpoint table (`opencode.ai/docs/go`)
+  and DeepSeek's V4.1-Flash release adds the id to the `opencode-go` preset and
+  its offline seed — Chat Completions, 1M context, image inputs, and the relay's
+  `low`/`high`/`max` effort ladder — with registry tests covering every DeepSeek
+  catalog id the endpoint table lists.
+
+### Removed
+
+- **`deepseek-flash` is dropped from the `opencode-go` baseline and seed.** The
+  Go endpoint table (`opencode.ai/docs/go`) no longer lists the id: V4.1-Flash
+  is published only as `deepseek-v4.1-flash`, and `deepseek-flash` survives only
+  as residue in the relay's `/models` response. The compiled baseline must not
+  outlive its source — muta registers no shadow entry for spellings upstream
+  dropped. While the relay still leaks the id from `/models`, it surfaces
+  capability-less (conservative fallback); once the relay retires it, it
+  vanishes from discovery on its own. A registry test pins this: a retired id
+  resolves to the anonymous fallback, not to a hand-maintained alias.
+
+### Fixed
+
+- **The TUI Models picker reads name-first again.** A provider catalog key
+  (`qfmodel`, `gmodel`) says nothing about what actually runs, while the catalog's
+  own `display_name` does (`Qwen3.8-Flash`, `GLM-5.3`). The multi-field search
+  work rendered the wire id as the bold leading column and demoted the provider's
+  name to a dim second column, inverting the documented contract
+  (`docs/reference/tui/modals.md`) and diverging from the web picker, which had
+  kept the name as the primary label. The name now leads and the id rides in the
+  column beside it, so the row names the model you are choosing while the string
+  that goes on the wire and into `hidden_models`/favorites/route settings stays
+  visible. The id column drops when the identity region cannot keep it readable —
+  a truncated fragment of the only typeable handle would read as a different
+  model — and the label is never shortened to fund it. Search highlighting now
+  follows the drawn column instead of whichever field matched first.
+
 ## [0.50.8] - 2026-09-21
 
 ### Added

@@ -213,6 +213,7 @@ impl OAuthTokenEnricher for QoderOAuthEnricher {
                 data_policy_agreed: true,
                 organization_id: None,
                 organization_tags: Vec::new(),
+                infer_endpoint: None,
             },
         );
         Ok(())

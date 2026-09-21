@@ -582,7 +582,11 @@ fn preset_chooser_highlights_the_focused_row_with_a_background_fill() {
 /// so all three sections render and RECENT has a meaningful internal
 /// order (gpt-5.5 newer than claude-opus-4-8).
 fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
-    let info = |model: &str, favorite: bool, used: Option<u64>, locked: bool| {
+    // `enabled` is the provider's picker declaration: `true` = an ordinary
+    // selectable row, `false` = a subscription-locked one. The lock case has
+    // its own test (`models_modal_lists_provider_locked_rows_greyed_with_a_lock_tag`)
+    // and builds its own rows; everything here is the normal path.
+    let info = |model: &str, favorite: bool, used: Option<u64>, enabled: bool| {
         muta_contracts::ProviderModelInfo {
             model: model.to_string(),
             name: None,
@@ -595,7 +599,7 @@ fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
             vision: Some(false),
             context_window: 128_000,
             max_output_tokens: None,
-            picker_enabled: Some(locked),
+            picker_enabled: Some(enabled),
         }
     };
     let row = |id: &str, name: &str, models: Vec<muta_contracts::ProviderModelInfo>| {
@@ -622,19 +626,23 @@ fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
                 "openai",
                 "OpenAI",
                 vec![
-                    info("gpt-5.5", false, Some(1_700_000_000_000), false),
-                    info("gpt-5.4", false, None, false),
+                    info("gpt-5.5", false, Some(1_700_000_000_000), true),
+                    info("gpt-5.4", false, None, true),
                 ],
             ),
             row(
                 "anthropic",
                 "Anthropic",
                 vec![
-                    info("claude-sonnet-5", true, Some(1_500_000_000_000), false),
-                    info("claude-opus-4-8", false, Some(1_600_000_000_000), false),
+                    info("claude-sonnet-5", true, Some(1_500_000_000_000), true),
+                    info("claude-opus-4-8", false, Some(1_600_000_000_000), true),
                 ],
             ),
-            row("google", "Google", vec![info("gemini-3-pro", false, None, false)]),
+            row(
+                "google",
+                "Google",
+                vec![info("gemini-3-pro", false, None, true)],
+            ),
         ],
     }
 }
@@ -770,19 +778,29 @@ fn models_modal_lists_provider_locked_rows_greyed_with_a_lock_tag() {
 #[test]
 fn models_modal_leads_with_the_provider_label_and_keeps_the_id_visible() {
     // A relay's opaque wire id (`deepseek-flash` for "DeepSeek V4.1 Flash")
-    // is unrecognisable, so the row leads with the provider's own name. The id
+    // is unrecognisable, so the row LEADS with the provider's own name. The id
     // must NOT disappear though — it is the string that goes on the wire and
-    // into config — so it rides along as a dim suffix. A model whose endpoint
-    // publishes nothing leads with its bare id.
+    // into config — so it rides along in the column beside it. A model whose
+    // endpoint publishes nothing leads with its bare id.
+    //
+    // The assertions check ORDER, not mere presence: both fields are on the
+    // line in either layout, so a `contains` check alone cannot catch a
+    // label/id swap (which is exactly how the id-first regression passed).
     let text = render_labelled_models_modal(110);
 
     let labelled = text
         .lines()
         .find(|line| line.contains("DeepSeek V4.1 Flash"))
         .expect("labelled row renders");
+    let label_at = labelled
+        .find("DeepSeek V4.1 Flash")
+        .expect("label on its own row");
+    let id_at = labelled
+        .find("gemini-3-pro")
+        .unwrap_or_else(|| panic!("the wire id stays visible behind the name: {labelled:?}"));
     assert!(
-        labelled.contains("gemini-3-pro"),
-        "the wire id stays visible behind the name: {labelled:?}"
+        label_at < id_at,
+        "the provider label leads the row and the id follows: {labelled:?}"
     );
 
     let bare = text
@@ -796,24 +814,30 @@ fn models_modal_leads_with_the_provider_label_and_keeps_the_id_visible() {
 }
 
 #[test]
-fn models_modal_drops_the_name_when_narrow_keeping_the_wire_id() {
-    // Model ID is the primary column and always renders. The display name
-    // only renders when there is enough room, so on a cramped terminal
-    // the name drops instead of crowding or truncating the wire ID.
+fn models_modal_drops_the_id_column_when_narrow_never_the_label() {
+    // The label owns the identity region; the wire id fills only its leftover
+    // padding. So on a cramped terminal the ID column vanishes rather than
+    // truncating the label or overflowing into the provider column — the row
+    // then reads exactly like a row whose provider published no label.
     let narrow = render_labelled_models_modal(60);
     let row = narrow
         .lines()
-        .find(|line| line.contains("gemini-3-pro"))
-        .expect("wire id row renders on narrow terminal");
+        .find(|line| line.contains("DeepSeek V4.1 Flash"))
+        .expect("labelled row renders on a narrow terminal");
     assert!(
-        !row.contains("DeepSeek V4.1 Flash"),
-        "on narrow screen, optional name drops to preserve wire id: {row:?}"
+        !row.contains("gemini-3-pro"),
+        "no room for the id column means no id column: {row:?}"
+    );
+    assert!(
+        !row.contains("…Flash") && !row.contains("Flash…"),
+        "the label is never truncated to fund the id column: {row:?}"
     );
 
-    // On a wide terminal, both the wire ID and the display name render.
+    // The wider render proves the two differ only by the id column, so the
+    // assertion above is about the column and not about a missing row.
     let wide = render_labelled_models_modal(110);
-    assert!(wide.contains("gemini-3-pro"));
     assert!(wide.contains("DeepSeek V4.1 Flash"));
+    assert!(wide.contains("gemini-3-pro"));
 }
 
 /// Render the Models modal with one provider-published model label at a given
@@ -854,6 +878,121 @@ fn render_labelled_models_modal(width: u16) -> String {
         );
     });
     buffer_text(&terminal)
+}
+
+/// One Qoder catalog entry: an opaque `key` plus the provider's own
+/// `display_name`, which is what actually identifies the model to a human.
+fn qoder_model_info(
+    model: &str,
+    name: &str,
+    picker_enabled: Option<bool>,
+) -> muta_contracts::ProviderModelInfo {
+    muta_contracts::ProviderModelInfo {
+        model: model.to_string(),
+        name: Some(name.to_string()),
+        protocol: String::new(),
+        effort: None,
+        thinking: None,
+        effort_levels: Vec::new(),
+        favorite: false,
+        last_used_ms: None,
+        vision: Some(true),
+        context_window: 200_000,
+        max_output_tokens: None,
+        picker_enabled,
+    }
+}
+
+/// Render the Models modal over a Qoder-shaped snapshot: opaque catalog keys
+/// (`qfmodel`) carrying the provider's real model names (`Qwen3.8-Flash`).
+fn render_qoder_models_modal(width: u16, query: &str) -> String {
+    let theme = Theme::default();
+    let picker = muta_contracts::ProviderPickerSnapshot {
+        default_id: "qoder".into(),
+        rows: vec![muta_contracts::ProviderPickerRow {
+            id: "qoder".into(),
+            name: "Qoder".into(),
+            model: "qfmodel".into(),
+            models: vec!["auto".into(), "qfmodel".into(), "gmodel".into()],
+            model_info: vec![
+                qoder_model_info("auto", "Auto", None),
+                qoder_model_info("qfmodel", "Qwen3.8-Flash", Some(true)),
+                qoder_model_info("gmodel", "GLM-5.3", Some(false)),
+            ],
+            builtin: true,
+            protocol: String::new(),
+            base_url: String::new(),
+            key_ready: true,
+            provider: String::new(),
+            client_identity: Default::default(),
+            last_used_ms: None,
+            auth: Default::default(),
+        }],
+    };
+    let ranked = crate::providers::models_flat_filtered_from(&picker, "qoder", "qfmodel", query);
+    let mut terminal = mutx_engine::TestTerminal::new(width, 20);
+    terminal.draw(|f| {
+        let mut scroll = 0;
+        draw_models_modal(
+            f,
+            crate::overlays::provider::models::ModelsModalProps {
+                models: &ranked,
+                current_provider: "qoder",
+                current_model: "qfmodel",
+                modal_index: 0,
+                query,
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: true,
+                search: !query.is_empty(),
+                show_caret: true,
+                refreshing: false,
+                spinner_phase: 0,
+            },
+            &theme,
+        );
+    });
+    buffer_text(&terminal)
+}
+
+#[test]
+fn models_modal_leads_with_the_model_name_for_opaque_catalog_keys() {
+    // The reported case: Qoder's catalog keys (`qfmodel`, `gmodel`) say nothing
+    // about what actually runs, while `display_name` carries the real model
+    // (`Qwen3.8-Flash`, `GLM-5.3`). The name leads the row; the key stays
+    // visible beside it because it is the string that goes on the wire.
+    let text = render_qoder_models_modal(100, "");
+    let row = text
+        .lines()
+        .find(|line| line.contains("Qwen3.8-Flash"))
+        .expect("the model name renders");
+    let name_at = row.find("Qwen3.8-Flash").expect("name on its row");
+    let id_at = row
+        .find("qfmodel")
+        .unwrap_or_else(|| panic!("the catalog key stays visible: {row:?}"));
+    assert!(
+        name_at < id_at,
+        "name-first, id-fallback: the key must not lead the row: {row:?}"
+    );
+
+    // A locked entry keeps its name first too, and still carries its lock tag.
+    let locked = text
+        .lines()
+        .find(|line| line.contains("GLM-5.3"))
+        .expect("locked row is listed");
+    assert!(
+        locked.find("GLM-5.3").expect("name") < locked.find("gmodel").expect("key"),
+        "a locked row is name-first as well: {locked:?}"
+    );
+    assert!(locked.contains("locked"), "lock tag renders: {locked:?}");
+
+    // Searching by the opaque key still finds the row, and by the name too.
+    assert!(
+        render_qoder_models_modal(100, "qfmodel")
+            .lines()
+            .any(|line| line.contains("Qwen3.8-Flash")),
+        "the wire id stays searchable behind a name label"
+    );
 }
 
 #[test]

@@ -3,11 +3,13 @@
 
 pub mod identity;
 pub mod pipeline;
+pub mod region;
 pub mod surface;
 pub mod wire;
 
 pub use identity::{QoderRequestIdentity, QoderStoredIdentity};
 pub use pipeline::build_qoder_pipeline;
+pub use region::{REGION_ENDPOINTS_URL, elect_infer_endpoint};
 pub use wire::*;
 
 use super::{ModelProviderSpec, RemoteCatalogSource};
@@ -51,7 +53,7 @@ pub const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
     id: std::borrow::Cow::Borrowed("qoder"),
     baselines: QODER_MODELS,
-    root_url: std::borrow::Cow::Borrowed("https://api2.qoder.sh"),
+    root_url: std::borrow::Cow::Borrowed("https://api3.qoder.sh"),
     user_agent: None,
     protocol: WireProtocol::ChatCompletions,
     catalog_source: RemoteCatalogSource::Endpoint(
@@ -92,6 +94,21 @@ pub async fn build_catalog_signer(
         identity,
         bearer.to_string(),
     )))
+}
+
+/// The catalog root for a connection: the stored identity's elected endpoint
+/// when one was synced, else `None` (the caller keeps the pinned spec root).
+///
+/// The catalog and inference share the same COSY-signed host family, and the
+/// center region map elects one host for both (§3.1a). A sync failure leaves
+/// the stored identity without an election and the pin stays authoritative —
+/// the same failure-never-diminishes contract as the election itself.
+pub fn catalog_root_for_connection(connection_id: &str) -> Option<String> {
+    crate::oauth::AuthStore::load()
+        .ok()?
+        .get(connection_id)?
+        .get_json_attr::<QoderStoredIdentity>("qoder")?
+        .infer_endpoint
 }
 
 /// The Qoder catalog signer.

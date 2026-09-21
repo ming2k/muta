@@ -196,27 +196,30 @@ currently-active pair is **not** pinned to the top of the list; it keeps its
 natural section position and is identified by its `●` glyph (the modal also
 opens with the cursor on it).
 
-Rows are **name-first, id-fallback**. The label is the provider's own name for
-the model when it publishes one (`DeepSeek V4.1 Flash` for the wire id
-`deepseek-flash`), and the raw wire id when it publishes none — the common case,
+Rows are **name-first, id-fallback**. The leading column is the provider's own
+name for the model when it publishes one (`DeepSeek V4.1 Flash` for the wire id
+`gemini-3-pro`), and the raw wire id when it publishes none — the common case,
 since stock OpenAI-compatible and Gemini catalogues advertise no label. The label
 is read bottom-up from whatever the provider already publishes and is never
 curated client-side, so there is no name table to drift.
 
 Because the id is the string that actually goes on the wire and into
-`hidden_models`/favorites/route settings, a name-first row keeps it visible as a
-dim suffix rather than hiding it behind the name. The suffix only fills the
-padding the label leaves unused, so it never shortens the label, never breaks
-tabular alignment with label-less rows, and never widens the row; when the
-identity column is cramped the suffix drops and the label stands alone. The id
-is always the identity regardless of what is drawn: activation, favoriting,
-hiding, and every config surface key on it.
+`hidden_models`/favorites/route settings, a labelled row never hides it behind
+the name: the id occupies the column immediately right of the label. That column
+is sized from the widest rendered label in the list, so the pairing stays tabular
+across labelled and label-less rows alike. When the identity region cannot leave
+the id column a readable width, the whole column drops and every row leads with
+its label alone — a truncated fragment of the only typeable handle would read as
+a different model, so the row prefers no id over a misleading one. The id is
+always the identity regardless of what is drawn: activation, favoriting, hiding,
+and every config surface key on it.
 
 Borrows the composer input as a fuzzy filter over the rendered label, the wire
-id behind it, and the provider name. Highlighting indexes the rendered label
-only; a row kept alive by an id or provider-name alias renders unhighlighted.
-The filtered results keep the same three-section grouping, and rows still order
-by the wire id — the stable identity — not by the label.
+id, and the provider name. Highlighting is per drawn column: a label matched by
+name highlights the label, a row found by its wire id highlights the id column.
+A row kept alive only by the provider name renders unhighlighted. The filtered
+results keep the same three-section grouping, and rows still order by the wire
+id — the stable identity — not by the label.
 
 ```text
 ╭───────────────────────────────────────────────────────────────╮

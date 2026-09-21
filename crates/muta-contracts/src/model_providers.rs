@@ -67,8 +67,8 @@ pub const OPENROUTER_BUILTIN_MODELS: &[&str] = &["nex-agi/nex-n2.5-pro:free"];
 pub const OPENCODE_GO_MODELS: &[&str] = &[
     "glm-5.2",
     "kimi-k2.7-code",
-    "deepseek-flash",
     "deepseek-v4-flash",
+    "deepseek-v4.1-flash",
 ];
 
 pub const OPENCODE_CONSOLE_MODELS: &[&str] = &[

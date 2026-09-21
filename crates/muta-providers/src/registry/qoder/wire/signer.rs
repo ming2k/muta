@@ -275,9 +275,18 @@ impl RequestSignerPhase for CosyTransportSigner {
     }
 
     /// The inference URL: the surface's declared path and fixed query over
-    /// the connection's base URL.
-    fn request_url(&self, base_url: &str) -> String {
-        inference_url(base_url)
+    /// the endpoint the resolved identity elects — the center region map's
+    /// `inferNodes` choice (§3.1a) when synced, else the executor's
+    /// (pinned) base URL. The signature binds the request to whichever host
+    /// serves it, so the override must happen here where both are derived.
+    fn request_url(&self, base_url: &str, auth: &ResolvedAuth) -> String {
+        match auth
+            .extension::<QoderRequestIdentity>()
+            .and_then(|identity| identity.infer_endpoint.clone())
+        {
+            Some(elected) => inference_url(&elected),
+            None => inference_url(base_url),
+        }
     }
 
     fn sign_request(

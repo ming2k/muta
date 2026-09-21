@@ -51,7 +51,7 @@ pub use openrouter::OPENROUTER_BUILTIN_MODELS;
 pub use xai::XAI_BUILTIN_MODELS;
 pub use zai::ZAI_CODE_MODELS;
 
-pub use qoder::{QoderCatalogSigning, build_catalog_signer};
+pub use qoder::{QoderCatalogSigning, build_catalog_signer, catalog_root_for_connection};
 
 use anthropic::anthropic_model_max_tokens;
 
