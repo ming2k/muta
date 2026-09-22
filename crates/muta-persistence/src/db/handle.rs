@@ -658,6 +658,96 @@ impl PersistenceHandle {
         )
     }
 
+    /// Commit immutable execution facts asynchronously through the single writer (ADR-0275 §7).
+    pub async fn commit_context_facts(
+        &self,
+        commit: crate::db::context_store::OwnedFactCommit,
+    ) -> Result<crate::db::context_store::CommitOutcome, crate::db::context_store::ContextCommitError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
+            .send(PersistenceCommand::CommitContextFacts {
+                commit: Box::new(commit),
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| crate::db::context_store::ContextCommitError::PersistenceFailure {
+                detail: "writer supervisor is closed".into(),
+            })?;
+        ack_rx
+            .await
+            .map_err(|_| crate::db::context_store::ContextCommitError::PersistenceFailure {
+                detail: "writer dropped response".into(),
+            })?
+    }
+
+    /// Commit a branch context view asynchronously through the single writer (ADR-0275 §7, ADR-0278).
+    pub async fn commit_context_view(
+        &self,
+        commit: crate::db::context_store::OwnedViewCommit,
+    ) -> Result<crate::db::context_store::CommitOutcome, crate::db::context_store::ContextCommitError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
+            .send(PersistenceCommand::CommitContextView {
+                commit: Box::new(commit),
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| crate::db::context_store::ContextCommitError::PersistenceFailure {
+                detail: "writer supervisor is closed".into(),
+            })?;
+        ack_rx
+            .await
+            .map_err(|_| crate::db::context_store::ContextCommitError::PersistenceFailure {
+                detail: "writer dropped response".into(),
+            })?
+    }
+
+    /// Execute an inspect deletion job asynchronously through the single writer (ADR-0279 §6).
+    pub async fn execute_inspect_deletion(
+        &self,
+        session_id: impl Into<String>,
+        job_id: impl Into<String>,
+        now_ms: u64,
+    ) -> Result<crate::db::inspect_service::DeletionReport, muta_contracts::context_lifecycle::InspectError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
+            .send(PersistenceCommand::ExecuteInspectDeletion {
+                session_id: session_id.into(),
+                job_id: job_id.into(),
+                now_ms,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| muta_contracts::context_lifecycle::InspectError::Corrupt)?;
+        ack_rx
+            .await
+            .map_err(|_| muta_contracts::context_lifecycle::InspectError::Corrupt)?
+    }
+
+    /// Collect a bounded garbage collection batch asynchronously through the single writer (ADR-0279 §5).
+    pub async fn collect_inspect_garbage(
+        &self,
+        session_id: impl Into<String>,
+        now_ms: u64,
+        batch_limit: u32,
+        batch_ms: u64,
+    ) -> Result<crate::db::inspect_service::CollectionProgress, muta_contracts::context_lifecycle::InspectError> {
+        let (ack_tx, ack_rx) = oneshot::channel();
+        self.supervisor
+            .send(PersistenceCommand::CollectInspectGarbage {
+                session_id: session_id.into(),
+                now_ms,
+                batch_limit,
+                batch_ms,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| muta_contracts::context_lifecycle::InspectError::Corrupt)?;
+        ack_rx
+            .await
+            .map_err(|_| muta_contracts::context_lifecycle::InspectError::Corrupt)?
+    }
+
     /// The one blocking bridge for every synchronous verb (ADR-0196).
     ///
     /// On a **multi-thread runtime** `block_in_place` is preferred: it parks

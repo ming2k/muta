@@ -46,7 +46,7 @@ the corresponding value.
 An omitted remote field is not a negative capability. It retains the static
 baseline so partial provider responses do not erase useful local knowledge.
 
-## Catalog discovery
+## Catalog sources
 
 Each connection uses one source selected by its provider's `RemoteCatalogSource`
 or its `catalog_source` override:
@@ -54,15 +54,12 @@ or its `catalog_source` override:
 | Source | Behavior |
 |--------|----------|
 | `Endpoint` | Reads the provider's catalog endpoint with the connection's credentials and client identity |
-| `ModelsDev` | Reads that provider's slice from the shared models.dev document |
-| `None` | Uses the compiled baseline without remote discovery |
+| `None` | Uses the compiled baseline without a remote catalog |
 
 Startup reads the persisted connection catalog and compiled baseline without
 fetching. Explicit refresh and connection lifecycle events fetch the selected
-source. There is no cross-source fallback or scheduled catalog refresh.
-Overlapping models.dev refreshes share one request and its result, including
-failures; a later explicit refresh starts another request. Reading the in-memory
-catalog or compiled snapshot never initiates a fetch.
+source. There is no cross-source fallback or scheduled catalog refresh. Reading
+the persisted catalog or compiled baseline never initiates a fetch.
 
 Directory requests use direct connections, platform certificate verification,
 and one 10-second deadline covering connection establishment, response headers,
@@ -76,19 +73,26 @@ connection filtering and user include/exclude rules before becoming routes.
 
 ## GitHub Copilot
 
-The Copilot provider uses endpoint discovery. Its model list controls
+The Copilot provider derives its catalog from the endpoint. Its model list controls
 the selectable set and each selectable model's route.
 
 | Remote field | muta behavior |
 |--------------|-----------------|
-| `model_picker_enabled` | `false` excludes the model from the picker and channel set |
+| `model_picker_enabled` | The vendor's **listing** declaration: `false` maps to `advertised: false` (a listing hint), not to unavailability. It excludes the model from neither the picker nor the channel set |
+| `policy.state` | The vendor's **availability** declaration: only an explicit `disabled` marks the model unusable (`policy.terms` becomes the verbatim reason); `enabled` is usable; `unconfigured`, `unknown`, and an absent policy are undeclared |
 | `supported_endpoints` with `/chat/completions` | Uses the OpenAI Chat Completions adapter |
 | `supported_endpoints` with `/responses` | Uses the OpenAI Responses adapter |
 | `supported_endpoints` with `/v1/messages` | Uses the Anthropic Messages adapter with Copilot authentication |
 | `capabilities.limits` | Supplies context and output limits |
 | `capabilities.supports` | Supplies tools, vision, reasoning, and effort controls |
 
-Copilot discovery sends the OAuth bearer and Copilot client identity headers.
+Two vendor declarations, two muta fields — see
+[ADR-0273](../adr/0273-upstream-availability-as-a-fourth-catalog-axis.md) for why
+they must not be ANDed. `billing.restricted_to` is a further entitlement
+declaration that muta does not yet read: deciding it needs the account's own SKU,
+which the catalog parser never sees.
+
+The Copilot catalog request sends the OAuth bearer and Copilot client identity headers.
 The response therefore reflects the logged-in account's entitlements rather
 than a generic static plan assumption.
 
@@ -105,7 +109,7 @@ root of each model.
 | map key | The wire model id; the entry itself publishes no `id` |
 | `reasoning_options` | Absent means no effort declaration, so the baseline ladder survives |
 
-Discovery sends the OAuth bearer with the `x-org-id` workspace header; inference
+The catalog request sends the OAuth bearer with the `x-org-id` workspace header; inference
 sends the same bearer with `x-opencode-org-id`. The two spellings are upstream
 contract. A Console request that omits the workspace fails with 403 before
 reaching the model, and an underfunded workspace fails with 402 after
@@ -114,12 +118,13 @@ authentication succeeds. See
 
 ## Persistence
 
-Discovery stores model ids, fitted capabilities, remote metadata, and ETag
+A catalog fetch stores model ids, fitted capabilities, remote metadata, and ETag
 validation state per connection in
-`$XDG_STATE_HOME/muta/models_discovery.json`. Successful discovery replaces that
+`$XDG_STATE_HOME/muta/remote_catalog.json`. A successful catalog fetch replaces that
 connection's records; failures preserve them. Routes are derived from these
 records and the connection configuration rather than persisted as channel tables.
 
-The raw models.dev document exists only in daemon memory. The committed snapshot
-is the offline floor; `$XDG_CACHE_HOME/muta/models-dev.json` is not read or written.
+There is no third-party catalog document and no embedded snapshot; the offline
+floor is the compiled baseline. `$XDG_CACHE_HOME/muta/models-dev.json` is a
+legacy file that is neither read nor written.
 See [Paths](paths.md) for legacy file locations.

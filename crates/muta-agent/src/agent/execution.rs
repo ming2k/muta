@@ -612,7 +612,7 @@ impl Agent {
         }
 
         // Stdin policy decision (L3 + L3.5)
-        // Decided here, before spawn, for execute_command only. The three-way decision:
+        // Decided here, before spawn, for run_command only. The three-way decision:
         //   1. opt-in model stdin (α): `allow_model_stdin` on AND the model
         //      supplied a `stdin` arg → Prefilled{model}. Structurally
         //      unreachable unless the flag exposed the schema field.
@@ -620,7 +620,7 @@ impl Agent {
         //      ask the operator; Prefilled{human} or Closed (if cancelled).
         //   3. closed (default hard floor): everything else.
         // For other tools, Closed is always correct (they ignore stdin).
-        let stdin_policy = if call.name == "execute_command" {
+        let stdin_policy = if call.name == "run_command" {
             self.decide_command_stdin(&call.arguments, event_tx).await
         } else {
             StdinPolicy::default()

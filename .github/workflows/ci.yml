@@ -39,6 +39,29 @@ jobs:
       # `cargo fetch --locked` fails (exit 101) if Cargo.lock is out of sync
       # with Cargo.toml; a clean run proves the lock is committable as-is.
       - run: cargo fetch --locked
+      # The web client's `package.json` version mirrors the workspace version
+      # (docs/dev/release.md). Both must move in the same release commit;
+      # catching a mismatch here keeps the release tag check from being the
+      # first to notice.
+      - name: Web package version matches the workspace version
+        run: |
+          cargo_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          web_version="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' apps/web/package.json | head -n1)"
+          echo "workspace=$cargo_version web=$web_version"
+          test -n "$cargo_version" && test "$cargo_version" = "$web_version"
+      # ADR-0204 [INV-EGRESS-01]: no production dependency may reach `reqwest` —
+      # the owned transport (`muta-net`) is the only egress path. reqwest exists
+      # only behind muta-llm-client's opt-in `reqwest-oracle` feature, so it must
+      # be absent from the normal (non-dev, non-build) graph. This restores the
+      # guarantee the retired `scripts/check-egress-deps.sh` provided.
+      - name: Zero-egress guard (no reqwest in the normal graph)
+        run: |
+          if cargo tree --workspace --locked --edges normal -i reqwest 2>/dev/null | grep -q 'reqwest'; then
+            echo "::error::reqwest is reachable in the normal dependency graph (INV-EGRESS-01)"
+            cargo tree --workspace --locked --edges normal -i reqwest
+            exit 1
+          fi
+          echo "reqwest is absent from the normal dependency graph — OK"
 
   # The Web app is a pnpm workspace package (apps/web) — no Cargo surface,
   # so it needs its own typecheck/build gate. `--frozen-lockfile` fails when
@@ -64,25 +87,24 @@ jobs:
       # Install from the root lockfile (workspace resolution needs the root).
       - run: pnpm install --frozen-lockfile
         working-directory: .
-      # Wire-protocol bump enforcement (ADR-0134): a wire-surface change
-      # without a PROTOCOL_VERSION bump fails unless the PR is labeled
-      # `wire-compatible` (the author's assertion that the change is purely
-      # additive — a reviewer verifies it). Run before the regeneration
-      # below so the committed mirror is what gets judged.
-      - name: Wire protocol bump policy
-        working-directory: .
-        run: bash scripts/check-wire-compat.sh
-      # Wire-type drift guard: the web client's protocol types
-      # (apps/web/src/lib/generated/wire.gen.ts) are generated from
-      # muta-contracts by ts-rs via deterministic generator; fail on any diff.
+      # Wire-type drift guard: apps/web/src/lib/generated/wire.gen.ts is a
+      # committed mirror generated from muta-contracts by ts-rs. Regenerate it
+      # in place through the `export_bindings` tests — single-threaded, because
+      # parallel exports race the shared target file and truncate it — then
+      # fail on any diff: the committed mirror must be byte-for-byte fresh.
+      #
+      # The two wire invariants of ADR-0134 are now enforced in-tree rather
+      # than by a bespoke script: this step guards freshness of the generated
+      # mirror, and `muta-contracts::tests::it::protocol_mirror` pins the
+      # Rust/web protocol-number agreement. The bump-or-`wire-compatible`-label
+      # discipline itself is a review-time gate (see docs/dev/release.md).
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest
       - name: wire.gen.ts is up to date
         working-directory: .
-        run: bash scripts/generate-wire.sh --check
+        run: |
+          cargo test -p muta-contracts --lib --locked export_bindings -- --test-threads=1
+          git diff --exit-code apps/web/src/lib/generated/wire.gen.ts crates/muta-contracts/bindings/
       - run: pnpm run check
       - run: pnpm run test
       - run: pnpm run build
@@ -229,12 +251,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Build docs for the whole workspace; catches hard rustdoc failures.
       - run: cargo doc --workspace --no-deps --document-private-items --locked
-      # Zero-drift documentation governance verification (Protocol v5.0.0 / advisory)
-      - name: Documentation governance verification
-        run: bash scripts/check-governance.sh || true
-      # Architecture-profile ADR verification (INV-TEMP-03/04, INV-ARCH-01, INV-CORE-05)
-      - name: ADR governance verification
-        run: bash scripts/check-adr-governance.sh
 
   coverage:
     name: Coverage

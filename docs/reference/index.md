@@ -8,7 +8,7 @@ Lookup-oriented documentation — tables, lists, and exact values.
   per-tool parameter schemas (one page per tool category)
 - [Providers](providers.md) — capability matrix, endpoint and env var catalog
 - [Reasoning effort](effort.md) — the per-model depth knob, the per-provider wire mapping, and how a model's effective ladder resolves
-- [Model metadata](model-metadata.md) — static fallback, trusted remote metadata, and model discovery precedence
+- [Model metadata](model-metadata.md) — static fallback, trusted remote metadata, and model catalog precedence
 - [Model catalog architecture](../architecture/model-catalog.md) — the blueprint behind those pages: model membership, catalog sources, refresh triggers, and what the model picker renders
 
 ## Commands

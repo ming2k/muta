@@ -659,6 +659,13 @@ pub struct ModelListCacheState {
     pub source_identity: String,
     #[serde(default)]
     pub refreshed_at_ms: i64,
+    /// Whether the most recent refresh attempt for this connection **failed**.
+    /// A failed refresh deliberately keeps the previous payload
+    /// (`[INV-CATALOG-03]`), so this is the only record that the retained
+    /// availability verdicts were observed before a failure and may already be
+    /// out of date (ADR-0273). Cleared by any successful refresh.
+    #[serde(default)]
+    pub refresh_failed: bool,
 }
 
 impl RemoteCatalogCache {
@@ -767,8 +774,10 @@ pub struct Config {
     #[serde(alias = "default_provider")]
     pub default_connection: String,
     pub mcp: HashMap<String, McpServerConfig>,
-    /// Context-compaction thresholds and relief policies. See
-    /// [`CompactionPolicy`] for the per-field semantics.
+    /// Versioned context lifecycle and admission policy (ADR-0280).
+    pub context: muta_contracts::context_lifecycle::ContextPolicy,
+    /// Deprecated context-compaction thresholds, skipped on serialization (ADR-0280).
+    #[serde(skip)]
     pub compaction: CompactionPolicy,
     /// Maximum number of attempts for a single model request when the connection returns a
     /// transient error (HTTP 408/429/5xx, connection, timeout). The initial try
@@ -967,6 +976,8 @@ struct RawConfig {
     #[serde(default)]
     mcp: Option<HashMap<String, McpServerConfig>>,
     #[serde(default)]
+    context: Option<muta_contracts::context_lifecycle::ContextPolicy>,
+    #[serde(default)]
     compaction: Option<CompactionPolicy>,
     #[serde(default)]
     compaction_preserve_rounds: Option<usize>,
@@ -1024,33 +1035,19 @@ impl<'de> Deserialize<'de> for Config {
         if let Some(mcp) = raw.mcp {
             cfg.mcp = mcp;
         }
-        if let Some(mut comp) = raw.compaction {
-            if let Some(r) = raw.compaction_preserve_rounds {
-                comp.preserve_rounds = r;
-            }
-            if let Some(s) = raw.compaction_summarize {
-                comp.summarize = s;
-            }
-            if let Some(p) = raw.compaction_prune {
-                comp.prune = p;
-            }
-            if let Some(pt) = raw.compaction_prune_protect_tokens {
-                comp.prune_protect_tokens = pt;
-            }
-            cfg.compaction = comp;
-        } else {
-            if let Some(r) = raw.compaction_preserve_rounds {
-                cfg.compaction.preserve_rounds = r;
-            }
-            if let Some(s) = raw.compaction_summarize {
-                cfg.compaction.summarize = s;
-            }
-            if let Some(p) = raw.compaction_prune {
-                cfg.compaction.prune = p;
-            }
-            if let Some(pt) = raw.compaction_prune_protect_tokens {
-                cfg.compaction.prune_protect_tokens = pt;
-            }
+        if raw.compaction.is_some()
+            || raw.compaction_preserve_rounds.is_some()
+            || raw.compaction_summarize.is_some()
+            || raw.compaction_prune.is_some()
+            || raw.compaction_prune_protect_tokens.is_some()
+        {
+            return Err(serde::de::Error::custom(
+                "legacy 'compaction.*' configuration is retired under ADR-0280 [INV-POLICY-01]; run `muta context migrate` to convert to versioned `context.*` policy",
+            ));
+        }
+        if let Some(ctx) = raw.context {
+            ctx.validate().map_err(serde::de::Error::custom)?;
+            cfg.context = ctx;
         }
         if let Some(a) = raw.connection_retry_max_attempts {
             cfg.connection_retry_max_attempts = a;
@@ -1103,6 +1100,7 @@ impl Default for Config {
         Self {
             default_connection: String::new(),
             mcp: HashMap::new(),
+            context: muta_contracts::context_lifecycle::ContextPolicy::default(),
             compaction: CompactionPolicy::default(),
             connection_retry_max_attempts: 30,
             connection_retry_base_ms: 1_000,
@@ -1651,18 +1649,28 @@ mod tests {
 
     #[test]
     fn compaction_round_count_writes_canonical_key_and_drops_legacy_key() {
-        // ADR-0120 policy: the pre-ADR-0047 key is not aliased. It parses as
+        // ADR-0120 / ADR-0280: the pre-ADR-0047 key is not aliased. It parses as
         // an unknown key (warned and ignored) and the field stays at its
         // default — the stale value must not carry through.
         let legacy: Config = toml::from_str("compaction_preserve_turns = 9").unwrap();
         assert_eq!(
-            legacy.compaction.preserve_rounds,
-            Config::default().compaction.preserve_rounds
+            legacy.context.preferred_recent_rounds,
+            Config::default().context.preferred_recent_rounds
         );
 
         let serialized = toml::to_string(&legacy).unwrap();
-        assert!(serialized.contains("preserve_rounds ="));
+        assert!(serialized.contains("preferred_recent_rounds ="));
         assert!(!serialized.contains("compaction_preserve_turns ="));
+        assert!(!serialized.contains("[compaction]"));
+    }
+
+    #[test]
+    fn legacy_compaction_keys_are_refused_under_inv_policy_01() {
+        let err = toml::from_str::<Config>("[compaction]\nutilization = 0.85\n").unwrap_err();
+        assert!(err.to_string().contains("retired under ADR-0280 [INV-POLICY-01]"));
+
+        let err2 = toml::from_str::<Config>("compaction_preserve_rounds = 6\n").unwrap_err();
+        assert!(err2.to_string().contains("retired under ADR-0280 [INV-POLICY-01]"));
     }
 
     #[test]
@@ -1866,6 +1874,7 @@ deepseek = "new-key"
                 client_version: "0.1.0".to_string(),
                 source_identity: "models-dev:deepseek".to_string(),
                 refreshed_at_ms: 1234,
+                refresh_failed: false,
             },
         );
         cache.save().unwrap();

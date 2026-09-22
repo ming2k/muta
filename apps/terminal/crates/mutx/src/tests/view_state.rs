@@ -198,7 +198,12 @@ fn composer_image_paste_follows_picker_snapshot_vision() {
                 vision: Some(true),
                 context_window: 128_000,
                 max_output_tokens: None,
-                picker_enabled: None,
+                availability: None,
+
+                availability_overridden: false,
+
+                advertised: None,
+                availability_stale: false,
             }],
             builtin: true,
             protocol: String::new(),
@@ -257,7 +262,12 @@ fn active_model_context_window_follows_picker_snapshot_for_relay_models() {
                 vision: Some(false),
                 context_window: 1_000_000,
                 max_output_tokens: Some(131_072),
-                picker_enabled: None,
+                availability: None,
+
+                availability_overridden: false,
+
+                advertised: None,
+                availability_stale: false,
             }],
             builtin: true,
             protocol: String::new(),
@@ -304,7 +314,12 @@ fn composer_image_paste_snapshot_override_forces_off() {
                 vision: Some(false),
                 context_window: 128_000,
                 max_output_tokens: None,
-                picker_enabled: None,
+                availability: None,
+
+                availability_overridden: false,
+
+                advertised: None,
+                availability_stale: false,
             }],
             builtin: true,
             protocol: String::new(),

@@ -1866,12 +1866,22 @@ pub async fn run_tui(
                             muta_contracts::ConnectStatus::CatalogSyncWarning {
                                 provider,
                                 message,
+                                kind,
                             } => {
+                                // A refusal is actionable and permanent (the
+                                // account may not use this provider); a
+                                // transient failure is not. Say which (ADR-0273).
+                                let text = match kind {
+                                    muta_contracts::CatalogSyncFailure::Refused => format!(
+                                        "{provider}: the upstream refused the model-list request ({message}). This connection is not usable with the current credentials or plan; the previously cached list is still shown."
+                                    ),
+                                    muta_contracts::CatalogSyncFailure::Transient => format!(
+                                        "{provider}: could not refresh the model list ({message}). Showing the previous list."
+                                    ),
+                                };
                                 let notice = TranscriptMessage::notice(
                                 NoticeSeverity::Warning,
-                                format!(
-                                    "{provider}: could not refresh the model list ({message}). Showing the previous list."
-                                ),
+                                text,
                             )
                             .with_sent_at_ms(now_ms!());
                                 mutations

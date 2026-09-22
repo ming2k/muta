@@ -13,7 +13,7 @@ Project and user-defined commands are covered under
 |---------|-------------|
 | `/models` | Switch the active model |
 | `/connections` | Manage LLM provider connections |
-| `/mcp` | Manage MCP servers (enable/disable, reconnect) |
+| `/mcp` | Manage MCP servers (status, reconnect) |
 | `/compact` | Compact older complete rounds now |
 | `/new` | Start a new session, keeping the current one in history. Typing the retired `/clear` (or `/reset`) suggests `/new` instead — it never wipes anything in place |
 | `/permissions [clear]` | Show or clear always-allowed tool rules |

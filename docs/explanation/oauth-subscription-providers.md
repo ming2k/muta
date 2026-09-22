@@ -173,9 +173,9 @@ for all three surfaces.) The grant is a JSON device-authorization flow
   the first org (sorted by name) is recorded as the default, and the full
   membership is persisted for a later switch.
 
-The same console access token authenticates inference and discovery. Inference
+The same console access token authenticates inference and catalog. Inference
 runs against the Console inference roots, each request carrying the selected
-workspace as `x-opencode-org-id`; discovery reads the account's own
+workspace as `x-opencode-org-id`; catalog reads the account's own
 `GET https://opencode.ai/console/api/config` (bearer plus `x-org-id`), which is
 the authority for which models exist and which root and wire protocol each one
 uses. [ADR-0268](../adr/0268-opencode-go-console-oauth-subscription.md)

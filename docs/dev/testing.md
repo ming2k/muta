@@ -12,7 +12,7 @@ The automated test hierarchy verifies programmatic implementation correctness ac
 |------|----------|-------------------|
 | **Unit Tests** | `src/**/*.rs` (`#[cfg(test)]`) | Per-module behavior, pure logic, state machines, parsers, token accounting. |
 | **Integration Tests** | `crates/<crate>/tests/*.rs` | Service boundaries, daemon socket IPC, streaming loop orchestration, provider wire decoding. |
-| **TUI Snapshot Tests** | `apps/tui/crates/mutx/src/snapshot_tests.rs` | Pixel/layout regression testing using `insta` snapshots for rendered TUI frames. |
+| **TUI Snapshot Tests** | `apps/terminal/crates/mutx/src/snapshot_tests.rs` | Pixel/layout regression testing using `insta` snapshots for rendered TUI frames. |
 | **E2E / CLI Smokes** | `apps/web/e2e/*.sh`, `*.mjs` | Subprocess contracts, flag routing, HTTP/WS control plane against an isolated daemon. |
 
 ---
@@ -97,7 +97,7 @@ When running binaries directly during development rather than via the test runne
 | `daemon lock already held` | Previous daemon test leaked or host daemon active | Check `MUTA_HOME` export; run `muta stop` |
 | `Snapshot mismatch` | Rendered frame layout or ANSI escape codes modified | Run `cargo insta review` to inspect the visual diff |
 | `Connection refused / timeout` | Daemon IPC socket not bound in time | Inspect `RUST_BACKTRACE=1` and daemon stderr logs |
-| `Wire decode parse error` | Upstream provider schema payload mismatch | Check `crates/muta-providers/tests/wire.rs` mock fixtures |
+| `Wire decode parse error` | Upstream provider schema payload mismatch | Check `crates/muta-providers/tests/it/wire.rs` mock fixtures |
 | `CJK wide character drift` | Ghost cell calculation or unicode-width mismatch | Run `mutx showcase` on affected modal |
 
 ---

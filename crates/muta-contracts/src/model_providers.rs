@@ -88,6 +88,19 @@ pub const OPENCODE_ZEN_MODELS: &[&str] = &[
 
 pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.3", "glm-5.3-flash", "glm-5.2"];
 
+/// QianwenAI Platform Token Plan seeds, in activation order. The live
+/// `/models` endpoint is authoritative for what this account's plan may run
+/// (the whitelist is enforced upstream); this keeps the plan's Qwen-native
+/// flagship models selectable before the first refresh. The plan's GLM /
+/// DeepSeek / Kimi third-party rows are not seeded — their capability
+/// baselines are owned by their home providers and the live catalog serves
+/// them (see `muta-providers::registry::qianwen`).
+pub const QIANWEN_BUILTIN_MODELS: &[&str] = &[
+    "qwen3.8-max",
+    "qwen3.8-flash",
+    "qwen3.6-flash",
+];
+
 pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
 
 /// Qoder subscription models, in activation order (mirrors
@@ -124,6 +137,7 @@ pub const MODEL_PROVIDER_IDS: &[&str] = &[
     "opencode-zen",
     "opencode-go",
     "qoder",
+    "qianwen",
 ];
 
 /// Whether `id` names a registered model provider.
@@ -166,6 +180,7 @@ pub fn model_provider_label(id: &str) -> &'static str {
         "openrouter" => "OpenRouter",
         "glm-cn" => "ZAI Code (CN)",
         "qoder" => "Qoder",
+        "qianwen" => "QianwenAI Token Plan",
         "xai" => "xAI",
         _ => "Custom Provider",
     }

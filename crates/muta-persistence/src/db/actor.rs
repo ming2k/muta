@@ -109,6 +109,46 @@ impl PersistenceCommand {
                     guarded(|| crate::db::session_ir::save_session_delta(&engine.conn, &delta));
                 let _ = ack.send(res);
             }
+            Self::CommitContextFacts { commit, ack } => {
+                let borrowed = commit.as_borrowed();
+                let res = crate::db::context_store::commit_facts(&engine.conn, &borrowed);
+                let _ = ack.send(res);
+            }
+            Self::CommitContextView { commit, ack } => {
+                let borrowed = commit.as_borrowed();
+                let res = crate::db::context_store::commit_view(&engine.conn, &borrowed);
+                let _ = ack.send(res);
+            }
+            Self::ExecuteInspectDeletion {
+                session_id,
+                job_id,
+                now_ms,
+                ack,
+            } => {
+                let res = crate::db::inspect_service::execute_deletion(
+                    &engine.conn,
+                    &session_id,
+                    &job_id,
+                    now_ms,
+                );
+                let _ = ack.send(res);
+            }
+            Self::CollectInspectGarbage {
+                session_id,
+                now_ms,
+                batch_limit,
+                batch_ms,
+                ack,
+            } => {
+                let res = crate::db::inspect_service::collect_batch(
+                    &engine.conn,
+                    &session_id,
+                    now_ms,
+                    batch_limit,
+                    batch_ms,
+                );
+                let _ = ack.send(res);
+            }
             #[cfg(test)]
             Self::Die { ack } => {
                 let _ = ack.send(());
@@ -145,6 +185,17 @@ impl PersistenceCommand {
             }
             Self::SaveSessionDelta { ack, .. } => {
                 let _ = ack.send(Err(error));
+            }
+            Self::CommitContextFacts { ack, .. } | Self::CommitContextView { ack, .. } => {
+                let _ = ack.send(Err(crate::db::context_store::ContextCommitError::PersistenceFailure {
+                    detail: error.to_string(),
+                }));
+            }
+            Self::ExecuteInspectDeletion { ack, .. } => {
+                let _ = ack.send(Err(muta_contracts::context_lifecycle::InspectError::Corrupt));
+            }
+            Self::CollectInspectGarbage { ack, .. } => {
+                let _ = ack.send(Err(muta_contracts::context_lifecycle::InspectError::Corrupt));
             }
             Self::UpsertSession { ack, .. }
             | Self::RecordCommand { ack, .. }

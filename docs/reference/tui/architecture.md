@@ -65,7 +65,7 @@ The view modules live flat under `apps/terminal/crates/mutx/src/`, grouped by co
 | `render/mod.rs` | The transcript-area renderer: `draw_transcript`, `TranscriptProps`, `HeightCache`; re-exports the drawing surface (chrome, composer, overlays, theme, …) the shell consumes. |
 | `components/` | Reusable composed components: modal pages, selectable lists, scroll bodies, selectable document bodies (`selectable_body`), footer hints, toasts, notices, option rows, and one-line metadata strips (`MetaStrip`). |
 | `overlays/` | One renderer per dialog/sheet (provider, session, help, queue, telemetry, usage stats, permission, …). |
-| `tools/` | Per-tool-step presenters (execute_command, edit, read, search, web, ask_user, diff, …). |
+| `tools/` | Per-tool-step presenters (run_command, edit, read, search, web, ask_user, diff, …). |
 | `disclosure/` | Expandable-step disclosure: state machine, sticky-pin tracking, step renderers. |
 | `layout/` | Transcript arrangement strategies (`default` / `legacy`). |
 | `theme.rs` / `design.rs` | Color scheme + non-color design tokens (spacing, gutters, row counts). |

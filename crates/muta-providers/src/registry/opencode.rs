@@ -11,7 +11,7 @@ use muta_contracts::{Model, WireProtocol};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-use super::{effort_ladders, CatalogShape, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource, effort_ladders};
 
 /// Baseline seed models for the OpenCode Console preset.
 pub use muta_contracts::model_providers::OPENCODE_CONSOLE_MODELS;
@@ -212,7 +212,8 @@ fn from_dev_model(
         .or(default_protocol);
     crate::list_models::DiscoveredModel {
         id,
-        picker_enabled: None,
+        availability: None,
+        advertised: None,
         protocol,
         endpoint: m.provider.as_ref().and_then(|p| p.api.clone()),
         family: m.family.clone(),

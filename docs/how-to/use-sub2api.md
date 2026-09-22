@@ -5,11 +5,11 @@ compatible HTTP surface and gives you a token plus a relay URL. muta's
 connection editor creates a named connection, stores the token, and seeds
 the model list from the selected template.
 
-For templates with live model discovery, muta queries the relay's `/models`
+For templates with live model catalog, muta queries the relay's `/models`
 endpoint at startup and keeps only ids that are also present in muta's model
 registry for that wire protocol. Unknown or incompatible ids are hidden. A
 failed request or an empty intersection keeps the last valid model list.
-Discovery never replaces the provider's token, token environment variable,
+The catalog never replaces the provider's token, token environment variable,
 base URL, user agent, or authentication mode.
 
 Trusted first-party templates (currently only Kimi Code) are the exception:

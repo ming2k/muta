@@ -49,7 +49,9 @@
 
 use std::collections::HashSet;
 
-use muta_contracts::{ReasoningSupport, RemoteModelMetadata, SecretString, WireProtocol};
+use muta_contracts::{
+    Availability, ReasoningSupport, RemoteModelMetadata, SecretString, WireProtocol,
+};
 use serde_json::Value;
 
 pub use muta_contracts::CatalogShape;
@@ -134,8 +136,10 @@ pub enum RemoteCatalogUpdate {
 }
 
 /// Why a live model list could not be obtained. The catalog layer treats every
-/// variant the same way — fall back to the compiled-in snapshot — so the
-/// variants exist only for diagnostics/logging.
+/// variant the same way — fall back to the compiled-in snapshot — but the
+/// distinction is no longer diagnostic-only: [`Self::is_refusal`] separates a
+/// durable upstream *refusal* from a transient failure so the connection's
+/// status can say which happened (ADR-0273).
 #[derive(Debug)]
 pub enum ModelListError {
     /// The chat base URL could not be turned into a models URL (e.g. it was
@@ -150,6 +154,45 @@ pub enum ModelListError {
     /// The response body could not be parsed into a model list (missing
     /// `data`/`models`, wrong types). Carries a short description.
     Parse(String),
+}
+
+impl ModelListError {
+    /// Whether the upstream **refused** the request, as opposed to failing to
+    /// serve it (ADR-0273).
+    ///
+    /// Only an explicit `401`/`403` counts: those are the server saying the
+    /// account may not do this. Everything else — including `404`, which for a
+    /// catalog fetch usually means a misconfigured path rather than a
+    /// revocation, and `429`/`5xx`, which are transient by definition — is
+    /// **not** a refusal. Guessing otherwise would be the same inference this
+    /// axis exists to forbid (`[INV-AVAIL-02]`).
+    pub const fn is_refusal(&self) -> bool {
+        matches!(self, Self::Status(401 | 403, _))
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::ModelListError;
+
+    #[test]
+    fn only_explicit_unauthorized_and_forbidden_are_refusals() {
+        // The server saying "you may not" is the only durable refusal.
+        assert!(ModelListError::Status(401, String::new()).is_refusal());
+        assert!(ModelListError::Status(403, String::new()).is_refusal());
+        // Everything else is transient, and must never be reported as the
+        // account being refused: a 404 is a wrong path, a 429/5xx is the
+        // server having a bad moment, and a transport error never reached it.
+        for code in [400, 404, 408, 429, 500, 502, 503] {
+            assert!(
+                !ModelListError::Status(code, String::new()).is_refusal(),
+                "HTTP {code} must not be reported as a refusal"
+            );
+        }
+        assert!(!ModelListError::Http("dns failure".to_string()).is_refusal());
+        assert!(!ModelListError::BadEndpoint("nope".to_string()).is_refusal());
+        assert!(!ModelListError::Parse("bad json".to_string()).is_refusal());
+    }
 }
 
 impl std::fmt::Display for ModelListError {
@@ -188,10 +231,14 @@ impl std::error::Error for ModelListError {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiscoveredModel {
     pub id: String,
-    /// Whether the provider allows this model to appear in its interactive
-    /// model picker. `None` means the endpoint did not distinguish picker
-    /// models, so callers may include it.
-    pub picker_enabled: Option<bool>,
+    /// The provider's declared availability for this model (ADR-0273): whether
+    /// the account behind the connection may run it, and the provider's own
+    /// reason when it gives one. `None` means the endpoint declared no verdict
+    /// — never a synthesized one.
+    pub availability: Option<Availability>,
+    /// The provider's listing intent: whether this model is meant to appear in
+    /// a model picker listing. `None` means the endpoint expressed none.
+    pub advertised: Option<bool>,
     /// Exact API surface advertised for the model. This is provider-scoped: a
     /// Copilot model can use Messages, Responses, or Chat Completions while the
     /// same id elsewhere uses another route.
@@ -276,7 +323,8 @@ impl DiscoveredModel {
                     .collect()
             }),
             catalog_source: self.catalog_source.clone(),
-            picker_enabled: self.picker_enabled,
+            availability: self.availability.clone(),
+            advertised: self.advertised,
         }
     }
 }
@@ -724,11 +772,23 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                 .map(str::to_string)
                 .collect();
             let reasoning = !effort_levels.is_empty();
-            let listed = entry.get("visibility").and_then(Value::as_str) == Some("list")
-                && entry
+            // Two independent declarations, never ANDed into one bit
+            // (ADR-0273): `visibility` says whether the model is *listed*, and
+            // `supported_in_api` says whether the API will *run* it. The
+            // `hidden-helper` case — listed nowhere, yet API-supported — is
+            // exactly why they must not be conflated.
+            let advertised = entry
+                .get("visibility")
+                .and_then(Value::as_str)
+                .map(|visibility| visibility == "list");
+            let availability =
+                entry
                     .get("supported_in_api")
                     .and_then(Value::as_bool)
-                    .unwrap_or(true);
+                    .map(|usable| Availability {
+                        usable,
+                        reason: None,
+                    });
             let vision = entry
                 .get("input_modalities")
                 .and_then(Value::as_array)
@@ -751,7 +811,8 @@ fn parse_codex_models(json: &Value) -> Vec<DiscoveredModel> {
                 index,
                 DiscoveredModel {
                     id,
-                    picker_enabled: Some(listed),
+                    availability,
+                    advertised,
                     protocol: Some(WireProtocol::Responses),
                     endpoint: None,
                     family: None,
@@ -841,7 +902,8 @@ fn discovered_model_from_entry(entry: &Value) -> Option<DiscoveredModel> {
         });
     Some(DiscoveredModel {
         id,
-        picker_enabled: None,
+        availability: None,
+        advertised: None,
         protocol: None,
         endpoint: None,
         family: None,
@@ -954,9 +1016,36 @@ fn copilot_model_from_capabilities(
         })
     };
     let protocol = copilot_protocol(entry.get("supported_endpoints"));
+    // `model_picker_enabled` is *picker/listing* metadata — it sits beside
+    // `model_picker_category` and `model_picker_price_category` in the vendor's
+    // `CCAModel` — so it maps to listing intent, never to availability.
+    let advertised = entry.get("model_picker_enabled").and_then(Value::as_bool);
+    // Availability is the vendor's `policy.state`, a closed vocabulary
+    // (`enabled`/`disabled`/`unconfigured`/`unknown`). Only an explicit
+    // `disabled` is a declaration; `unconfigured`, `unknown`, and an absent
+    // policy mean *undeclared*, not "off". `terms` is the provider's own
+    // free-text explanation and is carried verbatim as the reason.
+    let availability = match entry
+        .get("policy")
+        .and_then(|policy| policy.get("state"))
+        .and_then(Value::as_str)
+    {
+        Some("disabled") => Some(Availability {
+            usable: false,
+            reason: entry
+                .get("policy")
+                .and_then(|policy| policy.get("terms"))
+                .and_then(Value::as_str)
+                .filter(|terms| !terms.is_empty())
+                .map(str::to_string),
+        }),
+        Some("enabled") => Some(Availability::usable()),
+        _ => None,
+    };
     Some(DiscoveredModel {
         id,
-        picker_enabled: entry.get("model_picker_enabled").and_then(Value::as_bool),
+        availability,
+        advertised,
         protocol,
         endpoint: None,
         family: capabilities
@@ -1088,7 +1177,11 @@ fn parse_antigravity_models_map(
 
         let discovered = DiscoveredModel {
             id: model_id.clone(),
-            picker_enabled: Some(true),
+            // This parser applies the provider's admission filter itself (it
+            // drops deprecated and non-chat entries), so nothing survives that
+            // it needs to declare unavailable or unlisted.
+            availability: None,
+            advertised: None,
             protocol: None,
             endpoint: None,
             family: Some("google".to_string()),
@@ -1282,9 +1375,18 @@ mod tests {
         });
         let models = parse_models(CatalogShape::Codex, &json);
         assert_eq!(models[0].id, "hidden-helper");
-        assert_eq!(models[0].picker_enabled, Some(false));
+        // `visibility:"hide"` is a *listing* declaration, not an availability
+        // one. `hidden-helper` is `supported_in_api:true`, so it stays usable —
+        // exactly the distinction the old single bit erased (ADR-0273).
+        assert_eq!(models[0].advertised, Some(false));
+        assert_eq!(
+            models[0].availability,
+            Some(Availability::usable()),
+            "an API-supported model must not be marked unusable for being unlisted"
+        );
         assert_eq!(models[1].id, "gpt-codex");
-        assert_eq!(models[1].picker_enabled, Some(true));
+        assert_eq!(models[1].advertised, Some(true));
+        assert_eq!(models[1].availability, Some(Availability::usable()));
         assert_eq!(models[1].protocol, Some(WireProtocol::Responses));
         assert_eq!(models[1].context_window, Some(272_000));
         assert_eq!(models[1].thinking, Some(ReasoningSupport::ReasoningSummary));
@@ -1320,7 +1422,7 @@ mod tests {
         let models = parse_models(CatalogShape::Codex, &json);
         let astra = models.first().unwrap();
         assert_eq!(astra.id, "gpt-6-astra");
-        assert_eq!(astra.picker_enabled, Some(true));
+        assert_eq!(astra.advertised, Some(true));
         assert_eq!(astra.context_window, Some(872_000));
         assert_eq!(
             astra
@@ -1544,6 +1646,7 @@ mod tests {
                     "id": "internal-title-model",
                     "name": "Internal title model",
                     "model_picker_enabled": false,
+                    "policy": { "state": "disabled", "terms": "requires Copilot Business" },
                     "supported_endpoints": ["/responses"],
                     "capabilities": {
                         "type": "chat",
@@ -1560,7 +1663,10 @@ mod tests {
             .iter()
             .find(|model| model.id == "claude-opus-4.7")
             .unwrap();
-        assert_eq!(claude.picker_enabled, Some(true));
+        // `model_picker_enabled` is a *listing* declaration, so it lands on
+        // `advertised`; availability comes from `policy.state` only.
+        assert_eq!(claude.advertised, Some(true));
+        assert_eq!(claude.availability, None);
         assert_eq!(claude.protocol, Some(WireProtocol::AnthropicMessages));
         assert_eq!(claude.family.as_deref(), Some("claude-opus"));
         assert_eq!(claude.thinking, Some(ReasoningSupport::AnthropicAdaptive));
@@ -1583,8 +1689,42 @@ mod tests {
             .iter()
             .find(|model| model.id == "internal-title-model")
             .unwrap();
-        assert_eq!(internal.picker_enabled, Some(false));
+        // Both axes independently: the vendor's picker flag is a listing
+        // declaration, and `policy.state:"disabled"` is the availability one,
+        // carrying the vendor's own `terms` as the verbatim reason.
+        assert_eq!(internal.advertised, Some(false));
+        assert_eq!(
+            internal.availability,
+            Some(Availability::locked(Some(
+                "requires Copilot Business".to_string()
+            )))
+        );
         assert_eq!(internal.protocol, Some(WireProtocol::Responses));
+    }
+
+    #[test]
+    fn copilot_unconfigured_policy_is_undeclared_not_disabled() {
+        // `policy.state` is a closed vocabulary. Only an explicit `disabled`
+        // is a declaration; `unconfigured` means "no policy set" and must
+        // deserialize to undeclared — never to unavailable (ADR-0273).
+        let json = serde_json::json!({
+            "data": [{
+                "id": "o5-mini",
+                "name": "o5-mini",
+                "model_picker_enabled": true,
+                "policy": { "state": "unconfigured", "terms": "" },
+                "supported_endpoints": ["/chat/completions"],
+                "capabilities": {
+                    "type": "chat",
+                    "family": "o5",
+                    "limits": { "max_output_tokens": 2048 },
+                    "supports": { "tool_calls": true }
+                }
+            }]
+        });
+        let models = parse_models(CatalogShape::OpenAi, &json);
+        assert_eq!(models[0].availability, None);
+        assert_eq!(models[0].advertised, Some(true));
     }
 
     #[test]

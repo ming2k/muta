@@ -65,7 +65,7 @@ However, models differ in **chain disclosure**:
 
 Per ADR-0149, model capabilities resolve in three layers:
 1. **User Overrides** (`RouteSettings::capability_overrides`)
-2. **Remote Metadata** (Dynamic discovery)
+2. **Remote Metadata** (Dynamic catalog)
 3. **Static Baseline Registry**
 
 Users can override thinking disclosure for any route in `config.toml`:

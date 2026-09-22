@@ -150,10 +150,9 @@ impl CausalCompactor {
             modified_files,
         );
 
-        // Re-parent the preserved tail's head onto the new compaction node (ADR-0255)
-        if let Some(first_kept) = ir.history.nodes.get_mut(&cut_point.first_kept_entry_id) {
-            first_kept.parent_id = Some(compaction_node_id.clone());
-        }
+        // ADR-0275 / ADR-0278: Facts are immutable and parent edges never mutate.
+        // A checkpoint references a source interval; the preserved tail's head
+        // node parent_id is strictly preserved and never reparented (INV-CHK-01).
 
         Ok(Some(CausalCompactionOutcome {
             compaction_node_id,

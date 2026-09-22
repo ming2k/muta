@@ -88,7 +88,7 @@ The version bump is a single dedicated commit, separate from any code
 fixes. The commit message follows the established convention
 `release: bump version to vX.Y.Z`.
 
-Bump the workspace package version once in `Cargo.toml`, and update `apps/web/package.json` to match (enforced by `scripts/check-wire-compat.sh` in CI). Every Rust member inherits the workspace value.
+Bump the workspace package version once in `Cargo.toml`, and update `apps/web/package.json` to match. The two must move in the same release commit — a CI step in the `lockfile` job fails on any mismatch, and the release workflow's tag check pins the `Cargo.toml` value. Every Rust member inherits the workspace value.
 
 ```bash
 # Edit `[workspace.package] version` in the root manifest.

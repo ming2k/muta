@@ -328,4 +328,36 @@ impl DbReader {
     pub fn list_kv_keys_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
         self.engine.list_kv_keys_with_prefix(prefix)
     }
+
+    // -- context lifecycle (ADR-0275 / ADR-0279) ---------------------------
+
+    /// Query the current revision of a context branch.
+    pub fn context_branch_revision(
+        &self,
+        session_id: &str,
+        branch_id: &str,
+    ) -> std::result::Result<Option<u64>, crate::db::context_store::ContextCommitError> {
+        crate::db::context_store::branch_revision(&self.engine.conn, session_id, branch_id)
+    }
+
+    /// Load ordered immutable execution facts for a session branch.
+    pub fn load_context_facts(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Vec<muta_contracts::context_lifecycle::FactNode>, crate::db::context_store::ContextCommitError> {
+        crate::db::context_store::load_facts(&self.engine.conn, session_id)
+    }
+
+    /// Compute the SHA-256 digest of all facts for a session.
+    pub fn context_facts_digest(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<String, crate::db::context_store::ContextCommitError> {
+        crate::db::context_store::facts_digest(&self.engine.conn, session_id)
+    }
+
+    /// Obtain an inspect retrieval service bound to this reader connection (ADR-0279).
+    pub fn inspect_service(&self) -> crate::db::inspect_service::InspectService<'_> {
+        crate::db::inspect_service::InspectService::new(&self.engine.conn)
+    }
 }

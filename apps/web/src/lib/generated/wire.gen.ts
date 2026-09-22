@@ -40,7 +40,7 @@ parent_call_id: string | null, } } | { "UserQuestionReply": { request_id: string
  * side agent question. See [`AgentRequest::PermissionReply`] for the
  * routing contract.
  */
-parent_call_id: string | null, } } | { "StdinReply": { request_id: string, text: string, parent_call_id: string | null, } } | { "SwitchConnection": { provider: string, model: string, api_key: SecretString | null, base_url: string | null, } } | { "AddConnection": { name: string, provider: string, protocol: WireProtocol | null, base_url: string | null, user_agent: string | null, api_key: SecretString, models: Array<string>, 
+parent_call_id: string | null, } } | { "StdinReply": { request_id: string, text: string, parent_call_id: string | null, } } | { "SwitchConnection": { provider: string, model: string, api_key: SecretString | null, base_url: string | null, } } | { "RegisterProvider": { id: string, label: string | null, root_url: string, protocol: WireProtocol | null, client_profile: ClientPreset | null, user_agent: string | null, catalog_format: string | null, dialect: string | null, } } | { "AddConnection": { name: string, provider: string, api_key: SecretString, models: Array<string>, 
 /**
  * How the connection authenticates. OAuth credentials are owned by
  * this exact connection name.
@@ -49,7 +49,7 @@ auth: ConnectionAuth,
 /**
  * Client identity (impersonation/headers). Defaults to Native when unset.
  */
-client_identity: ClientProfile | null, } } | { "ConnectConnection": { name: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | "CancelAuthorizeOAuth" | { "EditConnection": { name: string, provider: string, protocol: WireProtocol | null, base_url: string | null, api_key: SecretString, client_identity: ClientProfile | null, } } | { "RenameConnection": { from: string, to: string, } } | { "IncludeModel": { scope: ModelTargetScope, model: DeclaredModel, } } | { "ExcludeModel": { scope: ModelTargetScope, model_id: string, } } | { "ClearModelRule": { scope: ModelTargetScope, model_id: string, } } | { "SetModelCapabilities": { scope: ModelTargetScope, model_id: string, overrides: CapabilityOverrides, } } | { "EditConnectionModel": { connection: string, model: string, effort: string | null, thinking: boolean | null, 
+client_identity: ClientProfile | null, } } | { "ConnectConnection": { name: string, method: LoginMethod, } } | { "AuthorizeOAuth": { method: LoginMethod, auth: ConnectionAuth, } } | "CancelAuthorizeOAuth" | { "EditConnection": { name: string, provider: string, api_key: SecretString, client_identity: ClientProfile | null, } } | { "RenameConnection": { from: string, to: string, } } | { "IncludeModel": { scope: ModelTargetScope, model: DeclaredModel, } } | { "ExcludeModel": { scope: ModelTargetScope, model_id: string, } } | { "ClearModelRule": { scope: ModelTargetScope, model_id: string, } } | { "SetModelCapabilities": { scope: ModelTargetScope, model_id: string, overrides: CapabilityOverrides, } } | { "EditConnectionModel": { connection: string, model: string, effort: string | null, thinking: boolean | null, 
 /**
  * Capability overrides (ADR-0149 layer 1): `None` keeps the stored
  * overrides untouched; `Some(record)` replaces them wholesale (an
@@ -108,6 +108,35 @@ export type AttestationStatus = "quarantined" | "trusted" | "session_ephemeral" 
 export type AutonomousFallbackPolicy = "fail_closed" | "recommended_labeled";
 
 /**
+ * A provider's declared availability verdict for a model on the account
+ * behind the connection: whether the account may run it, and — when the
+ * provider states one — why not (ADR-0273).
+ *
+ * This is a **declaration**, never an inference: it exists only because a
+ * provider response carried it, and it is never synthesized from status codes,
+ * model-id patterns, or plan heuristics. It is orthogonal to
+ * [`RemoteModelMetadata::advertised`] (the listing hint) and to capability:
+ * an unavailable model keeps its membership, its capabilities, and its route
+ * shape — it simply must not run.
+ *
+ * `reason` is the provider's own explanation, **verbatim**. It is display
+ * data and nothing else: no code path parses, matches, localizes, or decides
+ * on it (`[INV-AVAIL-03]`). A provider that states no reason yields `None`,
+ * and a surface must then say only what it knows rather than inventing one.
+ */
+export type Availability = { 
+/**
+ * Whether the account may run the model right now.
+ */
+usable: boolean, 
+/**
+ * The provider's own explanation for an unusable verdict, verbatim.
+ * `None` means the provider declared none — never "unknown, assume the
+ * obvious".
+ */
+reason?: string | null, };
+
+/**
  * Snapshot description of a background job for status polling and UI rendering.
  */
 export type BackgroundJobInfo = { id: JobId, spec: JobSpec, state: JobState, created_at_ms: number, completed_at_ms?: number | null, latest_output?: string | null, };
@@ -157,6 +186,16 @@ consumed_amount?: number | null,
  * Formatted primary balance string for display (e.g. "¥100.50", "$1.23 / $10.00").
  */
 display_primary?: string | null, };
+
+/**
+ * Why a live catalog refresh did not deliver a fresh model list (ADR-0273).
+ *
+ * The distinction is what the user can *do*: a refusal means the account was
+ * told it may not use the provider, so retrying is pointless and the remedy is
+ * an entitlement change; a transient failure means retrying is the remedy. The
+ * default is [`Self::Transient`] because it claims less.
+ */
+export type CatalogSyncFailure = "transient" | "refused";
 
 /**
  * Standard client identity presets supported by muta.
@@ -329,9 +368,13 @@ alias_of?: string, command?: CommandSpec, };
 export type ComposerCompletionKind = "slash" | "slash_alias" | "intent" | "path_file" | "path_dir" | "path_explicit";
 
 /**
- * How a user-defined connection authenticates.
+ * How a user-defined connection authenticates (ADR-0267).
  */
-export type ConnectionAuth = "ApiKey" | "XaiOAuth" | "ChatGptOAuth" | "CopilotOAuth" | "AntigravityOAuth" | "QoderOAuth";
+export type ConnectionAuth = "ApiKey" | { "Subscription": { 
+/**
+ * Stable provider integration id (e.g. "chatgpt", "copilot", "qoder", "xai", "google-antigravity").
+ */
+provider: string, } };
 
 /**
  * Full inspection detail for one connection in the `/connections` modal.
@@ -1134,6 +1177,8 @@ latest_output?: string | null,
 log_path?: string | null, };
 
 /**
+ * A connection-local override for the provider's remote catalog source.
+ *
  * Standard named pipe filter policies (ADR-0203).
  */
 export type NamedFilterPolicy = "baseline" | "all";
@@ -1338,15 +1383,33 @@ context_window: number,
  */
 max_output_tokens?: number | null, 
 /**
- * Whether the provider's catalog enables this model for this account
- * (Qoder's `enable`, three-valued like `vision` per ADR-0230). `Some(false)`
- * means the provider locked the model — the picker must render it
- * greyed-out and must not activate it (the server would refuse it);
- * `None` means *undeclared*, which older snapshots and every provider
- * without such a field deserialize to, so a frontend must treat it as
- * enabled.
+ * The **effective** availability verdict for this route (ADR-0273):
+ * the provider's declaration, after any sovereign user override has been
+ * applied daemon-side. `None` means undeclared — a frontend must treat it
+ * as usable, never as disabled. `Some(usable:false)` is the one value a
+ * picker may dim and refuse.
  */
-picker_enabled?: boolean | null, };
+availability?: Availability | null, 
+/**
+ * Set when the provider declared the model unusable but the user's own
+ * scope (inject) overrode it. The row is usable yet must disclose the
+ * upstream verdict it contradicts (`[INV-AVAIL-05]`).
+ */
+availability_overridden?: boolean, 
+/**
+ * The provider's listing intent (ADR-0273). `Some(false)` means the
+ * provider does not want this model offered in a listing; `None` means
+ * undeclared and therefore listed. Independent of `availability`.
+ */
+advertised?: boolean | null, 
+/**
+ * Set when this row's `availability` was observed **before a refresh that
+ * has since failed**, so the verdict may already have been reversed
+ * upstream. The declaration is still enforced (a failed refresh never
+ * widens access), but the surface must not present it as freshly
+ * confirmed (ADR-0273).
+ */
+availability_stale?: boolean, };
 
 /**
  * One row of provider-picker state sent from the harness to the TUI. Carries
@@ -1535,20 +1598,6 @@ export type RateLimitSpec = { requests: number, interval: string, };
  * How a service task declares itself ready (ADR-0190 §D1).
  */
 export type Readiness = { "readiness": "first_output" } | { "readiness": "after_ms" } & number | { "readiness": "port_probe", port: number, };
-
-/**
- * Network protocol used to query a first-party remote model catalog.
- */
-export type RemoteCatalogEndpoint = "open_ai_compatible" | "anthropic" | "google" | "google_cloud_code" | "codex" | "copilot" | "opencode_go";
-
-/**
- * A connection-local override for the provider's remote catalog source.
- *
- * The transport endpoint and the catalog source are deliberately independent:
- * a private relay can send inference traffic to its own `base_url` while
- * sourcing model metadata from a verified models.dev provider entry.
- */
-export type RemoteCatalogSourceOverride = { endpoint: RemoteCatalogEndpoint, } | { models_dev: string, };
 
 /**
  * Who actually settled a parked human request. The anti-fabrication

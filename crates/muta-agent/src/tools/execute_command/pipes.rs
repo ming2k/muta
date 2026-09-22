@@ -136,6 +136,7 @@ pub struct OutputCollector {
     pub stdout_buf: String,
     pub stderr_buf: String,
     pub lines: Vec<ShellLine>,
+    pub raw_bytes: Vec<u8>,
     truncated: bool,
     pending_stdout: String,
     pending_stderr: String,
@@ -150,6 +151,7 @@ impl Default for OutputCollector {
             stdout_buf: String::new(),
             stderr_buf: String::new(),
             lines: Vec::new(),
+            raw_bytes: Vec::new(),
             truncated: false,
             pending_stdout: String::new(),
             pending_stderr: String::new(),
@@ -171,6 +173,10 @@ impl OutputCollector {
         text: String,
         on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + '_),
     ) {
+        // ADR-0276: capture byte-exact raw stream before minification, ANSI stripping, or folding.
+        self.raw_bytes.extend_from_slice(text.as_bytes());
+        self.raw_bytes.push(b'\n');
+
         if self.cadence_tracker.observe(&text) {
             self.cadence_flooded = true;
         }
@@ -263,6 +269,10 @@ impl OutputCollector {
 
     pub fn drain_remaining_rx(&mut self, rx: &mut UnboundedReceiver<(ShellStream, String)>) {
         while let Ok((stream, text)) = rx.try_recv() {
+            // ADR-0276: capture byte-exact raw stream before minification, ANSI stripping, or folding.
+            self.raw_bytes.extend_from_slice(text.as_bytes());
+            self.raw_bytes.push(b'\n');
+
             match stream {
                 ShellStream::Out => {
                     self.stdout_buf.push_str(&text);
@@ -276,6 +286,12 @@ impl OutputCollector {
             self.lines.push(ShellLine { stream, text });
         }
         self.compact_in_flight_if_needed();
+    }
+
+    /// The un-truncated, un-folded raw bytes captured across the execution (ADR-0276).
+    #[allow(dead_code)]
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.raw_bytes
     }
 
     /// True when at least one output line was captured. A child that has

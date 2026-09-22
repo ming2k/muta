@@ -166,37 +166,6 @@ async fn secret_scrub_middleware_redacts_credentials() {
 }
 
 #[tokio::test]
-async fn spill_middleware_offloads_massive_output() {
-    let env = InMemoryExecutionEnvironment::new("/virtual/workspace");
-    let middleware = SpillMiddleware::new(100); // 100 byte limit for test
-
-    let mut large_text = String::new();
-    for i in 0..50 {
-        large_text.push_str(&format!(
-            "Line {i}: This is a detailed log output statement.\n"
-        ));
-    }
-
-    let mut output = ToolOutput::Text(large_text.clone());
-    middleware
-        .post_execute("execute_command", &mut output, &env)
-        .await
-        .unwrap();
-
-    let text = output.to_text();
-    assert!(text.contains("Output exceeded 100 bytes"));
-    assert!(text.contains("Output spooled to offstream epistemic memory"));
-
-    // Verify spill file was created on the virtual filesystem
-    let spill_dir = PathBuf::from("/virtual/workspace/.muta/storage/spool");
-    let entries = env.fs().list_dir(&spill_dir).await.unwrap();
-    assert_eq!(entries.len(), 1);
-
-    let saved_content = env.fs().read_to_string(&entries[0].path).await.unwrap();
-    assert_eq!(saved_content, large_text);
-}
-
-#[tokio::test]
 async fn workspace_jail_middleware_blocks_sensitive_roots() {
     let mut env = InMemoryExecutionEnvironment::new("/virtual/workspace");
     let jail = WorkspaceJailMiddleware;

@@ -1,10 +1,19 @@
 # ADR-0171: Three-layer model catalog and pluggable network sources
 
-- **Status:** Proposed
+- **Status:** Compacted into [Model catalog architecture](../../architecture/model-catalog.md)
 - **Date:** 2026-09-02
-- **Amended by:** [ADR-0227](0227-connection-scoped-catalog-refresh-and-in-memory-source-cache.md) — retires the
-  on-disk `models.dev` cache and the hourly background refresh, and collapses the standalone `muta-models-dev`
-  crate into the `muta-providers::models_dev` module.
+- **Archived:** 2026-09-21
+
+> **Notice**: Compacted into [Model catalog architecture](../../architecture/model-catalog.md) on
+> 2026-09-21. The durable design of this record — the three-layer catalog overlay and the
+> declarative, pluggable network source — is the binding rule in that blueprint, built out by
+> [ADR-0203](../0203-remote-catalog-overlay-and-connection-gated-pipeline.md),
+> [ADR-0227](../0227-connection-scoped-catalog-refresh-and-in-memory-source-cache.md),
+> [ADR-0259](../0259-deterministic-root-url-algebra-and-model-level-wire-protocol-inheritance.md),
+> and [ADR-0266](../0266-declarative-remote-catalog-descriptors.md). This record is preserved
+> for historical rationale and negative-knowledge audit only. The specific mechanisms it
+> proposed are no longer current: the `LiveCatalog` enum, the standalone `muta-models-dev`
+> module, and its committed snapshot are removed, and `DiscoveryProtocol` is now `CatalogShape`.
 
 ## Context
 

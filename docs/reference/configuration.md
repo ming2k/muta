@@ -8,58 +8,39 @@ All keys are optional: a missing key, a missing table, or an absent file uses
 the defaults below. Unknown keys are ignored, so removing or renaming a key
 never breaks parsing.
 
-## Compaction
+## Context Lifecycle Policy (ADR-0280)
 
-Context compaction keeps the uncapped agentic loop bounded. Thresholds are
-derived from the **active model's context window** (token-denominated) and
-re-seeded on every provider switch, so they track the live model rather than a
-fixed budget. See the [harness explanation](../explanation/agent-design/harness.md#context-projection),
-the [pruning](../explanation/agent-design/context-pruning.md) and
-[compaction](../explanation/agent-design/context-compaction.md) deep-dives, and
-ADR-0019 / ADR-0021 for the design.
+Context admission and representation selection is governed by the versioned `[context]` policy (ADR-0277 / ADR-0280). Legacy `compaction.*` keys are retired under `[INV-POLICY-01]`; to convert an existing legacy configuration run `muta context migrate`.
 
-Pressure estimates the complete next request: prepared conversation messages,
-the regenerated system prompt, newly injected skills, and visible tool schemas.
-Each fraction is multiplied by the active model's full context window (`0` →
-the fallback window) to produce an absolute threshold. The gap above
-`compaction.utilization` reserves room for protocol framing and the next model
-completion.
-
-The removed `compaction.max_active_tokens` and
-`compaction.prompt_reserve_tokens` keys are ignored when loading older config
-files. Performance limits are not part of context-capacity safety policy.
+Watermarks are fractions of the model's **input ceiling** `I = W - O - F` (resolved by ADR-0277's model budget contract), rather than fractions of the raw window `W`.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `compaction.utilization` | `0.85` | Trigger a full summarizing compaction once pressure reaches this fraction of the window |
-| `compaction.target_utilization` | `0.25` | After a full compaction, compress the model window down to this fraction |
-| `compaction.prune_utilization` | `0.65` | Trigger cheap tool-result pruning at this fraction (below `utilization`) |
-| `compaction.fallback_window_tokens` | `32000` | Assumed window (tokens) when the model's context window is unknown |
-| `compaction.preserve_rounds` | `6` | Number of recent complete user rounds kept verbatim after a full compaction. The former key `compaction_preserve_turns` is **not** aliased (ADR-0120): it parses as an unknown key, is ignored, and is dropped on the next save — run `muta config check` to find stale spellings |
-| `compaction.summarize` | `true` | Use the active model for an anchored structured summary; `false` uses the deterministic excerpt fallback |
-| `compaction.prune` | `true` | Enable cheap tool-result pruning (pre-round and mid-round) |
-| `compaction.prune_protect_tokens` | `6000` | Most recent tool results (tokens) protected from pruning |
-
-Resolved thresholds per model (defaults):
-
-| Model | Window | Prune at | Compact at | Target |
-|-------|--------|----------|------------|--------|
-| `glm-5.2`, Gemini, DeepSeek | 1,000,000 | 650,000 | 850,000 | 250,000 |
-| `k3` | 1,048,576 | 681,574 | 891,289 | 262,144 |
-| `kimi-k2.7-code` | 262,144 | 170,393 | 222,822 | 65,536 |
-| `gpt-4o` | 128,000 | 83,200 | 108,800 | 32,000 |
-| unknown / local | 32,000 (fallback) | 20,800 | 27,200 | 8,000 |
+| `context.schema_version` | `1` | Schema version of the context policy |
+| `context.preferred_recent_rounds` | `6` | Preference for number of recent rounds kept verbatim (never a hard protection guarantee) |
+| `context.checkpoint_enabled` | `true` | Enable structured causal summarization checkpoints (ADR-0278) |
+| `context.lightweight_degradation_enabled` | `true` | Enable progressive preview excerpting for old tool observations |
+| `context.fallback_window_tokens` | `32000` | Fallback input window estimate when model limits are undeclared |
+| `context.inspect_page_tokens` | `2048` | Default page size for scoped offstream inspection (ADR-0279) |
+| `context.capture_bytes_per_execution` | `268435456` | Per-command raw artifact capture ceiling (256 MiB, ADR-0276) |
+| `context.session_artifact_quota_bytes` | `2147483648` | Per-session logical artifact quota (2 GiB, ADR-0276) |
+| `context.watermarks.soft_watermark` | `0.65` | Fraction of `I` where lightweight degradation engages |
+| `context.watermarks.hard_watermark` | `0.85` | Fraction of `I` where strong reclamation / checkpointing is triggered |
+| `context.watermarks.target_watermark` | `0.50` | Target fraction of `I` after compaction |
 
 ```toml
-[compaction]
-utilization = 0.85
-target_utilization = 0.25
-prune_utilization = 0.65
+[context]
+schema_version = 1
+preferred_recent_rounds = 6
+checkpoint_enabled = true
+lightweight_degradation_enabled = true
 fallback_window_tokens = 32000
-preserve_rounds = 6
-summarize = true
-prune = true
-prune_protect_tokens = 6000
+inspect_page_tokens = 2048
+
+[context.watermarks]
+soft_watermark = 0.65
+hard_watermark = 0.85
+target_watermark = 0.50
 ```
 
 ## Agent behavior
@@ -69,8 +50,8 @@ The optional `[agent]` table.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `agent.hard_stop_turns` | `0` | Hard-stop a round after this many ReAct turns. `0` = uncapped (the only execution cap; compaction is the backstop) |
-| `agent.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for an `execute_command` call it emits. Off by default: the execute_command schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the execute_command schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for delegated automatic flows where no human is reachable |
-| `agent.skip_interactive_input` | `false` | Whether an interactive `execute_command` invocation (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as in delegated autonomous mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not put the agent into delegated autonomous mode, so ordinary tool confirmations still apply |
+| `agent.allow_model_stdin` | `false` | Whether the model may supply `stdin` bytes for an `run_command` call it emits. Off by default: the run_command schema exposes no `stdin` parameter and a command needing input either gets it from a human (interactive classifier → inline input panel) or fails fast with a non-interactive remedy hint (see ADR-0043). On: the run_command schema dynamically adds a `stdin` field the model can fill, threaded through as a prefilled pipe — for delegated automatic flows where no human is reachable |
+| `agent.skip_interactive_input` | `false` | Whether an interactive `run_command` invocation (matched by the interactive classifier: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) **never** pops the inline input panel. Off by default: a command needing input prompts you with an input panel (command + masked/plain field). On: the panel is skipped and the command runs with stdin closed — it reads EOF immediately and fails fast with a non-interactive remedy hint, exactly as in delegated autonomous mode. For users who find the prompt disruptive and would rather retry the command themselves. Note: this only governs the interactive-input path; it does not put the agent into delegated autonomous mode, so ordinary tool confirmations still apply |
 | `agent.doom_guard.enabled` | `true` | Doom-loop guard: blocks a watched tool signature once it recurs enough times to reach `threshold` within the window. On by default — a model making progress never trips it, and the cheapest token-burning loop (`sleep N; make` variants) is capped at its third occurrence (ADR-0148). Forced off for subordinate subagents |
 | `agent.doom_guard.window` | `16` | Number of recent watched tool signatures retained for repeat detection |
 | `agent.doom_guard.threshold` | `3` | Occurrences in-window before a repeat is blocked. `3` (ADR-0148): one same-signature re-run is tolerated — a transient retry, a re-run of the same test after an edit — and the second repeat is blocked. `2` restores the strict ADR-0113 first-repeat block. Clamped to `>= 2` |
@@ -106,7 +87,7 @@ Connections (the "who I connect to" records) live in the state store
 *selection* (`default_connection` / `default_model`, which reference connection
 names). The routes a model actually travels (per-model protocol/dialect/endpoint/
 reasoning) are **derived at runtime** from each connection's model provider and
-the discovery cache — never persisted, so two connections to the same provider
+the catalog cache — never persisted, so two connections to the same provider
 can never duplicate or drift a route set. See [Providers](providers.md) for the
 matrix, [Paths](paths.md) for the files, and [Add a provider](../how-to/add-a-provider.md)
 for the full workflow.
@@ -130,7 +111,6 @@ user_agent = "acme-client/1.0"
 
 # Optional catalog-source override. Independent of `base_url`: a relay can
 # serve inference from its own endpoint while reading metadata elsewhere.
-# catalog_source = { models_dev = "anthropic" }
 # catalog_source = { endpoint = "open_ai_compatible" }
 ```
 
@@ -226,15 +206,15 @@ broker and the command guard (`[bash_policy]`, the config key retained from the 
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `permissions.allow` | `[]` | Rules to pre-seed the "always allow" allowlist at startup: each rule is a `{ tool, scope }` pair. `scope = "*"` matches every call to the tool; any other value must match the call's scope exactly (a full path, or the exact command string for `execute_command`) — no prefix or substring matching |
-| `bash_policy.enabled` | `true` | Master switch for the bash policy guard; dangerous built-in commands stay protected even when `execute_command` is broadly allowed |
+| `permissions.allow` | `[]` | Rules to pre-seed the "always allow" allowlist at startup: each rule is a `{ tool, scope }` pair. `scope = "*"` matches every call to the tool; any other value must match the call's scope exactly (a full path, or the exact command string for `run_command`) — no prefix or substring matching |
+| `bash_policy.enabled` | `true` | Master switch for the bash policy guard; dangerous built-in commands stay protected even when `run_command` is broadly allowed |
 | `bash_policy.allow_user_override_builtin_deny` | `false` | Whether an explicit user `allow` rule may override a compiled-in `deny` rule (user `allow` can still override compiled-in `confirm` rules) |
 | `bash_policy.rules` | `[]` | User rules evaluated before built-in `confirm` rules: each rule is a `{ name, match, pattern, action, reason }` tuple. `match` is `"regex"` (default), `"contains"`, `"startswith"`, or `"program"`; `action` is `"allow"`, `"confirm"`, or `"deny"` |
 
 ```toml
 [permissions]
 allow = [
-  { tool = "execute_command", scope = "git status" },
+  { tool = "run_command", scope = "git status" },
   { tool = "hook", scope = ".muta/hooks/lint.sh" },
 ]
 
@@ -298,7 +278,7 @@ and Gemini. Valid values are clamped to the model's supported levels at
 request-build time (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`;
 GPT models expose a subset). Settings are stored per `(connection, model)` in
 `$XDG_STATE_HOME/muta/route_settings.json`, written by the model `e` editor in
-the picker — they are user-set route facts, not disposable discovery data or
+the picker — they are user-set route facts, not disposable catalog data or
 `config.toml` behavior.
 
 Anthropic extended thinking is **opt-in** (ADR-0046). A model does not reason
@@ -386,7 +366,7 @@ expand_auto_scroll = false
 
 [default_expanded]
 edit_text = true
-execute_command = true
+run_command = true
 thinking = false
 
 [custom_color_scheme]
@@ -460,10 +440,10 @@ command = ".muta/hooks/turn-open.sh"
 # waiting for you. The canonical use is a desktop/bell notification so a
 # long-running task that runs unattended still gets your attention. Outcomes are
 # ignored — these never grant/deny or alter the transcript. The matcher targets
-# the tool seeking approval (here: only execute_command). `UserQuestion` has no matcher.
+# the tool seeking approval (here: only run_command). `UserQuestion` has no matcher.
 [[hooks]]
 event   = "PermissionRequest"
-matcher = "execute_command"
+matcher = "run_command"
 command = ".muta/hooks/notify.sh \"Needs approval\""
 [[hooks]]
 event   = "UserQuestion"

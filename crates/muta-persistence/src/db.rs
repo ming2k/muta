@@ -19,11 +19,17 @@ mod engine;
 mod handle;
 mod migrations;
 mod reader;
+pub mod context_store;
+pub mod inspect_service;
+pub mod migration_tool;
+pub mod migration_policy;
 pub mod session_ir;
 
 pub use handle::get_persistence_handle;
 pub(crate) use migrations::*;
-pub use migrations::{CURRENT_DB_VERSION, SessionTranscriptView};
+pub use migrations::{
+    CURRENT_DB_VERSION, SessionTranscriptView, open_in_memory_for_tests,
+};
 
 #[cfg(test)]
 mod tests;
@@ -163,7 +169,7 @@ fn push_summary(
     } else {
         "(empty session)".to_string()
     };
-    let digest = digest_json.and_then(|raw| serde_json::from_str(&raw).ok());
+    let digest = digest_json.and_then(|digest_raw| serde_json::from_str(&digest_raw).ok());
     summaries.push(crate::session::SessionSummary {
         id: id.clone(),
         parent_id,
@@ -892,6 +898,31 @@ pub(crate) enum PersistenceCommand {
     SaveSessionDelta {
         delta: Box<muta_contracts::SessionDelta>,
         ack: oneshot::Sender<Result<(), PersistenceError>>,
+    },
+    /// Commit immutable execution facts to the canonical context store (ADR-0275 §7).
+    CommitContextFacts {
+        commit: Box<crate::db::context_store::OwnedFactCommit>,
+        ack: oneshot::Sender<Result<crate::db::context_store::CommitOutcome, crate::db::context_store::ContextCommitError>>,
+    },
+    /// Commit a branch context view to the canonical context store (ADR-0275 §7, ADR-0278).
+    CommitContextView {
+        commit: Box<crate::db::context_store::OwnedViewCommit>,
+        ack: oneshot::Sender<Result<crate::db::context_store::CommitOutcome, crate::db::context_store::ContextCommitError>>,
+    },
+    /// Execute an inspect deletion job (ADR-0279 §6).
+    ExecuteInspectDeletion {
+        session_id: String,
+        job_id: String,
+        now_ms: u64,
+        ack: oneshot::Sender<Result<crate::db::inspect_service::DeletionReport, muta_contracts::context_lifecycle::InspectError>>,
+    },
+    /// Collect a bounded garbage collection batch for artifacts/leases (ADR-0279 §5).
+    CollectInspectGarbage {
+        session_id: String,
+        now_ms: u64,
+        batch_limit: u32,
+        batch_ms: u64,
+        ack: oneshot::Sender<Result<crate::db::inspect_service::CollectionProgress, muta_contracts::context_lifecycle::InspectError>>,
     },
     /// Test-only: the writer acks and then exits its loop, simulating actor
     /// death so the supervisor's respawn path is exercisable (ADR-0196 D6).

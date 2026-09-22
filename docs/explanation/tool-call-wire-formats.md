@@ -86,8 +86,8 @@ Anthropic:
 muta's internal `Message` (`crates/muta-contracts/src/`) is **OpenAI-shaped**: a
 flat list with a `Tool` role, `tool_calls`, a JSON-string `arguments`, and a
 `tool_call_id`. `ChatCompletionsProvider` serializes that almost verbatim. The
-work lives in `AnthropicMessagesProvider::request_body`
-(`crates/muta-providers/src/anthropic_compat.rs`), which reshapes the flat
+work lives in the Anthropic request builder — `body` / `body_with_capabilities`
+in `crates/muta-llm-client/src/protocol/anthropic/request.rs` — which reshapes the flat
 list into Messages format on the way out:
 
 - **System lifting.** Leading `Role::System` messages are concatenated and moved

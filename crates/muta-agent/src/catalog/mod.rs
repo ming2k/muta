@@ -105,9 +105,42 @@ pub fn build_provider_for_model(
     .into_iter()
     .find(|e| e.id == connection_id)?;
     let wanted = model_id.or(config.default_model.as_deref());
-    let channel = wanted
-        .and_then(|m| entry.channel_for_model(m))
-        .or_else(|| entry.default_channel());
+    let connection = stores.connections.get(connection_id);
+    // The single daemon-side availability gate (ADR-0273
+    // `[INV-AVAIL-06]`). A route for a model the account may not run is never
+    // built, so no client is the only refusal site: TUI, web, daemon protocol,
+    // and session restore all inherit it. `effective_availability` applies the
+    // user's sovereign override, so an injected model still resolves.
+    let usable = |channel: &&muta_contracts::catalog::Channel| {
+        let (availability, overridden) = connection.map_or(
+            (muta_contracts::Availability::usable(), false),
+            |connection| {
+                derive::effective_availability(connection, &channel.model, channel.remote.as_ref())
+            },
+        );
+        if !availability.usable {
+            tracing::warn!(
+                connection = %entry.id,
+                model = %channel.model,
+                reason = availability.reason.as_deref().unwrap_or(""),
+                "refusing to route a model the provider declared unavailable",
+            );
+        }
+        let _ = overridden;
+        availability.usable
+    };
+    // An explicitly requested model that is declared unavailable is refused
+    // rather than silently swapped for another; an unrequested connection falls
+    // through to the first model that *is* available, so a catalogue whose head
+    // happens to be locked still yields a runnable default.
+    let channel = match wanted.and_then(|m| entry.channel_for_model(m)) {
+        Some(channel) => usable(&channel).then_some(channel),
+        None => entry
+            .channels
+            .iter()
+            .find(usable)
+            .or_else(|| entry.default_channel()),
+    };
     channel
         .map(|channel| muta_providers::build_provider_for_channel(channel, &entry.id, session_id))
 }

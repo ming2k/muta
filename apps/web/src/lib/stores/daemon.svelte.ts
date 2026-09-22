@@ -79,13 +79,14 @@ const CLIENT_VERSION: string =
 
 /**
  * The wire protocol number this client speaks (ADR-0134). Must equal
- * `PROTOCOL_VERSION` in `crates/muta-contracts/src/wire.rs` — CI refuses
- * a drift between the two (ts-rs cannot export constants, so this is the
- * one hand-maintained mirror of that value). The daemon serves any number
- * in its window; sending it is what opts this client into protocol-number
- * negotiation instead of product-version equality.
+ * `PROTOCOL_VERSION` in `crates/muta-contracts/src/wire.rs` — the
+ * `protocol_mirror` test in `muta-contracts` refuses a drift between the
+ * two (ts-rs cannot export constants, so this is the one hand-maintained
+ * mirror of that value). The daemon serves any number in its window;
+ * sending it is what opts this client into protocol-number negotiation
+ * instead of product-version equality.
  */
-const PROTOCOL_VERSION = 13;
+const PROTOCOL_VERSION = 14;
 
 /** Reconnect base delay for both channels; doubles per failure, capped. */
 const RECONNECT_BASE_MS = 1000;

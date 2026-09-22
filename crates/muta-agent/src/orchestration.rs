@@ -524,54 +524,6 @@ mod projection_settings_tests {
     }
 }
 
-/// Mid-round model-context projection gate: prunes old tool results durably
-/// when the active round is approaching the model's context budget.
-pub struct MidTurnPruneProjectionGate {
-    pub session: Arc<SessionStore>,
-    pub prune_protect_tokens: usize,
-    /// Shared content-addressed weights cache (from the agent): the post-prune
-    /// session-weight estimate walks it instead of re-tokenizing the whole
-    /// window, and runs on the blocking pool — same discipline as
-    /// `estimate_session_weight_off_executor`.
-    pub weights: Arc<muta_contracts::MessageTokenWeights>,
-}
-
-#[async_trait]
-impl crate::ContextProjectionGate for MidTurnPruneProjectionGate {
-    async fn project_context(&self, messages: Vec<Message>) -> Option<Vec<Message>> {
-        let mut messages = messages;
-        let min_reclaim =
-            if muta_contracts::has_stale_tool_results(&messages, self.prune_protect_tokens) {
-                100
-            } else {
-                ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS
-            };
-        let outcome = muta_contracts::prune_tool_results(
-            &mut messages,
-            self.prune_protect_tokens,
-            min_reclaim,
-        )?;
-        let window_tokens_after =
-            estimate_session_weight_off_executor(Arc::clone(&self.weights), &messages).await;
-        let checkpoint = ContextProjectionCheckpoint {
-            operation: muta_persistence::session::ContextProjectionKind::Prune,
-            archived_messages: outcome.originals.len(),
-            active_messages: messages.len(),
-            window_tokens_before: window_tokens_after + outcome.reclaimed_tokens,
-            window_tokens_after,
-        };
-        let result = ContextProjectionResult {
-            model_window: messages.clone(),
-            archived_originals: outcome.originals,
-            checkpoint,
-        };
-        if let Err(error) = self.session.commit_context_projection(result).await {
-            tracing::warn!(?error, "mid-turn prune commit failed");
-        }
-        Some(messages)
-    }
-}
-
 /// Emit the current harness snapshot (mode, round counter, loop
 /// status, delegated flag, retry affordance) to the UI for a running round.
 ///

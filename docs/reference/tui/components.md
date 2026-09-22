@@ -67,7 +67,7 @@ Interaction logic remains in the app shell or in shell-owned state machines:
 | Behavior | Owner |
 |----------|-------|
 | Keyboard and mouse event dispatch | `apps/terminal/crates/mutx/src/input/` |
-| Modal open/close and action handling | `apps/terminal/crates/mutx/src/event_loop.rs` |
+| Modal open/close and action handling | `apps/terminal/crates/mutx/src/event_loop/mod.rs` |
 | Question-modal state machine | `apps/terminal/crates/mutx/src/question_model.rs` |
 | Transcript-step focus and toggles | `apps/terminal/crates/mutx/src/step_interaction.rs` |
 | Hit-region storage and lookup | `LayoutMap` / `ModalHitMap`, owned by the shell and filled by renderers |

@@ -18,8 +18,22 @@
     effort: string | null;
     thinking: boolean | null;
     active: boolean;
-    /** Provider-declared lock (`picker_enabled: false`): visible but inert. */
+    /**
+     * Provider-declared availability (`availability.usable === false`):
+     * visible but inert. `null` means undeclared and therefore usable.
+     */
     locked: boolean;
+    /**
+     * The provider's own reason for the verdict, verbatim, when it stated one.
+     * Never paraphrased: a provider that declared none leaves this null and the
+     * row says only that the model is unavailable.
+     */
+    lockedReason: string | null;
+    /**
+     * The provider declared the model unusable but the user's own scope
+     * overrode it: the row is usable and must disclose the contradiction.
+     */
+    overridden: boolean;
   }
 
   /** Flatten the picker snapshot into one row per served model. */
@@ -38,7 +52,12 @@
           effort: info?.effort ?? null,
           thinking: info?.thinking ?? null,
           active: row.id === snapshot.default_id && row.model === model,
-          locked: info?.picker_enabled === false,
+          locked: info?.availability?.usable === false,
+          lockedReason:
+            info?.availability?.usable === false
+              ? (info.availability.reason ?? null)
+              : null,
+          overridden: info?.availability_overridden === true,
         });
       }
     }
@@ -94,10 +113,12 @@
             class:unavailable={!entry.provider.key_ready || entry.locked}
             onclick={() => choose(entry)}
             title={entry.locked
-              ? `${entry.provider.name} — locked for the current plan`
-              : entry.provider.key_ready
-                ? `${entry.provider.name} — click to switch`
-                : `${entry.provider.name} — no API key configured`}
+              ? `${entry.provider.name} — unavailable: ${entry.lockedReason ?? "the provider did not state a reason"}`
+              : entry.overridden
+                ? `${entry.provider.name} — the provider locked this model; you overrode it`
+                : entry.provider.key_ready
+                  ? `${entry.provider.name} — click to switch`
+                  : `${entry.provider.name} — no API key configured`}
           >
             <span class="star" class:favorite={entry.favorite}>{entry.favorite ? "★" : ""}</span>
             <span class="model-name" class:wire={!entry.name}>{entry.name ?? entry.id}</span>
@@ -116,7 +137,11 @@
                 <span class="flag no-key">{t("noApiKey")}</span>
               {/if}
               {#if entry.locked}
-                <span class="flag locked">{t("locked")}</span>
+                <span class="flag locked">
+                  {entry.lockedReason ? `${t("locked")}: ${entry.lockedReason}` : t("locked")}
+                </span>
+              {:else if entry.overridden}
+                <span class="flag locked">{t("locked")} · {t("overridden")}</span>
               {/if}
               {#if entry.active}
                 <span class="flag current">{t("current")}</span>

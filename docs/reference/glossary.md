@@ -49,7 +49,7 @@ The architecture defines the Homogeneous Agent Model (ADR-0183): a single unifie
 | Term | Definition |
 |------|------------|
 | **Timer task** | The fabric's clock arm (`JobSpec::Timer`): it publishes its digest as a completed outcome at fire time and re-arms itself for recurring use; it never executes a command line. No tool arms one today, and the former `/schedule` and `/repeat` schedulers (session-scoped `ScheduledJob` state, fresh round per tick) were removed with their internals. [ADR-0190](../adr/0190-agent-as-actor-unified-task-fabric.md), [ADR-0234](../adr/0234-authorized-background-job-continuations.md) |
-| **background job** | Work handed to the job fabric — `run_command` with `background: true` (bounded, `JobKind::Interactive`) or `service: true` (long-lived, readiness-reported) — identified by a `job_id` and controlled through the `process` tool (`status`/`logs`/`wait`/`kill`). Settling publishes a task event; it does not resume the model's turn ([ADR-0212](../adr/0212-decouple-followup-queue-and-authoritative-task-bar.md), [ADR-0234](../adr/0234-authorized-background-job-continuations.md)) |
+| **background job** | The job fabric's unit of tracked work, identified by a `job_id` and surfaced through `/jobs` and task events. No tool dispatches one today: the former `run_command` `background` / `service` parameters and the `process` controller were removed ([ADR-0263](../adr/0263-axiom-of-linear-causality-and-pure-execution-primitives.md)). Settling publishes a task event; it does not resume the model's turn |
 
 ## Task list
 
@@ -65,7 +65,7 @@ The architecture defines the Homogeneous Agent Model (ADR-0183): a single unifie
 | **sub-agent** | An isolated child agent spawned by a parent agent to investigate or execute a sub-task; shares only the provider, running with fresh history and policy-filtered tools. |
 | **profile / preset** | A declarative bundle (name, system-prompt fragment, and `ToolPolicy`) that scopes a sub-agent's behavior. |
 | **`EXPLORE` profile** | Research role: pure read tools. Bound by `spawn_agent` (`role = "explore"`). |
-| **`DEBUG` profile** | Diagnostic role: read-only tools plus non-interactive command execution (`run_command`/`process`). Probes and investigates root causes without mutating workspace code. Bound by `spawn_agent(role: "debug")`. |
+| **`DEBUG` profile** | Diagnostic role: read-only tools plus non-interactive command execution (`run_command`). Probes and investigates root causes without mutating workspace code. Bound by `spawn_agent(role: "debug")`. |
 | **`TITLE` profile** | Read-only role used to generate a session title in a single model call. [ADR-0022](../adr/0022-session-level-ai-title.md) |
 | **full-duplex** | Sub-agents are not fire-and-forget: requests travel up to the parent agent, replies travel down to the child. |
 
@@ -79,7 +79,7 @@ The architecture defines the Homogeneous Agent Model (ADR-0183): a single unifie
 | **workspace asset trust** | Canonical-workspace-keyed SHA-256 trust for the independent `mcp`, `skills`, `hooks`, and `rules` project asset domains. It controls loading only. |
 | **spatial workspace boundary** | The canonical primary workspace plus user-configured linked roots — plus the implicit platform temp roots — within which native file operations may occur. It does not load assets or authorize runtime operations. |
 | **runtime permission grant** | Authority for one concrete hazardous operation scope, granted Once, for the Session, or Always. It does not trust project assets or widen filesystem roots. |
-| **workspace sandbox** | The isolated variant of `execute_command` (`shell_isolation: Workspace`): commands run inside a container confined to the admitted workspace roots, with no host file or network access. Offered automatically when `muta_platform::workspace_sandbox::available()`. |
+| **workspace sandbox** | The isolated variant of `run_command` (`shell_isolation: Workspace`): commands run inside a container confined to the admitted workspace roots, with no host file or network access. Offered automatically when `muta_platform::workspace_sandbox::available()`. |
 | **delegated autonomous mode** | A persisted interaction posture: never wait for confirmations, questions, or stdin. Missing grants fail immediately. Formerly `autopilot` (and earlier, an internal spelling now retired); the legacy words remain input aliases. [Delegated autonomous execution](../explanation/agent-design/delegated-mode.md) |
 | **`tool_call_id` pairing** | The requirement that every result references its call. Provider ids are correlation labels rather than session-global identities; request projection may remap a colliding pair without changing durable history. [Tool-call wire formats](../explanation/tool-call-wire-formats.md#call-identity-across-provider-boundaries) |
 

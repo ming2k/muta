@@ -443,6 +443,14 @@ pub fn builtin_provider_metadata(id: &str) -> Option<(&'static str, &'static str
         "anthropic" => ("Anthropic", "Claude models"),
         // xAI Grok — OpenAI-compatible chat completions; SuperGrok OAuth or API key.
         "xai" => ("xAI", "Grok models (SuperGrok / API key)"),
+        // QianwenAI Token Plan — Alibaba's QianwenAI Platform subscription
+        // surface (Credits-billed, interactive-use only). One key hosts the
+        // Qwen/DeepSeek/GLM/Kimi models the plan whitelists; the live /models
+        // endpoint is authoritative for what this account may run.
+        "qianwen" => (
+            "QianwenAI Token Plan",
+            "QianwenAI Platform Token Plan (Qwen / DeepSeek / GLM / Kimi)",
+        ),
         _ => return None,
     };
     Some((name, description))

@@ -303,6 +303,21 @@ pub const PROVIDER_PRESETS: &[ConnectionTemplate] = &[
         auth: muta_contracts::ConnectionAuth::ApiKey,
     },
     ConnectionTemplate {
+        id: "qianwen",
+        label: "QianwenAI Token Plan",
+        description: "Alibaba's QianwenAI Platform Token Plan serving Qwen, DeepSeek, GLM, and Kimi over one Credits-billed key; sign in with your plan API key (sk-sp-…).",
+        protocol: WireProtocol::ChatCompletions,
+        models: muta_contracts::model_providers::QIANWEN_BUILTIN_MODELS,
+        needs_url: false,
+        url_hint: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1/chat/completions",
+        needs_model: false,
+        default_url: Some(
+            "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1/chat/completions",
+        ),
+        user_agent: None,
+        auth: muta_contracts::ConnectionAuth::ApiKey,
+    },
+    ConnectionTemplate {
         id: "qoder",
         label: "Qoder",
         description: "Alibaba's Qoder subscription for Qoder3 and Qwen coding models with COSY-signed inference; paste a personal access token (pt-…) or authorize via device flow.",
@@ -506,11 +521,22 @@ pub struct RankedModel {
     pub last_used_ms: Option<u64>,
     /// Context window limit in tokens (ADR-0182).
     pub context_window: usize,
-    /// Whether the provider's catalog enables this model for this account.
-    /// `false` marks a locked (subscription-gated) model: the row renders
-    /// greyed-out with a `locked` tag and activation is refused — the daemon
-    /// passes the provider's own declaration through (`None` = enabled).
-    pub picker_enabled: bool,
+    /// Whether this model may be run on this account right now (ADR-0273).
+    /// `false` renders the row greyed-out and refuses activation. Undeclared
+    /// availability — the common case — is always usable.
+    pub usable: bool,
+    /// The provider's own reason for an unusable verdict, verbatim. `None`
+    /// means the provider declared none; the surface then says only that the
+    /// model is unavailable rather than guessing a cause. Never parsed.
+    pub locked_reason: Option<String>,
+    /// The provider declared the model unusable but the user's own scope
+    /// overrode it: the row is usable and must disclose the contradiction
+    /// (`[INV-AVAIL-05]`).
+    pub availability_overridden: bool,
+    /// The availability verdict was observed before a refresh that has since
+    /// failed, so it may already be out of date upstream. The row says so
+    /// rather than presenting a stale verdict as freshly confirmed (ADR-0273).
+    pub availability_stale: bool,
     /// Subsequence match against the wire model ID (`model`). The renderer
     /// highlights the ID column with these positions, and uses them for the
     /// leading label column only when the row has no separate name to draw.
@@ -723,7 +749,17 @@ pub fn models_flat_filtered_from(
                 favorite: info.favorite,
                 last_used_ms: info.last_used_ms,
                 context_window: info.context_window,
-                picker_enabled: info.picker_enabled.unwrap_or(true),
+                usable: info
+                    .availability
+                    .as_ref()
+                    .is_none_or(|availability| availability.usable),
+                locked_reason: info
+                    .availability
+                    .as_ref()
+                    .filter(|availability| !availability.usable)
+                    .and_then(|availability| availability.reason.clone()),
+                availability_overridden: info.availability_overridden,
+                availability_stale: info.availability_stale,
                 match_id,
                 match_name,
                 match_connection,
@@ -890,7 +926,12 @@ mod tests {
             vision: Some(false),
             context_window: 128_000,
             max_output_tokens: None,
-            picker_enabled: None,
+            availability: None,
+
+            availability_overridden: false,
+
+            advertised: None,
+            availability_stale: false,
         }
     }
 
@@ -1337,6 +1378,7 @@ mod tests {
             "OpenCode Go",
             "OpenCode Zen",
             "OpenRouter",
+            "QianwenAI Token Plan",
             "Qoder",
         ];
         for t in PROVIDER_PRESETS {
@@ -1369,7 +1411,10 @@ mod tests {
             Some("https://opencode.ai/zen/v1/chat/completions")
         );
         assert_eq!(tmpl.auth, ConnectionAuth::ApiKey);
-        assert!(!tmpl.oauth_first(), "the Zen relay signs in with an API key");
+        assert!(
+            !tmpl.oauth_first(),
+            "the Zen relay signs in with an API key"
+        );
         assert_eq!(tmpl.fields(), vec![CustomField::Name, CustomField::Token]);
     }
 

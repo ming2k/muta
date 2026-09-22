@@ -2,7 +2,7 @@
 //! responses ([`AgentResponse`]), live agent events ([`AgentEvent`]), and the
 //! small data records they carry.
 
-use crate::{ImagePart, Message, ToolOutput, ToolStream, TrustDomain};
+use crate::{Availability, ImagePart, Message, ToolOutput, ToolStream, TrustDomain};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
@@ -1698,6 +1698,31 @@ pub struct ProviderPickerRow {
 
 pub type ConnectionPickerRow = ProviderPickerRow;
 
+/// Why a live catalog refresh did not deliver a fresh model list (ADR-0273).
+///
+/// The distinction is what the user can *do*: a refusal means the account was
+/// told it may not use the provider, so retrying is pointless and the remedy is
+/// an entitlement change; a transient failure means retrying is the remedy. The
+/// default is [`Self::Transient`] because it claims less.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogSyncFailure {
+    /// The upstream failed to serve the list: network, timeout, `429`, `5xx`.
+    #[default]
+    Transient,
+    /// The upstream refused the request as unauthorized or forbidden
+    /// (`401`/`403`): the connection is not usable with these credentials or
+    /// this plan.
+    Refused,
+}
+
 /// Progress / outcome of an OAuth connect flow (xAI SuperGrok).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -1716,8 +1741,14 @@ pub enum ConnectStatus {
     /// Authorization succeeded but the follow-up live catalog sync failed,
     /// so the provider keeps its previous (often seed-only) model list. The
     /// UI surfaces this as a warning so the user does not mistake a stale list
-    /// for the account's real entitlements.
-    CatalogSyncWarning { provider: String, message: String },
+    /// for the account's real entitlements. `kind` says whether the upstream
+    /// refused the account or merely failed to answer (ADR-0273).
+    CatalogSyncWarning {
+        provider: String,
+        message: String,
+        #[serde(default)]
+        kind: CatalogSyncFailure,
+    },
     /// Authorization failed or was denied.
     Failed { provider: String, message: String },
 }
@@ -1785,15 +1816,30 @@ pub struct ProviderModelInfo {
     /// Maximum output generation tokens for this route when declared or overridden.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
-    /// Whether the provider's catalog enables this model for this account
-    /// (Qoder's `enable`, three-valued like `vision` per ADR-0230). `Some(false)`
-    /// means the provider locked the model — the picker must render it
-    /// greyed-out and must not activate it (the server would refuse it);
-    /// `None` means *undeclared*, which older snapshots and every provider
-    /// without such a field deserialize to, so a frontend must treat it as
-    /// enabled.
+    /// The **effective** availability verdict for this route (ADR-0273):
+    /// the provider's declaration, after any sovereign user override has been
+    /// applied daemon-side. `None` means undeclared — a frontend must treat it
+    /// as usable, never as disabled. `Some(usable:false)` is the one value a
+    /// picker may dim and refuse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub picker_enabled: Option<bool>,
+    pub availability: Option<Availability>,
+    /// Set when the provider declared the model unusable but the user's own
+    /// scope (inject) overrode it. The row is usable yet must disclose the
+    /// upstream verdict it contradicts (`[INV-AVAIL-05]`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub availability_overridden: bool,
+    /// The provider's listing intent (ADR-0273). `Some(false)` means the
+    /// provider does not want this model offered in a listing; `None` means
+    /// undeclared and therefore listed. Independent of `availability`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advertised: Option<bool>,
+    /// Set when this row's `availability` was observed **before a refresh that
+    /// has since failed**, so the verdict may already have been reversed
+    /// upstream. The declaration is still enforced (a failed refresh never
+    /// widens access), but the surface must not present it as freshly
+    /// confirmed (ADR-0273).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub availability_stale: bool,
 }
 
 impl ProviderModelInfo {

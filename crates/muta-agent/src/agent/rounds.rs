@@ -659,10 +659,11 @@ impl Agent {
                                     crate::catalog::prune_stale_models_on_disk();
                                     on_event(AgentEvent::CatalogInvalidated);
                                 }
-                                for (provider, error) in outcome.failures {
+                                for failure in outcome.failures {
                                     tracing::warn!(
-                                        connection_id = %provider,
-                                        error = %error,
+                                        connection_id = %failure.connection,
+                                        error = %failure.message,
+                                        refused = failure.refused,
                                         "model catalog ETag refresh failed"
                                     );
                                 }

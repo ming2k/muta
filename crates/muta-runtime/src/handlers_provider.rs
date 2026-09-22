@@ -442,13 +442,52 @@ pub(crate) async fn add(
         return;
     }
 
+    // Step 3: activating a connection is a *model-switch* concern, not a
+    // connection-management concern (ADR-0201): `/connections` adds a
+    // connection to the store, it never hijacks the session's live model. Only
+    // two bootstrap cases may activate here:
+    //   * the session has no usable provider at all (the `NoProvider` sentinel
+    //     from startup) — the first added connection is the only way to get a
+    //     working channel, so it steps in;
+    //   * no default connection is configured yet (`default_connection` empty).
+    // Everything else leaves the current selection untouched: the user picks a
+    // model explicitly via `/models` (`SwitchConnection` / `SetDefaultModel`).
+    let no_live_provider = muta_agent::NoProvider::is(&**provider_for_task
+        .read()
+        .unwrap_or_else(|error| error.into_inner()));
+    let no_default_configured = config.default_connection.trim().is_empty();
+    if !no_live_provider && !no_default_configured {
+        // Still record the new connection as *known-good* telemetry for the
+        // picker (its models appear in the usage-recency ordering) without
+        // touching the live provider, the session pin, or the global default.
+        provider_usage.record(&name);
+        if let Err(error) = provider_usage.save() {
+            tracing::warn!(?error, "add: could not persist model usage telemetry");
+        }
+        let ack = format!(
+            "Connection '{name}' added. Switch to it with /models when you want to use it."
+        );
+        let _ = resp_tx.send(AgentResponse::ProviderKeys(provider_key_status(config)));
+        let session_id = session.id().await;
+        let _ = resp_tx.send(round_response(
+            &session_id,
+            RoundEvent::Notice(AgentNotice::command_ack(ack)),
+        ));
+        let _ = resp_tx.send(AgentResponse::ProviderPicker(catalog::build_picker_state(
+            config,
+            provider_usage,
+        )));
+        return;
+    }
+
     config.default_connection = name.clone();
     config.default_model = Some(active_model.clone());
     if let Err(error) = config.save() {
         tracing::warn!(?error, "add: could not persist selection");
     }
-    // Pin the newly-added connection to this session — adding a connection is
-    // also a live switch, so it is pinned like `/models`.
+    // Pin the newly-added connection to this session only in the bootstrap
+    // case where the add IS the activation (see the guard above): a session
+    // that already runs a model keeps its own pin untouched.
     if let Err(error) = session
         .set_provider_selection(Some(ProviderSelection {
             connection: name.clone(),
@@ -468,11 +507,16 @@ pub(crate) async fn add(
             catalog::sync_fitted_model_registry();
             catalog::prune_stale_models_on_disk();
         }
-        for (failed_provider, message) in &outcome.failures {
+        for failure in &outcome.failures {
             let _ = resp_tx.send(AgentResponse::ConnectStatus(
                 muta_contracts::ConnectStatus::CatalogSyncWarning {
-                    provider: failed_provider.clone(),
-                    message: message.clone(),
+                    provider: failure.connection.clone(),
+                    message: failure.message.clone(),
+                    kind: if failure.refused {
+                        muta_contracts::CatalogSyncFailure::Refused
+                    } else {
+                        muta_contracts::CatalogSyncFailure::Transient
+                    },
                 },
             ));
         }
@@ -1362,11 +1406,16 @@ pub async fn connect_post_oauth(
         catalog::sync_fitted_model_registry();
     }
     catalog::prune_stale_models(config, provider_usage);
-    for (failed_provider, message) in &outcome.failures {
+    for failure in &outcome.failures {
         let _ = resp_tx.send(AgentResponse::ConnectStatus(
             muta_contracts::ConnectStatus::CatalogSyncWarning {
-                provider: failed_provider.clone(),
-                message: message.clone(),
+                provider: failure.connection.clone(),
+                message: failure.message.clone(),
+                kind: if failure.refused {
+                    muta_contracts::CatalogSyncFailure::Refused
+                } else {
+                    muta_contracts::CatalogSyncFailure::Transient
+                },
             },
         ));
     }
@@ -1453,7 +1502,8 @@ pub(crate) async fn refresh_oauth_if_needed(_config: &Config, provider_id: &str)
     if !instance.auth.is_oauth() {
         return;
     }
-    let source = muta_providers::oauth::OAuthCredentialSource::new(provider_id, instance.auth.clone());
+    let source =
+        muta_providers::oauth::OAuthCredentialSource::new(provider_id, instance.auth.clone());
     if let Err(error) = muta_contracts::CredentialSource::resolve_auth(&source).await {
         tracing::warn!(error = %error, provider = %provider_id, "OAuth token resolution failed");
     }
@@ -1636,6 +1686,11 @@ pub fn apply_connection_update(
             muta_contracts::ConnectStatus::CatalogSyncWarning {
                 provider: update.connection.clone(),
                 message: error.clone(),
+                kind: if update.refused {
+                    muta_contracts::CatalogSyncFailure::Refused
+                } else {
+                    muta_contracts::CatalogSyncFailure::Transient
+                },
             },
         ));
     }
@@ -1838,7 +1893,8 @@ pub(crate) async fn query_connection_detail(
     let raw_key_str = raw_key.expose_secret().to_string();
     tokio::spawn(async move {
         let (api_key, is_oauth) = if conn_auth.is_oauth() {
-            let source = muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth.clone());
+            let source =
+                muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth.clone());
             match muta_contracts::CredentialSource::resolve_auth(&source).await {
                 Ok(auth) => (auth.token.expose_secret().to_string(), true),
                 Err(err) => {
@@ -1857,7 +1913,8 @@ pub(crate) async fn query_connection_detail(
             && let muta_contracts::ConnectionUsageState::Error(ref err) = usage
             && is_auth_error(err)
         {
-            let source = muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth.clone());
+            let source =
+                muta_providers::oauth::OAuthCredentialSource::new(&conn_id, conn_auth.clone());
             let rejected = SecretString::from(api_key.as_str());
             if let Ok(refreshed) =
                 muta_contracts::CredentialSource::force_refresh_after_rejection(&source, &rejected)
@@ -2138,6 +2195,7 @@ mod tests {
                 connection: "gmain".to_string(),
                 changed: false,
                 error: Some("network error".to_string()),
+                refused: false,
             },
         );
 
@@ -2146,9 +2204,11 @@ mod tests {
             AgentResponse::ConnectStatus(muta_contracts::ConnectStatus::CatalogSyncWarning {
                 provider,
                 message,
+                kind,
             }) => {
                 assert_eq!(provider, "gmain");
                 assert_eq!(message, "network error");
+                assert_eq!(kind, muta_contracts::CatalogSyncFailure::Transient);
             }
             other => panic!("expected CatalogSyncWarning, got {other:?}"),
         }
@@ -2305,6 +2365,145 @@ mod tests {
                 muta_contracts::NamedFilterPolicy::All
             ))
         );
+
+        muta_persistence::paths::set_test_default(None);
+    }
+
+    /// A session that already runs a model keeps it when a new connection is
+    /// added via `/connections`: the add handler must not touch the live
+    /// provider holder, the global default, or the session pin. Activation is
+    /// a model-switch concern (`/models`), not a connection-management one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn add_connection_never_hijacks_an_active_session_model() {
+        use muta_contracts::ModelRequest;
+
+        struct LiveStubProvider;
+        #[async_trait::async_trait]
+        impl muta_contracts::Provider for LiveStubProvider {
+            async fn chat(
+                &self,
+                _request: ModelRequest,
+            ) -> Result<muta_contracts::ProviderCompletion, muta_contracts::ProviderError> {
+                unreachable!("stub is never invoked")
+            }
+            async fn stream_chat(
+                &self,
+                _request: ModelRequest,
+            ) -> Result<
+                futures::stream::BoxStream<'static, Result<String, muta_contracts::ProviderError>>,
+                muta_contracts::ProviderError,
+            > {
+                unreachable!("stub is never invoked")
+            }
+            fn provider_id(&self) -> String {
+                "existing-conn".to_string()
+            }
+            fn model(&self) -> String {
+                "existing-model".to_string()
+            }
+        }
+
+        let _guard = muta_persistence::paths::TEST_OVERRIDE_GUARD
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = muta_persistence::paths::Dirs {
+            config_dir: dir.path().join("config"),
+            data_dir: dir.path().join("data"),
+            state_dir: dir.path().join("state"),
+            cache_dir: dir.path().join("cache"),
+            runtime_dir: None,
+        };
+        muta_persistence::paths::set_test_default(Some(dirs));
+
+        // A session pinned to an existing connection/model (as after /models).
+        let mut config = Config {
+            default_connection: "existing-conn".to_string(),
+            default_model: Some("existing-model".to_string()),
+            ..Default::default()
+        };
+        let session = SessionStore::for_path(dir.path().join("session.json"));
+        session
+            .set_provider_selection(Some(ProviderSelection {
+                connection: "existing-conn".to_string(),
+                model: Some("existing-model".to_string()),
+            }))
+            .await
+            .ok();
+
+        // A live, non-sentinel provider holder (NOT NoProvider).
+        let agent = muta_agent::Agent::builder(
+            Arc::new(LiveStubProvider),
+            Vec::new(),
+            muta_agent::AgentIdentity::default(),
+        )
+        .build();
+        let provider_for_task = Arc::new(std::sync::RwLock::new(agent.provider.clone()));
+        let (resp_tx, mut resp_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut usage = ConnectionUsage::default();
+
+        let env = ProviderEnv {
+            config: &mut config,
+            agent: &agent,
+            provider_for_task: &provider_for_task,
+            session: &session,
+            resp_tx: &resp_tx,
+            provider_usage: &mut usage,
+        };
+        let params = AddConnectionParams {
+            name: "second-conn".to_string(),
+            provider: "openai".to_string(),
+            api_key: SecretString::from("sk-test"),
+            models: vec!["gpt-4o".to_string()],
+            auth: muta_contracts::ConnectionAuth::ApiKey,
+            client_identity: None,
+        };
+
+        add(env, params, None).await;
+
+        // The connection itself was still persisted — connection management happened.
+        assert!(
+            Connections::load().get("second-conn").is_some(),
+            "the new connection must be created"
+        );
+
+        // ...but the live provider, global default, and session pin are untouched.
+        assert_eq!(
+            provider_for_task
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .provider_id(),
+            "existing-conn",
+            "live provider must not be swapped by /connections"
+        );
+        assert_eq!(
+            config.default_connection, "existing-conn",
+            "global default must not follow the newly added connection"
+        );
+        assert_eq!(
+            config.default_model.as_deref(),
+            Some("existing-model"),
+            "global default model must not follow the newly added connection"
+        );
+        let pin = session.provider_selection().await;
+        assert_eq!(
+            pin.as_ref().map(|s| s.connection.as_str()),
+            Some("existing-conn"),
+            "session pin must keep its original connection"
+        );
+        assert_eq!(
+            pin.as_ref().and_then(|s| s.model.as_deref()),
+            Some("existing-model"),
+            "session pin must keep its original model"
+        );
+
+        // No ProviderSwitched broadcast may fire — that would flip the TUI.
+        while let Ok(resp) = resp_rx.try_recv() {
+            assert!(
+                !matches!(resp, AgentResponse::ProviderSwitched { .. }),
+                "add must never broadcast ProviderSwitched"
+            );
+        }
 
         muta_persistence::paths::set_test_default(None);
     }

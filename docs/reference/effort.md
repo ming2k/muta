@@ -53,7 +53,7 @@ A model honors only a subset of the rungs above — its *ladder*. The effective
 ladder for a channel is resolved through one precedence chain (ADR-0203):
 
 ```
-live discovery (a preset whose RemoteCatalogSource carries effort tiers)
+live catalog (a preset whose RemoteCatalogSource carries effort tiers)
        │   only Kimi K3 and Copilot advertise tiers here
        ▼
 static baseline   ←   the `effort_ladders::*` consts in `muta-providers`, the compiled-in fallback
@@ -62,7 +62,7 @@ static baseline   ←   the `effort_ladders::*` consts in `muta-providers`, the 
 &[]   (non-reasoning model, or a protocol with no depth field)
 ```
 
-**Live discovery is authoritative when the upstream advertises; the baseline is
+**The live catalog is authoritative when the upstream advertises; the baseline is
 the fallback otherwise.** This matters because providers differ sharply in what
 their `/models` returns:
 
@@ -70,7 +70,7 @@ their `/models` returns:
 |----------|:---:|----------------|
 | Moonshot Kimi K3 | ✅ `think_efforts.valid_efforts` | pre-fetch seed (refreshed live) |
 | GitHub Copilot | ✅ `supports.reasoning_effort` | pre-fetch seed (refreshed live) |
-| OpenAI / xAI / DeepSeek / Z.AI / Google | ❌ bare `{id, object, owned_by}` list | **the effective ladder** (from prose docs) |
+| OpenAI / xAI / DeepSeek / Z.AI / Google / QianwenAI Token Plan | ❌ bare `{id, object, owned_by}` list | **the effective ladder** (from prose docs) |
 | Anthropic-compatible relay (unknown model) | ❌ | conservative `COMMON` |
 
 So for most providers the compiled-in baseline *is* the ladder — there is no
@@ -78,7 +78,12 @@ live value to read. DeepSeek is a clear example: its `/models` returns only an
 id list, so its `low`/`high`/`max` ladder is sourced from the chat-completions
 request-schema enum in its docs, not from any runtime call. Kimi K3, by
 contrast, advertises the same set live, so its baseline is just the seed before
-the first fetch.
+the first fetch. The QianwenAI Token Plan surface behaves the same way, with
+one per-family nuance: its Qwen models honor `none` as a first-class rung (the
+hybrid thinker's off switch rides the standard effort field), while the
+plan-hosted DeepSeek V4 Pro snapshots reject `none`/`minimal` outright —
+ladders the `qianwen` provider's compiled baselines pin, so the clamp can
+never emit a rung the endpoint 400s.
 
 ### An open vocabulary, not a closed one
 
@@ -95,7 +100,7 @@ name (a future `"turbo"`, say). Such a tier is **preserved**, not dropped:
 
 This split is deliberate: the `Copy` static registry cannot hold heap strings,
 but the `Clone` runtime view can — so openness lives exactly where live
-discovery lands, and the vetted baseline stays cheap and closed. A provider
+catalog data lands, and the vetted baseline stays cheap and closed. A provider
 adding a tier needs no muta release for that tier to reach the wire; it only
 needs a release to gain a *ranked* clamp and a picker caption.
 
@@ -112,11 +117,11 @@ clamps a legacy `medium` override up to `low`).
 ## Configuring it
 
 Effort is set per **route** — one `(connection, model)` pair — as a string,
-stored in the discovery cache (`route_settings`) and edited from the model `e`
+stored in the catalog cache (`route_settings`) and edited from the model `e`
 picker in the TUI:
 
 ```toml
-# $XDG_STATE_HOME/muta/models_discovery.json
+# $XDG_STATE_HOME/muta/remote_catalog.json
 # route_settings["<connection_name>"]["<model_id>"] = { "effort": "high" }
 ```
 

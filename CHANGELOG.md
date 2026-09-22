@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Upstream availability is now a declared catalog axis (ADR-0273).** A provider
+  can state that this account may not run a model right now — Qoder's
+  subscription-locked entries (`enable:false`), Codex's `supported_in_api:false`,
+  Copilot's `policy.state:"disabled"` — and muta now carries that as a
+  first-class, per-(account, model) fact instead of collapsing it into the
+  picker's single `locked` bit. `RemoteModelMetadata`/`DiscoveredModel` gain
+  `availability: Option<Availability>` (`{ usable, reason }`) plus a separate
+  `advertised: Option<bool>` listing hint, and `ProviderModelInfo` projects both
+  with `availability_overridden` and `availability_stale`. The verdict is
+  enforced **daemon-side** — `catalog::derive::effective_availability` resolves
+  it against the connection's own scope and `build_provider_for_model` refuses a
+  route for a declared-unavailable model — so no client is the only refusal site
+  any more (`[INV-AVAIL-06]`). A model the provider declares unusable stays
+  **listed** (so the account can see what an entitlement change would unlock) and
+  is rendered inert; membership and capabilities are untouched.
+
+### Changed
+
+- **The model picker states the provider's own reason, never an invented one.**
+  The hardcoded `"This model is locked for the current plan"` refusal is gone.
+  The provider's declared reason (Copilot's `policy.terms`, when it states one)
+  is shown verbatim; when the provider declares no reason (Qoder publishes only
+  the boolean) the row and the refusal say only that the model is unavailable.
+  Guesswork was actively wrong for the `403 code 110 "Billing daily count
+  exceeded"` quota case, where the plan is fine.
+- **Listing intent and availability are no longer conflated.** Codex's
+  `visibility == "list"` and `supported_in_api` were ANDed into one flag, so an
+  API-supported but unlisted model (`hidden-helper` in the existing fixture) was
+  recorded as unusable. They now map to `advertised` and `availability`
+  respectively (`[INV-AVAIL-07]`), and Copilot's `model_picker_enabled` maps to
+  the listing predicate while `policy.state` drives availability.
+- **A user override of an upstream lock is disclosed.** An explicit
+  `inject`/`include` still overrides a provider's unavailable verdict
+  (ADR-0203 `[INV-CATALOG-04]`), but the upstream declaration is never rewritten
+  and the row reads `locked upstream · overridden by you` instead of appearing
+  natively runnable (`[INV-AVAIL-05]`).
+- **A refused connection is distinguished from a transient failure.** A catalog
+  fetch that the upstream answers with `401`/`403` is reported as a refusal
+  (`CatalogSyncWarning { kind: CatalogSyncFailure::Refused }`), not as a flaky
+  network; the fetch error is carried typed instead of being stringified before
+  the fold. A verdict retained across a failed refresh is marked
+  `availability_stale` (`as last observed · re-check failed`) while remaining
+  enforced (`[INV-AVAIL-08]`).
+- **Wire protocol 14 (ADR-0134).** `ProviderModelInfo.picker_enabled` was
+  **removed** (not aliased) in favour of `availability`/`advertised`; a v13 peer
+  would read the absent field as "usable" and render a locked model selectable,
+  which is a silent misinterpretation, so `PROTOCOL_VERSION` rises to 14. The
+  floor does not move: a v13 peer is still served, and the new daemon-side
+  refusal keeps a client that cannot render the verdict from producing a wrong
+  inference.
+
 ## [0.50.9] - 2026-09-21
 
 ### Added

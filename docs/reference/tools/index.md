@@ -20,7 +20,7 @@ because it captures a snapshot of the other tools.
 
 | Tool | Access | Permission scope | Reference page |
 |------|--------|------------------|----------------|
-| `execute_command` | `Execute` | `command` argument | [execute_command](execute_command.md) |
+| `run_command` | `Execute` | `command` argument | [run_command](run_command.md) |
 | `read_text` | `Read` | `*` | [filesystem](filesystem.md) |
 | `read_image` | `Read` | `*` | [filesystem](filesystem.md) |
 | `write_file` | `Write` | `path` argument | [filesystem](filesystem.md) |
@@ -34,11 +34,10 @@ because it captures a snapshot of the other tools.
 | `read_url` | `Read` | `*` | [web](web.md) |
 | `search_web` | `Read` | `*` | [web](web.md) |
 | `spawn_agent` | `Read` (spawns subagent) | `*` | [subagent](subagent.md) |
-| `process` | `Read` | `*` | [execute_command](execute_command.md#the-process-tool) |
 | `mcp__<server>__<tool>` | `Read` if server `read_only = true`, else `Write` | `*` | [mcp](mcp.md) |
 
 `permission_scope` defaults to `"*"`. Only `write_file`, `edit_text`, and
-`execute_command` override it; their scope string is what a cached `Always` rule matches
+`run_command` override it; their scope string is what a cached `Always` rule matches
 against.
 
 `todo` is installed by `Agent::new` rather than self-registering, so it is absent

@@ -3,10 +3,15 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 /// File operations (read vs modified) tracked across a sequence of messages or branch.
+///
+/// Under ADR-0275 §1, attempted, failed, and confirmed effects are tracked
+/// separately; an unconfirmed intent never masquerades as a confirmed modification.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FileOperations {
     pub read: BTreeSet<String>,
     pub modified: BTreeSet<String>,
+    pub attempted: BTreeSet<String>,
+    pub failed: BTreeSet<String>,
 }
 
 impl FileOperations {
@@ -29,6 +34,7 @@ impl FileOperations {
                             && !p.is_empty()
                             && p != "."
                         {
+                            self.attempted.insert(p.to_string());
                             self.read.insert(p.to_string());
                         }
                     }
@@ -36,12 +42,20 @@ impl FileOperations {
                         if let Some(p) = path
                             && !p.is_empty()
                         {
+                            self.attempted.insert(p.to_string());
                             self.modified.insert(p.to_string());
                         }
                     }
                     _ => {}
                 }
             }
+        } else if message.role == Role::Tool
+            && (message.content.starts_with("Error:")
+                || message.content.starts_with("error:")
+                || message.content.contains("Failed to"))
+        {
+            // Failed tool executions are recorded as failed (ADR-0275 §1)
+            self.failed.insert(message.content.clone());
         }
     }
 

@@ -116,6 +116,7 @@ pub mod budget;
 pub mod catalog;
 pub mod compaction;
 pub mod context_projection;
+pub mod context_lifecycle;
 mod conversation_context;
 pub mod dynamic;
 mod dynamic_tools;

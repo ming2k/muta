@@ -53,21 +53,20 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
             println!("retry_base_ms:       {}ms", config.connection_retry_base_ms);
             println!("retry_max_ms:        {}ms", config.connection_retry_max_ms);
             println!(
-                "compaction.preserve_rounds: {}",
-                config.compaction.preserve_rounds
+                "context.schema_version:           {}",
+                config.context.schema_version
             );
             println!(
-                "compaction.summarize:       {}",
-                config.compaction.summarize
-            );
-            println!("compaction.prune:           {}", config.compaction.prune);
-            println!(
-                "compaction.prune_protect_tokens: {}",
-                config.compaction.prune_protect_tokens
+                "context.preferred_recent_rounds:  {}",
+                config.context.preferred_recent_rounds
             );
             println!(
-                "compaction.utilization:     {}",
-                config.compaction.utilization
+                "context.checkpoint_enabled:       {}",
+                config.context.checkpoint_enabled
+            );
+            println!(
+                "context.fallback_window_tokens:   {}",
+                config.context.fallback_window_tokens
             );
             println!("mcp_servers_count:          {}", config.mcp.len());
             println!(
@@ -93,27 +92,23 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                 "connection_retry_max_ms" | "provider_retry_max_ms" => {
                     println!("{}", config.connection_retry_max_ms)
                 }
-                "compaction.preserve_rounds" | "compaction_preserve_rounds" => {
-                    println!("{}", config.compaction.preserve_rounds)
+                "context.schema_version" => {
+                    println!("{}", config.context.schema_version)
                 }
-                "compaction.summarize" | "compaction_summarize" => {
-                    println!("{}", config.compaction.summarize)
+                "context.preferred_recent_rounds" => {
+                    println!("{}", config.context.preferred_recent_rounds)
                 }
-                "compaction.prune" | "compaction_prune" => {
-                    println!("{}", config.compaction.prune)
+                "context.checkpoint_enabled" => {
+                    println!("{}", config.context.checkpoint_enabled)
                 }
-                "compaction.prune_protect_tokens" | "compaction_prune_protect_tokens" => {
-                    println!("{}", config.compaction.prune_protect_tokens)
+                "context.fallback_window_tokens" => {
+                    println!("{}", config.context.fallback_window_tokens)
                 }
-                "compaction.utilization" => println!("{}", config.compaction.utilization),
-                "compaction.target_utilization" => {
-                    println!("{}", config.compaction.target_utilization)
+                "context.inspect_page_tokens" => {
+                    println!("{}", config.context.inspect_page_tokens)
                 }
-                "compaction.prune_utilization" => {
-                    println!("{}", config.compaction.prune_utilization)
-                }
-                "compaction.fallback_window_tokens" => {
-                    println!("{}", config.compaction.fallback_window_tokens)
+                k if k.starts_with("compaction.") || k.starts_with("compaction_") => {
+                    eprintln!("legacy 'compaction.*' configuration is retired under ADR-0280 [INV-POLICY-01]; run `muta context migrate` to convert to versioned `context.*` policy");
                 }
                 "agent.hard_stop_turns" | "master.hard_stop_turns" => {
                     println!("{}", config.agent.hard_stop_turns)
@@ -179,45 +174,28 @@ pub fn run(action: ConfigAction) -> Result<(), Box<dyn std::error::Error>> {
                         .parse()
                         .map_err(|_| "invalid integer for retry_max_ms")?;
                 }
-                "compaction.preserve_rounds" | "compaction_preserve_rounds" => {
-                    config.compaction.preserve_rounds = value
+                "context.preferred_recent_rounds" => {
+                    config.context.preferred_recent_rounds = value
                         .parse()
-                        .map_err(|_| "invalid integer for compaction.preserve_rounds")?;
+                        .map_err(|_| "invalid integer for context.preferred_recent_rounds")?;
                 }
-                "compaction.summarize" | "compaction_summarize" => {
-                    config.compaction.summarize = value
+                "context.checkpoint_enabled" => {
+                    config.context.checkpoint_enabled = value
                         .parse()
-                        .map_err(|_| "invalid boolean (true/false) for compaction.summarize")?;
+                        .map_err(|_| "invalid boolean for context.checkpoint_enabled")?;
                 }
-                "compaction.prune" | "compaction_prune" => {
-                    config.compaction.prune = value
+                "context.fallback_window_tokens" => {
+                    config.context.fallback_window_tokens = value
                         .parse()
-                        .map_err(|_| "invalid boolean (true/false) for compaction.prune")?;
+                        .map_err(|_| "invalid integer for context.fallback_window_tokens")?;
                 }
-                "compaction.prune_protect_tokens" | "compaction_prune_protect_tokens" => {
-                    config.compaction.prune_protect_tokens = value
+                "context.inspect_page_tokens" => {
+                    config.context.inspect_page_tokens = value
                         .parse()
-                        .map_err(|_| "invalid integer for compaction.prune_protect_tokens")?;
+                        .map_err(|_| "invalid integer for context.inspect_page_tokens")?;
                 }
-                "compaction.utilization" => {
-                    config.compaction.utilization = value
-                        .parse()
-                        .map_err(|_| "invalid float for compaction.utilization")?;
-                }
-                "compaction.target_utilization" => {
-                    config.compaction.target_utilization = value
-                        .parse()
-                        .map_err(|_| "invalid float for compaction.target_utilization")?;
-                }
-                "compaction.prune_utilization" => {
-                    config.compaction.prune_utilization = value
-                        .parse()
-                        .map_err(|_| "invalid float for compaction.prune_utilization")?;
-                }
-                "compaction.fallback_window_tokens" => {
-                    config.compaction.fallback_window_tokens = value
-                        .parse()
-                        .map_err(|_| "invalid integer for compaction.fallback_window_tokens")?;
+                k if k.starts_with("compaction.") || k.starts_with("compaction_") => {
+                    return Err("legacy 'compaction.*' configuration is retired under ADR-0280 [INV-POLICY-01]; run `muta context migrate` to convert to versioned `context.*` policy".into());
                 }
                 "agent.hard_stop_turns" | "master.hard_stop_turns" => {
                     config.agent.hard_stop_turns = value

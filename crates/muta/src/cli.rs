@@ -35,6 +35,8 @@ pub enum Mode {
     Mcp(McpAction),
     /// `muta skill ls` — list discovered skills.
     Skill(SkillAction),
+    /// `muta context migrate` — offline legacy→canonical conversion (ADR-0280).
+    Context(ContextAction),
     Doctor,
     /// `muta completions <shell>`.
     Completions(Shell),
@@ -126,6 +128,27 @@ pub enum AuthAction {
     List,
     Show(String),
     Set { provider: String, key: String },
+}
+
+/// `muta context …` (ADR-0280 §4): the offline migration surface.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContextAction {
+    /// `muta context migrate --legacy <db> --target <db>` — convert a legacy
+    /// database into a canonical one, offline, never in the runtime path.
+    Migrate {
+        /// The legacy database to read.
+        legacy: String,
+        /// The canonical database to write.
+        target: String,
+    },
+    /// `muta context verify --db <db> [--json]` — emit a machine-readable
+    /// integrity report for a canonical database.
+    Verify {
+        /// The canonical database to verify.
+        db: String,
+        /// Emit JSON instead of human-readable text.
+        json: bool,
+    },
 }
 
 /// A shell whose completion script `muta completions` can print.
@@ -232,26 +255,6 @@ const MCP_SUBS: &[Spec] = &[
         about: "list configured MCP servers",
     },
     Spec {
-        name: "add",
-        names: &["add"],
-        about: "register an MCP server in the user config",
-    },
-    Spec {
-        name: "rm",
-        names: &["rm", "remove"],
-        about: "remove an MCP server from the user config",
-    },
-    Spec {
-        name: "enable",
-        names: &["enable"],
-        about: "enable a configured MCP server",
-    },
-    Spec {
-        name: "disable",
-        names: &["disable"],
-        about: "disable a configured MCP server without removing it",
-    },
-    Spec {
         name: "get",
         names: &["get"],
         about: "print one server's config entry",
@@ -260,11 +263,6 @@ const MCP_SUBS: &[Spec] = &[
         name: "probe",
         names: &["probe"],
         about: "connect to a server once and list its tools",
-    },
-    Spec {
-        name: "import",
-        names: &["import"],
-        about: "import [mcp.*] TOML (e.g. `aegis-mcp print-config`) into the user config",
     },
 ];
 
@@ -306,6 +304,11 @@ const COMMANDS: &[Spec] = &[
         about: "inspect or modify configuration",
     },
     Spec {
+        name: "context",
+        names: &["context"],
+        about: "context lifecycle: offline legacy-to-canonical migration",
+    },
+    Spec {
         name: "auth",
         names: &["auth"],
         about: "manage provider credentials and API keys",
@@ -313,7 +316,7 @@ const COMMANDS: &[Spec] = &[
     Spec {
         name: "mcp",
         names: &["mcp"],
-        about: "manage MCP servers (ls, add, rm, probe, import)",
+        about: "inspect MCP servers (ls, get, probe); configured declaratively in TOML",
     },
     Spec {
         name: "skill",
@@ -670,6 +673,29 @@ pub fn parse(args: &[String]) -> Result<CliArgs, String> {
                 [bad, ..] => return unexpected(bad),
             }
         }
+        "context" => {
+            let extra_str: Vec<&str> = extra.iter().map(String::as_str).collect();
+            match extra_str.as_slice() {
+                ["migrate", "--legacy", legacy, "--target", target] => {
+                    Mode::Context(ContextAction::Migrate {
+                        legacy: (*legacy).to_string(),
+                        target: (*target).to_string(),
+                    })
+                }
+                ["migrate", ..] => {
+                    return Err("context migrate requires --legacy <db> and --target <db>".into());
+                }
+                ["verify", "--db", db] => Mode::Context(ContextAction::Verify {
+                    db: (*db).to_string(),
+                    json,
+                }),
+                ["verify", ..] => {
+                    return Err("context verify requires --db <db> [--json]".into());
+                }
+                [bad, ..] => return unexpected(bad),
+                [] => return Err("context requires a subcommand (migrate|verify)".into()),
+            }
+        }
         "auth" => {
             let extra_str: Vec<&str> = extra.iter().map(String::as_str).collect();
             match extra_str.as_slice() {
@@ -817,25 +843,8 @@ fn command_flags(cmd: &str) -> &'static [(&'static str, &'static str)] {
         "session" => &[("rm <id>", "terminate a hosted session by id")],
         "mcp" => &[
             ("ls", "list configured MCP servers"),
-            (
-                "add <name> -- <cmd> [args…]",
-                "register a stdio server in the user config",
-            ),
-            (
-                "add <name> --url <endpoint>",
-                "register a Streamable HTTP server",
-            ),
-            ("rm <name>", "remove a server from the user config"),
-            (
-                "enable/disable <name>",
-                "toggle a server without removing it",
-            ),
             ("get <name>", "print one server's config entry"),
             ("probe <name>", "connect once and list the advertised tools"),
-            (
-                "import (- | <file>)",
-                "merge [mcp.*] TOML (e.g. `aegis-mcp print-config`)",
-            ),
         ],
         "skill" => &[("ls", "list discovered skills")],
         _ => &[],

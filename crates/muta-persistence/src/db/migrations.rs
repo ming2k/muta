@@ -5,14 +5,14 @@
 use super::*;
 
 /// SQLite schema version tracking. Fresh databases jump straight to the latest version.
-pub const CURRENT_DB_VERSION: u32 = 21;
+pub const CURRENT_DB_VERSION: u32 = 23;
 
 /// SHA-256 fingerprint of the migration catalog (version + SQL of every
 /// entry). Locked by `migration_catalog_fingerprint_is_stable`; see that test
 /// for the discipline this enforces.
 #[cfg(test)]
 pub const MIGRATION_CATALOG_FINGERPRINT: &str =
-    "7fff2a21d1e28d6fb3c999d6dd5e481958f7504894ed45ee927234fb2c7384a2";
+    "47d0c9388a1ca9a0d98166048a74974d1938bf849ab2ec6eb53f5001510b40be";
 
 /// Payload size threshold (4 KB) beyond which text content is offloaded to CAS BlobStore.
 pub const CAS_THRESHOLD_BYTES: usize = 4096;
@@ -42,6 +42,27 @@ pub(crate) fn initialize_in_memory_db() -> Result<Connection> {
     let mut conn = Connection::open_in_memory()?;
     configure_connection(&mut conn)?;
     migrate_schema(&mut conn)?;
+    Ok(conn)
+}
+
+/// Apply the full schema to an already-open connection.
+///
+/// Used by the offline migration tool to prepare a target database without
+/// going through the daemon's single-writer door (the tool is a separate
+/// process; ADR-0280 §4).
+pub(crate) fn initialize_connection_schema(conn: &mut Connection) -> Result<()> {
+    configure_connection(conn)?;
+    migrate_schema(conn)
+}
+
+/// Open a fully-migrated in-memory database for integration tests.
+///
+/// Test support only: exposes the real migration path to cross-crate
+/// integration tests without a filesystem. Not part of the runtime API.
+#[doc(hidden)]
+pub fn open_in_memory_for_tests() -> Result<Connection> {
+    let mut conn = Connection::open_in_memory()?;
+    initialize_connection_schema(&mut conn)?;
     Ok(conn)
 }
 
@@ -477,6 +498,22 @@ pub const MIGRATIONS: &[Migration] = &[
         // Causal Nodes Composite Primary Key (session_id, id):
         // allows forked branches and asides to inherit and persist ancestral nodes without conflict.
         version: 21,
+        sql: "",
+    },
+    Migration {
+        // Canonical context-lifecycle substrate (ADR-0275 §7, ADR-0276, ADR-0279):
+        // immutable facts, branch cursors, derived views/checkpoints, artifact
+        // manifests + references, request manifests, tombstones, and the
+        // idempotency ledger. The schema enforces fact immutability at the SQL
+        // layer (INV-FACT-02) so a bug cannot rewrite history. DDL is idempotent.
+        version: 22,
+        sql: "",
+    },
+    Migration {
+        // Retrieval leases, deletion jobs, and GC continuation (ADR-0279 §4–§6):
+        // read leases protect live reads from concurrent GC; deletion jobs make
+        // purge observable and resumable across a crash.
+        version: 23,
         sql: "",
     },
 ];
@@ -1451,6 +1488,12 @@ pub fn apply_migrations(conn: &mut Connection, observed_version: u32) -> Result<
                 if migration.version == 21 {
                     apply_causal_nodes_composite_pk_schema(&tx)?;
                 }
+                if migration.version == 22 {
+                    apply_context_lifecycle_schema(&tx)?;
+                }
+                if migration.version == 23 {
+                    apply_retrieval_and_gc_schema(&tx)?;
+                }
             }
         }
 
@@ -1540,3 +1583,253 @@ pub struct SessionTranscriptView {
     pub message_count: usize,
     pub messages: Vec<SessionMessageView>,
 }
+
+/// Canonical context-lifecycle substrate (ADR-0275 §7, ADR-0276, ADR-0279),
+/// applied by migration 22. Creates the immutable fact tables, branch cursors,
+/// derived views/checkpoints, artifact manifests and references, request
+/// manifests, tombstones, and the idempotency ledger.
+///
+/// The `facts` triggers enforce `INV-FACT-02` at the SQL layer: a payload or
+/// ancestry may never be updated, and a fact may never be deleted. The one
+/// sanctioned payload replacement is a purge, which flips `deletion` in the
+/// same statement (the tombstone path, ADR-0279 §6). DDL is idempotent so a
+/// database that already carries the tables passes through unchanged.
+pub fn apply_context_lifecycle_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    tx.execute_batch(
+        r#"
+        -- Immutable execution facts (ADR-0275 §2). Payload and ancestry are
+        -- write-once; `deletion` is the only mutable column.
+        CREATE TABLE IF NOT EXISTS facts (
+            session_id       TEXT NOT NULL,
+            id               TEXT NOT NULL,
+            branch_origin    TEXT NOT NULL,
+            seq              INTEGER NOT NULL,
+            round_id         TEXT NOT NULL,
+            turn_id          TEXT NOT NULL,
+            parent_ids       TEXT NOT NULL DEFAULT '[]',
+            payload_json     TEXT NOT NULL,
+            payload_hash     TEXT NOT NULL DEFAULT '',
+            source_authority TEXT NOT NULL,
+            sensitivity      TEXT NOT NULL,
+            artifact_refs    TEXT NOT NULL DEFAULT '[]',
+            deletion         TEXT NOT NULL DEFAULT 'present'
+                             CHECK (deletion IN ('present','delete_pending','purged')),
+            created_at_ms    INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, id),
+            UNIQUE (session_id, seq)
+        );
+        CREATE INDEX IF NOT EXISTS idx_facts_session_seq ON facts(session_id, seq ASC);
+
+        -- Fact immutability (INV-FACT-02): refuse any change to a committed
+        -- payload or ancestry, and refuse deletion of a fact. The single
+        -- sanctioned payload replacement is a purge, which must advance
+        -- `deletion` in the same statement (the tombstone path, ADR-0279 §6).
+        DROP TRIGGER IF EXISTS trg_facts_immutable_payload;
+        CREATE TRIGGER trg_facts_immutable_payload
+        BEFORE UPDATE ON facts
+        WHEN NEW.id <> OLD.id
+          OR NEW.session_id <> OLD.session_id
+          OR NEW.seq <> OLD.seq
+          OR NEW.branch_origin <> OLD.branch_origin
+          OR NEW.parent_ids <> OLD.parent_ids
+          OR NEW.round_id <> OLD.round_id
+          OR NEW.turn_id <> OLD.turn_id
+          OR NEW.source_authority <> OLD.source_authority
+          OR NEW.sensitivity <> OLD.sensitivity
+          OR NEW.created_at_ms <> OLD.created_at_ms
+          OR NEW.payload_hash <> OLD.payload_hash
+          OR ((NEW.payload_json <> OLD.payload_json OR NEW.artifact_refs <> OLD.artifact_refs)
+              AND NOT (OLD.deletion <> 'purged' AND NEW.deletion = 'purged'
+                  AND NEW.payload_json = '{"termination":{"reason":"purged"}}'
+                  AND NEW.artifact_refs = '[]'))
+        BEGIN
+            SELECT RAISE(ABORT, 'facts are immutable: only payload erasure during purge is allowed');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_facts_deletion_monotonic
+        BEFORE UPDATE OF deletion ON facts
+        WHEN NOT (
+            (OLD.deletion = 'present' AND NEW.deletion IN ('present','delete_pending','purged'))
+            OR (OLD.deletion = 'delete_pending' AND NEW.deletion IN ('delete_pending','purged'))
+            OR (OLD.deletion = 'purged' AND NEW.deletion = 'purged')
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'facts are immutable: deletion state must not revert (INV-FACT-02)');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_facts_no_delete
+        BEFORE DELETE ON facts
+        BEGIN
+            SELECT RAISE(ABORT, 'facts are immutable: use a sanctioned purge, never a delete (INV-FACT-02)');
+        END;
+
+        -- Minimal deletion tombstones (ADR-0279 §6): structure without payload.
+        CREATE TABLE IF NOT EXISTS tombstones (
+            session_id  TEXT NOT NULL,
+            fact_id     TEXT NOT NULL,
+            parent_ids  TEXT NOT NULL DEFAULT '[]',
+            purged_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (session_id, fact_id)
+        );
+
+        -- Branch cursor and view pointer (ADR-0275 §2). `revision` is the
+        -- compare-and-swap token for every commit.
+        CREATE TABLE IF NOT EXISTS branches (
+            branch_id        TEXT NOT NULL,
+            session_id       TEXT NOT NULL,
+            head_fact_id     TEXT,
+            revision         INTEGER NOT NULL DEFAULT 0,
+            active_task_id   TEXT,
+            active_view_id   TEXT,
+            execution_cursor TEXT,
+            PRIMARY KEY (session_id, branch_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_branches_session ON branches(session_id);
+
+        -- Cross-round task state (ADR-0275 §1). A requirement fact is a GC
+        -- root while the task is open (ADR-0279 §6).
+        CREATE TABLE IF NOT EXISTS task_revisions (
+            session_id      TEXT NOT NULL,
+            task_id         TEXT NOT NULL,
+            revision        INTEGER NOT NULL,
+            objective_fact_id TEXT NOT NULL,
+            requirements    TEXT NOT NULL DEFAULT '[]',
+            open_items      TEXT NOT NULL DEFAULT '[]',
+            open            INTEGER NOT NULL DEFAULT 1,
+            created_at_ms   INTEGER NOT NULL,
+            PRIMARY KEY (session_id, task_id, revision)
+        );
+
+        -- Derived context views (ADR-0275 §2, ADR-0278). A view writes no facts.
+        CREATE TABLE IF NOT EXISTS context_views (
+            session_id        TEXT NOT NULL,
+            view_id           TEXT NOT NULL,
+            branch_id         TEXT NOT NULL,
+            basis_revision    INTEGER NOT NULL,
+            checkpoint_id     TEXT,
+            tail_after_fact_id TEXT,
+            representations   TEXT NOT NULL DEFAULT '[]',
+            policy_revision   INTEGER NOT NULL,
+            created_at_ms     INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, view_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_context_views_branch ON context_views(branch_id);
+
+        -- Derived checkpoints (ADR-0278 §1). Reference a source interval; no
+        -- parent edge, never an execution node.
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            session_id          TEXT NOT NULL,
+            checkpoint_id       TEXT NOT NULL,
+            branch_id           TEXT NOT NULL,
+            prior_checkpoint_id TEXT,
+            source_manifest     TEXT NOT NULL,
+            summary             TEXT NOT NULL,
+            mandatory_fact_refs TEXT NOT NULL DEFAULT '[]',
+            source_authority    TEXT NOT NULL,
+            created_at_ms       INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, checkpoint_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_checkpoints_branch ON checkpoints(branch_id);
+
+        -- Published raw artifact manifests (ADR-0276). Written only after the
+        -- artifact is durably published (INV-CAP-01).
+        CREATE TABLE IF NOT EXISTS artifact_manifests (
+            session_id   TEXT NOT NULL,
+            artifact_id  TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            media_type   TEXT NOT NULL,
+            stream       TEXT NOT NULL,
+            capture      TEXT NOT NULL,
+            byte_count   INTEGER NOT NULL,
+            retention    TEXT NOT NULL,
+            sensitivity  TEXT NOT NULL,
+            deletion     TEXT NOT NULL DEFAULT 'present'
+                         CHECK (deletion IN ('present','delete_pending','purged')),
+            created_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (session_id, artifact_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifact_manifests_hash ON artifact_manifests(content_hash);
+
+        -- Durable artifact references: a blob is live iff a reference exists
+        -- (ADR-0187 ledger extended to the fact substrate). GC roots.
+        CREATE TABLE IF NOT EXISTS artifact_refs (
+            session_id  TEXT NOT NULL,
+            artifact_id TEXT NOT NULL,
+            fact_id     TEXT NOT NULL,
+            PRIMARY KEY (session_id, artifact_id, fact_id)
+        );
+
+        -- Immutable request manifests (ADR-0277). No authentication headers.
+        CREATE TABLE IF NOT EXISTS request_manifests (
+            session_id      TEXT NOT NULL,
+            request_id      TEXT NOT NULL,
+            branch_id       TEXT NOT NULL,
+            basis_revision  INTEGER NOT NULL,
+            policy_revision INTEGER NOT NULL,
+            blocks          TEXT NOT NULL DEFAULT '[]',
+            input_ceiling   INTEGER NOT NULL,
+            created_at_ms   INTEGER NOT NULL,
+            PRIMARY KEY (session_id, request_id)
+        );
+
+        -- Idempotency ledger: an operation ID is applied at most once, so a
+        -- retry after a crash replays instead of double-applying (ADR-0275 §7).
+        CREATE TABLE IF NOT EXISTS commit_operations (
+            session_id       TEXT NOT NULL,
+            operation_id     TEXT NOT NULL,
+            kind             TEXT NOT NULL,
+            applied_revision INTEGER NOT NULL,
+            at_ms            INTEGER NOT NULL,
+            PRIMARY KEY (session_id, operation_id)
+        );
+        "#,
+    )?;
+    Ok(())
+}
+
+/// Retrieval leases, deletion jobs, and GC bookkeeping (ADR-0279 §4–§6),
+/// applied by migration 23.
+///
+/// A read lease protects an artifact from concurrent collection; a deletion job
+/// makes a purge observable and resumable across a crash (commit state first,
+/// then reclaim). DDL is idempotent.
+pub fn apply_retrieval_and_gc_schema(tx: &rusqlite::Transaction) -> Result<()> {
+    tx.execute_batch(
+        r#"
+        -- Read leases: while a lease is live, GC must not collect the artifact
+        -- (INV-RET-04). Expired leases are reclaimable.
+        CREATE TABLE IF NOT EXISTS read_leases (
+            session_id  TEXT NOT NULL,
+            lease_id    TEXT NOT NULL,
+            artifact_id TEXT,
+            fact_id     TEXT,
+            expires_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (session_id, lease_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_read_leases_artifact
+            ON read_leases(session_id, artifact_id);
+
+        -- Deletion jobs: state is committed first, reclamation follows; a crash
+        -- resumes the same job (INV-RET-03).
+        CREATE TABLE IF NOT EXISTS deletion_jobs (
+            session_id     TEXT NOT NULL,
+            job_id         TEXT NOT NULL,
+            target_kind    TEXT NOT NULL CHECK (target_kind IN ('fact','artifact')),
+            target_id      TEXT NOT NULL,
+            scope          TEXT NOT NULL,
+            state          TEXT NOT NULL CHECK (state IN ('pending','reclaiming','done')),
+            created_at_ms  INTEGER NOT NULL,
+            updated_at_ms  INTEGER NOT NULL,
+            PRIMARY KEY (session_id, job_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_deletion_jobs_state ON deletion_jobs(state);
+
+        -- GC continuation cursor: a bounded batch saves where it stopped.
+        CREATE TABLE IF NOT EXISTS gc_continuations (
+            session_id     TEXT PRIMARY KEY,
+            last_seq       INTEGER NOT NULL DEFAULT 0,
+            updated_at_ms  INTEGER NOT NULL DEFAULT 0
+        );
+        "#,
+    )?;
+    Ok(())
+}
+

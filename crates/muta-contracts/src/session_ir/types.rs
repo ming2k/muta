@@ -365,6 +365,14 @@ impl CausalGraph {
         let mut path = Vec::new();
         let mut current_id = Some(leaf_id);
 
+        let horizon_node = horizon.and_then(|h| self.nodes.get(h));
+        let first_kept_id = horizon_node.and_then(|h| match &h.payload {
+            NodePayload::Compaction {
+                first_kept_node_id, ..
+            } => Some(first_kept_node_id.as_str()),
+            _ => None,
+        });
+
         while let Some(id) = current_id {
             if let Some(node) = self.nodes.get(id) {
                 let is_compaction =
@@ -373,6 +381,17 @@ impl CausalGraph {
                 if is_compaction {
                     // Compaction acts as a causal horizon; ancestor nodes prior to
                     // compaction anchor are elided from the active linear view.
+                    break;
+                }
+                // ADR-0275 / ADR-0278: Facts are immutable and parent edges never mutate.
+                // When we reach first_kept_node_id, anchor to the horizon node without
+                // modifying the preserved tail's head node parent_id.
+                if let Some(fkid) = first_kept_id
+                    && id == fkid
+                {
+                    if let Some(h) = horizon_node {
+                        path.push(h);
+                    }
                     break;
                 }
                 current_id = node.parent_id.as_deref();

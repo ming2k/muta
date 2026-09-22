@@ -189,7 +189,7 @@ async fn compaction_commit_hides_range_and_keeps_originals() {
         other
             .commit_context_projection(ContextProjectionResult {
                 model_window: vec![checkpoint_message("summary of old rounds"), user("tail")],
-                archived_originals: vec![],
+                archived_originals: vec![user("old1"), assistant("old2")],
                 checkpoint: ContextProjectionCheckpoint {
                     operation: ContextProjectionKind::Compact,
                     archived_messages: 2,
@@ -892,7 +892,9 @@ async fn delete_persisted_session_and_idempotent_delete() {
 async fn test_session_store_ir_and_compile_request() {
     let store = store("session_ir_compile").await;
     let user_msg = user("Implement compiler pass");
-    store.replace_messages(vec![user_msg]).await.unwrap();
+    let mut ir = store.session_ir().await;
+    ir.append_message("msg-1", 1000, user_msg);
+    store.commit_session_ir(&ir).await.unwrap();
 
     // 1. Fetch SessionIR
     let ir = store.session_ir().await;

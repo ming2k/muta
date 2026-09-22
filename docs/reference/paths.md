@@ -96,9 +96,9 @@ re-prompts; no conversation is lost.
 | Path | Purpose | Lossy? |
 |------|---------|--------|
 | `history.json` | Slash-command input history | Rebuildable |
-| `connections.toml` | **Connections** — the program-managed "who I connect to" records: `name` (the identity), `provider` (a model provider id), `auth`, optional `api_key_env`, optional `protocol` / `base_url` / `user_agent` overrides, and the connection-level `models` delta. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each connection's model provider + the discovery cache, never persisted | No (user-managed connections) |
-| `route_settings.json` | The user's per-(connection, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of `models_discovery.json`) | No |
-| `models_discovery.json` | Per-connection discovered model lists, fitted capability metadata, and ETag revalidation state from live `GET /models`. Program-generated but expected to survive restarts — moved out of `$XDG_CACHE_HOME` in 0.43; the legacy location is adopted once on first load | Rebuildable |
+| `connections.toml` | **Connections** — the program-managed "who I connect to" records: `name` (the identity), `provider` (a model provider id), `auth`, optional `api_key_env`, optional `protocol` / `base_url` / `user_agent` overrides, and the connection-level `models` delta. Deliberately NOT in `config.toml`, which holds behavior only; routes are derived at runtime from each connection's model provider + the catalog cache, never persisted | No (user-managed connections) |
+| `route_settings.json` | The user's per-(connection, model) reasoning overrides — set from the model `e` editor. State, not cache: deleting it loses user configuration no endpoint can re-derive (migrated out of the pre-rename `models_discovery.json`) | No |
+| `remote_catalog.json` | Per-connection discovered model lists, fitted capability metadata, and ETag revalidation state from live `GET /models`. Program-generated but expected to survive restarts — moved out of `$XDG_CACHE_HOME` in 0.43; the pre-rename name `models_discovery.json` and the legacy cache location are adopted once on first load | Rebuildable |
 | `workspace_security.json` | Versioned, canonical-workspace-keyed SHA-256 grants for the concrete `mcp`, `skills`, `hooks`, `rules`, and `roots` project asset domains | Rebuildable (project asset trust must be granted again) |
 | `provider_usage.json` | Per-model usage telemetry driving recency sort in the model picker | Rebuildable |
 | `auth.toml` | OAuth token sets per connection name (`[tokens.<name>]`, 0600) — access/refresh/expiry for SuperGrok, ChatGPT, Copilot, and Google Antigravity logins. Rebuildable only by re-logging in (the refresh tokens are the durable secret; losing the file means re-auth, so back it up if rotating logins is costly) | Re-auth on loss |
@@ -229,7 +229,7 @@ directories:
 | `$XDG_CONFIG_HOME/muta/session.json` | the pre-ADR-0096 single-session layout | ADR-0096 (per-project buckets) |
 | `$XDG_STATE_HOME/muta/model_usage.json` | the pre-ADR-0024 usage telemetry (SQLite era) | ADR-0024's supersession; `provider_usage.json` is the live file |
 | `$XDG_DATA_HOME/muta/repeat.db` | the pre-ADR-0082 `/repeat` scheduler (SQLite) | any release after the SQLite removal |
-| `$XDG_CACHE_HOME/muta/models-dev.json` | an older remote-models cache format | the discovery cache (`models_discovery.json`) replaced it |
+| `$XDG_CACHE_HOME/muta/models-dev.json` | an older remote-models cache format | replaced by the catalog cache, now `remote_catalog.json` |
 
 None of these are read by the current code; deleting them changes nothing at
 runtime. They are *not* removed automatically — a tool silently deleting

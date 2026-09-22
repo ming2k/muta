@@ -284,7 +284,7 @@ without a baseline entry routes as chat completions and fails upstream.
    must not select the route (ADR-0201 INV-1, ADR-0267, ADR-0269). The three
    surfaces differ in endpoint family and model universe, not merely in how the
    bearer is obtained.
-2. **The account catalog beats the public mirror.** Discovery for an
+2. **The account catalog beats the public mirror.** Catalog for an
    account-scoped surface must come from an endpoint that presents that
    account's credential; a public catalogue may lag and may disagree on wire
    protocol (ADR-0269).

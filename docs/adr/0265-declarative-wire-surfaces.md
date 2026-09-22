@@ -1,6 +1,6 @@
 # 0265. Declarative wire surfaces: dialect tables, request envelopes, and the model-identity carrier set
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-20
 - **Implementation:** `muta-contracts`, `muta-llm-client`, `muta-providers`
 - **Builds on:** [ADR-0258](0258-first-class-declarative-model-providers-and-connection-pipe-purity.md), [ADR-0260](0260-provider-dialect-inheritance.md)

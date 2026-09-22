@@ -1,11 +1,13 @@
 # Model catalog architecture
 
 - Status: Living Blueprint
-- Last Updated: 2026-09-19
+- Last Updated: 2026-09-21
 - Scope: `muta-providers`, `muta-contracts`, `muta-persistence`, `muta-agent`, `muta-runtime`, `mutx`
 - Governing records: [ADR-0203](../adr/0203-remote-catalog-overlay-and-connection-gated-pipeline.md),
   [ADR-0227](../adr/0227-connection-scoped-catalog-refresh-and-in-memory-source-cache.md),
-  [ADR-0228](../adr/0228-direct-network-access-and-catalog-refresh-consistency.md)
+  [ADR-0228](../adr/0228-direct-network-access-and-catalog-refresh-consistency.md),
+  [ADR-0266](../adr/0266-declarative-remote-catalog-descriptors.md)
+- Open records affecting this blueprint: none ([ADR-0273](../adr/0273-upstream-availability-as-a-fourth-catalog-axis.md) delivered the fourth axis)
 
 ---
 
@@ -25,6 +27,23 @@ Only axis B is a genuine field-level overlay. Axis A is a single-source
 selection followed by a valve equation, never a merge of the layers. Axis C is
 a projection with its own filters, and it is the only axis where the keyword
 `key_ready` and the user's `hidden_models` have any effect.
+
+A fourth question — *may this account run this model right now, and why not* — is
+a **fourth axis** ([ADR-0273](../adr/0273-upstream-availability-as-a-fourth-catalog-axis.md)),
+resolved by its own code and enforced in one place:
+
+| Axis | Question | Owner |
+|------|----------|-------|
+| **D. Availability** | May this account run this model, and — when the provider says — why not? | `derive::effective_availability` (verdict), `build_provider_for_model` (enforcement) |
+
+It carries **two independent declared predicates**, never ANDed: `availability`
+(tristate verdict + the provider's own reason, verbatim) and `advertised` (the
+provider's listing intent). Both are declarations about an *(account, model)*
+pair; neither touches membership or capability. An unavailable model is a full
+member that keeps its capabilities and its derived route shape, is still listed so
+the account can see what an entitlement change would unlock, and is refused by the
+daemon rather than by a client. See §4 and §5.3 for the details, §7 for the
+`[INV-AVAIL-*]` invariants, and §5.5 for the retained-verdict staleness rule.
 
 Out of scope for this page: inference transport and wire-format selection per
 route, prompt caching, token accounting, and effort ladder resolution. Those
@@ -169,8 +188,41 @@ by `declared_vision()`.
 
 Capability resolution never changes membership. There is no longer any pass
 that removes a model because its capabilities look wrong: the former
-`fitting: bool` field is gone. The only membership-level capability test is a
-provider's explicit picker flag arriving from discovery.
+`fitting: bool` field is gone. Availability is equally orthogonal — a model the
+provider declared unusable stays a member and keeps every advertised capability;
+only its *routability* changes, and that change is enforced daemon-side (§4, §7).
+
+### 4a. Availability: the fourth axis
+
+`RemoteModelMetadata` carries two declared predicates, and `DiscoveredModel`
+mirrors them:
+
+```rust
+pub availability: Option<Availability>,   // { usable: bool, reason: Option<String> }
+pub advertised: Option<bool>,             // the provider's listing intent
+```
+
+- `availability` is the verdict. `None` means the provider declared nothing and
+  the model is usable; `Some(usable: false)` is a declaration that this account
+  may not run it. `reason` is the provider's own explanation, **verbatim** —
+  rendered or omitted, never parsed and never invented. Qoder states only
+  `enable`, so its reason is legitimately `None`; the surfaces then say only that
+  the model is unavailable rather than guessing "your plan".
+- `advertised` is *listing*, deliberately separate. Codex's `visibility` says
+  whether a model belongs in a listing; `supported_in_api` says whether the API
+  will serve it. Its own fixture (`hidden-helper`: hidden **and** API-supported) is
+  why these must never be ANDed into one bit (`[INV-AVAIL-07]`).
+- **Enforcement is daemon-side and singular.** `derive::effective_availability`
+  resolves the declaration against the connection's own scope and
+  `build_provider_for_model` refuses a verdict that says no. Every session start,
+  model switch, and bootstrap passes through it, so no client is the only refusal
+  site (`[INV-AVAIL-06]`).
+- **Sovereignty overrides and discloses.** An explicit `inject`/`include` makes an
+  unavailable model usable (`[INV-CATALOG-04]`), the upstream declaration is never
+  rewritten, and the projection reports `availability_overridden` so the row says
+  `locked upstream · overridden by you` (`[INV-AVAIL-05]`).
+- **Listing is a hint, not a gate.** `advertised: Some(false)` marks a model the
+  provider does not want offered by default; it does not make the model unusable.
 
 ## 5. The remote catalog (layer 2)
 
@@ -181,7 +233,6 @@ A connection resolves to exactly one of these, in order:
 | Effective source | When |
 |------------------|------|
 | Connection override: `Endpoint` | The connection pins a first-party catalog protocol |
-| Connection override: `ModelsDev` | The connection reads a provider slice from models.dev |
 | Provider default | The provider spec's `catalog_source` |
 | `None` | No network sync; the compiled baseline is authoritative |
 
@@ -189,17 +240,19 @@ Overrides exist because the transport endpoint and the catalog source are
 deliberately independent: a private relay can serve inference from its own base
 URL while sourcing model metadata from a verified catalog entry.
 
-### 5.2 models.dev
+### 5.2 Retired sources
 
-models.dev publishes one central document keyed by provider. The client holds
-the fetched catalog in **process memory only** — there is no on-disk catalog
-cache, no TTL schedule, and no background refresh loop. An explicit refresh
-fetches once through a shared in-flight future and replaces the in-memory
-document; every concurrent caller shares that single request, including its
-failure. On a cold read the committed, pruned snapshot embedded at build time
-is the offline floor.
+There is no third-party Layer-2 source. The former models.dev feed
+(`LiveCatalog::ModelsDev`, the standalone `muta-models-dev` module, and its
+committed build-time snapshot) was removed: `catalog_source` has exactly two
+arms, `Endpoint(CatalogShape)` and `None` (§5.1), and no code path fetches the
+models.dev document. A provider whose catalog lives there is now reached through
+its own first-party `Endpoint`.
 
-Reading the catalog never fetches. This is what makes startup network-free.
+Consequently there is no central models.dev document, no in-memory catalog
+cache, and no embedded snapshot; the offline floor is the compiled baseline
+(§2, Layer 3). Reading a catalog never fetches, so startup stays network-free
+(§5.7).
 
 ### 5.3 First-party endpoints
 
@@ -208,13 +261,30 @@ inference protocols use the OpenAI `/models` shape; Anthropic, Google, Google
 Cloud Code, Codex, and Copilot each have their own. Requests are conditional:
 the stored validator is sent, and a `304` reuses the cached list.
 
-Two admission rules apply while parsing, before anything is persisted:
+One exclusion rule applies while parsing, before anything is persisted:
 
 - Provider-specific exclusions — non-chat capability types, entries with no
   text output modality, entries lacking the generate-content method, and
-  provider-published deprecation lists.
-- A provider's own picker flag. An explicit "not in the picker" excludes the
-  model; `None` means "not stated" and admits it.
+  provider-published deprecation lists. A fully retired model is *gone*, which is
+  membership removal, not an availability verdict.
+
+A provider's availability declaration is **not** an admission rule and excludes
+nothing at parse time. Each shape maps only the fields its own vendor publishes
+(ADR-0273 §2):
+
+| Shape | Vendor field | Mapped to |
+|-------|--------------|-----------|
+| Qoder | `enable` | `availability` (no reason field exists → `reason: None`) |
+| Codex | `supported_in_api` | `availability` |
+| Codex | `visibility == "list"` | `advertised` |
+| Copilot | `policy.state` | `availability` — only an explicit `disabled` is a declaration; `unconfigured`, `unknown`, and an absent policy are **undeclared** |
+| Copilot | `policy.terms` | `reason`, verbatim |
+| Copilot | `model_picker_enabled` | `advertised` |
+
+The declarations are persisted with the entry (`None` = "not stated" = usable and
+listed, never rendered as disabled), reach the picker as the dim/reason, are
+enforced by the daemon (§4a), and withhold the fitted registration unless the
+connection's own scope injected the model.
 
 Parsed entries are sorted by id and de-duplicated, except for providers that
 publish a meaningful priority order, which is preserved.
@@ -231,24 +301,35 @@ after the profile or dimension changes.
 
 ### 5.5 Orchestration and write policy
 
-A refresh pass builds one job per discovery-capable connection and runs them
-with bounded concurrency (eight in flight). A single models.dev refresh is
-shared across the whole pass and started lazily by the first job that needs it,
-so it overlaps with the first-party fetches.
+A refresh pass builds one job per catalog-capable connection and runs them
+with bounded concurrency (eight in flight).
 
 Each result is applied as it completes, under a cross-process lock on the
-discovery cache, so one slow provider never delays a fast one. A connection
+catalog cache, so one slow provider never delays a fast one. A connection
 deleted while its fetch was in flight is never resurrected by the response.
 
 Per connection, one successful fetch writes:
 
-- the admitted model ids, in discovery order;
+- the admitted model ids, in catalog order;
 - the advertised capability fields;
+- the two availability declarations (`availability`, `advertised`) alongside the
+  rest of the advertised metadata;
 - fitted metadata for ids no compiled baseline knows;
-- the validator, client version, source identity, and refresh timestamp.
+- the validator, client version, source identity, refresh timestamp, and
+  `refresh_failed: false`.
 
-A failed fetch writes nothing. Discovery warnings surface to the user as a
-connection status rather than as a silent list change.
+A failed fetch writes nothing to the model data — the previous list, metadata, and
+verdicts are retained (`[INV-CATALOG-03]`) — but it does set `refresh_failed` on
+the connection's state, so the retained availability verdicts present as
+*as last observed* rather than freshly confirmed (`[INV-AVAIL-08]`). Enforcement is
+unchanged by the flag: a failure never widens access.
+
+Catalog warnings surface to the user as a connection status rather than as a silent
+list change, and that status distinguishes a durable upstream **refusal** (the
+upstream answered `401`/`403`) from a transient failure
+(`ConnectStatus::CatalogSyncWarning { kind }`, `[INV-AVAIL-09]`). The typed fetch
+error is carried intact to that point; it is no longer stringified at the fetch
+boundary.
 
 ### 5.6 Persistence
 
@@ -264,7 +345,7 @@ adoption rule.
 
 | Trigger | Scope | Notes |
 |---------|-------|-------|
-| User-initiated refresh in the model picker | All discovery-capable connections | Streams per-connection results back to the UI |
+| User-initiated refresh in the model picker | All catalog-capable connections | Streams per-connection results back to the UI |
 | Connection added or connected after authentication | That one connection | Login and add flows never wait on unrelated providers |
 | An in-flight model response advertising a new catalog validator | That one connection | Event-initiated, never a scheduled poll |
 
@@ -389,6 +470,15 @@ unavailable rather than silently keeping a stale name.
 | `[INV-CATALOG-05]` | Persistence stores filter rules, never materialized id lists | `filter` is a policy value in the connection record |
 | `[INV-CATALOG-06]` | A missing capability field and an explicit false are distinct | Tristate patch deserialization |
 | `[INV-CATALOG-07]` | An omitted client profile inherits the provider's recommended profile | Provider spec carries the recommendation and a sensitivity flag |
+| `[INV-AVAIL-01]` | Membership, capability, presentation, and availability are four owners; none is implemented by mutating another | Separate resolution paths; availability never edits the id set or capabilities |
+| `[INV-AVAIL-02]` | A verdict or reason is recorded only when the provider declares it — never derived from ids, status codes, or error text | Per-shape field mapping only |
+| `[INV-AVAIL-03]` | The reason is inert display data: never parsed, matched, or decided on | `reason` is read only by presentation |
+| `[INV-AVAIL-04]` | Only the tristate verdict gates; undeclared is never rendered disabled | `Availability` + client projections |
+| `[INV-AVAIL-05]` | A user scope may override a verdict, never rewrite it, and the override is disclosed | `effective_availability` + `availability_overridden` |
+| `[INV-AVAIL-06]` | No client is the only refusal site: a declared-unavailable route is not built daemon-side | `build_provider_for_model` gate |
+| `[INV-AVAIL-07]` | Listing intent and availability are independent and never ANDed | Separate `advertised` / `availability` fields |
+| `[INV-AVAIL-08]` | A verdict retained across a failed refresh is marked stale; enforcement never depends on the mark | `ModelListCacheState::refresh_failed` → `availability_stale` |
+| `[INV-AVAIL-09]` | A refused connection is a connection-level fact, distinct from a transient failure | `CatalogSyncWarning { kind }` + `ModelListError::is_refusal` |
 
 ## 8. Deltas from the decision records
 
@@ -404,6 +494,9 @@ sentence over the running code.
 | ADR-0203 §10 describes a four-tier sort with curated baseline order and a pinned active pair | Presentation is three sections ordered by wire id or recency; the active pair is not pinned |
 | ADR-0203 retires the word "discovery" | **Resolved.** ADR-0266 delivered the full rename: `CatalogShape` (was `DiscoveryProtocol`), `RemoteCatalogCache`, `CatalogSyncOutcome`, `CatalogSyncWarning`, `sync_remote_catalog`, the `catalog::sync` module, and the `remote_catalog.json` state file. The word remains only where ADR-0203 §2 says it is correct — service/peer/skill/tool registration — and as frozen on-disk names read by one-shot user-data migration |
 | ADR-0268 kept the compiled OpenCode Go routes and the keyless `models.opencode.ai` catalogue, deferring `/api/config` | **Resolved.** ADR-0269 made the authenticated Console `api/config` the authority for OpenCode Go: it declares each model's protocol and API root, which `RemoteModelMetadata.endpoint` carries into the ADR-0259 route algebra |
+| §4 said a provider's picker flag was the only *membership-level capability* test | **Resolved.** Nothing gates on a picker flag: availability is its own axis (§4a) enforced daemon-side, and the flag itself (`picker_enabled`) is retired in favour of `availability` + `advertised` ([ADR-0273](../adr/0273-upstream-availability-as-a-fourth-catalog-axis.md)) |
+| §5.3 and [Model metadata](../reference/model-metadata.md) both said a provider's picker flag *excludes* the model from the picker and channel set | **Corrected in place.** No shape excludes on an availability declaration: membership is untouched, and only Google Cloud Code's `deprecatedModelIds` truly prunes (retirement = membership; unavailable = axis D) |
+| §6.2 said `key_ready` is the only readiness signal a client needs | **Resolved.** `availability` and `availability_overridden` join it, and `availability_stale` records that a retained verdict survived a failed refresh rather than implying it is current |
 
 ## 8a. Catalog shapes and dimensions (ADR-0266)
 
@@ -426,7 +519,7 @@ canonical forms.
 
 **Dimensions select a variant of one catalog.** `CatalogShape::dimensions()`
 declares them; `Connection::catalog_dimensions` overrides them by name; the
-resolved set is folded into the discovery identity hash, so `scene=assistant`
+resolved set is folded into the catalog identity hash, so `scene=assistant`
 and `scene=experts` cache independently. This is not a second catalog source —
 `[INV-CATALOG-02]` holds (see ADR-0266).
 
@@ -470,7 +563,7 @@ implementation, now guarded by tests):
 | [ADR-0070](../adr/0070-provider-scoped-remote-model-metadata.md) | Remote metadata scoped to one provider instance and model | Accepted |
 | [ADR-0123](../adr/0123-provider-instances-as-state-derived-routes.md) | Connections carry no model-list state; routes are derived, never persisted | Accepted |
 | [ADR-0149](../adr/0149-model-capability-resolution-order.md) | The capability precedence order this blueprint's axis B extends | Accepted |
-| [ADR-0171](../adr/0171-three-layer-model-catalog-and-pluggable-network-sources.md) | The three-layer model and the pluggable network source | Proposed |
+| [ADR-0171](../adr/archive/0171-three-layer-model-catalog-and-pluggable-network-sources.md) | The three-layer model and the pluggable network source (now this blueprint's binding rule) | Compacted |
 | [ADR-0198](../adr/0198-declared-models-on-preset-connections.md) | Declared models on preset connections | Superseded by ADR-0199 |
 | [ADR-0199](../adr/0199-unified-cascading-model-resolution-architecture.md) | Unified model scope configuration and cascading resolution | Accepted |
 | [ADR-0201](../adr/0201-model-provider-service-surface-and-connection-identity.md) | `ModelProvider` as the service surface, `Connection` as the named pipe | Accepted |

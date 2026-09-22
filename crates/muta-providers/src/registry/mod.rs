@@ -33,6 +33,8 @@ mod openrouter;
 /// golden-wire tests ([INV-WIRE-01], ADR-0271), which need the pipeline builder
 /// and the codec's decode half.
 pub mod qoder;
+/// The QianwenAI Token Plan ladders are reused by its model-provider tests.
+pub mod qianwen;
 mod xai;
 mod zai;
 
@@ -150,6 +152,7 @@ pub const MODEL_PROVIDER_SPECS: &[ModelProviderSpec] = &[
     copilot::MODEL_PROVIDER_SPEC,
     kimi::MODEL_PROVIDER_SPEC,
     zai::MODEL_PROVIDER_SPEC,
+    qianwen::MODEL_PROVIDER_SPEC,
     qoder::MODEL_PROVIDER_SPEC,
     opencode::MODEL_PROVIDER_SPEC,
     opencode_go::MODEL_PROVIDER_SPEC,

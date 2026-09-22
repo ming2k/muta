@@ -74,6 +74,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .await
             .map_err(Into::into),
         Mode::Config(action) => commands::config::run(action),
+        Mode::Context(action) => commands::context::run(action),
         Mode::Auth(action) => commands::auth::run(action),
         Mode::Mcp(McpAction::Probe { name }) => commands::mcp::probe(&name).await,
         Mode::Mcp(action) => commands::mcp::run(action),

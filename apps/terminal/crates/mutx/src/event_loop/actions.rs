@@ -283,13 +283,20 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             let target = if app.active_dialog() == Some(DialogKind::Models) {
                 let rows = app.models_flat_filtered();
                 let picked = rows.get(app.modal_index).or_else(|| rows.first());
-                // A provider-locked model (`picker_enabled: false`) mirrors the
-                // official CLI's greyed-out menu row: refuse activation with a
-                // toast instead of sending a request the server must refuse.
-                if picked.is_some_and(|row| !row.picker_enabled) {
+                // A model the provider declared unavailable mirrors the official
+                // CLI's greyed-out menu row: refuse activation with a toast
+                // stating the provider's OWN reason when it gave one, instead of
+                // sending a request the server must refuse. When the provider
+                // declared no reason, say only that (ADR-0273) — never invent
+                // "your plan", which is a different, unstated diagnosis.
+                if let Some(row) = picked.filter(|row| !row.usable) {
+                    let message = row.locked_reason.as_deref().map_or_else(
+                        || "This model is unavailable on your account".to_string(),
+                        |reason| format!("This model is unavailable: {reason}"),
+                    );
                     crate::event_loop::sync::show_local_toast(
                         app,
-                        "This model is locked for the current plan",
+                        message,
                         true,
                         std::time::Duration::from_millis(2000),
                     );

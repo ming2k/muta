@@ -17,8 +17,8 @@
 use muta_contracts::catalog::{Channel, ProviderEntry, Transport};
 use muta_contracts::model::CapabilityOverrides;
 use muta_contracts::{
-    ClientProfile, ConnectionFilterPolicy, Effort, NamedFilterPolicy,
-    ProviderDialect, ReasoningMode, SecretString, WireProtocol,
+    ClientProfile, ConnectionFilterPolicy, Effort, NamedFilterPolicy, ProviderDialect,
+    ReasoningMode, SecretString, WireProtocol,
 };
 use muta_persistence::config::{Credentials, RemoteCatalogCache};
 use muta_persistence::connections::Connection;
@@ -360,4 +360,49 @@ pub fn resolve_credential(connection: &Connection, creds: &Credentials) -> Secre
         return SecretString::from(value);
     }
     SecretString::default()
+}
+
+/// The **effective** availability verdict for `(connection, model)`, plus
+/// whether a user override is what made it usable (ADR-0273).
+///
+/// The provider's declaration lives in the model's
+/// [`muta_contracts::RemoteModelMetadata`]; this resolves it against the
+/// connection's own scope. A model the connection (or the provider scope)
+/// explicitly injected stays usable even when the provider declared otherwise:
+/// ADR-0203 `[INV-CATALOG-04]` gives sovereign injection unconditional
+/// precedence, and ADR-0273 `[INV-AVAIL-05]` requires the override to be
+/// *disclosed* rather than silently erasing the upstream declaration.
+///
+/// This is the single source of truth for "may this be run"; the daemon gate
+/// and the picker projection both derive from it, so a client can never be the
+/// only place availability is enforced.
+pub fn effective_availability(
+    connection: &Connection,
+    model: &str,
+    remote: Option<&muta_contracts::RemoteModelMetadata>,
+) -> (muta_contracts::Availability, bool) {
+    let declared = remote.map(muta_contracts::RemoteModelMetadata::availability_or_usable);
+    let declared = declared.unwrap_or_default();
+    if declared.usable {
+        return (declared, false);
+    }
+    let providers = ModelProviders::load();
+    let sovereign = connection
+        .models
+        .included_ids()
+        .iter()
+        .any(|id| id == model)
+        || providers
+            .get(&connection.provider)
+            .is_some_and(|scope| scope.included_ids().iter().any(|id| id == model));
+    if sovereign {
+        tracing::info!(
+            connection = %connection.name,
+            model,
+            "user scope overrides a provider-declared unavailable model"
+        );
+        (muta_contracts::Availability::usable(), true)
+    } else {
+        (declared, false)
+    }
 }

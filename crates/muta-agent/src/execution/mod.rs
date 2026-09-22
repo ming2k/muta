@@ -9,7 +9,7 @@ pub use local::{
     LocalExecutionEnvironment, LocalFsProvider, LocalProcessRunner, WorkspaceExecutionEnvironment,
     workspace_sandbox_available,
 };
-pub use middleware::{SecretScrubMiddleware, SpillMiddleware, WorkspaceJailMiddleware};
+pub use middleware::{SecretScrubMiddleware, WorkspaceJailMiddleware};
 
 #[cfg(test)]
 pub(crate) use local::workspace_tests::workspace_tests_outside_scratch;

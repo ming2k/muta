@@ -19,7 +19,7 @@
 //! before invoking [`assemble`].
 
 use muta_agent::catalog;
-use muta_agent::orchestration::{MidTurnPruneProjectionGate, ProxyProvider, round_response};
+use muta_agent::orchestration::{ProxyProvider, round_response};
 use muta_agent::{Agent, AgentIdentity, AgentRoleProfile, RoundLifecycle, SubagentTool};
 use muta_contracts::{
     AgentNotice, AgentRequest, AgentResponse, Message, NoticeKind, NoticeSeverity, NoticeSource,
@@ -742,22 +742,7 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
     };
 
     // Mid-turn context projection: when pruning is enabled, install a gate that
-    // clears old tool results between ReAct turns once pressure crosses the
-    // prune threshold. The threshold is derived from the active model's context
-    // window and re-seeded whenever the provider switches (see
-    // `reseed_prune_threshold`), so it tracks the live model rather than a
-    // fixed token budget.
     if config.compaction.prune {
-        agent.set_context_projection_gate(Some(Arc::new(MidTurnPruneProjectionGate {
-            session: session.clone(),
-            // ADR-0120: token-native — the config key was always tokens; the
-            // old ×4 char conversion existed only for the byte-space pruner.
-            prune_protect_tokens: config.compaction.prune_protect_tokens,
-            // Share the agent's content-addressed weights cache so the gate's
-            // post-prune estimate is a cache walk on the blocking pool, not a
-            // full-window BPE pass on the async executor.
-            weights: agent.token_weights_handle(),
-        })));
         crate::agent_setup::reseed_prune_threshold(&agent, &config);
     }
 

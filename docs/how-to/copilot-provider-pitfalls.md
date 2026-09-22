@@ -17,7 +17,7 @@ that opencode and several community integrations also use. If you replace it
 with your own GitHub OAuth App, the backend will usually return only the
 always-available GPT-4o family, not the account's full subscription catalog.
 
-**Check:** the client id is compiled into `crates/muta-providers/src/oauth/config.rs`.
+**Check:** the client id is compiled into `crates/muta-providers/src/oauth/presets.rs`.
 If you fork muta and change `COPILOT.client_id`, you are also changing the
 model set GitHub exposes.
 
@@ -57,7 +57,7 @@ under the current account.
 If a model id appears in a raw `/models` response but not in muta's picker,
 check the `model_picker_enabled` field first.
 
-## When discovery fails
+## When the catalog fetch fails
 
 After login, muta fetches the live `/models` list automatically. If that
 fetch fails (network error, an expired token, a Copilot backend hiccup), the

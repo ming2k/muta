@@ -103,3 +103,27 @@ pub const GEMINI_BUDGET: &[Effort] = &[
     Effort::High,
     Effort::Max,
 ];
+
+/// QianwenAI Token Plan hybrid models (Qwen3.x, GLM-5.2, DeepSeek V4 Flash,
+/// live-verified 2026-10): `none`/`low`/`medium`/`high`/`xhigh`/`max`. `none`
+/// is a first-class rung on this surface — the endpoint answers with zero
+/// reasoning content, making it the thinking off switch.
+pub const QWEN_MIXED: &[Effort] = &[
+    Effort::None,
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::Xhigh,
+    Effort::Max,
+];
+
+/// QianwenAI Token Plan DeepSeek V4 Pro snapshots (live-verified 2026-10):
+/// `low`/`medium`/`high`/`xhigh`/`max` — the endpoint rejects `none` and
+/// `minimal` outright, so "reasoning off" is inexpressible on these models.
+pub const DEEPSEEK_V4_PLAN: &[Effort] = &[
+    Effort::Low,
+    Effort::Medium,
+    Effort::High,
+    Effort::Xhigh,
+    Effort::Max,
+];

@@ -72,7 +72,7 @@ vocabulary; the dispatch tools bind them by reference.
 | Profile | Bound by | Ceiling | Write grant | Gets |
 |---------|----------|---------|-------------|------|
 | `EXPLORE` | `spawn_agent` tool | `Read` | none | Pure read tools (`read_text`, `find_files`, `list_dir`, `search_text`, …) |
-| `CODE` | `delegate_code` tool | `Write` | none | Read tools + `execute_command`, `edit_text`, `write_file`, `todo*` — a full coding surface; runs delegated, so the delegation *is* the authorization |
+| `CODE` | `delegate_code` tool | `Write` | none | Read tools + `run_command`, `edit_text`, `write_file`, `todo*` — a full coding surface; runs delegated, so the delegation *is* the authorization |
 | `SKILL` | `spawn_agent(role: "skill")` | `Read` | none | Read tools for discovering and synthesizing instructions from `SKILL.md` |
 | `TITLE` | harness title generation | `Read` | none | No tools — a single `provider.chat()` call |
 
@@ -95,7 +95,7 @@ accountable for the result. See
 ### Why a `Read` ceiling (and the one exception)
 
 The research role is pure inspection, no side effects. A researcher should not
-run commands — an exploration subagent with `execute_command` could mutate the workspace
+run commands — an exploration subagent with `run_command` could mutate the workspace
 or run arbitrary commands, which is wrong for "go find things and report
 back". Every built-in *research* profile therefore carries a `Read` ceiling.
 The `Read < Execute < Write` tier split (ADR-0012) and the decoupled `write_paths`
@@ -103,7 +103,7 @@ grant (ADR-0028) remain available for a future command-running or
 scoped-write role, but no built-in profile exercises them today.
 
 The one exception is `CODE`: a coding subagent needs the full edit surface
-(`execute_command` + `edit_text` + `write_file`), so it admits those tools by name. Like
+(`run_command` + `edit_text` + `write_file`), so it admits those tools by name. Like
 every other built-in subagent it runs **delegated** — the delegation is the
 authorization, so the user does not re-approve each nested write/command; the
 principal reviews the subagent's handoff instead. Admission says *whether* a
@@ -136,7 +136,7 @@ admitted by a non-empty `write_paths` grant; the other two axes are gates:
 
 | Axis | Rule |
 |------|------|
-| Filesystem access | Admitted when the tool's tier is at or below the ceiling — every built-in profile has a `Read` ceiling, so it drops `execute_command`/`Write` |
+| Filesystem access | Admitted when the tool's tier is at or below the ceiling — every built-in profile has a `Read` ceiling, so it drops `run_command`/`Write` |
 | Scoped write | A `Write` tool below the ceiling is admitted when `write_paths` is non-empty (then scoped at runtime). No built-in profile sets `write_paths` today. `Execute` is never granted this way |
 | Needs a human | Excluded unless the profile opts in — `ask_user` and any future approval-gated tool |
 | Spawns a subagent | Always excluded, in *every* profile — this is what prevents recursion |

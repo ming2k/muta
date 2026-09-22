@@ -8,7 +8,7 @@ capability model that decides which path to take, see
 muta resolves every provider through one catalog
 (`build_catalog` in `crates/muta-agent/src/catalog/`): it derives the
 concrete routes (per-model protocol/endpoint/credential/reasoning) from each
-connection's model provider plus the discovery cache, then constructs the
+connection's model provider plus the catalog cache, then constructs the
 concrete `Provider` via `build_provider_for_channel` in
 `crates/muta-providers/src/registry/mod.rs`.
 Startup and a `/models` pick share this single path — there is no separate
@@ -73,7 +73,7 @@ wechat = "sk-..."
 
 ## Path 1: Declarative custom provider (ADR-0258, no code)
 
-Per ADR-0258, service surfaces (endpoints, protocols, and discovery rules) live
+Per ADR-0258, service surfaces (endpoints, protocols, and catalog rules) live
 in `model_providers.toml`, while credentialed pipes live in `connections.toml`.
 This lets multiple connections share one custom relay or local vLLM/Ollama
 instance without duplicating URL and protocol configuration:
@@ -104,7 +104,7 @@ api_key_env = "ACME_TEST_KEY"
 
 A **native-Google relay / 中转站** sets `default_protocol = "google-gemini"`.
 Per ADR-0259 Root URL Algebra, specify the versioned API root (`https://relay.example.com/v1beta`).
-The `/models/{id}:generateContent` inference path and `/models` discovery path are
+The `/models/{id}:generateContent` inference path and `/models` catalog path are
 derived algebraically:
 
 ```toml
@@ -141,7 +141,7 @@ Connection fields:
 | Field | Meaning |
 |-------|---------|
 | `name` | The connection's identity; unique (case-insensitive), referenced by `default_connection` and by `credentials.toml` |
-| `provider` | **Required**: the model provider id this connection points at (`openai`, `anthropic`, `google`, `deepseek`, `kimi-code`, `custom`, ...). See `muta_contracts::model_providers::MODEL_PROVIDER_IDS` |
+| `provider` | **Required**: the model provider id this connection points at (`openai`, `anthropic`, `google`, `deepseek`, `kimi-code`, `qianwen`, `custom`, ...). See `muta_contracts::model_providers::MODEL_PROVIDER_IDS` |
 | `auth` | `ApiKey` (default), or an OAuth variant for subscription connections |
 | `api_key_env` | Optional env var *name* holding the credential; wins over `credentials.toml` |
 | `protocol` | Optional wire-protocol override: `chat-completions`, `responses`, `anthropic-messages`, or `google-gemini` (legacy aliases accepted). Defaults to the provider's protocol |
@@ -150,7 +150,7 @@ Connection fields:
 | `models` | Optional connection-level delta: `models.include` / `models.exclude` / `models.overrides`. A connection may narrow or override the provider's universe; it must not invent models except under `provider = "custom"` |
 
 Per-model reasoning (`effort` / `thinking`) is **not** a persisted field — it
-lives per `(connection, model)` in the discovery cache, edited from the model `e`
+lives per `(connection, model)` in the catalog cache, edited from the model `e`
 picker. See [Reasoning effort](../reference/effort.md).
 
 Multiple connections to the same provider (e.g. two `deepseek` connections with
@@ -168,7 +168,7 @@ and a model provider spec. Use `deepseek.rs` as a minimal reference.
 use muta_contracts::thinking::ThinkingSupport;
 use muta_contracts::{Model, WireFormat, WireProtocol};
 
-use super::{DiscoveryProtocol, ModelProviderSpec, RemoteCatalogSource};
+use super::{CatalogShape, ModelProviderSpec, RemoteCatalogSource};
 
 /// The model ids this provider serves (display order).
 pub const ACME_BUILTIN_MODELS: &[&str] = &["acme-1"];
@@ -200,7 +200,7 @@ pub(crate) const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     user_agent: None,
     protocol: WireProtocol::ChatCompletions,
     models: ACME_BUILTIN_MODELS,
-    catalog_source: RemoteCatalogSource::Endpoint(DiscoveryProtocol::OpenAi),
+    catalog_source: RemoteCatalogSource::Endpoint(CatalogShape::OpenAi),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
     wire_overrides: &[],

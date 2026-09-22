@@ -52,7 +52,16 @@ use serde::{Deserialize, Serialize};
 /// model (models.dev `name`, Anthropic/Kimi `display_name`, Gemini
 /// `displayName`). Additive and optional: a v12 peer simply renders the wire id
 /// with no annotation, so the minimum served version does not move.
-pub const PROTOCOL_VERSION: u32 = 13;
+/// v14 (ADR-0273): `ProviderModelInfo.picker_enabled` is replaced by
+/// `availability` (a verdict plus the provider's own reason), with
+/// `availability_overridden`, `advertised`, and `availability_stale` alongside.
+/// A v13 peer would read the absent `picker_enabled` as `None` and render a
+/// provider-declared-unusable model as selectable — a *silent misinterpretation*
+/// of the availability axis, not an omitted annotation — so the version bumps.
+/// The floor does not move: a v13 peer is still served, and the daemon-side
+/// refusal (ADR-0273 `[INV-AVAIL-06]`) keeps a client that cannot render the
+/// verdict from producing a wrong inference.
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// Minimum served wire protocol version. ADR-0228 requires direct network
 /// access and rejects peers that can still submit application proxy settings.

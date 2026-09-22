@@ -1,6 +1,6 @@
 # 0266. Declarative remote catalog descriptors: shapes, dimensions, and the retirement of `DiscoveryProtocol`
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-20
 - **Implementation:** `muta-contracts`, `muta-providers`, `muta-agent`, `muta-persistence`
 - **Builds on:** [ADR-0203](0203-remote-catalog-overlay-and-connection-gated-pipeline.md), [ADR-0227](0227-connection-scoped-catalog-refresh-and-in-memory-source-cache.md), [ADR-0258](0258-first-class-declarative-model-providers-and-connection-pipe-purity.md)

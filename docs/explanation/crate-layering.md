@@ -60,7 +60,7 @@ These crates implement the contracts below orchestration:
   request/response semantics. Each provider embeds a shared `Client` so a
   single connection pool is reused across every turn.
 - **`muta-providers`** — the channel registry and `build_provider_for_channel`
-  factory, live model-list discovery, and the OAuth2/PKCE flows for
+  factory, live model-list catalog, and the OAuth2/PKCE flows for
   subscription providers. It selects *which* backend to talk to;
   `muta-llm-client` knows *how*.
 - **`muta-skills`** — skill metadata, discovery, remote caching, registry,
@@ -87,7 +87,7 @@ dispatch and compatibility parsing, context projection, shell input policy,
 `ProxyProvider`, skill context injection,
 `SubagentTool`, and the full-duplex subagent registry (ADR-0029). This crate knows how
 to run *one* LLM round with tools. It also owns the built-in tools
-(`execute_command`, `read_text`, `find_files`, `search_text`, `read_url`, todo management, …) in its
+(`run_command`, `read_text`, `find_files`, `search_text`, `read_url`, todo management, …) in its
 `tools` module: most self-register via `inventory`, and stateful todo tools
 receive an agent-owned context bound in `tool_integration`. It consumes
 `muta-skills` and interacts

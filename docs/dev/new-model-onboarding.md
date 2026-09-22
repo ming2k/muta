@@ -45,12 +45,12 @@ own home. No single edit makes a model appear everywhere:
       (`template_models_are_covered_by_the_local_baseline_table` — historical test name) fails loudly
       if the offering list and the baseline table drift apart.
 - [ ] Update `docs/reference/providers.md`: the preset table row (model list
-      column) and the provider bullet (behavior, discovery, defaults).
+      column) and the provider bullet (behavior, catalog, defaults).
 - [ ] Add a `CHANGELOG.md` `Unreleased` entry describing what a user gains.
 - [ ] If the platform's `/models` endpoint now returns capability metadata it
       did not before, check its `RemoteCatalogSource` binding (see
       [ADR-0203](../adr/0203-remote-catalog-overlay-and-connection-gated-pipeline.md)):
-      standard endpoints can bind to first-party `Endpoint` or verified `ModelsDev`.
+      standard endpoints bind to a first-party `Endpoint`.
 
 ## Layer weights (why the checklist looks like this)
 
@@ -85,7 +85,7 @@ Membership and capability are easy to conflate here, so keep them apart:
   floor: a 128k context window, no tool calling, and the permissive vision
   routing policy.
 
-A new model therefore needs a baseline entry even when discovery is on. The
+A new model therefore needs a baseline entry even when catalog sync is on. The
 Zhipu coding `/models` endpoint returns ids only
 (`{id, object, created, owned_by}` — verified live 2026-08), so without a
 baseline the model would be visible but capability-less, or — on a

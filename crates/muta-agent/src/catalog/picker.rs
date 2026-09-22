@@ -83,6 +83,7 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
             } else {
                 visible_channels
             };
+            let connection = stores.connections.get(&entry.id);
             let model_info = channels_to_show
                 .iter()
                 .copied()
@@ -97,10 +98,38 @@ pub fn build_picker_state(config: &Config, usage: &ConnectionUsage) -> ProviderP
                     // it. 0 (never activated on this connection) surfaces as `None`.
                     let recency = usage.model_recency(&entry.id, &info.model);
                     info.last_used_ms = (recency > 0).then_some(recency);
+                    // Availability is resolved against the connection's own
+                    // scope here — the SAME helper the daemon gate uses — so
+                    // the row can never claim a model is runnable when the
+                    // route would be refused, and a sovereign override is
+                    // disclosed rather than silently erasing the upstream
+                    // declaration (ADR-0273 `[INV-AVAIL-05]`, `[INV-AVAIL-06]`).
+                    if let Some(connection) = connection {
+                        let remote = channels_to_show
+                            .iter()
+                            .find(|channel| channel.model == info.model)
+                            .and_then(|channel| channel.remote.as_ref());
+                        let (effective, overridden) =
+                            super::derive::effective_availability(connection, &info.model, remote);
+                        info.availability_overridden = overridden;
+                        info.availability = if overridden {
+                            Some(effective)
+                        } else {
+                            info.availability.take()
+                        };
+                    }
+                    // A verdict whose refresh has since failed is presented as
+                    // observed-but-unverified rather than freshly confirmed
+                    // (ADR-0273). Only declared verdicts can be stale.
+                    info.availability_stale = info.availability.is_some()
+                        && stores
+                            .cache
+                            .model_lists
+                            .get(&entry.id)
+                            .is_some_and(|state| state.refresh_failed);
                     info
                 })
                 .collect();
-            let connection = stores.connections.get(&entry.id);
             let provider = connection.map(|p| p.provider.clone()).unwrap_or_default();
             let client_identity = connection
                 .map(|p| p.client_identity.clone())
@@ -263,13 +292,17 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
         .iter()
         .filter_map(|lvl| lvl.as_known())
         .collect();
-    // The provider's own picker enablement for this model, round-tripped from
-    // the remote catalog. `Some(false)` marks a locked (subscription-gated)
-    // model the picker renders greyed-out and must not activate.
-    let picker_enabled = channel
+    // The provider's declared availability for this model, round-tripped from
+    // the remote catalog (ADR-0273). This is the *declaration*; the caller
+    // applies the user's sovereign override via `derive::effective_availability`
+    // and sets `availability_overridden`. `None` is undeclared, never disabled.
+    let availability = channel
         .remote
         .as_ref()
-        .and_then(|remote| remote.picker_enabled);
+        .and_then(|remote| remote.availability.clone());
+    // The provider's listing intent, orthogonal to availability: an
+    // API-supported model may be deliberately unlisted (Codex `visibility`).
+    let advertised = channel.remote.as_ref().and_then(|remote| remote.advertised);
     match &channel.transport {
         Transport::Anthropic {
             effort, thinking, ..
@@ -293,7 +326,10 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 vision,
                 context_window,
                 max_output_tokens,
-                picker_enabled,
+                availability: availability.clone(),
+                availability_overridden: false,
+                advertised,
+                availability_stale: false,
             }
         }
         Transport::OpenAi { effort, .. } => {
@@ -317,7 +353,10 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 vision,
                 context_window,
                 max_output_tokens,
-                picker_enabled,
+                availability: availability.clone(),
+                availability_overridden: false,
+                advertised,
+                availability_stale: false,
             }
         }
         Transport::OpenAiResponses { effort, .. } => {
@@ -336,7 +375,10 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 vision,
                 context_window,
                 max_output_tokens,
-                picker_enabled,
+                availability: availability.clone(),
+                availability_overridden: false,
+                advertised,
+                availability_stale: false,
             }
         }
         Transport::Google { effort, .. } => {
@@ -362,7 +404,10 @@ pub fn channel_model_info(channel: &Channel) -> ProviderModelInfo {
                 vision,
                 context_window,
                 max_output_tokens,
-                picker_enabled,
+                availability: availability.clone(),
+                availability_overridden: false,
+                advertised,
+                availability_stale: false,
             }
         }
     }
@@ -427,17 +472,35 @@ mod tests {
         // the row must carry that so pickers render it greyed-out (official
         // `/model` parity) and refuse activation.
         let locked = muta_contracts::RemoteModelMetadata {
-            picker_enabled: Some(false),
+            availability: Some(muta_contracts::Availability::locked(None)),
             ..Default::default()
         };
         assert_eq!(
-            channel_model_info(&openai_channel("gmodel", Some(locked))).picker_enabled,
-            Some(false)
+            channel_model_info(&openai_channel("gmodel", Some(locked))).availability,
+            Some(muta_contracts::Availability::locked(None))
         );
-        // Undeclared stays undeclared — never coerced to enabled *or* locked.
+        // Undeclared stays undeclared — never coerced to usable *or* locked.
         assert_eq!(
-            channel_model_info(&openai_channel("qfmodel", None)).picker_enabled,
+            channel_model_info(&openai_channel("qfmodel", None)).availability,
             None
+        );
+    }
+
+    #[test]
+    fn channel_model_info_keeps_listing_intent_apart_from_availability() {
+        // Codex's `visibility != "list"` is a *listing* declaration. An
+        // API-supported model is usable whether or not it is advertised, so the
+        // two fields must move independently (ADR-0273).
+        let unlisted_but_usable = muta_contracts::RemoteModelMetadata {
+            availability: Some(muta_contracts::Availability::usable()),
+            advertised: Some(false),
+            ..Default::default()
+        };
+        let info = channel_model_info(&openai_channel("hidden-helper", Some(unlisted_but_usable)));
+        assert_eq!(info.advertised, Some(false));
+        assert_eq!(
+            info.availability,
+            Some(muta_contracts::Availability::usable())
         );
     }
 

@@ -121,7 +121,7 @@ struct CatalogSyncJob {
 struct CatalogFetchResult {
     connection: muta_persistence::connections::Connection,
     source_identity: String,
-    update: Result<RemoteCatalogUpdate, String>,
+    update: Result<RemoteCatalogUpdate, muta_providers::ModelListError>,
 }
 
 async fn fetch_models(job: CatalogSyncJob) -> CatalogFetchResult {
@@ -143,10 +143,12 @@ async fn fetch_models(job: CatalogSyncJob) -> CatalogFetchResult {
                 match muta_contracts::CredentialSource::resolve_auth(&source).await {
                     Ok(auth) => auth,
                     Err(error) => {
+                        // A credential that cannot even be resolved is a local
+                        // transport-shaped failure, not a server refusal.
                         return CatalogFetchResult {
                             connection: job.connection,
                             source_identity,
-                            update: Err(error),
+                            update: Err(muta_providers::ModelListError::Http(error)),
                         };
                     }
                 }
@@ -190,9 +192,7 @@ async fn fetch_models(job: CatalogSyncJob) -> CatalogFetchResult {
             let options = RemoteCatalogOptions {
                 etag: cached_etag.as_deref(),
             };
-            let update = muta_providers::fetch_remote_catalog(request, options)
-                .await
-                .map_err(|error| error.to_string());
+            let update = muta_providers::fetch_remote_catalog(request, options).await;
             CatalogFetchResult {
                 connection: job.connection,
                 source_identity,
@@ -213,6 +213,12 @@ pub struct ConnectionUpdate {
     pub changed: bool,
     /// The fetch error, when the source could not be refreshed.
     pub error: Option<String>,
+    /// Whether [`Self::error`] was a durable upstream **refusal** (`401`/`403`)
+    /// rather than a transient failure (ADR-0273). A refusal means the account
+    /// was told it may not use the connection; a transient failure means the
+    /// network or the server had a bad moment. The notice must not present one
+    /// as the other.
+    pub refused: bool,
 }
 
 /// The result of a live catalog sync pass ([`sync_remote_catalog`]).
@@ -220,8 +226,20 @@ pub struct ConnectionUpdate {
 pub struct CatalogSyncOutcome {
     /// Whether any connection changed its cached model list or fitted metadata.
     pub changed: bool,
-    /// Per-connection fetch failures: `(connection_name, error_message)`.
-    pub failures: Vec<(String, String)>,
+    /// Per-connection fetch failures.
+    pub failures: Vec<CatalogSyncFailureEntry>,
+}
+
+/// One connection's catalog-sync failure, with the durable/transient verdict
+/// attached so nothing downstream has to re-derive it from the message text
+/// (ADR-0273).
+#[derive(Debug, Clone)]
+pub struct CatalogSyncFailureEntry {
+    pub connection: String,
+    pub message: String,
+    /// Whether the upstream refused the request (`401`/`403`) rather than
+    /// failing to serve it.
+    pub refused: bool,
 }
 
 /// Fetch every catalog-capable connection's live model list and update the
@@ -283,7 +301,11 @@ pub async fn refresh_connection_models_for_etag(
         Err(error) => {
             return CatalogSyncOutcome {
                 changed: false,
-                failures: vec![(connection_name.to_string(), error)],
+                failures: vec![CatalogSyncFailureEntry {
+                    connection: connection_name.to_string(),
+                    message: error,
+                    refused: false,
+                }],
             };
         }
     };
@@ -303,7 +325,11 @@ pub async fn refresh_connection_models_for_etag(
         Ok(()) => CatalogSyncOutcome::default(),
         Err(error) => CatalogSyncOutcome {
             changed: false,
-            failures: vec![(connection_name.to_string(), error.to_string())],
+            failures: vec![CatalogSyncFailureEntry {
+                connection: connection_name.to_string(),
+                message: error.to_string(),
+                refused: false,
+            }],
         },
     }
 }
@@ -313,7 +339,7 @@ async fn sync_catalogs_matching(
     sink: Option<mpsc::UnboundedSender<ConnectionUpdate>>,
 ) -> CatalogSyncOutcome {
     let stores = Stores::load();
-    let mut failures: Vec<(String, String)> = Vec::new();
+    let mut failures: Vec<CatalogSyncFailureEntry> = Vec::new();
     let mut jobs = Vec::new();
 
     for connection in &stores.connections.connections {
@@ -366,16 +392,24 @@ async fn sync_catalogs_matching(
         let mut cache = match RemoteCatalogCache::lock().await {
             Ok(lock) => lock,
             Err(error) => {
-                failures.push((connection_name.clone(), error.clone()));
-                emit(&sink, &connection_name, false, Some(error));
+                failures.push(CatalogSyncFailureEntry {
+                    connection: connection_name.clone(),
+                    message: error.clone(),
+                    refused: false,
+                });
+                emit(&sink, &connection_name, false, Some(error), false);
                 continue;
             }
         };
         let (connection_changed, error) = apply_fetched(&mut cache, fetched, now_ms);
         if let Err(error) = cache.save() {
             let error = error.to_string();
-            failures.push((connection_name.clone(), error.clone()));
-            emit(&sink, &connection_name, false, Some(error));
+            failures.push(CatalogSyncFailureEntry {
+                connection: connection_name.clone(),
+                message: error.clone(),
+                refused: false,
+            });
+            emit(&sink, &connection_name, false, Some(error), false);
             continue;
         }
         drop(cache);
@@ -383,15 +417,29 @@ async fn sync_catalogs_matching(
             changed = true;
             tracing::info!(connection = %connection_name, "live catalog sync updated connection");
         }
+        let refused = error
+            .as_ref()
+            .is_some_and(muta_providers::ModelListError::is_refusal);
         if let Some(error) = &error {
             tracing::warn!(
                 connection = %connection_name,
                 error = %error,
+                refused,
                 "live catalog sync failed; keeping previous models"
             );
-            failures.push((connection_name.clone(), error.clone()));
+            failures.push(CatalogSyncFailureEntry {
+                connection: connection_name.clone(),
+                message: error.to_string(),
+                refused,
+            });
         }
-        emit(&sink, &connection_name, connection_changed, error);
+        emit(
+            &sink,
+            &connection_name,
+            connection_changed,
+            error.map(|error| error.to_string()),
+            refused,
+        );
     }
 
     CatalogSyncOutcome { changed, failures }
@@ -404,14 +452,25 @@ fn apply_fetched(
     cache: &mut RemoteCatalogCache,
     fetched: CatalogFetchResult,
     now_ms: i64,
-) -> (bool, Option<String>) {
+) -> (bool, Option<muta_providers::ModelListError>) {
     let connection = &fetched.connection;
     match fetched.update {
         Ok(RemoteCatalogUpdate::Modified { models, etag }) => {
             let mut changed = false;
+            // A model the provider declared unusable registers in the fitted
+            // overlay only when the user's own scope injected it — sovereignty
+            // over an upstream verdict (ADR-0203 `[INV-CATALOG-04]`, ADR-0273
+            // `[INV-AVAIL-05]`).
+            let sovereign = connection.models.included_ids();
             let fitted: std::collections::BTreeMap<String, FittedModelInfo> = models
                 .iter()
-                .filter(|model| model.picker_enabled != Some(false))
+                .filter(|model| {
+                    model
+                        .availability
+                        .as_ref()
+                        .is_none_or(muta_contracts::Availability::is_usable)
+                        || sovereign.contains(&model.id)
+                })
                 .filter(|model| muta_contracts::model::model_by_id(&model.id).is_none())
                 .map(|model| (model.id.clone(), fitted_model_info(model)))
                 .collect();
@@ -419,12 +478,12 @@ fn apply_fetched(
                 cache.fitted_models.insert(connection.name.clone(), fitted);
                 changed = true;
             }
-            // Locked models (`picker_enabled: Some(false)`) stay in the
-            // connection's catalog view and metadata so the picker can render
-            // them greyed-out (official CLI `/model` parity), but they never
-            // register in the fitted overlay: the model registry is the
-            // inference-capable set, and a locked model must not resolve for
-            // inference.
+            // Locked models (declared unusable) stay in the connection's
+            // catalog view and metadata so the picker can render them
+            // greyed-out with the provider's own reason (official CLI `/model`
+            // parity), but they never register in the fitted overlay: the model
+            // registry is the inference-capable set, and a locked model must
+            // not resolve for inference (ADR-0273).
             let supported: Vec<String> = models.iter().map(|model| model.id.clone()).collect();
             let remote_metadata: std::collections::BTreeMap<String, _> = models
                 .iter()
@@ -449,6 +508,9 @@ fn apply_fetched(
                     client_version: CLIENT_VERSION.to_string(),
                     source_identity: fetched.source_identity,
                     refreshed_at_ms: now_ms,
+                    // A successful refresh re-verifies every availability
+                    // verdict it carried (ADR-0273).
+                    refresh_failed: false,
                 },
             );
             (changed, None)
@@ -461,11 +523,21 @@ fn apply_fetched(
                     client_version: CLIENT_VERSION.to_string(),
                     source_identity: fetched.source_identity,
                     refreshed_at_ms: now_ms,
+                    refresh_failed: false,
                 },
             );
             (false, None)
         }
-        Err(error) => (false, Some(error)),
+        Err(error) => {
+            // The payload is deliberately retained (ADR-0227 / `[INV-CATALOG-03]`),
+            // so record that the verdicts inside it are now unverified: a
+            // retained `unavailable` may have been reversed upstream
+            // (ADR-0273).
+            if let Some(state) = cache.model_lists.get_mut(&connection.name) {
+                state.refresh_failed = true;
+            }
+            (false, Some(error))
+        }
     }
 }
 
@@ -474,12 +546,14 @@ fn emit(
     connection: &str,
     changed: bool,
     error: Option<String>,
+    refused: bool,
 ) {
     if let Some(sink) = sink {
         let _ = sink.send(ConnectionUpdate {
             connection: connection.to_string(),
             changed,
             error,
+            refused,
         });
     }
 }
@@ -642,10 +716,11 @@ mod tests {
     use super::*;
     use muta_providers::DiscoveredModel;
 
-    fn discovered(id: &str, picker_enabled: Option<bool>) -> DiscoveredModel {
+    fn discovered(id: &str, availability: Option<muta_contracts::Availability>) -> DiscoveredModel {
         DiscoveredModel {
             id: id.to_string(),
-            picker_enabled,
+            availability,
+            advertised: None,
             protocol: None,
             endpoint: None,
             family: Some("qwen".to_string()),
@@ -670,9 +745,9 @@ mod tests {
         let mut cache = RemoteCatalogCache::default();
         // Pre-sorted like the generic fetcher emits them (id-ascending).
         let models = vec![
-            discovered("gmodel", Some(false)),
+            discovered("gmodel", Some(muta_contracts::Availability::locked(None))),
             discovered("mmodel", None),
-            discovered("qtest-max", Some(true)),
+            discovered("qtest-max", Some(muta_contracts::Availability::usable())),
         ];
         let fetched = CatalogFetchResult {
             connection: muta_persistence::connections::Connection {
@@ -701,11 +776,11 @@ mod tests {
         );
         let metadata = &cache.remote_metadata["qoder-test"];
         assert_eq!(
-            metadata["gmodel"].picker_enabled,
-            Some(false),
+            metadata["gmodel"].availability,
+            Some(muta_contracts::Availability::locked(None)),
             "the lock declaration round-trips to the picker surface"
         );
-        assert_eq!(metadata["mmodel"].picker_enabled, None);
+        assert_eq!(metadata["mmodel"].availability, None);
         let fitted = &cache.fitted_models["qoder-test"];
         assert!(
             !fitted.contains_key("gmodel"),
@@ -713,5 +788,95 @@ mod tests {
         );
         assert!(fitted.contains_key("qtest-max"));
         assert!(fitted.contains_key("mmodel"));
+    }
+
+    /// A user who explicitly injects a provider-declared-unavailable model
+    /// overrides the verdict (ADR-0203 `[INV-CATALOG-04]`): it must register as
+    /// inference-capable, because sovereignty beats an upstream declaration.
+    #[test]
+    fn injected_locked_model_registers_for_inference() {
+        let mut cache = RemoteCatalogCache::default();
+        let mut connection = muta_persistence::connections::Connection {
+            name: "qoder-test".to_string(),
+            ..Default::default()
+        };
+        connection.models.include = vec![muta_contracts::DeclaredModel {
+            id: "gmodel".to_string(),
+            ..Default::default()
+        }];
+        let fetched = CatalogFetchResult {
+            connection,
+            source_identity: "sha256:test".to_string(),
+            update: Ok(RemoteCatalogUpdate::Modified {
+                models: vec![discovered(
+                    "gmodel",
+                    Some(muta_contracts::Availability::locked(Some(
+                        "requires a paid plan".to_string(),
+                    ))),
+                )],
+                etag: Some("\"v1\"".to_string()),
+            }),
+        };
+        let (_changed, error) = apply_fetched(&mut cache, fetched, 0);
+        assert!(error.is_none());
+        let fitted = &cache.fitted_models["qoder-test"];
+        assert!(
+            fitted.contains_key("gmodel"),
+            "an injected model must override the provider's unavailable verdict"
+        );
+        // The declaration itself is never rewritten — only overridden.
+        assert_eq!(
+            cache.remote_metadata["qoder-test"]["gmodel"].availability,
+            Some(muta_contracts::Availability::locked(Some(
+                "requires a paid plan".to_string()
+            )))
+        );
+    }
+
+    /// A failed refresh retains the payload (`[INV-CATALOG-03]`) but must record
+    /// that the retained availability verdicts are no longer verified, so a
+    /// surface cannot present a possibly-reversed verdict as freshly confirmed
+    /// (ADR-0273).
+    #[test]
+    fn failed_refresh_marks_retained_verdicts_stale() {
+        let connection = muta_persistence::connections::Connection {
+            name: "qoder-test".to_string(),
+            ..Default::default()
+        };
+        let mut cache = RemoteCatalogCache::default();
+        let seeded = CatalogFetchResult {
+            connection: connection.clone(),
+            source_identity: "sha256:test".to_string(),
+            update: Ok(RemoteCatalogUpdate::Modified {
+                models: vec![discovered(
+                    "gmodel",
+                    Some(muta_contracts::Availability::locked(None)),
+                )],
+                etag: Some("\"v1\"".to_string()),
+            }),
+        };
+        let (_changed, error) = apply_fetched(&mut cache, seeded, 1);
+        assert!(error.is_none());
+        assert!(!cache.model_lists["qoder-test"].refresh_failed);
+
+        let failed = CatalogFetchResult {
+            connection,
+            source_identity: "sha256:test".to_string(),
+            update: Err(muta_providers::ModelListError::Status(
+                503,
+                "upstream down".to_string(),
+            )),
+        };
+        let (_changed, error) = apply_fetched(&mut cache, failed, 2);
+        assert!(error.is_some_and(|error| !error.is_refusal()));
+        assert!(
+            cache.model_lists["qoder-test"].refresh_failed,
+            "the failure must be recorded so the verdict reads as unverified"
+        );
+        // The verdict is retained, not dropped — and still enforced.
+        assert_eq!(
+            cache.remote_metadata["qoder-test"]["gmodel"].availability,
+            Some(muta_contracts::Availability::locked(None))
+        );
     }
 }

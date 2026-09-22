@@ -16,7 +16,7 @@ a threshold:
 | Tier | Subagent admission | Permission broker | Examples |
 |------|-----------|-------------------|----------|
 | `Read` | Admitted by every profile | Bypassed | `read_text`, `find_files`, `search_text` |
-| `Execute` | Admitted only above a `Read` ceiling | Prompted unless a cached `Always` rule matches | `execute_command` |
+| `Execute` | Admitted only above a `Read` ceiling | Prompted unless a cached `Always` rule matches | `run_command` |
 | `Write` (default) | Admitted only by a `Write` ceiling or a `write_paths` grant, then scoped by `WriteScope` | Prompted unless a cached `Always` rule matches | `write_file`, `edit_text` |
 
 The broker prompts for any tool above `Read` (`Execute` or `Write`). Subagent

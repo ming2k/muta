@@ -599,7 +599,14 @@ fn sectioned_snapshot() -> muta_contracts::ProviderPickerSnapshot {
             vision: Some(false),
             context_window: 128_000,
             max_output_tokens: None,
-            picker_enabled: Some(enabled),
+            availability: Some(if enabled {
+                muta_contracts::Availability::usable()
+            } else {
+                muta_contracts::Availability::locked(None)
+            }),
+            availability_overridden: false,
+            advertised: None,
+            availability_stale: false,
         }
     };
     let row = |id: &str, name: &str, models: Vec<muta_contracts::ProviderModelInfo>| {
@@ -713,26 +720,34 @@ fn models_modal_lists_provider_locked_rows_greyed_with_a_lock_tag() {
     // upgrade unlocks) with a leading `locked` tag instead of being dropped.
     let theme = Theme::default();
     let mut picker = sectioned_snapshot();
-    let info = |model: &str, picker_enabled: Option<bool>| muta_contracts::ProviderModelInfo {
-        model: model.to_string(),
-        name: None,
-        protocol: String::new(),
-        effort: None,
-        thinking: None,
-        effort_levels: Vec::new(),
-        favorite: false,
-        last_used_ms: None,
-        vision: Some(false),
-        context_window: 128_000,
-        max_output_tokens: None,
-        picker_enabled,
+    let info = |model: &str, availability: Option<muta_contracts::Availability>| {
+        muta_contracts::ProviderModelInfo {
+            model: model.to_string(),
+            name: None,
+            protocol: String::new(),
+            effort: None,
+            thinking: None,
+            effort_levels: Vec::new(),
+            favorite: false,
+            last_used_ms: None,
+            vision: Some(false),
+            context_window: 128_000,
+            max_output_tokens: None,
+            availability,
+            availability_overridden: false,
+            advertised: None,
+            availability_stale: false,
+        }
     };
     picker.rows.push(muta_contracts::ProviderPickerRow {
         id: "qoder".into(),
         name: "Qoder".into(),
         model: "gmodel".into(),
         models: vec!["qfmodel".into(), "gmodel".into()],
-        model_info: vec![info("qfmodel", Some(true)), info("gmodel", Some(false))],
+        model_info: vec![
+            info("qfmodel", Some(muta_contracts::Availability::usable())),
+            info("gmodel", Some(muta_contracts::Availability::locked(None))),
+        ],
         builtin: true,
         protocol: String::new(),
         base_url: String::new(),
@@ -743,8 +758,8 @@ fn models_modal_lists_provider_locked_rows_greyed_with_a_lock_tag() {
         auth: Default::default(),
     });
     let ranked = crate::providers::models_flat_filtered_from(&picker, "openai", "gpt-5.5", "");
-    assert!(ranked.iter().any(|r| r.model == "gmodel" && !r.picker_enabled));
-    assert!(ranked.iter().any(|r| r.model == "qfmodel" && r.picker_enabled));
+    assert!(ranked.iter().any(|r| r.model == "gmodel" && !r.usable));
+    assert!(ranked.iter().any(|r| r.model == "qfmodel" && r.usable));
     let mut terminal = mutx_engine::TestTerminal::new(72, 28);
     terminal.draw(|f| {
         let mut scroll = 0;
@@ -773,6 +788,98 @@ fn models_modal_lists_provider_locked_rows_greyed_with_a_lock_tag() {
     let text = buffer_text(&terminal);
     assert!(text.contains("gmodel"), "locked row is listed");
     assert!(text.contains("locked"), "lock tag renders");
+}
+
+/// ADR-0273: when the provider states a reason, the row shows *that* — muta
+/// must never invent "locked for the current plan", which is a different,
+/// unstated diagnosis (the `403 code 110` quota incident is exactly a case
+/// where the plan is fine).
+#[test]
+fn models_modal_shows_the_providers_own_reason_verbatim() {
+    let theme = Theme::default();
+    let mut picker = sectioned_snapshot();
+    let info = |model: &str, availability: Option<muta_contracts::Availability>| {
+        muta_contracts::ProviderModelInfo {
+            model: model.to_string(),
+            name: None,
+            protocol: String::new(),
+            effort: None,
+            thinking: None,
+            effort_levels: Vec::new(),
+            favorite: false,
+            last_used_ms: None,
+            vision: Some(false),
+            context_window: 128_000,
+            max_output_tokens: None,
+            availability,
+            availability_overridden: false,
+            advertised: None,
+            availability_stale: false,
+        }
+    };
+    picker.rows.push(muta_contracts::ProviderPickerRow {
+        id: "qoder".into(),
+        name: "Qoder".into(),
+        model: "degraded".into(),
+        models: vec!["degraded".into(), "overridden".into()],
+        model_info: vec![
+            info(
+                "degraded",
+                Some(muta_contracts::Availability::locked(Some(
+                    "Billing daily count exceeded".to_string(),
+                ))),
+            ),
+            muta_contracts::ProviderModelInfo {
+                availability: Some(muta_contracts::Availability::usable()),
+                availability_overridden: true,
+                ..info("overridden", None)
+            },
+        ],
+        builtin: true,
+        protocol: String::new(),
+        base_url: String::new(),
+        key_ready: true,
+        provider: String::new(),
+        client_identity: Default::default(),
+        last_used_ms: None,
+        auth: Default::default(),
+    });
+    let ranked = crate::providers::models_flat_filtered_from(&picker, "openai", "gpt-5.5", "");
+    let mut terminal = mutx_engine::TestTerminal::new(96, 28);
+    terminal.draw(|f| {
+        let mut scroll = 0;
+        draw_models_modal(
+            f,
+            crate::overlays::provider::models::ModelsModalProps {
+                models: &ranked,
+                current_provider: "openai",
+                current_model: "gpt-5.5",
+                modal_index: 0,
+                query: "",
+                cursor_position: 0,
+                scroll: &mut scroll,
+                follow_selection: true,
+                search: false,
+                show_caret: true,
+                refreshing: false,
+                spinner_phase: 0,
+            },
+            &theme,
+        );
+    });
+    let text = buffer_text(&terminal);
+    assert!(
+        text.contains("Billing daily count exceeded"),
+        "the provider's own reason is rendered verbatim: {text}"
+    );
+    assert!(
+        !text.contains("locked for the current plan"),
+        "muta must not invent a plan diagnosis the provider never stated"
+    );
+    assert!(
+        text.contains("overridden by you"),
+        "an override of an upstream lock is disclosed, not silent: {text}"
+    );
 }
 
 #[test]
@@ -885,7 +992,7 @@ fn render_labelled_models_modal(width: u16) -> String {
 fn qoder_model_info(
     model: &str,
     name: &str,
-    picker_enabled: Option<bool>,
+    availability: Option<muta_contracts::Availability>,
 ) -> muta_contracts::ProviderModelInfo {
     muta_contracts::ProviderModelInfo {
         model: model.to_string(),
@@ -899,7 +1006,10 @@ fn qoder_model_info(
         vision: Some(true),
         context_window: 200_000,
         max_output_tokens: None,
-        picker_enabled,
+        availability,
+        availability_overridden: false,
+        advertised: None,
+        availability_stale: false,
     }
 }
 
@@ -916,8 +1026,16 @@ fn render_qoder_models_modal(width: u16, query: &str) -> String {
             models: vec!["auto".into(), "qfmodel".into(), "gmodel".into()],
             model_info: vec![
                 qoder_model_info("auto", "Auto", None),
-                qoder_model_info("qfmodel", "Qwen3.8-Flash", Some(true)),
-                qoder_model_info("gmodel", "GLM-5.3", Some(false)),
+                qoder_model_info(
+                    "qfmodel",
+                    "Qwen3.8-Flash",
+                    Some(muta_contracts::Availability::usable()),
+                ),
+                qoder_model_info(
+                    "gmodel",
+                    "GLM-5.3",
+                    Some(muta_contracts::Availability::locked(None)),
+                ),
             ],
             builtin: true,
             protocol: String::new(),
@@ -1676,7 +1794,12 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 vision: Some(false),
                 context_window: 1_000_000,
                 max_output_tokens: None,
-                picker_enabled: None,
+                availability: None,
+
+                availability_overridden: false,
+
+                advertised: None,
+                availability_stale: false,
             },
             muta_contracts::ProviderModelInfo {
                 model: "gemini-3.1-pro".to_string(),
@@ -1690,7 +1813,12 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 vision: Some(false),
                 context_window: 1_000_000,
                 max_output_tokens: None,
-                picker_enabled: None,
+                availability: None,
+
+                availability_overridden: false,
+
+                advertised: None,
+                availability_stale: false,
             },
             muta_contracts::ProviderModelInfo {
                 model: "claude-3-7-sonnet".to_string(),
@@ -1704,7 +1832,12 @@ fn connections_modal_detail_view_renders_grouped_periodic_quota_and_effort() {
                 vision: Some(false),
                 context_window: 200_000,
                 max_output_tokens: None,
-                picker_enabled: None,
+                availability: None,
+
+                availability_overridden: false,
+
+                advertised: None,
+                availability_stale: false,
             },
         ],
         active_model: Some("gemini-3.7-flash".to_string()),
@@ -2190,19 +2323,17 @@ fn connections_modal_quota_bucket_used_percentage_and_separate_reset_line() {
                 description: None,
                 quota: Some(muta_contracts::ProviderQuotaData::Periodic(
                     muta_contracts::PeriodicQuota {
-                        buckets: vec![
-                            muta_contracts::QuotaWindowBucket {
-                                label: "Gemini Pro Agent".to_string(),
-                                used_fraction: 0.72,
-                                used_amount: None,
-                                total_limit: None,
-                                unit: None,
-                                window: Some(muta_contracts::QuotaWindowKind::Daily),
-                                reset_at_ms: None,
-                                reset_time_str: Some("in 3h 25m".to_string()),
-                                group: None,
-                            },
-                        ],
+                        buckets: vec![muta_contracts::QuotaWindowBucket {
+                            label: "Gemini Pro Agent".to_string(),
+                            used_fraction: 0.72,
+                            used_amount: None,
+                            total_limit: None,
+                            unit: None,
+                            window: Some(muta_contracts::QuotaWindowKind::Daily),
+                            reset_at_ms: None,
+                            reset_time_str: Some("in 3h 25m".to_string()),
+                            group: None,
+                        }],
                     },
                 )),
                 primary_balance: None,

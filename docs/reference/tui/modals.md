@@ -262,6 +262,32 @@ keyboard protocol. In a raw terminal `Ctrl+M` is byte-identical to `Enter`,
 so on unsupported terminals the key falls through to `Enter` and `/models`
 is the reliable trigger.
 
+### Availability annotations
+
+A provider may declare that this account may not run a model (Qoder's
+subscription-locked entries, an org policy, a quota block). Such a row stays in
+the list — an empty picker would hide what an entitlement change would unlock —
+but it is rendered inert, and its tag row leads with the verdict
+(ADR-0273):
+
+- **Locked with a stated reason** — `locked: <the provider's own words>`. The
+  reason is the provider's, verbatim; muta never substitutes its own diagnosis
+  (a quota exhaustion is not a plan problem, and saying so would send the user
+  to the wrong remedy).
+- **Locked with no stated reason** — the bare `locked`. Some providers (Qoder)
+  publish only a boolean, so the tag says only what is known, and `Enter`
+  reports only that the model is unavailable.
+- **Locked upstream, overridden by you** — the model is usable because the
+  connection's own `inject`/`include` scope overrode the verdict. The row
+  announces the contradiction instead of silently looking natively runnable.
+- **`as last observed · re-check failed`** — the verdict survived a refresh
+  that has since failed, so it may already be out of date upstream. It is still
+  enforced; the mark only prevents a stale verdict from reading as current.
+
+`Enter` on an inert row is refused with a toast rather than sent upstream. The
+refusal is enforced by the daemon as well, so the same model cannot be activated
+through any other frontend.
+
 ## Connections modal
 
 Connection-management surface. Rows are the configured connections, ranked
@@ -432,7 +458,7 @@ the list. Data comes from the session-context snapshot.
 ╭────────────────────────────────────────────────────────╮
 │ Tools                                                  │
 │                                                        │
-│  ●  execute_command    builtin    run a shell command[on]│  ← selected → brand bg
+│  ●  run_command    builtin    run a shell command[on]│  ← selected → brand bg
 │  ●  read_text         builtin    read a text file    [on]│
 │  ○  mcp__fs__search   mcp:fs     semantic file search[off]│
 │  …                                                     │

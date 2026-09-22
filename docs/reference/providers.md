@@ -112,6 +112,7 @@ a wire protocol and never an authentication mode. The closed id set lives in
 | `glm-cn` | `chat-completions` | standard plus ZCode identity | coding-plan key |
 | `kimi-code` | `chat-completions` | standard | coding-plan key |
 | `qoder` | `chat-completions` | Qoder | Qoder OAuth (device flow) or pasted `pt-` personal-access token |
+| `qianwen` | `chat-completions` | standard | Token Plan key (`QIANWEN_API_KEY`, `sk-sp-…`) |
 | `opencode` | Advertised per model: `chat-completions`, `responses`, `anthropic-messages`, or `google-gemini` | Console account inference roots (`inference/{openai,anthropic,google}`) | OpenCode Console OAuth (device flow) |
 | `opencode-zen` | `chat-completions`; the compiled baseline pins non-chat models by id | standard | `OPENCODE_API_KEY` |
 | `opencode-go` | `chat-completions`; the compiled baseline pins non-chat models by id | standard | `OPENCODE_API_KEY` |
@@ -142,7 +143,7 @@ upstream service may offer.
 | Google provider models | implicit | none | reads |
 | DeepSeek provider models | implicit | none | provider-specific hits and misses |
 | Kimi Code models | implicit | none | provider-specific reads |
-| xAI, ChatGPT subscription, Copilot, GLM CN, OpenRouter, OpenCode, OpenCode Zen, OpenCode Go, Antigravity, and `custom` routes | unsupported | none | none declared |
+| xAI, ChatGPT subscription, Copilot, GLM CN, OpenRouter, OpenCode, OpenCode Zen, OpenCode Go, Antigravity, QianwenAI Token Plan, and `custom` routes | unsupported | none | none declared |
 
 “Unsupported” means Muta sends no cache control and rejects a non-default cache
 preference for that route. It does not claim that the upstream never performs
@@ -177,29 +178,29 @@ Model input field.
 The connection's `name` is its sole identifier (unique, compared
 case-insensitively; a duplicate is rejected with a suggested alternative). It
 keys the credential (`credentials.toml`), the OAuth token set (`auth.toml`),
-the discovery cache, and `config.toml`'s `default_connection`. Renaming is one
+the catalog cache, and `config.toml`'s `default_connection`. Renaming is one
 atomic transaction over `credentials.toml`, `auth.toml`, and
 `default_connection`; historical session and telemetry records keep the name
 they ran under.
 
 Routes are never persisted: the catalog derives each route (protocol, dialect,
 endpoint, credential, capability set) at runtime from the connection's provider
-plus the discovery cache. Custom routes do not inherit a provider's prompt-cache
+plus the catalog cache. Custom routes do not inherit a provider's prompt-cache
 capabilities.
 
 Credential resolution is `api_key_env` first, then the connection entry in
 `credentials.toml`. OAuth connections resolve their current bearer from the
 auth store.
 
-## Model discovery
+## Model catalog
 
 Admission, refresh triggers, and everything the picker finally renders are
 specified in
 [Model catalog architecture](../architecture/model-catalog.md); this section
 covers only the wire surfaces.
 
-Inference and discovery protocols are distinct. Both OpenAI inference
-protocols use the OpenAI `/models` discovery shape; Anthropic and Google use
+Inference and catalog protocols are distinct. Both OpenAI inference
+protocols use the OpenAI `/models` catalog shape; Anthropic and Google use
 their own model-list surfaces. ChatGPT uses the Codex model catalogue.
 
 OpenRouter's OpenAI-shaped catalog additionally supplies context and output
@@ -207,7 +208,7 @@ limits, input modalities, tool-call support, and reasoning effort levels.
 Those facts remain scoped to the OpenRouter connection. Its offline seed is
 `nex-agi/nex-n2.5-pro:free`; the live catalog is authoritative once fetched.
 
-Discovery facts are scoped to the connection. Remote protocol metadata may
+Catalog facts are scoped to the connection. Remote protocol metadata may
 override a model's baseline route only for that connection, which is how
 Copilot can serve the same model id over different APIs on different plans.
 
@@ -218,12 +219,21 @@ capability fallbacks; they do not retain a model that a successful remote
 catalog no longer returns. Explicit `inject` entries remain the only way to
 keep an unlisted model.
 
+Membership, however, is not availability. A provider may return a model it
+declares this account may not run (Qoder's `enable:false`, Codex's
+`supported_in_api:false`, Copilot's `policy.state:"disabled"`). Such a model
+stays listed and remains a member, but the daemon refuses to route it and the
+picker renders it dimmed with the provider's own reason — see
+[ADR-0273](../adr/0273-upstream-availability-as-a-fourth-catalog-axis.md). A
+provider's separate *listing* hint (Codex `visibility`, Copilot
+`model_picker_enabled`) is not an availability verdict.
+
 A successful, structurally valid empty catalog means the connection currently
 has no available models and clears its prior list. Network, authorization,
 HTTP status, and schema failures preserve the last valid result instead.
 
 Catalog freshness and ETag validators are scoped to the complete request
-identity. Changing the source, endpoint, discovery protocol, or client
+identity. Changing the source, endpoint, catalog protocol, or client
 emulation profile invalidates the old validator and triggers an unconditional
 fetch. This prevents a catalog selected for an older client profile from being
 treated as current after the profile changes.

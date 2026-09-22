@@ -280,7 +280,7 @@ pub(crate) fn model_list_body(
             ModelBodyLine::Row(row) => {
                 let rm = &models[row];
                 let is_selected = row == modal_index;
-                let locked = !rm.picker_enabled;
+                let locked = !rm.usable;
                 let style = choice_style(ChoiceTone::Filled, is_selected && !locked, theme);
 
                 let tag = match (rm.thinking, rm.effort.as_deref()) {
@@ -289,13 +289,38 @@ pub(crate) fn model_list_body(
                     (None, Some(effort)) => effort.to_string(),
                     _ => String::new(),
                 };
-                // The provider's own lock declaration leads the tag row so the
-                // reason a row is inert reads first (official `/model` parity).
+                // The provider's own declaration leads the tag row so why a row
+                // is inert reads first (official `/model` parity). When the
+                // provider stated a reason it is shown verbatim; when it stated
+                // none the tag stays the bare word, and the refusal toast says
+                // only that. A model the user overrode keeps its upstream
+                // verdict visible rather than looking natively runnable.
                 let tag = if locked {
+                    let verdict = rm.locked_reason.as_deref().map_or_else(
+                        || "locked".to_string(),
+                        |reason| format!("locked: {reason}"),
+                    );
                     if tag.is_empty() {
-                        "locked".to_string()
+                        verdict
                     } else {
-                        format!("locked · {tag}")
+                        format!("{verdict} · {tag}")
+                    }
+                } else if rm.availability_overridden {
+                    if tag.is_empty() {
+                        "locked upstream · overridden by you".to_string()
+                    } else {
+                        format!("locked upstream · overridden by you · {tag}")
+                    }
+                } else {
+                    tag
+                };
+                // A verdict observed before a failed refresh is marked as such:
+                // it is still enforced, but it is not freshly confirmed.
+                let tag = if rm.availability_stale {
+                    if tag.is_empty() {
+                        "as last observed · re-check failed".to_string()
+                    } else {
+                        format!("{tag} · as last observed · re-check failed")
                     }
                 } else {
                     tag

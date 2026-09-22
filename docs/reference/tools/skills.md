@@ -74,7 +74,7 @@ skills from, in priority order (later sources override earlier ones):
    (highest priority).
 
 All user-level paths resolve through the central `Dirs` layer
-(`crates/muta-persistence/src/paths.rs`) and honour the standard XDG overrides
+(`crates/muta-paths/src/paths.rs`) and honour the standard XDG overrides
 (`$XDG_DATA_HOME`, `$XDG_CACHE_HOME`) plus the app-specific overrides
 (`$MUTA_DATA_DIR`, `$MUTA_CACHE_DIR`). See [Paths](../paths.md) for
 the full override stack and [Persistence and the XDG

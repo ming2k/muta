@@ -191,11 +191,19 @@ fn discovered_from_scene_entry(entry: &Value) -> Option<super::super::Discovered
         return None;
     }
     // `enable:false` is subscription-locked, not absent: the official CLI's
-    // `/model` menu lists such entries greyed-out, so the entry is kept with
-    // `picker_enabled: Some(false)` and only pickers/registry gate on it.
-    let picker_enabled = match entry.get("enable") {
-        Some(Value::Bool(enabled)) => Some(*enabled),
-        Some(Value::Number(number)) => Some(number.as_i64().unwrap_or(0) != 0),
+    // `/model` menu lists such entries greyed-out, so the entry is kept as a
+    // declared-unusable model. The Qoder catalog states only the boolean — no
+    // reason field exists — so the reason stays `None` and no surface may
+    // invent one (ADR-0273).
+    let availability = match entry.get("enable") {
+        Some(Value::Bool(enabled)) => Some(muta_contracts::Availability {
+            usable: *enabled,
+            reason: None,
+        }),
+        Some(Value::Number(number)) => Some(muta_contracts::Availability {
+            usable: number.as_i64().unwrap_or(0) != 0,
+            reason: None,
+        }),
         _ => None,
     };
     let context_window = entry
@@ -218,7 +226,8 @@ fn discovered_from_scene_entry(entry: &Value) -> Option<super::super::Discovered
         .map(|efforts| efforts.keys().cloned().collect());
     Some(super::super::DiscoveredModel {
         id: key,
-        picker_enabled,
+        availability,
+        advertised: None,
         protocol: None,
         endpoint: None,
         family: entry
@@ -313,11 +322,22 @@ mod tests {
                 .find(|model| model.id == id)
                 .unwrap_or_else(|| panic!("{id} present"))
         };
-        assert_eq!(by_id("qmodel_38max").picker_enabled, Some(true));
-        assert_eq!(by_id("gmodel").picker_enabled, Some(false));
-        assert_eq!(by_id("kmodel").picker_enabled, Some(false));
+        assert_eq!(
+            by_id("qmodel_38max").availability,
+            Some(muta_contracts::Availability::usable())
+        );
+        // Qoder states only the boolean; the reason stays undeclared so no
+        // surface may invent one (ADR-0273).
+        assert_eq!(
+            by_id("gmodel").availability,
+            Some(muta_contracts::Availability::locked(None))
+        );
+        assert_eq!(
+            by_id("kmodel").availability,
+            Some(muta_contracts::Availability::locked(None))
+        );
         // Absent `enable` is undeclared, not locked.
-        assert_eq!(by_id("auto").picker_enabled, None);
+        assert_eq!(by_id("auto").availability, None);
         assert_eq!(by_id("gmodel").name.as_deref(), Some("GLM-5.3"));
     }
 

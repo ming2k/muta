@@ -562,16 +562,8 @@ impl SessionStore {
         let (path, data) = {
             let mut state = self.state.lock().await;
             let translated = translate_projection(&mut state.data.transcript, &result);
-            match translated {
-                Some(()) => {}
-                None => {
-                    // Fallback: the caller's window is the truth; rebuild the
-                    // entries and drop the stale directive history. The new
-                    // transcript shares nothing with the durable rows, so the
-                    // next save rewrites in full (ADR-0187).
-                    state.data.transcript = rebuild_transcript_from_messages(&result.model_window);
-                    state.data.generation = uuid::Uuid::new_v4().to_string();
-                }
+            if translated.is_none() {
+                return Err("projection translation failed: view commit writes no execution facts and history cannot be rebuilt from model window (ADR-0275/0280)".into());
             }
             state.data.last_projection = Some(result.checkpoint);
             state.invalidate_projection_cache();
@@ -623,11 +615,11 @@ impl SessionStore {
 
         // Fork canonical SessionIR into SQLite (ADR-0241/ADR-0249)
         let parent_ir = self.session_ir().await;
+        let parent_delta = parent_ir.drain_delta(0);
+        let _ = self.writer.save_session_delta(parent_delta).await;
         let child_ir = parent_ir.fork(&fork_child_id);
         let delta = child_ir.drain_delta(0);
-        if let Err(e) = self.writer.save_session_delta(delta).await {
-            tracing::warn!(error = %e, "failed to persist forked SessionDelta to sessions_v2 / causal_nodes");
-        }
+        self.writer.save_session_delta(delta).await.map_err(|e| e.to_string())?;
 
         Ok((fork_child_id, parent_id))
     }
@@ -659,11 +651,14 @@ impl SessionStore {
 
         // Fork canonical SessionIR into SQLite (ADR-0241/ADR-0249)
         let parent_ir = self.session_ir().await;
+        let parent_delta = parent_ir.drain_delta(0);
+        let _ = self.writer.save_session_delta(parent_delta).await;
         let side_ir = parent_ir.fork(&side_id);
         let delta = side_ir.drain_delta(0);
-        if let Err(e) = self.writer.save_session_delta(delta).await {
-            tracing::warn!(error = %e, "failed to persist forked SessionDelta to sessions_v2 / causal_nodes");
-        }
+        self.writer
+            .save_session_delta(delta)
+            .await
+            .map_err(|e| format!("failed to persist forked SessionDelta to canonical storage: {e}"))?;
 
         Ok((side_id, parent_id))
     }
@@ -758,7 +753,7 @@ impl SessionStore {
         Ok(messages)
     }
 
-    /// Project the current session state into canonical [`muta_contracts::SessionIR`] (ADR-0241/ADR-0249).
+    /// Project the current session state into canonical [`muta_contracts::SessionIR`] (ADR-0241/ADR-0249/ADR-0275).
     pub async fn session_ir(&self) -> muta_contracts::SessionIR {
         let session_id = self.id().await;
         if let Ok(reader) = self.writer.reader()
@@ -766,31 +761,18 @@ impl SessionStore {
         {
             return ir;
         }
-        let state = self.state.lock().await;
-        #[allow(deprecated)]
-        super::ir_bridge::session_data_to_ir(&state.data)
+        let now = unix_timestamp();
+        muta_contracts::SessionIR::new(session_id, muta_contracts::SessionPolicy::default(), now)
     }
 
-    /// Commit mutations from a [`muta_contracts::SessionIR`] back into the session store (ADR-0241/ADR-0249).
+    /// Commit mutations from a [`muta_contracts::SessionIR`] back into the session store (ADR-0241/ADR-0249/ADR-0275).
     pub async fn commit_session_ir(&self, ir: &muta_contracts::SessionIR) -> Result<(), String> {
-        // 1. Direct O(Δ) persistence to sessions_v2 and causal_nodes tables (INV-SESSION-05)
+        // Direct O(Δ) persistence to sessions_v2 and causal_nodes tables (INV-SESSION-05, ADR-0275)
         let delta = ir.drain_delta(0);
-        if let Err(e) = self.writer.save_session_delta(delta).await {
-            tracing::warn!(error = %e, "failed to persist SessionDelta directly to sessions_v2 / causal_nodes");
-        }
-
-        // 2. Transitional synchronization with legacy SessionData until full retirement
-        let data = {
-            let mut state = self.state.lock().await;
-            #[allow(deprecated)]
-            super::ir_bridge::apply_ir_to_session_data(ir, &mut state.data);
-            state.data.generation = uuid::Uuid::new_v4().to_string();
-            state.invalidate_projection_cache();
-            state.data.updated_at = unix_timestamp();
-            state.data.clone()
-        };
-        persist_to(&self.writer, &data, &self.blob_store)?;
-        Ok(())
+        self.writer
+            .save_session_delta(delta)
+            .await
+            .map_err(|e| format!("failed to persist SessionDelta directly to canonical storage: {e}"))
     }
 
     /// Commit an incremental [`muta_contracts::SessionDelta`] directly into SQLite (ADR-0241/ADR-0249, INV-SESSION-05).

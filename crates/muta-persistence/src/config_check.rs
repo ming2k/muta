@@ -80,7 +80,7 @@ pub fn schema_key_tree() -> BTreeMap<String, BTreeMap<String, String>> {
     root.insert("default_connection".to_string(), BTreeMap::new());
     root.insert("default_model".to_string(), BTreeMap::new());
     root.insert("mcp".to_string(), BTreeMap::new());
-    root.insert("compaction".to_string(), BTreeMap::new());
+    root.insert("context".to_string(), BTreeMap::new());
     root.insert("connection_retry_max_attempts".to_string(), BTreeMap::new());
     root.insert("connection_retry_base_ms".to_string(), BTreeMap::new());
     root.insert("connection_retry_max_ms".to_string(), BTreeMap::new());
@@ -104,7 +104,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     "default_connection",
     "default_model",
     "mcp",
-    "compaction",
+    "context",
     "connection_retry_max_attempts",
     "connection_retry_base_ms",
     "connection_retry_max_ms",
@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn typo_and_legacy_keys_are_reported_separately() {
         let (path, _dir) = write_config(
-            "compaction_preserve_turns = 9\n\n[compaction]\npreserve_rounds = 6\n\n[copaction]\n",
+            "compaction_preserve_turns = 9\n\n[web]\nreader = \"builtin\"\n\n[copaction]\n",
         );
         let findings = check_config_file(Some(path));
         assert_eq!(findings.len(), 2, "got: {findings:?}");
@@ -337,10 +337,10 @@ mod tests {
 
     #[test]
     fn type_mismatch_is_a_finding() {
-        // `preserve_rounds` is a usize; a string is a type error
+        // `preferred_recent_rounds` is a u32; a string is a type error
         // that makes a load fall back to *defaults* — the exact silent
         // failure mode `check` exists to surface.
-        let (path, _dir) = write_config("[compaction]\npreserve_rounds = \"six\"\n");
+        let (path, _dir) = write_config("[context]\npreferred_recent_rounds = \"six\"\n");
         let findings = check_config_file(Some(path));
         assert!(
             findings.iter().any(|f| f.message.contains("schema")),

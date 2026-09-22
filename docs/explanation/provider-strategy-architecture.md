@@ -26,7 +26,7 @@ matrix and parameter schemas, see [Providers](../reference/providers.md).
      ┌─────────────────────────────────┼─────────────────────────────────┐
      │                                 │                                 │
 ┌────▼─────────────┐          ┌────────▼─────────┐             ┌─────────▼────────┐
-│  Wire Protocol   │          │  Reasoning &     │             │  Live Discovery  │
+│  Wire Protocol   │          │  Reasoning &     │             │  Live Catalog    │
 │  Inference Core  │          │  Effort Strategy │             │  & ETag Cache    │
 └────┬─────────────┘          └────────┬─────────┘             └─────────┬────────┘
      │                                 │                                 │
@@ -65,7 +65,7 @@ keyed by provider first:
 A connection may narrow or override the resolved set but must not invent a
 model the provider excludes, except under `provider = "custom"`, whose model
 universe is open by definition. Routes stay derived at runtime from the provider
-plus the discovery cache and are never persisted (ADR-0123, ADR-0182); this
+plus the catalog cache and are never persisted (ADR-0123, ADR-0182); this
 decision changes naming and keying, not derivation. The remaining sections
 describe the strategy layers that derivation consumes.
 
@@ -117,10 +117,10 @@ without requiring a recompilation or application update.
 
 ---
 
-## 3. Dynamic Model Discovery and Conditional Caching
+## 3. Dynamic Model Catalog and Conditional Caching
 
 Models change dynamically as vendors deploy updates. muta queries provider
-discovery endpoints asynchronously during startup and manual connection
+catalog endpoints asynchronously during startup and manual connection
 refreshes:
 
 - **OpenAI & Anthropic**: `GET /v1/models`
@@ -129,7 +129,7 @@ refreshes:
 
 ### RFC 7232 Conditional Revalidation
 
-Discovery requests store HTTP `ETag` validators in the local discovery cache.
+Catalog requests store HTTP `ETag` validators in the local catalog cache.
 Subsequent startup checks issue conditional requests carrying `If-None-Match`.
 When the server returns HTTP `304 Not Modified`, the existing cached catalog
 is retained instantly, reducing startup latency.

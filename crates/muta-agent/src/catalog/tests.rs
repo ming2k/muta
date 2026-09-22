@@ -10,7 +10,10 @@ use super::{
     sync_fitted_model_registry, sync_remote_catalog,
 };
 use muta_contracts::catalog::Transport;
-use muta_contracts::{ConnectionAuth, Effort, OpenAiResponsesDialect, ReasoningMode, WireProtocol};
+use muta_contracts::{
+    ConnectionAuth, ConnectionFilterPolicy, Effort, NamedFilterPolicy, OpenAiResponsesDialect,
+    ReasoningMode, WireProtocol,
+};
 use muta_persistence::config::{
     Config, Credentials, FittedModelInfo, ModelListCacheState, RemoteCatalogCache,
 };
@@ -115,7 +118,10 @@ fn register_mock_provider(
 fn provider_dialect_is_inherited_independently_of_auth_and_remote_protocol() {
     use muta_contracts::{GoogleGenerateContentDialect, ProviderDialect};
     let _sandbox = sandboxed_paths();
-    for auth in [ConnectionAuth::ApiKey, ConnectionAuth::subscription("google-antigravity")] {
+    for auth in [
+        ConnectionAuth::ApiKey,
+        ConnectionAuth::subscription("google-antigravity"),
+    ] {
         for remote_protocol in [None, Some(WireProtocol::GoogleGemini)] {
             let mut conn = instance("dialect-inheritance", Some("google-antigravity"));
             conn.auth = auth.clone();
@@ -1324,7 +1330,10 @@ async fn single_source_endpoint_failure_records_failure_and_preserves_determinis
         "failed catalog sync must not record a change"
     );
     assert!(
-        outcome.failures.iter().any(|(name, _)| name == "zai"),
+        outcome
+            .failures
+            .iter()
+            .any(|failure| failure.connection == "zai"),
         "the failed endpoint must be reported as a failure: {:?}",
         outcome.failures
     );
@@ -1441,7 +1450,7 @@ async fn catalog_sync_failure_keeps_the_previous_subset_and_reports() {
     let outcome = sync_remote_catalog().await;
     assert!(!outcome.changed);
     assert_eq!(outcome.failures.len(), 1);
-    assert_eq!(outcome.failures[0].0, "deepseek");
+    assert_eq!(outcome.failures[0].connection, "deepseek");
     // The previous subset is untouched (there was none → snapshot still wins).
     let cache = RemoteCatalogCache::load();
     assert!(cache.connection_models.is_empty());
@@ -1521,6 +1530,7 @@ async fn orphaned_response_etag_does_not_renew_catalog_state() {
             client_version: "stale-client".to_string(),
             source_identity: "stale-source".to_string(),
             refreshed_at_ms: 0,
+            refresh_failed: false,
         },
     );
     cache.save().unwrap();
@@ -1780,6 +1790,7 @@ async fn etag_matching_stale_renews_timestamp() {
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             source_identity,
             refreshed_at_ms: 1000, // very stale
+            refresh_failed: false,
         },
     );
     cache.save().unwrap();
@@ -1996,4 +2007,124 @@ fn catalog_advertised_root_replaces_the_compiled_spec_route() {
     )
     .unwrap_err();
     assert!(error.message().contains("catalog-advertised root"));
+}
+
+/// ADR-0273 end-to-end: a model the provider declared unavailable for this
+/// account stays *visible* in the picker (so the account can see what an
+/// upgrade would unlock, with the provider's own reason when it gave one) while
+/// the daemon refuses to build a route for it. A user injection overrides the
+/// verdict but the upstream declaration is never rewritten.
+#[test]
+fn declared_unavailable_model_is_listed_but_refused_by_the_daemon() {
+    let _sandbox = sandboxed_paths();
+    let qoder = Connection {
+        name: "qoder".to_string(),
+        provider: "qoder".to_string(),
+        auth: muta_contracts::ConnectionAuth::subscription("qoder"),
+        ..Default::default()
+    };
+    Connections {
+        connections: vec![qoder.clone()],
+    }
+    .save()
+    .unwrap();
+
+    let mut cache = RemoteCatalogCache::default();
+    cache.connection_models.insert(
+        "qoder".to_string(),
+        vec!["qfmodel".to_string(), "gmodel".to_string()],
+    );
+    cache.remote_metadata.insert("qoder".to_string(), {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert(
+            "qfmodel".to_string(),
+            muta_contracts::RemoteModelMetadata {
+                availability: Some(muta_contracts::Availability::usable()),
+                ..Default::default()
+            },
+        );
+        m.insert(
+            "gmodel".to_string(),
+            muta_contracts::RemoteModelMetadata {
+                availability: Some(muta_contracts::Availability::locked(None)),
+                ..Default::default()
+            },
+        );
+        m
+    });
+    cache.save().unwrap();
+
+    let config = Config {
+        default_connection: "qoder".to_string(),
+        default_model: Some("gmodel".to_string()),
+        ..Default::default()
+    };
+    let usage = muta_persistence::connection_usage::ConnectionUsage::default();
+    let snapshot = build_picker_state(&config, &usage);
+    let row = snapshot
+        .rows
+        .iter()
+        .find(|r| r.id == "qoder")
+        .expect("qoder row");
+    let locked = row
+        .model_info
+        .iter()
+        .find(|info| info.model == "gmodel")
+        .expect("the locked model is still listed, not dropped");
+    assert_eq!(
+        locked.availability,
+        Some(muta_contracts::Availability::locked(None)),
+        "the declaration reaches the picker so it can dim the row"
+    );
+    assert!(
+        row.models.contains(&"gmodel".to_string()),
+        "membership is untouched by availability"
+    );
+
+    // The daemon refuses the explicitly requested locked model...
+    assert!(
+        super::build_provider_for_model(&config, "qoder", Some("gmodel"), None).is_none(),
+        "a provider-declared-unavailable model must not be routable"
+    );
+    // ...while a usable sibling still routes.
+    assert!(
+        super::build_provider_for_model(&config, "qoder", Some("qfmodel"), None).is_some(),
+        "an available sibling must still route"
+    );
+    // A user injection overrides the verdict (ADR-0203 `[INV-CATALOG-04]`):
+    // the route is built, and the override is disclosed rather than silent.
+    let mut injected = qoder;
+    // An explicit filter keeps the connection out of the legacy-policy
+    // migration path, which folds only `extra_models` back into the scope.
+    injected.models.filter = Some(ConnectionFilterPolicy::Named(NamedFilterPolicy::All));
+    injected.models.include = vec![muta_contracts::DeclaredModel {
+        id: "gmodel".to_string(),
+        ..Default::default()
+    }];
+    Connections {
+        connections: vec![injected],
+    }
+    .save()
+    .unwrap();
+    assert!(
+        super::build_provider_for_model(&config, "qoder", Some("gmodel"), None).is_some(),
+        "a sovereign injection overrides the provider's unavailable verdict"
+    );
+    let snapshot = build_picker_state(&config, &usage);
+    let row = snapshot
+        .rows
+        .iter()
+        .find(|r| r.id == "qoder")
+        .expect("qoder row");
+    let overridden = row
+        .model_info
+        .iter()
+        .find(|info| info.model == "gmodel")
+        .expect("model listed");
+    assert!(overridden.availability_overridden);
+    assert_eq!(
+        overridden.availability,
+        Some(muta_contracts::Availability::usable()),
+        "the effective verdict is usable after the override"
+    );
 }

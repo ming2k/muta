@@ -185,7 +185,7 @@ cell. The two results serve different purposes in the click cascade.
 
 When a mouse click arrives at `(x, y)`, the event loop runs a priority
 chain in
-[`event_loop.rs`](../../apps/terminal/crates/mutx/src/event_loop.rs):
+[`event_loop.rs`](../../apps/terminal/crates/mutx/src/event_loop/mod.rs):
 
 ```text
 ┌─ Input box?            → focus Compose, start text selection
@@ -312,4 +312,4 @@ table structure.
 | [`message_body.rs`](../../apps/terminal/crates/mutx/src/message_body.rs) | Renders table lines, registers `TableCellHit`s and `table_grid` |
 | [`layout.rs`](../../apps/terminal/crates/mutx/src/model/layout.rs) | `LayoutMap` with dual hit systems: `hit_test` + `table_cell_at` |
 | [`selection.rs`](../../apps/terminal/crates/mutx/src/model/selection.rs) | `SelectionState::TableCell`, `SelectionDrag.origin_cell`, `table_cell_text`, `strip_table_borders` |
-| [`event_loop.rs`](../../apps/terminal/crates/mutx/src/event_loop.rs) | Click cascade: `table_cell_at` check, cell-locked drag arm/dispatch |
+| [`event_loop.rs`](../../apps/terminal/crates/mutx/src/event_loop/mod.rs) | Click cascade: `table_cell_at` check, cell-locked drag arm/dispatch |

@@ -135,6 +135,68 @@ impl Model {
     }
 }
 
+/// A provider's declared availability verdict for a model on the account
+/// behind the connection: whether the account may run it, and — when the
+/// provider states one — why not (ADR-0273).
+///
+/// This is a **declaration**, never an inference: it exists only because a
+/// provider response carried it, and it is never synthesized from status codes,
+/// model-id patterns, or plan heuristics. It is orthogonal to
+/// [`RemoteModelMetadata::advertised`] (the listing hint) and to capability:
+/// an unavailable model keeps its membership, its capabilities, and its route
+/// shape — it simply must not run.
+///
+/// `reason` is the provider's own explanation, **verbatim**. It is display
+/// data and nothing else: no code path parses, matches, localizes, or decides
+/// on it (`[INV-AVAIL-03]`). A provider that states no reason yields `None`,
+/// and a surface must then say only what it knows rather than inventing one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, ts_rs::TS)]
+#[ts(
+    export,
+    export_to = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../apps/web/src/lib/generated/wire.gen.ts"
+    )
+)]
+pub struct Availability {
+    /// Whether the account may run the model right now.
+    pub usable: bool,
+    /// The provider's own explanation for an unusable verdict, verbatim.
+    /// `None` means the provider declared none — never "unknown, assume the
+    /// obvious".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Availability {
+    /// The account may run the model.
+    pub const fn usable() -> Self {
+        Self {
+            usable: true,
+            reason: None,
+        }
+    }
+
+    /// The account may not run the model, with the provider's stated reason
+    /// when it gave one.
+    pub fn locked(reason: Option<String>) -> Self {
+        Self {
+            usable: false,
+            reason,
+        }
+    }
+
+    pub const fn is_usable(&self) -> bool {
+        self.usable
+    }
+}
+
+impl Default for Availability {
+    fn default() -> Self {
+        Self::usable()
+    }
+}
+
 /// Capability metadata received from a trusted provider's live model catalogue.
 ///
 /// Every field is optional so an omitted remote field falls back to the static
@@ -202,15 +264,24 @@ pub struct RemoteModelMetadata {
     /// `None` when the endpoint advertises no provenance.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog_source: Option<String>,
-    /// The provider's model-picker enablement for this model — Qoder's
-    /// `enable:false` marks a subscription-locked model the catalog lists but
-    /// this account may not run (the official CLI's `/model` menu renders such
-    /// entries greyed-out). `Some(false)` locks the model: pickers surface it
-    /// dimmed and it must not register as inference-capable; `None` — the
-    /// common case, since most providers advertise no such field — means
-    /// undeclared and therefore enabled.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub picker_enabled: Option<bool>,
+    /// The provider's declared availability for this model on this account
+    /// (ADR-0273). Qoder's `enable:false`, Codex's `supported_in_api:false`,
+    /// and Copilot's `policy.state:"disabled"` all land here. `None` — the
+    /// common case, since most providers declare no such verdict — means
+    /// undeclared and therefore usable. `Some(usable: false)` is a declaration
+    /// the account may not run the model; pickers surface it dimmed and the
+    /// daemon refuses to route it, but membership and capabilities are
+    /// untouched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub availability: Option<Availability>,
+    /// The provider's listing intent: whether this model is meant to appear in
+    /// a model picker listing (Codex's `visibility != "list"`, Copilot's
+    /// `model_picker_enabled:false`). Independent of [`Self::availability`]:
+    /// an API-supported model may be deliberately unlisted, and an unavailable
+    /// model may well be listed (Qoder's greyed entries). `None` means the
+    /// provider expressed no listing intent and the model is listed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advertised: Option<bool>,
 }
 
 /// Effective capabilities for one provider channel.
@@ -241,6 +312,27 @@ pub struct ModelCapabilities {
     /// and stamped through (ADR-0065). Built in `for_channel` from the remote
     /// advertisement over the static baseline.
     pub effort_levels: Vec<crate::effort::EffortLevel>,
+}
+
+impl RemoteModelMetadata {
+    /// The declared availability verdict, defaulting to usable when the
+    /// provider declared none (ADR-0273). Undeclared is *not* a declaration:
+    /// it must never render as disabled.
+    pub fn availability_or_usable(&self) -> Availability {
+        self.availability.clone().unwrap_or_default()
+    }
+
+    /// Whether the provider's declared verdict permits running the model.
+    pub fn is_usable(&self) -> bool {
+        self.availability
+            .as_ref()
+            .is_none_or(Availability::is_usable)
+    }
+
+    /// Whether the provider wants the model listed; undeclared means listed.
+    pub fn is_advertised(&self) -> bool {
+        self.advertised.unwrap_or(true)
+    }
 }
 
 /// Materialized, route-scoped capabilities evaluated daemon-side via ADR-0149.
