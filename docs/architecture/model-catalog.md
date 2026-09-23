@@ -274,7 +274,8 @@ nothing at parse time. Each shape maps only the fields its own vendor publishes
 
 | Shape | Vendor field | Mapped to |
 |-------|--------------|-----------|
-| Qoder | `enable` | `availability` (no reason field exists → `reason: None`) |
+| Qoder | `enable` | `availability` (the reason, when stated, is `strategies[].disabled_message_key`, carried verbatim) |
+| Qoder | routing switch keys (`auto`, `ultimate`, `performance`, `efficient`, `advanced`) | **not a member** — excluded at parse time (ADR-0281); a routing mode is not a model |
 | Codex | `supported_in_api` | `availability` |
 | Codex | `visibility == "list"` | `advertised` |
 | Copilot | `policy.state` | `availability` — only an explicit `disabled` is a declaration; `unconfigured`, `unknown`, and an absent policy are **undeclared** |
@@ -470,6 +471,8 @@ unavailable rather than silently keeping a stale name.
 | `[INV-CATALOG-05]` | Persistence stores filter rules, never materialized id lists | `filter` is a policy value in the connection record |
 | `[INV-CATALOG-06]` | A missing capability field and an explicit false are distinct | Tristate patch deserialization |
 | `[INV-CATALOG-07]` | An omitted client profile inherits the provider's recommended profile | Provider spec carries the recommendation and a sensitivity flag |
+| `[INV-CATALOG-08]` | A non-model entry (routing mode, selector, or "the server decides" alias) is a membership fact: excluded at parse time, never recorded as an unavailable model | `registry::qoder::surface::is_function_switch` + `parse_scene_catalog` |
+| `[INV-CATALOG-09]` | A provider-surface vocabulary that cannot be read from a declared field is pinned to a committed capture and audited by a test | `tests/it/qoder_catalog_contract.rs` against `tests/fixtures/qoder-model-list-*.json` |
 | `[INV-AVAIL-01]` | Membership, capability, presentation, and availability are four owners; none is implemented by mutating another | Separate resolution paths; availability never edits the id set or capabilities |
 | `[INV-AVAIL-02]` | A verdict or reason is recorded only when the provider declares it — never derived from ids, status codes, or error text | Per-shape field mapping only |
 | `[INV-AVAIL-03]` | The reason is inert display data: never parsed, matched, or decided on | `reason` is read only by presentation |

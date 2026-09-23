@@ -233,6 +233,14 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         app.arm_ctrl_c(None);
     }
 
+    // While the leader chord is armed, any action other than SetLeaderChord
+    // resets the leader chord state.
+    if app.leader_chord != crate::app::LeaderChord::None
+        && !matches!(action, input::InputAction::SetLeaderChord(_))
+    {
+        app.leader_chord = crate::app::LeaderChord::None;
+    }
+
     match action {
         input::InputAction::None => {}
         input::InputAction::TerminalResized { cols, rows } => {
@@ -1377,6 +1385,30 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         }
         input::InputAction::CloseModal => {
             modals::handle_close_modal(app, viewed_session_id);
+        }
+        input::InputAction::CloseScene => {
+            app.leader_chord = crate::app::LeaderChord::None;
+            if app.active_dialog().is_some() {
+                app.dismiss_surface();
+            } else if app.in_side_view || app.current_scene() == crate::surfaces::SceneKind::Aside {
+                app.exit_side_view();
+                app.arm_esc(None);
+                app.send_intent(AgentRequest::ExitSideView);
+            } else if app.in_subagent_view()
+                || app.current_scene() == crate::surfaces::SceneKind::TaskInspection
+            {
+                if !app.exit_subagent() {
+                    app.dismiss_surface();
+                }
+            } else {
+                app.dismiss_surface();
+            }
+        }
+        input::InputAction::SetLeaderChord(chord) => {
+            app.leader_chord = chord;
+        }
+        input::InputAction::CancelLeaderChord => {
+            app.leader_chord = crate::app::LeaderChord::None;
         }
         input::InputAction::TelemetryActivate => {
             if app.active_dialog() == Some(DialogKind::Telemetry) {

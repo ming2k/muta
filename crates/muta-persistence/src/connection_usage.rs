@@ -179,6 +179,27 @@ impl ConnectionUsage {
             .map_err(|e| format!("could not persist connection usage to sqlite: {e}"))
     }
 
+    /// Re-key a connection's usage telemetry from `from` to `to` (rename).
+    ///
+    /// Usage recency is keyed by the connection name, so a rename would
+    /// otherwise strand the history under the dead name — the renamed
+    /// connection would lose its picker ordering and its last-used model, and
+    /// the orphan entry would never be read again.
+    pub fn rename_connection(&mut self, from: &str, to: &str) {
+        if from.eq_ignore_ascii_case(to) {
+            return;
+        }
+        if let Some(entry) = self.connections.remove(from) {
+            self.connections.insert(to.to_string(), entry);
+        }
+        if let Some(models) = self.models.remove(from) {
+            self.models.insert(to.to_string(), models);
+        }
+        if let Some(last) = self.last_models.remove(from) {
+            self.last_models.insert(to.to_string(), last);
+        }
+    }
+
     /// Remove a connection and its associated models usage and last_model pointer.
     pub fn remove_connection(&mut self, id: &str) {
         self.connections.remove(id);
@@ -353,5 +374,50 @@ mod tests {
         assert_eq!(usage.model_recency("conn-a", "shared-model"), 1000);
         // conn-b gets its own recency (500), NOT conn-a's recency!
         assert_eq!(usage.model_recency("conn-b", "shared-model"), 500);
+    }
+
+    /// A rename carries the connection's recency, its per-model recency, and
+    /// its last-used model pointer. Losing `last_models` would reset the
+    /// renamed connection to a derived default, silently discarding the user's
+    /// last choice.
+    #[test]
+    fn rename_connection_carries_usage_recency_and_last_model() {
+        let mut usage = ConnectionUsage::default();
+        usage.record("old");
+        usage.record_model("old", "qfmodel");
+
+        usage.rename_connection("old", "new");
+
+        assert_eq!(usage.last_model_for("new"), Some("qfmodel"));
+        assert_eq!(
+            usage.last_model_for("old"),
+            None,
+            "no entry under the dead name"
+        );
+        assert!(
+            usage.model_recency("new", "qfmodel") > 0,
+            "per-model recency follows the rename"
+        );
+        assert_eq!(usage.model_recency("old", "qfmodel"), 0);
+        assert!(
+            usage.recency_of("new") > 0,
+            "connection recency follows the rename"
+        );
+    }
+
+    /// A case-only rename is the same connection; re-keying would strand the
+    /// entry under a different exact key, so it must be a no-op.
+    #[test]
+    fn usage_case_only_rename_is_a_no_op() {
+        let mut usage = ConnectionUsage::default();
+        usage.record("qod");
+        let before = usage.recency_of("qod");
+        usage.rename_connection("qod", "QOD");
+        assert_eq!(
+            usage.recency_of("qod"),
+            before,
+            "the entry stays under its original exact key"
+        );
+        assert_eq!(usage.recency_of("QOD"), 0, "no second key was created");
     }
 }

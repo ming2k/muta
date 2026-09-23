@@ -519,14 +519,22 @@ impl App {
     /// The first ↑ stashes the in-progress draft — text and any staged
     /// attachments together — so a later ↓ past the newest entry restores
     /// it instead of leaving the composer empty. Subsequent ↑ walk further
-    /// back and clamp at the oldest entry. Returns `true` when a row was
-    /// loaded; `false` when the slice is empty.
+    /// back until the oldest entry. Once at the oldest entry, further ↑
+    /// do nothing (no-op) so the composer text and cursor remain intact
+    /// rather than reloading and resetting the cursor. Returns `true`
+    /// when a row was loaded; `false` when the slice is empty or already
+    /// at the oldest entry.
     pub fn history_prev(&mut self, session_rows: &[usize]) -> bool {
         if session_rows.is_empty() {
             return false;
         }
         let new_pos = match self.history_index {
-            Some(p) => (p + 1).min(session_rows.len() - 1),
+            Some(p) => {
+                if p >= session_rows.len() - 1 {
+                    return false;
+                }
+                p + 1
+            }
             None => {
                 // First ↑: stash the in-progress draft (and its staged
                 // attachments) so a later ↓ past the newest entry restores

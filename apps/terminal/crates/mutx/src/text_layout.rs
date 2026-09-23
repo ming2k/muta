@@ -648,8 +648,9 @@ pub(crate) fn line_spans_rich(params: RichLineParams<'_>) -> Line<'static> {
                 if bold_delim(seg_lo) || matches!(math, Some(false)) || matches!(link, Some(false))
                 {
                     // Formatting/link/math delimiters are visually elided
-                    // (zero-width). The bytes remain in `text` so copy still
-                    // yields the original markdown/TeX source.
+                    // (zero-width). The bytes remain in `text` so the layout
+                    // keeps byte-accurate offsets and copy can map through
+                    // them (stripping the delimiters to yield clean text).
                     continue;
                 } else {
                     let mut style = if sel { base.bg(selected_bg) } else { base };

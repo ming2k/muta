@@ -56,6 +56,16 @@ pub enum ComposerSendMode {
     FollowUp,
 }
 
+/// Active two-stroke leader chord state (ADR-0169 / ADR-0205).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeaderChord {
+    /// No leader active.
+    #[default]
+    None,
+    /// `Ctrl+X` leader active (View stack / Scene navigation / Window management).
+    CtrlX,
+}
+
 /// A user message owned by the compact outbox (the **next-round** queue).
 ///
 /// Follow-up content and a busy-Enter steer whose round ended before admission
@@ -916,6 +926,8 @@ pub struct App {
     pub pending_dispatch: VecDeque<QueuedDispatch>,
     /// Target queue mode for the live composer while a round is running.
     pub composer_send_mode: ComposerSendMode,
+    /// Active two-stroke leader chord state (`Ctrl+X`).
+    pub leader_chord: LeaderChord,
     /// Sessions whose outbox is hard-blocked by the user. While a session is
     /// blocked, no queued message auto-drains — not even after its round
     /// reaches natural completion and the harness goes idle. The queue modal

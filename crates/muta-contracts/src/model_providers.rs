@@ -103,9 +103,14 @@ pub const QIANWEN_BUILTIN_MODELS: &[&str] = &[
 
 pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
 
-/// Qoder subscription models, in activation order (mirrors
-/// `muta-providers::registry::qoder::QODER_MODELS`).
-pub const QODER_MODELS: &[&str] = &["qoder3", "qoder3-max", "qoder3-base", "qwen3-coder-plus"];
+/// Qoder subscription seed models, in activation order.
+///
+/// This is the **offline seed** — the ids a connection starts with before the
+/// live scene catalog has been fetched. The catalog is the authority once it
+/// answers; the seed only keeps the provider usable offline and gives the
+/// picker an activation order (`qmodel_38max` first, matching the vendor's own
+/// `is_default` entry).
+pub const QODER_MODELS: &[&str] = &["qmodel_38max", "qfmodel"];
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Model provider ids — contract vocabulary (ADR-0201)

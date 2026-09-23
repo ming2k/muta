@@ -1,6 +1,5 @@
 //! The `agent_chat_generation` request envelope (Qoder's agent surface).
 
-use muta_contracts::Effort;
 use muta_contracts::model::ModelCapabilities;
 use muta_contracts::wire_surface::{AgentChatSpec, IdentityValue, ModelBinding, ModelCarrier};
 use muta_contracts::ProviderError;
@@ -10,14 +9,16 @@ use serde_json::{Map, Value, json};
 use super::super::surface::{AGENT_CHAT, COSY_VERSION, MODEL_BINDINGS};
 
 /// Everything the envelope needs that the flat body does not already carry.
+///
+/// Reasoning effort is deliberately **not** here: the canonical body already
+/// carries it (clamped against the channel's ladder by the chat-completions
+/// request builder), and [`parameters_block`] projects it from there. A second
+/// copy on this struct would be a fork that could disagree with the body.
 pub struct EnvelopeInput<'a> {
     pub model: &'a str,
     pub catalog_source: &'a str,
     pub display_name: &'a str,
-    #[allow(dead_code)]
     pub capabilities: &'a ModelCapabilities,
-    #[allow(dead_code)]
-    pub reasoning_effort: Option<Effort>,
     pub session_id: Option<&'a str>,
     pub fresh_uuids: &'a [String],
     pub now_ms: u64,
@@ -102,6 +103,50 @@ pub fn first_user_text(body: &Value) -> &str {
         .unwrap_or("")
 }
 
+/// The generation `parameters` block, projected from the canonical body.
+///
+/// The reference client sends reasoning controls under `parameters`, not at the
+/// envelope root, so the flat chat-completions body's `reasoning_effort` must be
+/// *moved* here or the user's effort selection is silently dropped — the service
+/// then runs its own default and every downstream signal (thinking deltas,
+/// effort display) describes a turn the user did not ask for.
+///
+/// Every value is either declared by the surface table or advertised for the
+/// channel; nothing is synthesized. `max_tokens` falls back to the surface's
+/// [`AgentChatSpec::default_max_output_tokens`] because Qoder's catalog
+/// publishes no `max_output_tokens` and the reference client's token-count
+/// normalizer returns that same value for an absent input — so omitting the
+/// field would be the deviation from the client, not including it.
+///
+/// `enable_thinking` follows the vendor's rule exactly: `"none"` means
+/// reasoning off, any other effort means reasoning on. It is derived from the
+/// same effort string rather than tracked separately, so the two can never
+/// disagree.
+fn parameters_block(
+    body: &Value,
+    capabilities: &ModelCapabilities,
+    default_max_output_tokens: u32,
+) -> Value {
+    let mut parameters = Map::new();
+
+    let max_tokens = capabilities
+        .max_output_tokens
+        .unwrap_or(default_max_output_tokens);
+    parameters.insert("max_tokens".to_string(), json!(max_tokens));
+
+    let effort = body
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty());
+    if let Some(effort) = effort {
+        parameters.insert("reasoning_effort".to_string(), json!(effort));
+        parameters.insert("enable_thinking".to_string(), json!(effort != "none"));
+    }
+
+    Value::Object(parameters)
+}
+
 pub fn wrap(body: &Value, spec: &AgentChatSpec, input: &EnvelopeInput<'_>) -> Value {
     let mut root = json!({
         "chat_task": spec.chat_task,
@@ -110,7 +155,13 @@ pub fn wrap(body: &Value, spec: &AgentChatSpec, input: &EnvelopeInput<'_>) -> Va
         "task_id": spec.task_id,
         "source": spec.source,
         "version": spec.version,
-        "model_format": spec.model_format,
+        // Stated unconditionally by the reference client on every turn; the
+        // service answers only with SSE, so these are part of the shape the
+        // client is fingerprinted on rather than per-request options.
+        "stream": spec.stream,
+        "is_reply": spec.is_reply,
+        "is_retry": spec.is_retry,
+        "aliyun_user_type": spec.aliyun_user_type,
         "business": {
             "product": spec.business_product,
             "type": spec.business_type,
@@ -120,6 +171,10 @@ pub fn wrap(body: &Value, spec: &AgentChatSpec, input: &EnvelopeInput<'_>) -> Va
             "version": input.emulated_version,
         },
     });
+
+    // Always present: the reference client's envelope literal carries
+    // `parameters` unconditionally.
+    root["parameters"] = parameters_block(body, input.capabilities, spec.default_max_output_tokens);
 
     if let Some(sid) = input.session_id {
         write_pointer(&mut root, "session_id", Value::String(sid.to_string()));
@@ -155,7 +210,22 @@ impl EnvelopePhase for QoderAgentEnvelope {
         &self,
         body: &serde_json::Value,
     ) -> Result<ReshapedEnvelope, ProviderError> {
-        let model = body.get("model").and_then(Value::as_str).unwrap_or("qoder3");
+        // The flat chat-completions body always carries `model` (it is the
+        // request's identity), so its absence is a construction bug rather than
+        // a wire condition. Fail closed: stamping a placeholder here would send
+        // `X-Model-Key: <phantom>` and `model_config.key: <phantom>` to a
+        // service that routes on them, and the refusal would arrive as an
+        // opaque upstream error with no local cause.
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|model| !model.trim().is_empty())
+            .ok_or_else(|| {
+                ProviderError::invalid_request(
+                    "qoder",
+                    "the chat body carries no model id to bind the Qoder envelope to",
+                )
+            })?;
         let first_text = first_user_text(body);
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -172,7 +242,6 @@ impl EnvelopePhase for QoderAgentEnvelope {
             catalog_source: "system",
             display_name: model,
             capabilities: &caps,
-            reasoning_effort: None,
             session_id: None,
             fresh_uuids: &fresh_uuids,
             now_ms,

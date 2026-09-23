@@ -646,7 +646,9 @@ pub struct TranscriptMessage {
     pub id: u64,
     pub role: Role,
     pub blocks: Vec<Block>,
-    /// The original raw markdown/text, preserved for exact copy.
+    /// The original raw markdown/text, preserved byte-for-byte. Copy resolves
+    /// against the parsed `blocks` (rendered plain text), so this is retained
+    /// for re-parsing, layout, and any consumer that needs the source form.
     pub raw: String,
     pub kind: MessageKind,
     /// What kind of user message this `Role::User` message is. Defaults to

@@ -3,6 +3,9 @@
 //! `cargo run -p muta-providers --example qoder_live_smoke` — hits the real
 //! API, so it is deliberately an example, not a test.
 
+// Failing loudly on a broken pre-condition is the point of a smoke run.
+#![allow(clippy::expect_used)]
+
 use muta_contracts::{ClientPreset, Message, ResolvedAuth, Role, SecretString};
 use muta_llm_client::protocol::openai::chat_completions::OpenAiChatCompletionsProvider;
 use muta_providers::qoder::{QoderRequestIdentity, build_qoder_pipeline};

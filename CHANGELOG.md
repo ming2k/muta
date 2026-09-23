@@ -5,6 +5,93 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Qoder's routing modes no longer appear as models (ADR-0281).** Qoder's scene
+  catalog mixes real models with *function switches* — `auto`, `ultimate`,
+  `performance`, `efficient`, `advanced` — which select a routing mode rather
+  than a model. muta read both, so the picker listed four routing modes as
+  unusable rows. Selecting one would have delegated model choice to the server
+  (`X-Model-Key: auto`), leaving every capability muta fitted for the channel —
+  effort ladder, thinking, context window — describing a model nobody selected.
+  Switches are now excluded at **parse time** (membership removal, not an
+  availability verdict), including their scene-scoped forms (`quest-auto`,
+  `qwork-advanced`). The vocabulary is pinned to a committed catalog capture and
+  audited by a test that fails when the two disagree, because the payload
+  declares no kind field to read.
+- **A locked Qoder model now states the provider's own reason.** The payload
+  carries `strategies[].disabled_message_key` (e.g. `codeSafeModelReason`); it is
+  recorded verbatim as `Availability.reason` and never resolved, translated, or
+  branched on. ADR-0273's claim that Qoder "states only the boolean — no reason
+  field exists" was wrong and is amended.
+
+### Fixed
+
+- **Every copy gesture now yields the same clean text.** Whole-block
+  (middle-click) copy resolved through `block.raw_text()`, so it copied
+  `**bold**`, `` `code` `` and `[label](url)` verbatim while a character drag
+  over the same span returned clean text; a multi-message drag copied its
+  interior messages as `msg.raw`, splicing raw markdown (`# heading`,
+  `> quote`) into an otherwise clean selection. All three paths now resolve
+  through the block walk, so inline markup delimiters are elided, table
+  borders are stripped, and paragraph rhythm is preserved — the same visual
+  span always copies the same text regardless of how it was selected.
+- **Paragraph rhythm copies as one blank line.** A `Block::Break` separator
+  emitted its own `"\n"` on top of the inter-block separator, so copying
+  across two paragraphs produced `"\n\n\n"` instead of `"\n\n"`.
+- **A blockquote now wraps on its visible width.** The quote renderer paints
+  `**`/`` ` ``/`$…$` delimiters at zero width but wrapped against the raw
+  width, so markup consumed column budget and could wrap a quote early (or
+  split a `` `…` `` pair across lines). Prose, headings, and list items had
+  the same defect and now share the markup-aware wrapper.
+- **A blockquote's hard-break marker no longer leaks.** The two-space hard
+  break terminating a quote line survived into the stored content (the
+  paragraph path strips it), leaking trailing spaces into both rendering and
+  copy.
+- **One blockquote gutter glyph everywhere.** Transcript prose used `▎`, the
+  web-article payload renderer used `│`, and the docs said `┃`. All three now
+  read from a single `QUOTE_GUTTER_GLYPH` token, and the quote lead is the
+  named `QUOTE_PREFIX` / `QUOTE_PREFIX_COLS` pair the wrap budget, paint, and
+  hit-testing all derive from.
+- **A reasoning-effort selection now reaches the wire.** The user's effort was
+  silently dropped: the flat chat-completions body carries `reasoning_effort`,
+  but the Qoder envelope never projected it, so the service ran its own default
+  while the picker showed the user's choice. The envelope now emits
+  `parameters.reasoning_effort` plus `enable_thinking` derived by the vendor's
+  rule (`"none"` → off). Verified live: the same prompt at `low` produced 288
+  reasoning characters and at `xhigh` 826.
+- **The Qoder envelope states what the reference client states.** It now carries
+  `stream`, `is_reply`, `is_retry`, `aliyun_user_type`, and a `parameters`
+  block, and the fabricated root-level `model_format` is gone — the reference
+  client (`qodercli` 1.1.59) has no such field; its `format` lives inside
+  `model_config`, where muta now binds it. All of it is declared in the surface
+  table (ADR-0265) and pinned by golden-wire tests (`[INV-WIRE-01]`).
+- **A body with no model id fails closed.** The envelope previously stamped the
+  placeholder `qoder3` into `X-Model-Key` / `model_config.key` — ids the platform
+  never had — turning a construction bug into an opaque upstream error. The
+  contracts seed list (`QODER_MODELS`) is corrected to the real ids and now has
+  a single source of truth shared with the registry.
+- **Renaming a connection no longer strands its state.** `rename` re-keyed the
+  hard join keys but its comment claimed the catalog cache and usage recency
+  "expire on their own" — they do not, and nothing expires them. A renamed
+  connection lost its cached catalog validator, its usage ordering, and the
+  user's own per-route effort settings to orphan entries no code reads again.
+  All three are now re-keyed.
+- **A mid-turn steer no longer splits its turn into two bands.** A steering
+  message is admitted at an inner boundary of the *running* turn, so the turn
+  keeps producing output after the insert lands. The transcript grouped turn
+  components by a maximal same-`(round, turn)` run and treated every user
+  message as a group terminator, so the insert ended the band and the resumed
+  half opened a second one — the same turn painted two `> turn N` headers
+  (`> turn 60 … < steer … > turn 60`). Steer inserts are now absorbed into the
+  turn they interrupted whenever that turn resumes after them, so exactly one
+  header spans the whole turn with the steer panel nested between its two
+  halves. A steer that arrived too late for its turn and was held for the next
+  round has no resumption after it, so it still ends the band and stays outside
+  it. Notices and ordinary prompts are unaffected and remain terminators.
+
 ## [0.50.10] - 2026-09-22
 
 ### Added

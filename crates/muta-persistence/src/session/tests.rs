@@ -244,6 +244,68 @@ async fn prune_commit_appends_directive_not_rewrite() {
     assert_eq!(full[2].content, "long output");
 }
 
+#[tokio::test]
+async fn prune_commit_after_new_user_turn_with_unsynced_timestamp_succeeds() {
+    let store = store("prune-multiturn").await;
+    let call = ToolCall::new("call-1", "read_file", "{}");
+    let mut assistant_message = assistant("working");
+    assistant_message.tool_calls = Some(vec![call.clone()]);
+    let tool_result = Message::tool_result(&call, "long output");
+
+    // Turn 1 committed
+    store
+        .commit_turn(CommitTurn {
+            messages: &[user("turn 1"), assistant_message, tool_result.clone()],
+            round_counter: Some(1),
+            usage_records: &[],
+            retry_point: None,
+            round_interrupt: None,
+            operation_id: None,
+            expected_revision: None,
+        })
+        .await
+        .unwrap();
+
+    // Turn 2: User sends a new message constructed via Message::new (timestamp is None).
+    let mut round_history = store.model_window().await;
+    round_history.push(Message::new(Role::User, "turn 2"));
+
+    // Admitted turn committed
+    store
+        .commit_turn(CommitTurn {
+            messages: &round_history,
+            round_counter: Some(2),
+            usage_records: &[],
+            retry_point: None,
+            round_interrupt: None,
+            operation_id: None,
+            expected_revision: None,
+        })
+        .await
+        .unwrap();
+
+    // Context projection prune triggers on stale tool output
+    round_history[2].content = "[pruned output]".into();
+    store
+        .commit_context_projection(ContextProjectionResult {
+            model_window: round_history,
+            archived_originals: vec![tool_result.clone()],
+            checkpoint: ContextProjectionCheckpoint {
+                operation: ContextProjectionKind::Prune,
+                archived_messages: 1,
+                active_messages: 4,
+                window_tokens_before: 10,
+                window_tokens_after: 5,
+            },
+        })
+        .await
+        .expect("prune projection translation must succeed with semantic wire equivalence");
+
+    let window = store.model_window().await;
+    assert_eq!(window.len(), 4);
+    assert_eq!(window[2].content, "[pruned output]");
+}
+
 // ---------------------------------------------------------------
 // Turn commits: prefix-delta appends; divergence rebuilds.
 // ---------------------------------------------------------------

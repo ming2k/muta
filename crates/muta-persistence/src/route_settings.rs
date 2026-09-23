@@ -176,6 +176,21 @@ impl RouteSettingsStore {
     pub fn retain_connection_except(&mut self, connection_id: &str) {
         self.file.connections.remove(connection_id);
     }
+
+    /// Re-key every route setting from `from` to `to` (connection rename).
+    ///
+    /// These are the user's own per-model effort/thinking choices — state, not
+    /// cache — so a rename must carry them. Leaving them under the old name
+    /// would silently reset the renamed connection to derived defaults, which
+    /// is a user-visible loss of a setting they never touched.
+    pub fn rename_connection(&mut self, from: &str, to: &str) {
+        if from.eq_ignore_ascii_case(to) {
+            return;
+        }
+        if let Some(settings) = self.file.connections.remove(from) {
+            self.file.connections.insert(to.to_string(), settings);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -186,6 +201,46 @@ mod tests {
         let mut store = RouteSettingsStore::default();
         store.settings_for_mut(instance, model).effort = Some(effort.to_string());
         store
+    }
+
+    /// A rename carries the user's own per-route effort/thinking choices. These
+    /// are state, not cache: dropping them would silently reset the renamed
+    /// connection to derived defaults — a user-visible loss of a setting they
+    /// never touched.
+    #[test]
+    fn rename_connection_carries_route_settings() {
+        let mut store = RouteSettingsStore::default();
+        store.settings_for_mut("old", "qfmodel").effort = Some("xhigh".into());
+        store.rename_connection("old", "new");
+
+        assert_eq!(
+            store
+                .settings_for("new", "qfmodel")
+                .and_then(|s| s.effort.clone())
+                .as_deref(),
+            Some("xhigh")
+        );
+        assert!(
+            store.settings_for("old", "qfmodel").is_none(),
+            "no settings may remain under the old name"
+        );
+    }
+
+    /// A case-only rename must not move the entry: the stored key is exact, so
+    /// re-keying to a differently-cased string would orphan the settings.
+    #[test]
+    fn route_case_only_rename_is_a_no_op() {
+        let mut store = RouteSettingsStore::default();
+        store.settings_for_mut("qod", "qfmodel").effort = Some("low".into());
+        store.rename_connection("qod", "QOD");
+        assert_eq!(
+            store
+                .settings_for("qod", "qfmodel")
+                .and_then(|s| s.effort.clone())
+                .as_deref(),
+            Some("low")
+        );
+        assert!(store.settings_for("QOD", "qfmodel").is_none());
     }
 
     #[test]

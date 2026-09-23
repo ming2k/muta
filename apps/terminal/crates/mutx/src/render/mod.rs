@@ -394,6 +394,10 @@ struct WrapKey {
     hash: u64,
     len: u32,
     width: u32,
+    /// Distinguishes plain [`crate::text_layout::wrap_text`] from
+    /// markup-aware [`crate::text_layout::wrap_text_markup`] at the same
+    /// content + width, so the two never alias one cache slot.
+    markup: bool,
 }
 
 struct CachedWrap {
@@ -416,6 +420,16 @@ fn wrap_key(content: &str, width: usize) -> WrapKey {
         hash: hasher.finish(),
         len: content.len() as u32,
         width: width as u32,
+        markup: false,
+    }
+}
+
+/// Like [`wrap_key`] but tagged as the markup-aware variant so the two wrap
+/// modes never share a cache slot at the same content + width.
+fn wrap_key_markup(content: &str, width: usize) -> WrapKey {
+    WrapKey {
+        markup: true,
+        ..wrap_key(content, width)
     }
 }
 
@@ -435,6 +449,35 @@ impl BlockWrapCache {
             return std::sync::Arc::clone(&entry.lines);
         }
         let lines = crate::text_layout::wrap_text(content, width);
+        let shared = std::sync::Arc::new(lines);
+        self.lines.insert(
+            key,
+            std::sync::Arc::new(CachedWrap {
+                content: content.to_string(),
+                lines: std::sync::Arc::clone(&shared),
+            }),
+        );
+        self.touch(WrapKind::Lines, key);
+        shared
+    }
+
+    /// Cached [`crate::text_layout::wrap_text_markup`]: like [`Self::wrap_text`]
+    /// but inline-markup delimiters count as zero display width. The hidden
+    /// ranges are derived deterministically from `content`'s inline scan, so
+    /// keying the cache on content + width is sufficient.
+    pub(crate) fn wrap_text_markup(
+        &mut self,
+        content: &str,
+        width: usize,
+        hidden_ranges: &[(usize, usize)],
+    ) -> std::sync::Arc<Vec<crate::text_layout::WrappedLine>> {
+        let key = wrap_key_markup(content, width);
+        if let Some(entry) = self.lines.get(&key)
+            && entry.content == content
+        {
+            return std::sync::Arc::clone(&entry.lines);
+        }
+        let lines = crate::text_layout::wrap_text_markup(content, width, hidden_ranges);
         let shared = std::sync::Arc::new(lines);
         self.lines.insert(
             key,

@@ -47,6 +47,8 @@ pub struct Dispatch {
     /// A scene component above the application surfaces owns the event. Its
     /// component handler declined the key, so only global chords may run.
     pub scene_blocked: bool,
+    /// Active two-stroke leader chord state (`Ctrl+X`).
+    pub leader_chord: crate::app::LeaderChord,
 }
 
 /// Classify one terminal event into the keyboard family resolved by the
@@ -313,6 +315,39 @@ pub fn route_event(
             }
 
             let physical_key = crate::keymap::Key::from_event(key);
+
+            // Two-stroke Leader Chord resolution (Ctrl+X)
+            if dispatch.leader_chord == crate::app::LeaderChord::CtrlX {
+                return match key.code {
+                    KeyCode::Char('w')
+                    | KeyCode::Char('W')
+                    | KeyCode::Char('k')
+                    | KeyCode::Char('K') => InputAction::CloseScene,
+                    KeyCode::Char('p')
+                    | KeyCode::Char('P')
+                    | KeyCode::Char('b')
+                    | KeyCode::Char('B') => InputAction::ViewSwitcherToggle,
+                    KeyCode::Char('c') | KeyCode::Char('C')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        InputAction::CtrlC
+                    }
+                    KeyCode::Esc => InputAction::CancelLeaderChord,
+                    KeyCode::Char('g') | KeyCode::Char('G')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        InputAction::CancelLeaderChord
+                    }
+                    _ => InputAction::CancelLeaderChord,
+                };
+            }
+
+            // Initiate Ctrl+X two-stroke leader chord
+            if (key.code == KeyCode::Char('x') || key.code == KeyCode::Char('X'))
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+            {
+                return InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX);
+            }
 
             // Stage 5: Global Hard-Bound Shortcuts
             // Ctrl+L (Palette), Ctrl+C (Interrupt/Quit), CopySelection

@@ -1,0 +1,35 @@
+version: "6.0"
+
+root_sanitization:
+  enforce: true
+  allowed_markdown:
+    - "README.md"
+    - "README.zh-CN.md"
+    - "CHANGELOG.md"
+    - "CONTRIBUTING.md"
+    - "AGENTS.md"
+    - "LICENSE.md"
+    - "SECURITY.md"
+
+firewall:
+  public_surfaces:
+    - "docs/tutorials/**"
+    - "docs/how-to/**"
+    - "docs/reference/**"
+    - "docs/explanation/**"
+  internal_surfaces:
+    - "docs/dev/**"
+
+architecture:
+  adr_path: "docs/adr"
+  require_frontmatter:
+    status_enum: ["draft", "accepted", "superseded", "rejected", "deprecated"]
+    mandatory_fields: ["id", "title", "status", "date"]
+
+triggers:
+  - watch: "crates/**"
+    require_update: "docs/**"
+    message: "Core crates modified; verify documentation synchronization."
+  - watch: "apps/**"
+    require_update: "docs/**"
+    message: "Apps modified; verify documentation synchronization."

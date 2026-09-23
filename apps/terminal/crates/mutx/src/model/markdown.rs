@@ -263,7 +263,12 @@ pub(crate) fn parse_blocks_markdown_tracked(text: &str) -> (Vec<Block>, ParseRes
                 if idx > 0 {
                     content.push(if q_hard[idx] { '\n' } else { ' ' });
                 }
-                content.push_str(l);
+                // Strip the trailing two-space/tab hard-break marker from the
+                // stored text exactly as the paragraph path does; `q_hard`
+                // already recorded that this line ended in a hard break, so the
+                // marker itself must not survive into the content (it used to
+                // leak two trailing spaces into copy and rendering).
+                content.push_str(l.trim_end_matches([' ', '\t']));
             }
             push_block(&mut blocks, Block::Quote(Inline::scanned(&content)));
             continue;

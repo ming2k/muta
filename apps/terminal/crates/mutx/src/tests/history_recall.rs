@@ -905,7 +905,12 @@ async fn history_rows_are_readonly_snapshots() {
 
     // Edit the history row — the edit is temporary.
     app.input = "EDITED".to_string();
-    // Move away (clamp at the oldest reloads its original text) and back.
+    // At the oldest row, pressing Up is a no-op: no reload, edit stays in place until moving away.
+    assert!(!app.history_prev(&rows));
+    assert_eq!(app.input, "EDITED");
+    // Move away toward newer rows and back: the original text is reloaded.
+    assert!(app.history_next(&rows));
+    assert_eq!(app.input, "newest row");
     assert!(app.history_prev(&rows));
     assert_eq!(
         app.input, "older row",
@@ -1494,4 +1499,35 @@ async fn history_search_overlay_does_not_dim_composer() {
         hist_cell.bg, normal_cell.bg,
         "composer background should not be dimmed when history search is open"
     );
+}
+
+#[tokio::test]
+async fn oldest_history_entry_up_arrow_does_not_cycle_cursor() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-a".to_string();
+    app.current_workspace = "~/p".to_string();
+    app.record_input_history("multiline\nentry\nbottom".to_string(), Vec::new(), Vec::new());
+    let rows = app.current_session_history();
+    assert_eq!(rows.len(), 1);
+
+    // Initial draft
+    app.input = "".to_string();
+    assert!(app.history_prev(&rows));
+    assert_eq!(app.input, "multiline\nentry\nbottom");
+    assert_eq!(app.cursor_position, "multiline\nentry\nbottom".chars().count());
+
+    // Move cursor up line-by-line
+    assert!(crate::input::cursor_line_up(&app.input, &mut app.cursor_position));
+    assert!(crate::input::cursor_line_up(&app.input, &mut app.cursor_position));
+    // Cursor is now on the top line
+    let top_line_cursor = app.cursor_position;
+    assert!(!crate::input::cursor_line_up(&app.input, &mut app.cursor_position));
+    assert_eq!(app.cursor_position, top_line_cursor);
+
+    // Pressing Up at the top line tries history_prev: already at oldest entry, must be a no-op!
+    assert!(!app.history_prev(&rows));
+    // Cursor position and text must NOT change (must not reset cursor to end of message)
+    assert_eq!(app.cursor_position, top_line_cursor);
+    assert_eq!(app.input, "multiline\nentry\nbottom");
+    assert_eq!(app.history_index, Some(0));
 }

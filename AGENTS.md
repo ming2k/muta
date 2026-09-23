@@ -1,4 +1,17 @@
-Before writing, modifying, or archiving any documentation, please read and follow `docs/governance/documentation/core/index.md` in the project root. AI assistants may read `docs/governance/documentation/` and suggest changes, but must not directly modify files in that directory.
+# Agent Directives & Documentation Governance
+
+Before writing, modifying, or archiving any documentation, follow Protocol v6.0.0 (`docs/governance/documentation/core/index.md`).
+
+## 1. Documentation Governance & Invariant Directives
+- **`[INV-LINT-01]` Location Sanitization**: Never create unapproved Markdown files at the repository root; permit only whitelisted root entries (`README.md`, `README.zh-CN.md`, `CHANGELOG.md`, `AGENTS.md`, `LICENSE.md`, etc.).
+- **`[INV-LINT-02]` Contributor Firewall**: Public documentation (`docs/{tutorials,how-to,reference,explanation}/`) must NEVER link into internal documentation (`docs/dev/**`).
+- **`[INV-LINT-03]` Frontmatter & Lifecycle Integrity**: ADRs must declare standardized frontmatter (`id`, `title`, `status`, `date`) and evolve in-place.
+- **`[INV-AGENT-01]` Negative Knowledge Mandate**: Every ADR must detail rejected alternatives and why they failed.
+- **`[INV-AGENT-02]` Context Routing & Chesterton's Fence**:
+  - In feature generation: never recommend patterns marked `status: superseded` or `status: rejected`.
+  - In refactoring/investigation: retrieve `superseded`/`rejected` records as negative constraints.
+- **`[INV-AGENT-03]` Blameless Postmortems**: Postmortems in `docs/dev/postmortems/` must focus strictly on systemic defense failures and detection gaps; human blame is prohibited.
+- **Verification Tool**: Run `docgov check` to verify repository governance compliance.
 
 ## Testing Rules & AI Behavioral Boundaries
 - **Runner Tool**: Always use `cargo nextest run` instead of `cargo test` for unit and integration tests.

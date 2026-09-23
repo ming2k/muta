@@ -37,7 +37,9 @@ fn table_cell_text(block: &Block, cell_idx: usize) -> String {
 /// Resolve the copyable text for a block. For `Block::Table` we prefer the
 /// last-rendered grid (which reflects viewport reshaping) and strip the
 /// box-drawing borders so the result is clean cell text; otherwise we use
-/// the block's own raw text. Returns `(text, strip_borders)`.
+/// the block's own raw content (inline-markup ranges are applied later by the
+/// caller). Returns `(text, strip_borders)`. Callers must not pass
+/// `Block::Break`, which carries no text and is handled as structural rhythm.
 fn block_copy_text<'a>(
     block: &'a Block,
     message_idx: usize,
@@ -240,13 +242,15 @@ pub fn get_selected_text<'a>(
             block_idx,
         } => {
             let msg = messages.get(*message_idx)?;
-            let block = msg.blocks.get(*block_idx)?;
-            let (text, strip) = block_copy_text(block, *message_idx, *block_idx, table_grid);
-            Some(if strip {
-                strip_table_borders(&text)
-            } else {
-                text.into_owned()
-            })
+            // Delegate to the same block walk a drag uses, so whole-block copy
+            // is byte-for-byte the same text a range selection over the same
+            // block yields: inline markup delimiters elided, table borders
+            // stripped, paragraph rhythm preserved. Resolving through
+            // `block.raw_text()` here used to leak `**bold**` / `` `code` `` /
+            // `[label](url)` into the clipboard.
+            let start = SemanticCursor::new(*message_idx, *block_idx, 0);
+            let end = SemanticCursor::new(*message_idx, *block_idx, usize::MAX);
+            extract_within_message(*message_idx, msg, &start, &end, table_grid)
         }
         SelectionState::Range { .. } => {
             let (start, end) = state.active_normalized_range()?;
@@ -261,33 +265,36 @@ pub fn get_selected_text<'a>(
                 let msg = messages.get(start.message_idx)?;
                 extract_within_message(start.message_idx, msg, &start, &end, table_grid)
             } else {
-                // Selection spans multiple messages.
+                // Selection spans multiple messages. Every message — including
+                // the interior ones — is extracted through the block model, so
+                // the result is uniformly the rendered plain text. The interior
+                // messages used to be copied as `msg.raw`, which spliced the
+                // original markdown source (`# heading`, `> quote`, `**bold**`)
+                // into the middle of an otherwise clean selection.
                 let mut result = String::new();
                 for mi in start.message_idx..=end.message_idx {
                     let msg = messages.get(mi)?;
-                    if mi == start.message_idx {
+                    let last_block = msg.blocks.len().saturating_sub(1);
+                    let (lo, hi) = if mi == start.message_idx {
                         // From start cursor to end of message.
-                        let end_cursor =
-                            SemanticCursor::new(mi, msg.blocks.len().saturating_sub(1), usize::MAX);
-                        if let Some(s) =
-                            extract_within_message(mi, msg, &start, &end_cursor, table_grid)
-                        {
-                            result.push_str(&s);
-                        }
+                        (start, SemanticCursor::new(mi, last_block, usize::MAX))
                     } else if mi == end.message_idx {
                         // From start of message to end cursor.
-                        let start_cursor = SemanticCursor::new(mi, 0, 0);
-                        if let Some(s) =
-                            extract_within_message(mi, msg, &start_cursor, &end, table_grid)
-                        {
-                            result.push_str(&s);
-                        }
+                        (SemanticCursor::new(mi, 0, 0), end)
                     } else {
-                        // Whole message.
-                        result.push_str(&msg.raw);
-                    }
-                    if mi != end.message_idx {
-                        result.push('\n');
+                        // Whole interior message.
+                        (
+                            SemanticCursor::new(mi, 0, 0),
+                            SemanticCursor::new(mi, last_block, usize::MAX),
+                        )
+                    };
+                    if let Some(s) = extract_within_message(mi, msg, &lo, &hi, table_grid)
+                        && !s.is_empty()
+                    {
+                        if !result.is_empty() {
+                            result.push('\n');
+                        }
+                        result.push_str(&s);
                     }
                 }
                 Some(result)
@@ -310,8 +317,20 @@ fn extract_within_message<'a>(
 ) -> Option<String> {
     let mut result = String::new();
 
-    for bi in start.block_idx..=end.block_idx.min(msg.blocks.len().saturating_sub(1)) {
+    // A `Block::Break` is a structural blank-line separator, not text. It is
+    // emitted as the *rhythm* between content blocks (one blank line → "\n\n")
+    // rather than copied as its own "\n" payload on top of the inter-block
+    // separator — which used to triple the newline between paragraphs
+    // ("H\n\n\npara one").
+    let mut pending_blank = false;
+    let last = end.block_idx.min(msg.blocks.len().saturating_sub(1));
+
+    for bi in start.block_idx..=last {
         let block = msg.blocks.get(bi)?;
+        if matches!(block, Block::Break) {
+            pending_blank = true;
+            continue;
+        }
         let (text, strip) = block_copy_text(block, message_idx, bi, table_grid);
 
         let byte_start = if bi == start.block_idx {
@@ -326,6 +345,10 @@ fn extract_within_message<'a>(
         };
 
         if byte_start < byte_end {
+            if !result.is_empty() {
+                result.push_str(if pending_blank { "\n\n" } else { "\n" });
+            }
+            pending_blank = false;
             if strip {
                 let slice = &text[byte_start..byte_end];
                 result.push_str(&strip_table_borders(slice));
@@ -347,11 +370,6 @@ fn extract_within_message<'a>(
                 let slice = &text[byte_start..byte_end];
                 result.push_str(slice);
             }
-        }
-
-        // Add separator between blocks unless at the end.
-        if bi < end.block_idx && bi < msg.blocks.len().saturating_sub(1) {
-            result.push('\n');
         }
     }
 
@@ -835,6 +853,83 @@ mod tests {
             get_selected_text(&sel, &messages, &|_, _| None, None),
             Some("abc😀".to_string())
         );
+    }
+
+    #[test]
+    fn whole_block_copy_matches_range_copy_and_strips_markup() {
+        // Regression: whole-block (middle-click) copy used to resolve through
+        // `block.raw_text()`, leaking `**bold**`, `` `code` `` and
+        // `[label](url)` into the clipboard while a drag over the same block
+        // returned clean text. Both paths must now agree.
+        let msg = TranscriptMessage::new(
+            Role::Assistant,
+            "Text with **bold** and `code` and a [link](https://example.com).",
+        );
+        let messages = vec![msg];
+        let clean = "Text with bold and code and a link.";
+        let whole = get_selected_text(
+            &SelectionState::Block {
+                message_idx: 0,
+                block_idx: 0,
+            },
+            &messages,
+            &|_, _| None,
+            None,
+        );
+        let range = get_selected_text(
+            &SelectionState::Range {
+                anchor: SemanticCursor::new(0, 0, 0),
+                head: SemanticCursor::new(0, 0, usize::MAX),
+            },
+            &messages,
+            &|_, _| None,
+            None,
+        );
+        assert_eq!(whole.as_deref(), Some(clean));
+        assert_eq!(range.as_deref(), Some(clean));
+    }
+
+    #[test]
+    fn cross_message_copy_extracts_clean_text_from_every_message() {
+        // Regression: interior messages of a multi-message selection were
+        // copied as `msg.raw`, splicing the original markdown source into the
+        // middle of an otherwise clean selection.
+        let msgs = vec![
+            TranscriptMessage::new(Role::Assistant, "first **bold**"),
+            TranscriptMessage::new(Role::Assistant, "> middle **quote**"),
+            TranscriptMessage::new(Role::Assistant, "# last `code`"),
+        ];
+        let copied = get_selected_text(
+            &SelectionState::Range {
+                anchor: SemanticCursor::new(0, 0, 0),
+                head: SemanticCursor::new(2, 0, usize::MAX),
+            },
+            &msgs,
+            &|_, _| None,
+            None,
+        );
+        assert_eq!(
+            copied.as_deref(),
+            Some("first bold\nmiddle quote\nlast code")
+        );
+    }
+
+    #[test]
+    fn paragraph_rhythm_copies_as_single_blank_line() {
+        // A `Break` between two paragraphs is one blank line ("\n\n"), not the
+        // block's own "\n" stacked on the separator (which produced "\n\n\n").
+        let msg = TranscriptMessage::new(Role::Assistant, "one\n\ntwo");
+        let messages = vec![msg];
+        let copied = get_selected_text(
+            &SelectionState::Range {
+                anchor: SemanticCursor::new(0, 0, 0),
+                head: SemanticCursor::new(0, messages[0].blocks.len() - 1, usize::MAX),
+            },
+            &messages,
+            &|_, _| None,
+            None,
+        );
+        assert_eq!(copied.as_deref(), Some("one\n\ntwo"));
     }
 
     #[test]

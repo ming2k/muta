@@ -253,6 +253,12 @@ with the transcript content above.
 - Messages render top-to-bottom with semantic boundary spacing. A turn header,
   thinking segment, tool batch, and assistant text are separated by one row;
   tool-like siblings in the same known turn are flush.
+- A **steer insert** (a user entry staged for, or admitted at, an inner boundary
+  of the running turn) is *absorbed into the turn it interrupted*: the band spans
+  it and its panel renders between the turn's two halves. It is typed while that
+  turn is still producing output, so it lands mid-turn in append order; treating
+  it as a boundary would split the turn into two bands carrying the same
+  `> turn N` header. Notices and ordinary user prompts still terminate a band.
 - Auto-follow pins to the newest content while `follow_bottom` is set.
 - Scrolling up pauses follow; scrolling back to the bottom (or sending a
   message) re-engages it.
@@ -289,6 +295,7 @@ with the transcript content above.
 | Turn header → first component | 1 row | `TURN_HEADER_BODY_GAP_ROWS` |
 | Thinking header → expanded body | 0 rows | `REASONING_TRACE_BODY_TOP_GAP_ROWS` |
 | Same-turn tool batch | 0 rows between tool-like siblings | Semantic boundary rule |
+| Steer insert inside a turn | Absorbed into the turn band (no extra header) | `is_steer_insert` in `layout/mod.rs` |
 | Other component boundaries | 1 row | `MESSAGE_GAP_ROWS` |
 | Mouse scroll step | 4 rows | `ScrollUp`/`Down` handler |
 | PageUp/PageDown step | `view_height - 1` | One line of overlap |

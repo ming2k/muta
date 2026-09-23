@@ -58,7 +58,7 @@ wire-level contract with model servers, and the terminal rendering surface.
 | [Chat API primitives](chat-api-primitives.md) | The three protocol primitives — role authority, stateless memory, function calling — that shape the agent |
 | [Terminal UI](tui.md) | How the TUI is built (full-screen app, semantic document model, live rendering) and why it is not terminal text |
 | [Composer and input architecture](composer.md) | The unified input surface, intent-driven state machine, zero-latency two-tier completion, history/outbox pointer model, and caret ownership |
-| [Markdown rendering](markdown-rendering.md) | The custom markdown parser → semantic `Block` model → grid rendering pipeline: why it exists, the two-path parse, inline range tracking, adaptive table layout, and how selection returns original source |
+| [Markdown rendering](markdown-rendering.md) | The custom markdown parser → semantic `Block` model → grid rendering pipeline: why it exists, the two-path parse, inline range tracking, adaptive table layout, and how selection returns the rendered plain text |
 | [Table hit-testing and cell-locked selection](table-hit-testing.md) | How table cells get a parallel hit-test system: layout, dual coordinate maps, cell-locked drag, and border-stripped copy |
 | [Request flow](request-flow.md) | HTTP transaction shape, SSE streaming, and the ReAct loop's message evolution |
 | [Tool-call wire formats](tool-call-wire-formats.md) | How OpenAI Chat Completions and Anthropic Messages serialize tool declarations and tool-call arguments |

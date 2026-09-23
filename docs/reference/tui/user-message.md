@@ -32,6 +32,16 @@ All user prompts share the same visual container and `<` Stdin indicator rail, d
 | Text color | `theme.user_text()` (`theme.muted()` when queued) |
 | Top/bottom padding | Full panel-bg rows (no half-block glyphs — identical across terminals) |
 
+## Steer placement
+
+A steer is admitted at an inner turn boundary of the *running* round, and the
+interrupted turn keeps producing output after it. The transcript therefore
+absorbs the steer panel into the turn it interrupted rather than letting it
+terminate the turn band: exactly one `> turn N` header spans the whole turn,
+with the steer panel nested between the work that preceded it and the work that
+followed. A queued steer awaiting admission is staged at the live tail with the
+same placement, so the band never re-splits when admission lands.
+
 ## Selection
 
 Character-level semantic selection — only the dragged substring gets

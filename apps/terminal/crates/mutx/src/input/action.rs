@@ -538,6 +538,12 @@ pub enum InputAction {
     PrevSibling,
     /// Move to the next sibling subagent task.
     NextSibling,
+    /// Arm a two-stroke leader chord (`Ctrl+X`).
+    SetLeaderChord(crate::app::LeaderChord),
+    /// Cancel the active leader chord without performing an action.
+    CancelLeaderChord,
+    /// Explicitly close/exit the active scene or dialog (e.g. via `C-x w`).
+    CloseScene,
     /// Terminal was resized (SIGWINCH). The event loop forces a redraw and
     /// re-emits `EnableMouseCapture` so the crossterm parser's internal state
     /// machine is resynced: a resize frequently splits an in-flight SGR mouse

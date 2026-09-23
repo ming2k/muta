@@ -624,10 +624,18 @@ pub(crate) async fn edit(
 
 /// `AgentRequest::RenameConnection` — rename a connection, rewriting every hard
 /// join key in one transaction (ADR-0201 INV-4): `credentials.toml`,
-/// `auth.toml`, and `config.toml`'s `default_connection`. The regenerable
-/// stores (catalog cache, usage recency) expire on their own, and historical
-/// session / telemetry records keep the old name rather than being rewritten
-/// retroactively.
+/// `auth.toml`, and `config.toml`'s `default_connection`.
+///
+/// Every *live* store keyed by the connection name is re-keyed too — the
+/// catalog cache (whose ETag validator is name-independent, so it stays valid),
+/// usage recency, and per-route effort/thinking settings. None of these expire
+/// on their own: leaving them under the old name would strand a live validator,
+/// reset the user's own route settings to defaults, and leave orphan entries no
+/// code ever reads again.
+///
+/// Historical session and telemetry *records* are the one exception — they keep
+/// the name they were written under rather than being rewritten retroactively,
+/// because a past event happened under the name that was true at the time.
 pub(crate) async fn rename(
     ProviderEnv {
         config,
@@ -745,6 +753,27 @@ pub(crate) async fn rename(
         }
         reject(resp_tx, "Could not rename connection", &reason);
         return;
+    }
+
+    // Re-key every live name-keyed store to the new name. This runs only after
+    // the hard join keys persisted successfully, so a rolled-back rename never
+    // strands these entries under a name that no longer exists.
+    if let Err(error) =
+        RemoteCatalogCache::modify(|cache| cache.rename_connection(&from, &new_name)).await
+    {
+        tracing::warn!(?error, connection = %new_name, "could not re-key the catalog cache on rename");
+    }
+    provider_usage.rename_connection(&from, &new_name);
+    if let Err(error) = provider_usage.save() {
+        tracing::warn!(?error, connection = %new_name, "could not persist usage recency on rename");
+    }
+    let mut routes = RouteSettingsStore::load();
+    routes.rename_connection(&from, &new_name);
+    if routes.save().is_err() {
+        tracing::warn!(
+            connection = %new_name,
+            "could not persist route settings on rename"
+        );
     }
 
     catalog::prune_stale_models(config, provider_usage);

@@ -890,9 +890,15 @@ pub(crate) fn draw_web_article_content(
             let avail_w = inner_w.saturating_sub(4).max(1);
             let wrapped = nonempty_wrapped(wrap_text(quote_trimmed, avail_w));
             for wl in &wrapped {
+                // Share the transcript's blockquote gutter glyph so a quoted
+                // run reads identically in an assistant turn and in a rendered
+                // web-article payload.
                 let mut spans = vec![
                     Span::styled(" ".repeat(indent), pad),
-                    Span::styled("│ ", quote_bar_style),
+                    Span::styled(
+                        format!("{} ", crate::design::QUOTE_GUTTER_GLYPH),
+                        quote_bar_style,
+                    ),
                     Span::styled(wl.text.clone(), quote_style),
                 ];
                 let used = indent + 2 + wl.text.width();

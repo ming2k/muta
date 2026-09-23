@@ -246,10 +246,19 @@ pub(crate) fn resolve_subagent_key(
     match key.code {
         // Subagent zoom: Esc returns to the parent scene once completion is
         // dismissed and step/browse focus is cleared (following the stepwise unwind cascade).
+        // When not composing, 'q' also exits (standard TUI inspection convention).
         KeyCode::Esc
             if keys.completion_kind == crate::completion::CompletionKind::None
                 && !keys.focused_target
                 && !keys.transcript_focused =>
+        {
+            Some(InputAction::ExitSubagent)
+        }
+        KeyCode::Char('q')
+            if keys.completion_kind == crate::completion::CompletionKind::None
+                && !keys.focused_target
+                && !keys.transcript_focused
+                && input.is_empty() =>
         {
             Some(InputAction::ExitSubagent)
         }
@@ -267,14 +276,19 @@ pub(crate) fn resolve_side_key(
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
     match key.code {
-        // Esc in an aside returns to the primary transcript (ADR-0103),
-        // once completion is dismissed and step/browse focus is cleared.
+        // Esc in an aside:
+        // - if responding: interrupt the viewed aside's round (ADR-0103 §2)
+        // - otherwise: return to the primary transcript once completion and focus are clear
         KeyCode::Esc
             if keys.completion_kind == crate::completion::CompletionKind::None
                 && !keys.focused_target
                 && !keys.transcript_focused =>
         {
-            Some(InputAction::ExitSideView)
+            if keys.is_responding {
+                Some(InputAction::InterruptSide)
+            } else {
+                Some(InputAction::ExitSideView)
+            }
         }
         _ => resolve_chat_surface_key(key, keys, input, cursor_position),
     }

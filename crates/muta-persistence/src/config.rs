@@ -702,6 +702,34 @@ impl RemoteCatalogCache {
         self.model_lists.remove(connection_id);
     }
 
+    /// Re-key every cached entry from `from` to `to` (connection rename).
+    ///
+    /// A rename changes the connection's *name*, not what it fetches:
+    /// [`crate::RemoteCatalogCache`]'s `model_lists` validator fingerprint is
+    /// derived from the fetch attributes (shape, base URL, client profile,
+    /// dimensions), never from the name, so the cached ETag stays valid for the
+    /// renamed connection and the next sync revalidates instead of refetching.
+    /// Discarding the entry here would throw away a live validator and force a
+    /// full catalog fetch for no reason — which is why rename carries rather
+    /// than deletes.
+    pub fn rename_connection(&mut self, from: &str, to: &str) {
+        if from.eq_ignore_ascii_case(to) {
+            return;
+        }
+        if let Some(models) = self.connection_models.remove(from) {
+            self.connection_models.insert(to.to_string(), models);
+        }
+        if let Some(fitted) = self.fitted_models.remove(from) {
+            self.fitted_models.insert(to.to_string(), fitted);
+        }
+        if let Some(metadata) = self.remote_metadata.remove(from) {
+            self.remote_metadata.insert(to.to_string(), metadata);
+        }
+        if let Some(state) = self.model_lists.remove(from) {
+            self.model_lists.insert(to.to_string(), state);
+        }
+    }
+
     /// The trusted per-(connection, model) metadata, if set.
     pub fn remote_metadata_for(
         &self,
@@ -2452,5 +2480,103 @@ name = "DeepSeek"
             global.workspace.additional_roots,
             vec!["../optics", "../backend"]
         );
+    }
+
+    fn catalog_cache_with(connection: &str) -> RemoteCatalogCache {
+        let mut cache = RemoteCatalogCache::default();
+        cache
+            .connection_models
+            .insert(connection.into(), vec!["qfmodel".into()]);
+        cache.fitted_models.insert(
+            connection.into(),
+            [(
+                "qfmodel".to_string(),
+                FittedModelInfo {
+                    context_window: 200_000,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        cache.remote_metadata.insert(
+            connection.into(),
+            [(
+                "qfmodel".to_string(),
+                RemoteModelMetadata {
+                    context_window: Some(200_000),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        );
+        cache.model_lists.insert(
+            connection.into(),
+            ModelListCacheState {
+                etag: Some("W/\"catalog-etag\"".into()),
+                source_identity: "sha256:deadbeef".into(),
+                client_version: "1.1.58".into(),
+                refreshed_at_ms: 1_700_000_000_000,
+                refresh_failed: false,
+            },
+        );
+        cache
+    }
+
+    /// A rename re-keys all four maps, so the renamed connection keeps its
+    /// cached models, fitted metadata, advertised metadata, and — critically —
+    /// its ETag validator. Nothing is left under the dead name.
+    #[test]
+    fn rename_connection_carries_every_map_including_the_validator() {
+        let mut cache = catalog_cache_with("old");
+        cache.rename_connection("old", "new");
+
+        assert!(
+            !cache.connection_models.contains_key("old"),
+            "no entry may be stranded under the old name"
+        );
+        assert_eq!(cache.connection_models["new"], ["qfmodel".to_string()]);
+        assert_eq!(
+            cache.fitted_models["new"]["qfmodel"].context_window,
+            200_000
+        );
+        assert_eq!(
+            cache
+                .remote_metadata_for("new", "qfmodel")
+                .and_then(|m| m.context_window),
+            Some(200_000)
+        );
+        assert_eq!(
+            cache.model_lists["new"].etag.as_deref(),
+            Some("W/\"catalog-etag\""),
+            "the validator must survive so the next sync revalidates, not refetches"
+        );
+        assert_eq!(cache.model_lists["new"].source_identity, "sha256:deadbeef");
+    }
+
+    /// A case-only rename is the same connection and must not move anything:
+    /// the key is case-insensitive for identity (ADR-0201) but the stored key
+    /// is exact, so a case flip that re-keyed would drop the entry.
+    #[test]
+    fn case_only_rename_leaves_the_entry_in_place() {
+        let mut cache = catalog_cache_with("qod");
+        cache.rename_connection("qod", "QOD");
+        assert!(cache.model_lists.contains_key("qod"), "unchanged");
+        assert!(!cache.model_lists.contains_key("QOD"));
+    }
+
+    /// Renaming a connection with no cached entry is a no-op that must not
+    /// create one — an empty entry would make `route_models` treat the
+    /// connection as "catalog answered with nothing" rather than "never
+    /// fetched", which changes the fallback behaviour.
+    #[test]
+    fn rename_connection_without_an_entry_creates_nothing() {
+        let mut cache = RemoteCatalogCache::default();
+        cache.rename_connection("ghost", "renamed");
+        assert!(cache.connection_models.is_empty());
+        assert!(cache.model_lists.is_empty());
+        assert!(cache.remote_metadata.is_empty());
+        assert!(cache.fitted_models.is_empty());
     }
 }

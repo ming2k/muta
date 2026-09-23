@@ -15,3 +15,4 @@ pub(super) mod scroll;
 pub(super) mod selectable_body;
 pub(super) mod toast;
 pub mod tooltip;
+pub(super) mod which_key;

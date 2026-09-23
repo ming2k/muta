@@ -29,6 +29,7 @@ pub trait EnvelopePhase: Send + Sync {
 
 /// The envelope phase's two artifacts: the reshaped body and its header
 /// carriers.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReshapedEnvelope {
     pub body: serde_json::Value,
     /// Header carriers declared by the surface's model-binding table

@@ -264,9 +264,11 @@ rendering is covered in [Markdown rendering](markdown-rendering.md).
 | Quote | quoted content |
 | Table | headers, rows, alignment |
 
-Two properties fall out of this. First, copy returns the **original**
-text, not the terminal-wrapped projection of it: a table cell copies as
-clean cell text, a code block copies its source. Second, the structure
+Two properties fall out of this. First, copy returns the **rendered** text,
+not the terminal-wrapped projection of it and not the raw markdown source:
+inline markers (`**bold**`, `` `code` ``, `[label](url)`) are stripped, a
+table cell copies as clean cell text, and a code block copies its source.
+Second, the structure
 is addressable — there is a stable notion of "the third block of message
 seven" that survives any change of terminal width or scroll position.
 

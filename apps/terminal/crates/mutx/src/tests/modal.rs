@@ -272,8 +272,8 @@ async fn inline_history_arrows_walk_old_then_new() {
     assert_eq!(app.input, "first (oldest)");
     assert_eq!(app.history_index, Some(2));
 
-    // ↑ #4: already at the oldest — clamps and stays put.
-    assert!(app.history_prev(&rows));
+    // ↑ #4: already at the oldest — stays put without reloading.
+    assert!(!app.history_prev(&rows));
     assert_eq!(app.input, "first (oldest)");
     assert_eq!(app.history_index, Some(2));
 

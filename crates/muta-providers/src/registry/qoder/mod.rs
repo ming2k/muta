@@ -18,8 +18,18 @@ use muta_contracts::model::Model;
 use muta_contracts::reasoning::ReasoningSupport;
 use serde_json::Value;
 
-/// Offline seed for Qoder: the two platform flagships.
-pub const QODER_MODELS: &[Model] = &[
+/// The offline seed ids, owned by `muta_contracts` so the TUI template and the
+/// registry cannot disagree about them (the convention every other curated
+/// provider follows).
+pub use muta_contracts::model_providers::QODER_MODELS;
+
+/// Baseline capability metadata for the seeded models.
+///
+/// Qoder's live scene catalog is the authority for what exists and what is
+/// runnable; this table only supplies capability fields the catalog does not
+/// advertise (`tool_call`, effort ladders) and keeps the provider usable before
+/// the first catalog sync.
+pub const MODELS: &[Model] = &[
     Model {
         id: "qmodel_38max",
         family: "qwen",
@@ -44,7 +54,7 @@ pub const QODER_MODELS: &[Model] = &[
     },
 ];
 
-inventory::submit!(muta_contracts::model::BaselineModels(QODER_MODELS));
+inventory::submit!(muta_contracts::model::BaselineModels(MODELS));
 
 pub const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     dialect: muta_contracts::ProviderDialect::Qoder,
@@ -52,7 +62,7 @@ pub const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     catalog_root_url: None,
     prompt_cache: super::PromptCachePolicy::Compiled(super::unsupported_prompt_cache),
     id: std::borrow::Cow::Borrowed("qoder"),
-    baselines: QODER_MODELS,
+    baselines: MODELS,
     root_url: std::borrow::Cow::Borrowed("https://api3.qoder.sh"),
     user_agent: None,
     protocol: WireProtocol::ChatCompletions,
@@ -61,7 +71,7 @@ pub const MODEL_PROVIDER_SPEC: ModelProviderSpec = ModelProviderSpec {
     ),
     default_client_profile: muta_contracts::ClientPreset::Native,
     client_profile_sensitive: false,
-    models: &["qmodel_38max", "qfmodel"],
+    models: QODER_MODELS,
 };
 
 /// Sign a catalog request with the connection's COSY identity.
@@ -156,54 +166,94 @@ impl super::super::CatalogSigning for QoderCatalogSigning {
 }
 
 /// Parse Qoder's scene-keyed catalog into the requested scene's models.
+///
+/// Function switches never appear in the result: they are routing modes, not
+/// models, so their absence is a membership fact rather than an availability
+/// verdict (ADR-0281). Dropping them here — rather than marking them
+/// unavailable — keeps the model universe pure: a switch that becomes
+/// `enable:true` on a paid plan must not surface as a selectable model, because
+/// selecting it hands model choice to the server and invalidates every
+/// capability muta fitted for the channel.
 pub fn parse_scene_catalog(json: &Value, scene: &str) -> Vec<super::super::DiscoveredModel> {
     let Some(scenes) = json.as_object() else {
         return Vec::new();
     };
-    let entries = scenes
-        .get(scene)
-        .or_else(|| scenes.get("assistant"))
-        .and_then(Value::as_array);
-    let entries = match entries {
-        Some(entries) => entries,
-        None => {
-            let mut all = Vec::new();
-            for value in scenes.values() {
-                if let Some(array) = value.as_array() {
-                    all.extend(array.iter());
-                }
-            }
-            return all
-                .into_iter()
-                .filter_map(discovered_from_scene_entry)
-                .collect();
-        }
-    };
-    entries
-        .iter()
-        .filter_map(discovered_from_scene_entry)
+    // The owning scene name is part of the switch rule: scene-scoped forms
+    // carry it as a hyphen prefix (`quest-auto`, `qwork-advanced`). Read the
+    // scene the connection declared, falling back to `assistant` (the CLI's
+    // default) when the response does not carry it, and to every scene only
+    // when neither is present.
+    let scoped = scenes
+        .get_key_value(scene)
+        .or_else(|| scenes.get_key_value("assistant"))
+        .and_then(|(name, entries)| {
+            entries
+                .as_array()
+                .map(|entries| vec![(name.as_str(), entries.as_slice())])
+        })
+        .unwrap_or_else(|| {
+            scenes
+                .iter()
+                .filter_map(|(name, value)| {
+                    value
+                        .as_array()
+                        .map(|entries| (name.as_str(), entries.as_slice()))
+                })
+                .collect()
+        });
+    scoped
+        .into_iter()
+        .flat_map(|(owning_scene, entries)| {
+            entries
+                .iter()
+                .filter_map(move |entry| discovered_from_scene_entry(entry, owning_scene))
+        })
         .collect()
 }
 
-fn discovered_from_scene_entry(entry: &Value) -> Option<super::super::DiscoveredModel> {
-    let key = entry.get("key").and_then(Value::as_str)?.trim().to_string();
-    if key.is_empty() {
+/// The provider's stated reason an entry is unusable, verbatim.
+///
+/// Qoder carries it as an opaque i18n key (`strategies[].disabled_message_key`,
+/// e.g. `codeSafeModelReason`) rather than as prose. `[INV-AVAIL-02]` permits
+/// recording it and nothing more: the key is stored as the provider stated it,
+/// and no surface resolves it against the vendor's own text table — that would
+/// localize the reason (`[INV-AVAIL-03]`) and would put a vendor copy table in
+/// muta's core (ADR-0281).
+fn disabled_reason(entry: &Value) -> Option<String> {
+    entry
+        .get("strategies")
+        .and_then(Value::as_array)?
+        .iter()
+        .find_map(|strategy| strategy.get("disabled_message_key").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_string)
+}
+
+fn discovered_from_scene_entry(
+    entry: &Value,
+    scene: &str,
+) -> Option<super::super::DiscoveredModel> {
+    let key = entry.get("key").and_then(Value::as_str)?.trim();
+    if key.is_empty() || surface::is_function_switch(key, scene) {
         return None;
     }
     // `enable:false` is subscription-locked, not absent: the official CLI's
     // `/model` menu lists such entries greyed-out, so the entry is kept as a
-    // declared-unusable model. The Qoder catalog states only the boolean — no
-    // reason field exists — so the reason stays `None` and no surface may
-    // invent one (ADR-0273).
+    // declared-unusable model. The verdict carries the provider's own reason
+    // when the payload states one (`strategies[].disabled_message_key`) and
+    // `None` otherwise — no surface may invent one (ADR-0273).
+    let reason = disabled_reason(entry);
     let availability = match entry.get("enable") {
-        Some(Value::Bool(enabled)) => Some(muta_contracts::Availability {
-            usable: *enabled,
-            reason: None,
-        }),
-        Some(Value::Number(number)) => Some(muta_contracts::Availability {
-            usable: number.as_i64().unwrap_or(0) != 0,
-            reason: None,
-        }),
+        Some(Value::Bool(true)) => Some(muta_contracts::Availability::usable()),
+        Some(Value::Bool(false)) => Some(muta_contracts::Availability::locked(reason)),
+        Some(Value::Number(number)) => {
+            if number.as_i64().unwrap_or(0) != 0 {
+                Some(muta_contracts::Availability::usable())
+            } else {
+                Some(muta_contracts::Availability::locked(reason))
+            }
+        }
         _ => None,
     };
     let context_window = entry
@@ -225,7 +275,7 @@ fn discovered_from_scene_entry(entry: &Value) -> Option<super::super::Discovered
         .and_then(Value::as_object)
         .map(|efforts| efforts.keys().cloned().collect());
     Some(super::super::DiscoveredModel {
-        id: key,
+        id: key.to_string(),
         availability,
         advertised: None,
         protocol: None,
@@ -264,7 +314,7 @@ fn discovered_from_scene_entry(entry: &Value) -> Option<super::super::Discovered
 #[cfg(test)]
 mod tests {
     use super::MODEL_PROVIDER_SPEC as SPEC;
-    use super::{parse_scene_catalog, QODER_MODELS};
+    use super::{MODELS, QODER_MODELS, parse_scene_catalog};
     use muta_contracts::WireProtocol;
     use serde_json::json;
 
@@ -304,11 +354,16 @@ mod tests {
                     "display_name": "Kimi-K2.8-Preview",
                     "enable": 0,
                     "is_vl": true,
-                    "source": "system"
+                    "source": "system",
+                    // The vendor's own reason key, carried verbatim.
+                    "strategies": [
+                        { "tag": "C4", "enabled": false, "disabled_message_key": "codeSafeModelReason" }
+                    ]
                 },
                 {
-                    "key": "auto",
-                    "display_name": "Auto",
+                    "key": "qmodel_latest",
+                    "display_name": "Qwen3.7-Max",
+                    "enable": false,
                     "is_vl": true,
                     "source": "system"
                 }
@@ -326,24 +381,130 @@ mod tests {
             by_id("qmodel_38max").availability,
             Some(muta_contracts::Availability::usable())
         );
-        // Qoder states only the boolean; the reason stays undeclared so no
+        // A locked entry the payload gives no reason for stays reasonless: no
         // surface may invent one (ADR-0273).
         assert_eq!(
             by_id("gmodel").availability,
             Some(muta_contracts::Availability::locked(None))
         );
+        // A locked entry the payload *does* explain carries the provider's own
+        // key verbatim — never resolved against the vendor's text table
+        // (`[INV-AVAIL-03]`).
         assert_eq!(
             by_id("kmodel").availability,
-            Some(muta_contracts::Availability::locked(None))
+            Some(muta_contracts::Availability::locked(Some(
+                "codeSafeModelReason".to_string()
+            )))
         );
-        // Absent `enable` is undeclared, not locked.
-        assert_eq!(by_id("auto").availability, None);
+        // A numeric `enable: 0` is a lock, same as `false`.
+        assert_eq!(
+            by_id("qmodel_latest")
+                .availability
+                .as_ref()
+                .map(|a| a.usable),
+            Some(false)
+        );
         assert_eq!(by_id("gmodel").name.as_deref(), Some("GLM-5.3"));
     }
 
+    /// An entry carrying no `enable` at all declares no verdict. `None` is
+    /// undeclared, never "locked" — `[INV-AVAIL-04]`.
     #[test]
-    fn baselines_stay_the_two_platform_flagships() {
-        let ids: Vec<&str> = QODER_MODELS.iter().map(|model| model.id).collect();
-        assert_eq!(ids, ["qmodel_38max", "qfmodel"]);
+    fn absent_enable_is_undeclared_not_locked() {
+        let json = json!({
+            "assistant": [{ "key": "qfmodel", "display_name": "Qwen3.8-Flash" }]
+        });
+        let models = parse_scene_catalog(&json, "assistant");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].availability, None);
+    }
+
+    /// A blank or missing `key` is not a model and cannot become one: the entry
+    /// is dropped rather than surfacing an empty id that no route could name.
+    #[test]
+    fn blank_key_is_dropped() {
+        let json = json!({
+            "assistant": [
+                { "key": "  ", "display_name": "Blank" },
+                { "display_name": "No key" },
+                { "key": "qfmodel", "display_name": "Qwen3.8-Flash" }
+            ]
+        });
+        let models = parse_scene_catalog(&json, "assistant");
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["qfmodel"]);
+    }
+
+    /// Function switches are routing modes, not models: they never enter the
+    /// model universe, in either their bare or their scene-prefixed form.
+    /// Their absence is a membership fact, not an availability verdict — a
+    /// switch that becomes `enable:true` on a paid plan must still not surface
+    /// as a selectable model (ADR-0281).
+    #[test]
+    fn scene_catalog_drops_function_switches() {
+        let json = json!({
+            "assistant": [
+                { "key": "auto",         "display_name": "Auto",        "enable": true },
+                { "key": "ultimate",     "display_name": "Ultimate",    "enable": true },
+                { "key": "performance",  "display_name": "Performance", "enable": false },
+                { "key": "efficient",    "display_name": "Efficient",   "enable": true },
+                { "key": "advanced",     "display_name": "Advanced",    "enable": true },
+                { "key": "qfmodel",      "display_name": "Qwen3.8-Flash", "enable": true }
+            ]
+        });
+        let models = parse_scene_catalog(&json, "assistant");
+        assert_eq!(
+            models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["qfmodel"],
+            "function switches must not enter the model universe"
+        );
+    }
+
+    /// A scene-scoped switch carries its owning scene as a hyphen prefix; the
+    /// prefix is stripped before the vocabulary test. Model keys use `_`, so the
+    /// two namespaces cannot collide.
+    #[test]
+    fn scene_prefixed_switches_are_dropped_in_their_own_scene() {
+        let json = json!({
+            "qwork": [
+                { "key": "qwork-auto",     "display_name": "Auto",     "enable": true },
+                { "key": "qwork-advanced", "display_name": "Advanced", "enable": true },
+                { "key": "smodel",         "display_name": "Sonus",    "enable": true }
+            ],
+            "quest": [
+                { "key": "quest-ultimate", "display_name": "Ultimate", "enable": true },
+                { "key": "cmodel",         "display_name": "Cantus",   "enable": true }
+            ]
+        });
+        let qwork = parse_scene_catalog(&json, "qwork");
+        assert_eq!(
+            qwork.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["smodel"]
+        );
+        // A model key that merely contains a switch word as a substring is not
+        // a switch — the test is on the whole (optionally prefixed) key.
+        assert!(
+            parse_scene_catalog(&json, "quest")
+                .iter()
+                .any(|m| m.id == "cmodel")
+        );
+    }
+
+    /// The seed ids and the baseline capability table must describe the *same*
+    /// models in the *same* order. They live in two crates because the TUI
+    /// cannot depend on `muta-providers`, so the agreement is an invariant this
+    /// test owns rather than something the compiler can express — it is exactly
+    /// the invariant the old duplicated `qoder3*` seed silently broke.
+    #[test]
+    fn seed_ids_and_baseline_capabilities_agree() {
+        let seed: Vec<&str> = QODER_MODELS.to_vec();
+        let baselines: Vec<&str> = MODELS.iter().map(|model| model.id).collect();
+        assert_eq!(
+            seed, baselines,
+            "the contracts seed and the registry baselines drifted apart"
+        );
+        assert_eq!(seed, ["qmodel_38max", "qfmodel"]);
+        assert_eq!(SPEC.models, QODER_MODELS, "the spec seeds from one source");
+        assert_eq!(SPEC.baselines.len(), 2);
     }
 }

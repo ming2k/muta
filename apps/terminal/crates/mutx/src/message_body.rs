@@ -16,9 +16,9 @@ use crate::render::BlockWrapCache;
 
 use super::design::{
     BLOCK_SURFACE_H_INSET, CODE_BAND_GUTTER_GAP, CODE_BAND_GUTTER_MIN_WIDTH, CODE_BAND_LEFT_INDENT,
-    MATH_MARKER_GAP_COLS, USER_MESSAGE_GUTTER_GLYPH, USER_MESSAGE_HEADER_BODY_GAP_ROWS,
-    USER_MESSAGE_OUTER_GUTTER_COLS, USER_MESSAGE_RIGHT_PAD_COLS, USER_MESSAGE_TEXT_GAP_COLS,
-    USER_MESSAGE_TRANSITION_ROWS,
+    MATH_MARKER_GAP_COLS, QUOTE_PREFIX, QUOTE_PREFIX_COLS, USER_MESSAGE_GUTTER_GLYPH,
+    USER_MESSAGE_HEADER_BODY_GAP_ROWS, USER_MESSAGE_OUTER_GUTTER_COLS, USER_MESSAGE_RIGHT_PAD_COLS,
+    USER_MESSAGE_TEXT_GAP_COLS, USER_MESSAGE_TRANSITION_ROWS,
 };
 use super::markdown_table::{TableRowInfo, build_table_render, push_table_segment};
 use super::text_layout::{
@@ -309,13 +309,22 @@ pub fn draw_message_body(
                 let user_text_width = user_panel_w
                     .saturating_sub(USER_MESSAGE_TEXT_GAP_COLS + USER_MESSAGE_RIGHT_PAD_COLS)
                     .max(1);
-                let lines = wrap.wrap_text(
+                let lines = wrap.wrap_text_markup(
                     content,
                     if is_user {
                         user_text_width
                     } else {
                         body_wrap_width
                     },
+                    // User messages carry no inline ranges (plain parse), so
+                    // this is empty and the wrap degenerates to `wrap_text`.
+                    &crate::text_layout::block_hidden_ranges(
+                        content,
+                        code_ranges,
+                        bold_ranges,
+                        math_ranges,
+                        link_ranges,
+                    ),
                 );
                 *content_lines += lines.len();
 
@@ -1121,8 +1130,17 @@ pub fn draw_message_body(
                     .fg(theme.heading())
                     .add_modifier(Modifier::BOLD);
                 let continuation = " ".repeat(prefix_cols as usize);
-                let lines =
-                    wrap.wrap_text(content, area.width.saturating_sub(prefix_cols) as usize);
+                let lines = wrap.wrap_text_markup(
+                    content,
+                    area.width.saturating_sub(prefix_cols) as usize,
+                    &crate::text_layout::block_hidden_ranges(
+                        content,
+                        code_ranges,
+                        bold_ranges,
+                        math_ranges,
+                        link_ranges,
+                    ),
+                );
                 *content_lines += lines.len();
                 for (line_index, wl) in lines.iter().enumerate() {
                     if *skip_rows > 0 {
@@ -1215,8 +1233,24 @@ pub fn draw_message_body(
                     math_ranges,
                     link_ranges,
                 } = inline;
-                // 5-col `▎` prefix; the area is already inset so no right gutter.
-                let lines = wrap.wrap_text(content, area.width.saturating_sub(5) as usize);
+                // Fixed-width `▎` lead on every wrapped row (the area is already
+                // inset, so there is no right gutter). Wrap against the *visible*
+                // width: inline-code backticks, `**` bold markers, `$…$` math and
+                // link syntax are painted zero-width, so counting them would make
+                // the quote wrap early (and could split a `` `…` ``/`**…**` pair
+                // across lines).
+                let hidden = crate::text_layout::block_hidden_ranges(
+                    content,
+                    code_ranges,
+                    bold_ranges,
+                    math_ranges,
+                    link_ranges,
+                );
+                let lines = wrap.wrap_text_markup(
+                    content,
+                    area.width.saturating_sub(QUOTE_PREFIX_COLS as u16) as usize,
+                    &hidden,
+                );
                 *content_lines += lines.len();
                 for wl in lines.iter() {
                     if *skip_rows > 0 {
@@ -1229,7 +1263,7 @@ pub fn draw_message_body(
 
                     let base = Style::default().fg(theme.quote());
                     let line = line_spans_rich(RichLineParams {
-                        prefix: "   ▎ ",
+                        prefix: QUOTE_PREFIX,
                         prefix_style: Style::default().fg(theme.quote()),
                         text: &wl.text,
                         line_start_byte: wl.start_byte,
@@ -1268,7 +1302,7 @@ pub fn draw_message_body(
                             bi,
                             wl.start_byte,
                             &wl.text,
-                            5,
+                            QUOTE_PREFIX_COLS as u16,
                             line_rect,
                             &hidden_for_line,
                         );
@@ -1278,7 +1312,7 @@ pub fn draw_message_body(
                             start_byte: wl.start_byte,
                             end_byte: wl.end_byte,
                             text: wl.text.clone(),
-                            prefix_cols: 5,
+                            prefix_cols: QUOTE_PREFIX_COLS as u16,
                             rect: line_rect,
                             hidden_ranges: hidden_for_line,
                         });
@@ -1334,8 +1368,17 @@ pub fn draw_message_body(
                 let prefix = format!("   {}{} ", indent, marker);
                 let prefix_cols = display_width_u16(&prefix);
                 let continuation = " ".repeat(prefix_cols as usize);
-                let lines =
-                    wrap.wrap_text(content, area.width.saturating_sub(prefix_cols) as usize);
+                let lines = wrap.wrap_text_markup(
+                    content,
+                    area.width.saturating_sub(prefix_cols) as usize,
+                    &crate::text_layout::block_hidden_ranges(
+                        content,
+                        code_ranges,
+                        bold_ranges,
+                        math_ranges,
+                        link_ranges,
+                    ),
+                );
                 *content_lines += lines.len();
                 for (line_index, wl) in lines.iter().enumerate() {
                     if *skip_rows > 0 {
@@ -1484,6 +1527,68 @@ mod tests {
             None,
             "rows/cells outside the origin cell must not inherit generic range selection"
         );
+    }
+
+    #[test]
+    fn quote_hard_break_marker_is_stripped_from_content() {
+        // The two-space hard-break marker that terminates a quote line must be
+        // stripped from the stored content (as the paragraph path does); only
+        // the "\n" join survives. It used to leak two trailing spaces into
+        // both rendering and copy.
+        let blocks = crate::model::document::parse_blocks("> a  \n> b");
+        assert!(
+            matches!(&blocks[0], Block::Quote(inline) if inline.content == "a\nb"),
+            "got {:?}",
+            blocks[0]
+        );
+    }
+
+    #[test]
+    fn quote_wrap_counts_markup_delimiters_as_zero_width() {
+        // A `**bold**` span must not consume column budget when wrapping a
+        // quote: the delimiters are painted zero-width, so a quote whose
+        // *visible* text fits on one line must not wrap early.
+        let msg = TranscriptMessage::new(muta_contracts::Role::Assistant, "> **abcd** ef");
+        let theme = Theme::default();
+        let mut grid = mutx_engine::Grid::new(12, 4);
+        let mut frame = mutx_engine::Frame::new(&mut grid);
+        let mut layout_map = LayoutMap::new();
+        let mut skip_rows = 0;
+        let mut current_y = 0;
+        let mut content_lines = 0;
+        let mut wrap = BlockWrapCache::default();
+        draw_message_body(
+            &mut frame,
+            Rect::new(0, 0, 12, 4),
+            &msg,
+            0,
+            &SelectionState::None,
+            None,
+            &theme,
+            &mut layout_map,
+            &mut skip_rows,
+            &mut current_y,
+            &mut content_lines,
+            false,
+            &mut wrap,
+        );
+        // Visible quote text is "abcd ef" (7 cols) inside a 7-col body budget
+        // (12 - 5 prefix), so it fits on one row. Raw width (11) would wrap.
+        assert_eq!(content_lines, 1);
+    }
+
+    #[test]
+    fn quote_prefix_constant_matches_rendered_lead() {
+        // The wrap budget, the painted lead, and the recorded hit-test
+        // `prefix_cols` all derive from `QUOTE_PREFIX_COLS` / `QUOTE_PREFIX`.
+        // If they ever disagree, selection columns drift from the painted text.
+        use crate::design::{QUOTE_PREFIX, QUOTE_PREFIX_COLS};
+        assert_eq!(QUOTE_PREFIX.width(), QUOTE_PREFIX_COLS);
+        let char_cols: usize = QUOTE_PREFIX
+            .chars()
+            .map(|c| mutx_engine::text::grapheme_width(&c.to_string()) as usize)
+            .sum();
+        assert_eq!(char_cols, QUOTE_PREFIX_COLS);
     }
 
     #[test]

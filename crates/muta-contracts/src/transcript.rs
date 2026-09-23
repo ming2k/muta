@@ -452,6 +452,7 @@ impl Transcript {
         {
             view.push((entry.seq, message));
         }
+        let mut last_pruned_tool = false;
         for entry in &self.entries {
             if entry.is_hidden_kind() {
                 continue;
@@ -469,6 +470,20 @@ impl Transcript {
                 && let Some(placeholder) = elided.get(tool_call_id)
             {
                 message.content = placeholder.clone();
+                message.reasoning_content = None;
+                message.images = None;
+                last_pruned_tool = true;
+            } else if last_pruned_tool
+                && message
+                    .origin
+                    .as_ref()
+                    .is_some_and(|o| o.kind == crate::message::InjectionKind::ToolImage)
+            {
+                message.content = "[cleared image payload]".to_string();
+                message.images = None;
+                last_pruned_tool = false;
+            } else {
+                last_pruned_tool = false;
             }
             if let Some(shape) = frozen.get(&entry.seq) {
                 message.content = shape.clone();

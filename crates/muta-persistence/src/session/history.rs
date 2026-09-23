@@ -932,22 +932,43 @@ fn translate_projection(
     if current.len() == target.len() && !current.is_empty() {
         let mut elided = Vec::new();
         let mut pruneable = true;
+        let mut last_was_pruned_tool = false;
         for (before, after) in current.iter().zip(target.iter()) {
-            if before == after {
+            if before.semantic_wire_eq(after) {
+                last_was_pruned_tool = false;
                 continue;
             }
             let is_tool_result = before.role == Role::Tool
                 && before.tool_call_id == after.tool_call_id
                 && before.tool_calls == after.tool_calls
                 && before.role == after.role;
-            if !is_tool_result {
-                pruneable = false;
-                break;
+            if is_tool_result {
+                elided.push(muta_contracts::PrunedToolOutput {
+                    tool_call_id: after.tool_call_id.clone().unwrap_or_default(),
+                    placeholder: after.content.clone(),
+                });
+                last_was_pruned_tool = true;
+                continue;
             }
-            elided.push(muta_contracts::PrunedToolOutput {
-                tool_call_id: after.tool_call_id.clone().unwrap_or_default(),
-                placeholder: after.content.clone(),
-            });
+            let is_companion_tool_image = last_was_pruned_tool
+                && before.role == Role::User
+                && before
+                    .origin
+                    .as_ref()
+                    .is_some_and(|o| o.kind == InjectionKind::ToolImage)
+                && after.role == Role::User
+                && after
+                    .origin
+                    .as_ref()
+                    .is_some_and(|o| o.kind == InjectionKind::ToolImage)
+                && after.content == "[cleared image payload]"
+                && after.images.is_none();
+            if is_companion_tool_image {
+                last_was_pruned_tool = false;
+                continue;
+            }
+            pruneable = false;
+            break;
         }
         if pruneable && !elided.is_empty() {
             let last_seq = transcript.next_seq().saturating_sub(1);

@@ -112,14 +112,36 @@ pub struct AgentChatSpec {
     pub source: u32,
     /// The envelope schema version (`3`).
     pub version: &'static str,
-    /// The `model_config.format` value (`openai`).
-    pub model_format: &'static str,
     /// The `business.product` value (`cli`).
     pub business_product: &'static str,
     /// The `business.type` value (`agent`).
     pub business_type: &'static str,
     /// The `business.stage` value (`start`).
     pub business_stage: &'static str,
+    /// The envelope's `stream` flag. The service only answers with SSE, so the
+    /// reference client states it unconditionally; declaring it keeps the
+    /// envelope byte-identical to the client the service fingerprints.
+    pub stream: bool,
+    /// The envelope's `is_reply` flag — the reference client sets it on every
+    /// chat turn.
+    pub is_reply: bool,
+    /// The envelope's `is_retry` flag — false for a first attempt. The retry
+    /// path is a client concern the envelope does not model.
+    pub is_retry: bool,
+    /// The envelope's `aliyun_user_type` value. The reference client sends an
+    /// empty string for a subscription account; it is declared rather than
+    /// omitted so the field's presence matches the client.
+    pub aliyun_user_type: &'static str,
+    /// The `parameters.max_tokens` fallback when the catalog advertises no
+    /// output cap for the model.
+    ///
+    /// This is the reference client's own normalizer default, not a muta
+    /// invention: its token-count normalizer returns this value for an absent
+    /// or non-positive input, and the surface's catalog publishes no
+    /// `max_output_tokens`, so every turn the client sends carries it. Declaring
+    /// it keeps the envelope byte-faithful; omitting `max_tokens` entirely would
+    /// be the deviation.
+    pub default_max_output_tokens: u32,
     /// JSON pointers (rooted at the envelope object) whose values are fresh
     /// UUIDs per request. The server rejects a replayed id with code 103.
     pub fresh_uuid_pointers: &'static [&'static str],

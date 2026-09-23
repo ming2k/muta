@@ -456,21 +456,59 @@ Confirmed against the live service by replaying byte-exact requests:
 - `Cosy-Version` (now `1.1.58`) and the signed-path derivation are unchanged
   from 1.1.57; the signature algorithm is confirmed by reproducing the
   recorded request's signature exactly.
-- The **full server catalog shape** (decrypted from the CLI's
-  `catalog-v6` cache, which the client encrypts with the embedded WASM
-  `model_cache_encrypt`): nine scenes (`assistant`, `chat`, `quest`, `qwork`,
-  `experts`, `qwake`, `app`, `nap`, `inline`) plus empty `byok_*` maps; each
-  populated scene carries 17 entries (`auto`/`ultimate`/`performance`/
-  `efficient` function switches, `smodel` Sonus, `cmodel` Cantus,
-  `qmodel_38max`, `qfmodel`, `qmodel_latest`, `qmodel`, `kmodel_latest`,
-  `kmodel`, `gmodel`, `gfmodel`, `dmodel`, `dfmodel`, `mmodel`). For a free
-  account only the two flagships are `enable:true`; everything else is
-  subscription-locked. The official CLI's `--list-models` prints exactly the
-  two enabled entries, while its interactive `/model` menu lists all 17
-  greyed-out (`isGreyedOut: enable === false`). muta mirrors both behaviors:
-  `--list-models` parity is the inference-capable set, and the picker
-  surfaces locked entries dimmed with a `locked` tag (round-tripped as
-  `picker_enabled`).
+- The **full server catalog shape** (captured live with
+  `cargo run -p muta-providers --example qoder_catalog_dump`): eleven scenes
+  (`assistant`, `chat`, `quest`, `qwork`, `experts`, `qwake`, `app`, `nap`,
+  `inline`) plus empty `byok_teams`/`byok_enterprise` maps; each populated
+  scene carries the routing switches alongside real models (`smodel` Sonus,
+  `cmodel` Cantus, `qmodel_38max`, `qfmodel`, `qmodel_latest`, `qmodel`,
+  `kmodel_latest`, `kmodel`, `gmodel`, `gfmodel`, `dmodel`, `dfmodel`,
+  `mmodel`). For a free account only the two flagships are `enable:true`;
+  everything else is subscription-locked. The official CLI's `--list-models`
+  prints exactly the two enabled entries, while its interactive `/model` menu
+  lists the locked entries greyed-out (`isGreyedOut: enable === false`). muta
+  mirrors both behaviors: `--list-models` parity is the inference-capable set,
+  and the picker surfaces locked entries dimmed, stating the provider's own
+  reason when the payload carries one.
+
+#### Function switches vs models (ADR-0281)
+
+A scene mixes two **kinds** of entry, and they are not interchangeable:
+
+| Kind | Keys | What selecting one means |
+|------|------|--------------------------|
+| Model | `qmodel_38max`, `qfmodel`, `smodel`, `gmodel`, … | Run *this* model |
+| Function switch | `auto`, `ultimate`, `performance`, `efficient`, `advanced` | *Let the server pick* a model |
+
+The switches are not models: they carry no capability, and `performance` even
+advertises a `272K` context window that no real entry has. Sending one as
+`X-Model-Key` delegates model choice upstream, so every capability muta fitted
+for the channel (effort ladder, thinking, context window) describes a model
+nobody selected. muta therefore **excludes them at parse time** — a membership
+fact, not an availability verdict — via
+`surface::is_function_switch(key, scene)`. Scene-scoped forms carry their
+owning scene as a hyphen prefix (`quest-auto`, `qwork-advanced`,
+`experts-ultimate`) and are matched in that scene; model keys use `_`, so the
+namespaces cannot collide.
+
+The payload declares **no kind field** — no value of any field is disjoint
+between the two kinds except `display_name` and `key` themselves. `is_new` is
+present on every captured model and absent from every switch, but it is a
+"NEW" marketing badge, so it is a drift *audit* signal and never the
+classifier. The vocabulary is pinned in `surface::FUNCTION_SWITCH_KEYS` and
+audited against the committed capture
+(`tests/it/qoder_catalog_contract.rs`); a new switch name fails that audit
+rather than silently entering the model list.
+
+#### The locked reason
+
+A locked entry carries `strategies[] = [{ tag, priority, enabled,
+disabled_message_key }]`. `disabled_message_key` is an opaque i18n key (e.g.
+`codeSafeModelReason`, resolved by the client's own `dynamic-texts.json`), and
+muta records it **verbatim** as `Availability.reason` — it is never resolved
+against the vendor's table, translated, or branched on. An
+entry the payload gives no reason for keeps `reason: None`; undeclared is never
+invented.
 
 ### 5.3 Extending to the CN line
 

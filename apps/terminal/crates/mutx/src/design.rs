@@ -54,6 +54,23 @@ pub(crate) const USER_MESSAGE_GUTTER_GLYPH: &str = "<";
 /// Lead glyph for assistant turn headers, representing Unix stdout redirection (`>`).
 pub(crate) const AI_OUTPUT_LEAD_GLYPH: &str = ">";
 
+/// Blockquote gutter glyph for transcript prose (`Block::Quote`): a light
+/// vertical rule that marks the quoted run. Painted on every wrapped row so
+/// the quote reads as one continuous block, at a fixed 5-column lead
+/// (`"   ▎ "`). Kept as a named token so the prose, the web-article payload
+/// renderer, and the docs can never drift to different glyphs again.
+pub(crate) const QUOTE_GUTTER_GLYPH: &str = "▎";
+
+/// Columns occupied by the blockquote lead: the [`TRANSCRIPT_BODY_LEADING_INDENT`]
+/// indent (2) + the [`QUOTE_GUTTER_GLYPH`] (1) + one trailing gap (1) + one
+/// more leading pad column (1) = 5. Both the wrap budget and the recorded
+/// `prefix_cols` for hit-testing derive from this single value.
+pub(crate) const QUOTE_PREFIX_COLS: usize = 5;
+
+/// The blockquote lead as a literal run of [`QUOTE_PREFIX_COLS`] columns, so
+/// the rendered width and [`QUOTE_PREFIX_COLS`] can never disagree.
+pub(crate) const QUOTE_PREFIX: &str = "   ▎ ";
+
 /// Vertical chrome rows around a sent user message panel: one top transition
 /// row and one bottom transition row.
 pub(crate) const USER_MESSAGE_TRANSITION_ROWS: usize = 1;

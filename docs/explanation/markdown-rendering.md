@@ -13,7 +13,7 @@ Using an off-the-shelf markdown-to-terminal renderer (e.g. `termimad` or
 `pulldown-cmark` → `syntect` → `ratatui::Paragraph`) would produce a
 pixel-correct terminal image. That is not what muta needs. The TUI is a
 **structured application**, not a print pipeline: it must support mouse
-selection that copies the *original source text*, addressable blocks that
+selection that copies clean *rendered* text, addressable blocks that
 survive reflow, per-cell table hit-testing, and inline-code/bold paint
 without disturbing the byte-addressable selection model. A black-box
 "markdown → string" pipeline preserves none of that structure.
@@ -47,8 +47,9 @@ trigger a horizontal rule or table; the transcript stays readable.
 
 Each `TranscriptMessage` holds three things:
 
-- `raw` — the original text, preserved byte-for-byte so copy returns
-  exactly what the provider emitted.
+- `raw` — the original text, preserved byte-for-byte (used for re-parsing,
+  layout, and any consumer that needs the source form; copy resolves against
+  the parsed blocks, not this string).
 - `blocks: Vec<Block>` — the parsed semantic structure.
 - `kind: MessageKind` — Text, ToolStep, Thinking, or Notice; carries the
   lifecycle state that the step renderer keys off.
@@ -75,10 +76,12 @@ The `Inline` payload is shared by all prose variants: the flattened
 Inline code (`` `…` ``) and bold (`**…**`) are *not* stripped from
 `content`. Instead the parser records their byte ranges — marker-inclusive
 — in `code_ranges` and `bold_ranges`. The renderer paints those spans on a
-different colour surface (`code_bg`, `bold` modifier) while the underlying
-text stays plain. This is the key invariant that makes **copy return the
-original source**: selection extraction walks the plain `content` strings
-and never sees the colour markup.
+different colour surface (`code_bg`, `bold` modifier) and elides the
+delimiter bytes to zero width, while the underlying text stays plain. The
+same marker-inclusive ranges drive copy: `get_selected_text()` uses them to
+strip the delimiters, so a selection returns the clean rendered text
+(`bold`, not `**bold**`) while the block model keeps the full source for
+re-parsing and layout.
 
 The inline scanner (`scan_inline`) is a single-pass byte-level loop over
 the paragraph text. It finds backtick runs for inline code and `**…**`
@@ -150,7 +153,7 @@ draw_message_body()          [message_body.rs]
   │   ├─ Code     → code_gutter_line() + language badge
   │   ├─ Heading  → bold weight (+ underline for H1); same leading indent as prose
   │   ├─ ListItem → marker prefix (• / 1. / [x]) + wrapped content
-  │   ├─ Quote    → `┃` bar prefix + muted colour
+  │   ├─ Quote    → `▎` bar prefix + muted colour
   │   ├─ Table    → build_table_render() [markdown_table.rs] → box-drawing grid
   │   ├─ Rule     → full-width `─` line
   │   └─ Break    → blank row
@@ -239,14 +242,24 @@ two directions:
 
 ## Design consequences
 
-### Selection copies the original source
+### Selection copies the rendered plain text
 
-Because `raw` is preserved and blocks carry plain `content` strings with
-marker-inclusive inline ranges, `get_selected_text()` returns the original
-markdown source — not the terminal-wrapped projection. A code block copies
-as its raw source (no line numbers, no gutter), a table cell copies as
-clean cell text (no box-drawing characters), and inline code copies with
-its backticks intact.
+Copy resolves against the semantic block model, so what lands on the clipboard
+is the text as the user *sees* it on screen — not the terminal-wrapped
+projection, and not the raw markdown source:
+
+- Inline markup delimiters are elided: `**bold**` copies as `bold`,
+  `` `code` `` copies as `code`, `[label](url)` copies as `label`, and `$x$`
+  copies as `x`.
+- A code block copies as its raw source (no line numbers, no gutter, no fence).
+- A table copies as its aligned grid with the box-drawing borders stripped.
+- Block rhythm is preserved: a blank line between paragraphs copies as a
+  single `\n\n`, and a hard break inside a paragraph copies as one `\n`.
+
+The unified rule holds for every selection gesture — a character drag, a
+whole-block (middle-click) selection, and a multi-message drag all resolve
+through the same block walk, so the same visual span always yields the same
+text regardless of how it was selected.
 
 ### Tables are hit-testable
 

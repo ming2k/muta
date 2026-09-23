@@ -1582,6 +1582,179 @@ fn different_tool_turns_have_one_vertical_gap() {
     );
 }
 
+/// A steer typed while a turn is still producing output is staged at the live
+/// tail, and the turn keeps appending its own components *after* it. The band
+/// must span the insert: exactly one `> turn 60` header for the whole turn, with
+/// the steer panel nested inside it, and the work that continued afterwards
+/// still under that same header. Left ungrouped, the turn would paint a second
+/// header and read as two turns numbered 60.
+#[test]
+fn steer_insert_mid_turn_keeps_one_turn_header() {
+    use crate::model::document::{DeliveryStatus, UserMessageOrigin};
+
+    let mut thinking = TranscriptMessage::reasoning("re-read the ADR").with_turn(60);
+    thinking.set_reasoning_duration(10);
+    let step = |path: &str| {
+        tool_step_structured(
+            "read_text",
+            format!(r#"{{"path":"{path}"}}"#).as_str(),
+            muta_contracts::ToolOutput::Code {
+                lang: None,
+                text: "a".into(),
+                start_line: 1,
+                prefix: None,
+                suffix: None,
+            },
+            false,
+        )
+        .with_turn(60)
+    };
+    // The queued form the live tail carries: no position yet, staged mid-turn.
+    let steer = TranscriptMessage::new(muta_contracts::Role::User, "stop and re-read the ADR")
+        .with_origin(UserMessageOrigin::Steer)
+        .with_sent_at_ms(1_700_000_000_000)
+        .queued();
+    assert_eq!(steer.delivery, DeliveryStatus::Queued);
+
+    let messages = vec![
+        thinking,
+        step("a.rs"),
+        steer,
+        step("b.rs"),
+        TranscriptMessage::new(muta_contracts::Role::Assistant, "done reading").with_turn(60),
+    ];
+
+    let grid = render_transcript_grid(&messages, 72, 40);
+    let rows: Vec<&str> = grid.lines().collect();
+    let header_rows: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.contains("> turn"))
+        .map(|(index, _)| index)
+        .collect();
+
+    assert_eq!(
+        header_rows.len(),
+        1,
+        "the interrupted turn keeps exactly one header:\n{grid}"
+    );
+    assert!(grid.contains("> turn 60"), "band labels the turn:\n{grid}");
+    assert!(
+        grid.contains("< steer"),
+        "the steer panel still renders inside the band:\n{grid}"
+    );
+
+    // Both halves of the turn's work sit below that single header — the insert
+    // must not have pushed the resumed work into a new band.
+    let resumed = rows
+        .iter()
+        .position(|row| row.contains("Read b.rs"))
+        .expect("the turn's post-steer work renders");
+    let first_work = rows
+        .iter()
+        .position(|row| row.contains("Read a.rs"))
+        .expect("the turn's pre-steer work renders");
+    let steer_row = rows
+        .iter()
+        .position(|row| row.contains("< steer"))
+        .expect("steer panel renders");
+    assert!(
+        first_work < steer_row && steer_row < resumed,
+        "the steer stays between the two halves of its turn:\n{grid}"
+    );
+    assert!(
+        resumed > header_rows[0],
+        "resumed work stays under the original header:\n{grid}"
+    );
+}
+
+/// A steer that was already admitted (delivered, stamped with the turn it
+/// interrupted) groups identically — the position stamp must not promote it to
+/// a group terminator.
+#[test]
+fn delivered_steer_mid_turn_keeps_one_turn_header() {
+    use crate::model::document::UserMessageOrigin;
+
+    let step = |path: &str| {
+        tool_step_structured(
+            "read_text",
+            format!(r#"{{"path":"{path}"}}"#).as_str(),
+            muta_contracts::ToolOutput::Code {
+                lang: None,
+                text: "a".into(),
+                start_line: 1,
+                prefix: None,
+                suffix: None,
+            },
+            false,
+        )
+        .with_turn(60)
+    };
+    let mut steer = TranscriptMessage::new(muta_contracts::Role::User, "adjust the heading")
+        .with_origin(UserMessageOrigin::Steer)
+        .with_round(3)
+        .with_turn(60)
+        .with_sent_at_ms(1_700_000_000_000);
+    steer.delivery = crate::model::document::DeliveryStatus::Delivered;
+
+    let messages = vec![step("a.rs"), steer, step("b.rs")];
+    let grid = render_transcript_grid(&messages, 72, 40);
+
+    assert_eq!(
+        grid.lines().filter(|row| row.contains("> turn")).count(),
+        1,
+        "a delivered steer stays inside its turn band:\n{grid}"
+    );
+    assert!(
+        grid.contains("< steer  round 3 › turn 60"),
+        "the steer keeps its provenance breadcrumb:\n{grid}"
+    );
+}
+
+/// Only steer inserts are absorbed. A notice (e.g. the round-interrupt row) is
+/// still a group terminator, so an assistant component after it starts a fresh
+/// band rather than being swallowed into the interrupted one.
+#[test]
+fn notice_still_splits_a_turn_band() {
+    let step = tool_step_structured(
+        "read_text",
+        r#"{"path":"a.rs"}"#,
+        muta_contracts::ToolOutput::Code {
+            lang: None,
+            text: "a".into(),
+            start_line: 1,
+            prefix: None,
+            suffix: None,
+        },
+        false,
+    )
+    .with_turn(60);
+    let notice = TranscriptMessage::notice(
+        crate::model::document::NoticeSeverity::Warning,
+        "stopped by the user",
+    );
+    let after = tool_step_structured(
+        "read_text",
+        r#"{"path":"b.rs"}"#,
+        muta_contracts::ToolOutput::Code {
+            lang: None,
+            text: "b".into(),
+            start_line: 1,
+            prefix: None,
+            suffix: None,
+        },
+        false,
+    )
+    .with_turn(60);
+
+    let grid = render_transcript_grid(&[step, notice, after], 72, 40);
+    assert_eq!(
+        grid.lines().filter(|row| row.contains("> turn")).count(),
+        2,
+        "a notice terminates the band, so the following component re-anchors:\n{grid}"
+    );
+}
+
 #[test]
 fn command_component_renders_lead_symbols_and_timestamps() {
     let epoch_ms = 1_700_000_000_000; // Produces a deterministic HH:MM label
@@ -1755,3 +1928,4 @@ fn user_prompt_sending_and_cancelled_render_clean_headers() {
         "must render cancelled prompt with round provenance:\n{grid_cancelled_round}"
     );
 }
+

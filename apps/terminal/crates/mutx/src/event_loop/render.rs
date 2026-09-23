@@ -1432,6 +1432,17 @@ fn compose_frame(
         );
     }
 
+    // Floating Which-Key guide overlay when two-stroke leader chord is active
+    let has_surface_to_close = app.active_dialog().is_some()
+        || app.current_scene() != crate::surfaces::SceneKind::Conversation;
+    crate::components::which_key::draw_which_key_overlay(
+        f,
+        &app.theme,
+        app.leader_chord,
+        has_surface_to_close,
+        f.area(),
+    );
+
     ui.stage_document(layout_map);
 
     // Capture the open modal's body height for page-scroll step

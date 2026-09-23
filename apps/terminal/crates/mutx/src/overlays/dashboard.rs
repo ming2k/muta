@@ -783,7 +783,7 @@ fn render_footer(
                 ("i", "interrupt"),
                 ("k", "kill"),
                 ("s", "suspend"),
-                ("Esc", "close"),
+                ("q/Esc", "back"),
             ],
             DashboardFocus::Detail => vec![
                 ("↑/↓", "scroll"),
@@ -791,7 +791,7 @@ fn render_footer(
                 ("n", "new session"),
                 ("p", "prompt"),
                 ("a", "attach"),
-                ("Esc", "close"),
+                ("q/Esc", "back"),
             ],
         }
     };

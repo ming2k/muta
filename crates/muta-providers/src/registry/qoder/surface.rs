@@ -29,6 +29,40 @@ pub const SIGNED_PATH: &str = "/api/v2/service/pro/sse/agent_chat_generation";
 #[allow(dead_code)]
 pub const CATALOG_PATH: &str = "/algo/api/v2/model/list";
 
+/// Qoder's *function switches*: catalog entries that select a routing mode
+/// rather than a model.
+///
+/// The vendor's own text table describes them as switches, not models — `auto`
+/// is "smartly select the optimal model, balancing performance and cost",
+/// `ultimate`/`performance`/`efficient`/`advanced` are quality tiers, and the
+/// selector groups them under `modelSelector.functionSwitch.*`. Sending one as
+/// `X-Model-Key` delegates model choice to the server, which makes every
+/// capability muta fits for the channel (effort, thinking, context window)
+/// describe a model nobody selected — `performance` even advertises a
+/// `272K` window that no real entry carries.
+///
+/// This vocabulary is **surface data, not a heuristic**: it is the closed set
+/// the vendor published as of [`COSY_VERSION`], and
+/// `tests/fixtures/qoder-model-list-*.json` pins it. A new switch name is a
+/// contract change, caught by the fixture audit rather than guessed at here.
+pub const FUNCTION_SWITCH_KEYS: &[&str] =
+    &["advanced", "auto", "efficient", "performance", "ultimate"];
+
+/// Whether a catalog `key` names a function switch in the scene it appeared in.
+///
+/// Scene-scoped forms carry their owning scene as a hyphen prefix
+/// (`quest-auto`, `qwork-advanced`, `experts-ultimate`, `nap-auto`), so the
+/// prefix is stripped before the vocabulary test. Model keys never use a
+/// hyphen — they use `_` (`qmodel_38max`, `kmodel_latest`) — so the two
+/// namespaces cannot collide.
+pub fn is_function_switch(key: &str, scene: &str) -> bool {
+    let bare = key
+        .strip_prefix(scene)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .unwrap_or(key);
+    FUNCTION_SWITCH_KEYS.contains(&bare)
+}
+
 /// The catalog's signed-path form (the URL pathname minus the `/algo` prefix,
 /// no query). One signer covers both this and [`SIGNED_PATH`].
 #[allow(dead_code)]
@@ -62,10 +96,21 @@ pub const AGENT_CHAT: AgentChatSpec = AgentChatSpec {
     task_id: "common",
     source: 1,
     version: "3",
-    model_format: "openai",
     business_product: "cli",
     business_type: "agent",
     business_stage: "start",
+    // The reference client (qodercli 1.1.59, `UT`) states these four on every
+    // chat turn regardless of the turn's content. The service answers only with
+    // SSE, so `stream` is not a request option here — it is part of the shape
+    // the client is fingerprinted on.
+    stream: true,
+    is_reply: true,
+    is_retry: false,
+    aliyun_user_type: "",
+    // The reference client's token-count normalizer returns 32000 for an absent
+    // input, and Qoder's catalog publishes no `max_output_tokens`, so this is
+    // the value every turn it sends carries.
+    default_max_output_tokens: 32_000,
     fresh_uuid_pointers: &["request_id", "request_set_id", "chat_record_id"],
 };
 
@@ -90,6 +135,14 @@ pub const MODEL_BINDINGS: &[ModelBinding] = &[
     ModelBinding {
         carrier: ModelCarrier::BodyPointer("model_config/source"),
         value: IdentityValue::CatalogSource,
+    },
+    // The catalog entry's `format` field; every entry the surface publishes
+    // carries `"openai"`, so it is bound as a constant rather than threaded
+    // through `EnvelopeInput`. This belongs *inside* `model_config`, matching
+    // the reference client — the envelope has no root-level `model_format`.
+    ModelBinding {
+        carrier: ModelCarrier::BodyPointer("model_config/format"),
+        value: IdentityValue::Constant("openai"),
     },
 ];
 

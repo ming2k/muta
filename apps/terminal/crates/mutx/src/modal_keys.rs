@@ -537,6 +537,9 @@ pub(crate) fn live_history_hints() -> &'static [LiveHint] {
 /// Settings modal: `space` activates the row; in the Detail pane `1`/`h` and
 /// `2`/`l` step segments.
 fn resolve_config_key(c: char, keys: &ModalKeys) -> Option<InputAction> {
+    if c == 'q' && keys.config_focus == crate::overlays::ConfigFocus::Categories {
+        return Some(InputAction::ConfigBack);
+    }
     if c == ' ' {
         return Some(InputAction::ConfigActivate);
     }
@@ -620,6 +623,7 @@ fn resolve_picker_key(c: char, is_models: bool, keys: &ModalKeys) -> Option<Inpu
 /// other char seeding the console composer.
 fn resolve_host_key(c: char) -> Option<InputAction> {
     match c {
+        'q' => Some(InputAction::CloseModal),
         'a' => Some(InputAction::HostSwitchSelected),
         'i' => Some(InputAction::HostInterruptSelected),
         'k' => Some(InputAction::HostKillSelected),
@@ -848,7 +852,11 @@ mod tests {
         );
         assert_eq!(
             resolve_scene(SceneKind::Dashboard, key('q'), &c),
-            Some(InputAction::HostPromptSeed('q'))
+            Some(InputAction::CloseModal)
+        );
+        assert_eq!(
+            resolve_scene(SceneKind::Dashboard, key('z'), &c),
+            Some(InputAction::HostPromptSeed('z'))
         );
     }
 

@@ -615,3 +615,166 @@ fn resize_event_routes_to_terminal_resized_with_dimensions() {
         }
     );
 }
+
+#[test]
+fn ctrl_x_initiates_leader_chord() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+        &mut input,
+        &mut cursor,
+        Dispatch::default(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(
+        action,
+        InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX)
+    );
+}
+
+#[test]
+fn ctrl_x_w_and_k_route_to_close_scene() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let dispatch = Dispatch {
+        leader_chord: crate::app::LeaderChord::CtrlX,
+        ..Default::default()
+    };
+    let action_w = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        dispatch.clone(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action_w, InputAction::CloseScene);
+
+    let action_k = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        dispatch,
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action_k, InputAction::CloseScene);
+}
+
+#[test]
+fn ctrl_x_p_and_b_route_to_view_switcher() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let dispatch = Dispatch {
+        leader_chord: crate::app::LeaderChord::CtrlX,
+        ..Default::default()
+    };
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        dispatch,
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ViewSwitcherToggle);
+}
+
+#[test]
+fn ctrl_x_esc_and_ctrl_g_cancel_leader_chord() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let dispatch = Dispatch {
+        leader_chord: crate::app::LeaderChord::CtrlX,
+        ..Default::default()
+    };
+    let action_esc = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        dispatch.clone(),
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action_esc, InputAction::CancelLeaderChord);
+
+    let action_cg = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+        &mut input,
+        &mut cursor,
+        dispatch,
+        &ModalKeys::default(),
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action_cg, InputAction::CancelLeaderChord);
+}
+
+#[test]
+fn q_in_dashboard_routes_to_close_modal() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let dispatch = Dispatch {
+        scene: crate::surfaces::SceneKind::Dashboard,
+        ..Default::default()
+    };
+    let modal_keys = ModalKeys {
+        host_prompting: false,
+        ..Default::default()
+    };
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        dispatch,
+        &modal_keys,
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::CloseModal);
+}
+
+#[test]
+fn q_in_settings_categories_routes_to_config_back() {
+    let mut input = String::new();
+    let mut cursor = 0;
+    let mut drag = SelectionDrag::default();
+    let dispatch = Dispatch {
+        scene: crate::surfaces::SceneKind::Settings,
+        ..Default::default()
+    };
+    let modal_keys = ModalKeys {
+        config_focus: crate::overlays::ConfigFocus::Categories,
+        ..Default::default()
+    };
+    let action = route_event(
+        Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+        &mut input,
+        &mut cursor,
+        dispatch,
+        &modal_keys,
+        &SheetKeys::default(),
+        &SceneKeys::default(),
+        &mut drag,
+    );
+    assert_eq!(action, InputAction::ConfigBack);
+}
