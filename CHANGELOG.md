@@ -5,7 +5,7 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.50.11] - 2026-09-23
 
 ### Added
 
@@ -7906,7 +7906,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.10...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.11...HEAD
+[0.50.11]: https://github.com/ming2k/muta/compare/v0.50.10...v0.50.11
 [0.50.10]: https://github.com/ming2k/muta/compare/v0.50.9...v0.50.10
 [0.50.9]: https://github.com/ming2k/muta/compare/v0.50.8...v0.50.9
 [0.50.8]: https://github.com/ming2k/muta/compare/v0.50.7...v0.50.8
