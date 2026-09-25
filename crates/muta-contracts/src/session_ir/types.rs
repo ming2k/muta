@@ -257,6 +257,7 @@ impl SessionIR {
                 tokens_before,
                 read_files,
                 modified_files,
+                belief_state: None,
             },
         };
 
@@ -280,6 +281,12 @@ impl SessionIR {
             .into_iter()
             .filter_map(|node| match &node.payload {
                 NodePayload::Message { message } => Some(message.clone()),
+                NodePayload::Observation {
+                    call_id,
+                    tool_name,
+                    lifecycle,
+                    ..
+                } => Some(lifecycle.lower_to_message(call_id, tool_name)),
                 _ => None,
             })
             .collect()
@@ -422,6 +429,8 @@ pub struct CausalNode {
 pub enum NodeKind {
     /// Dialogue turns: User, Assistant, or Tool result messages.
     Dialogue,
+    /// First-class tool execution observation (ADR-0282).
+    Observation,
     /// Compaction horizon replacing historical turns up to a checkpoint.
     Compaction,
     /// Execution termination: human interrupt, timeout, or fatal fault.
@@ -438,6 +447,14 @@ pub enum NodePayload {
     Message {
         message: Message,
     },
+    /// First-class tool execution observation fact (ADR-0282).
+    Observation {
+        call_id: String,
+        tool_name: String,
+        blob_hash: String,
+        metrics: ObservationMetrics,
+        lifecycle: ObservationLifecycle,
+    },
     Compaction {
         summary: String,
         first_kept_node_id: String,
@@ -446,6 +463,8 @@ pub enum NodePayload {
         read_files: Vec<String>,
         #[serde(default)]
         modified_files: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        belief_state: Option<BeliefState>,
     },
     Termination {
         reason: TerminationReason,
@@ -461,6 +480,110 @@ pub enum NodePayload {
         notice_type: String,
         content: String,
     },
+}
+
+/// Physical metrics captured for a tool execution observation (ADR-0282).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ObservationMetrics {
+    pub original_bytes: usize,
+    pub original_lines: usize,
+    pub original_tokens: usize,
+}
+
+/// Lifecycle states of a tool execution observation (ADR-0282).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ObservationLifecycle {
+    /// State 1: Raw payload retained in working context (within token admission budget).
+    Raw {
+        content: String,
+    },
+    /// State 2: Active Truncated (oversized at ingestion).
+    /// Retains a bounded head and tail preview with elision metrics, plus the invariant invoice handle.
+    ActiveTruncated {
+        head_preview: String,
+        tail_preview: String,
+        retained_tokens: usize,
+        omitted_bytes: usize,
+    },
+    /// State 3: Retired Pruned (causally superseded or garbage-collected).
+    /// The payload body is entirely cleared to a lightweight tombstone, preserving causal intent and the invoice.
+    Retired {
+        reason: InvalidationReason,
+        original_tokens: usize,
+        original_lines: usize,
+    },
+}
+
+impl ObservationLifecycle {
+    pub fn lower_to_message(&self, call_id: &str, tool_name: &str) -> Message {
+        let content = match self {
+            Self::Raw { content } => content.clone(),
+            Self::ActiveTruncated {
+                head_preview,
+                tail_preview,
+                omitted_bytes,
+                ..
+            } => {
+                format!(
+                    "{head_preview}\n\n[... {omitted_bytes} bytes elided to relieve context — inspect with handle \"call:{call_id}\"]\n\n{tail_preview}"
+                )
+            }
+            Self::Retired {
+                reason,
+                original_tokens,
+                original_lines,
+            } => {
+                format!(
+                    "{} {tool_name} ({original_lines} lines, {original_tokens} tokens) — reason: {} — inspect with handle \"call:{call_id}\"]",
+                    crate::pressure::CLEARED_TOOL_PREFIX,
+                    reason.summary()
+                )
+            }
+        };
+        let mut msg = Message::new(crate::Role::Tool, content);
+        msg.tool_call_id = Some(call_id.to_string());
+        msg
+    }
+}
+
+/// Causal invalidation reason for transitioning an observation to Retired (ADR-0282).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InvalidationReason {
+    /// File read invalidated by a subsequent write/edit to the same resource.
+    SupersededByMutation {
+        target_resource: String,
+        mutator_node_id: String,
+    },
+    /// Diagnostic/test execution invalidated by a subsequent run.
+    SupersededByExecution {
+        successor_node_id: String,
+    },
+    /// Reclaimed under quantum budget pressure after recency quarantine expiration.
+    BudgetRelief,
+}
+
+impl InvalidationReason {
+    pub fn summary(&self) -> &'static str {
+        match self {
+            Self::SupersededByMutation { .. } => "superseded by mutation",
+            Self::SupersededByExecution { .. } => "superseded by execution",
+            Self::BudgetRelief => "budget relief",
+        }
+    }
+}
+
+/// Typed BeliefState produced by Generative Horizon Compaction (ADR-0283).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BeliefState {
+    pub task_objective: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub established_facts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_state: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_plan: Vec<String>,
 }
 
 /// Causality classifier for execution terminations.
@@ -497,6 +620,9 @@ pub struct SessionState {
     /// Queue of asynchronous notifications received during sleep/suspension.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_notifications: Vec<SystemNoticePayload>,
+    /// Unidirectional exhaustion flag for budget-driven pruning (ADR-0283).
+    #[serde(default)]
+    pub pruning_exhausted: bool,
     /// Turn counter within the current session.
     pub round_counter: u64,
 }
@@ -510,6 +636,7 @@ impl Default for SessionState {
             compaction_horizon: None,
             status: ExecutionStatus::Idle,
             pending_notifications: Vec::new(),
+            pruning_exhausted: false,
             round_counter: 0,
         }
     }
@@ -858,6 +985,7 @@ mod tests {
                 tokens_before: 5000,
                 read_files: vec![],
                 modified_files: vec![],
+                belief_state: None,
             },
         };
         let n3 = CausalNode {

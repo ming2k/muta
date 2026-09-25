@@ -467,8 +467,8 @@ pub struct ContextProjectionSettings {
 
 impl ContextProjectionSettings {
     /// Mid-turn pruning only fires when it can reclaim at least this many
-    /// tokens, to avoid pruning churn for negligible gains.
-    pub const PRUNE_MIN_RECLAIM_TOKENS: usize = 2_000;
+    /// tokens, to avoid pruning churn for negligible gains (ADR-0283 Quantum Floor).
+    pub const PRUNE_MIN_RECLAIM_TOKENS: usize = muta_contracts::PRUNE_QUANTUM_FLOOR_TOKENS;
 
     /// Resolve settings for the active model's context window. `window_tokens`
     /// is the live model's context window (tokens); `0` means unknown and the
@@ -1218,14 +1218,12 @@ pub async fn execute_round(
         return Err(HarnessError::Interrupted);
     }
     let mut request_estimate = estimate_off_executor(&agent, &round_history).await;
-    // ADR-0254: Pruning engages either when window pressure exceeds the model-relative
-    // prune threshold, OR when prunable stale tool results (superseded build/test runs,
-    // invalidated file reads, or evicted images) exist outside recency protection.
-    let near_tail_stale = projection.prune
-        && muta_contracts::has_stale_tool_results(&round_history, projection.prune_protect_tokens);
+    // ADR-0283, ADR-0284: Budget-driven pruning engages strictly when window pressure
+    // breaches the model-relative prune threshold watermark. In the healthy cruise zone,
+    // history mutation is completely deactivated to preserve 100% KV-cache prefix stability
+    // and eliminate artificial context size drops across round boundaries.
     if projection.prune
-        && (request_estimate.total_tokens > projection.budget.prune_threshold_tokens
-            || near_tail_stale)
+        && request_estimate.total_tokens > projection.budget.prune_threshold_tokens
     {
         prune_and_commit(
             &mut round_history,
@@ -2083,12 +2081,9 @@ pub async fn prune_and_commit(
 ) -> Result<(), String> {
     let window_tokens_before =
         estimate_session_weight_off_executor(Arc::clone(&weights), history).await;
-    let min_reclaim =
-        if muta_contracts::has_stale_tool_results(history, settings.prune_protect_tokens) {
-            100
-        } else {
-            ContextProjectionSettings::PRUNE_MIN_RECLAIM_TOKENS
-        };
+    // ADR-0283 Damper 1: Quantum Reclaim Gate ($Q_{min} >= 4,000 tokens)
+    // Strictly forbids micro-pruning for negligible gains.
+    let min_reclaim = settings.budget.quantum_floor_tokens;
     let Some(outcome) =
         muta_contracts::prune_tool_results(history, settings.prune_protect_tokens, min_reclaim)
     else {
@@ -2108,7 +2103,7 @@ pub async fn prune_and_commit(
         window_tokens_before,
         window_tokens_after,
         reclaimed_tokens = outcome.reclaimed_tokens,
-        "pruned stale tool results"
+        "pruned tool results under budget pressure"
     );
     session
         .commit_context_projection(ContextProjectionResult {

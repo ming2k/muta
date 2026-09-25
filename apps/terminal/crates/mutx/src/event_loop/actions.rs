@@ -1949,16 +1949,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             if let Ok(idx) = idx_str.parse::<usize>() {
                 app.accept_completion(idx);
             }
-            // Enter — and now Tab — always "finish" the completion
-            // regardless of kind: drop the highlight and latch the
-            // dismissal flag so the popup stays hidden until the next edit.
-            // For slash commands and path files this mirrors what
-            // accept_completion already did; for a path *directory* accept
-            // (which stays live so Tab can keep descending) it is the
-            // commit-specific close. Tab re-opens via
-            // ReopenCompletion, so closing here costs nothing.
-            app.suggestion_index = None;
-            app.completion_dismissed = true;
         }
         input::InputAction::ReopenCompletion => {
             // The other half of the Esc/Tab toggle: bring a dismissed

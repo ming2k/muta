@@ -185,6 +185,15 @@ fn pass2_context_budgeting(
                 }
                 messages.push(msg);
             }
+            NodePayload::Observation {
+                call_id,
+                tool_name,
+                lifecycle,
+                ..
+            } => {
+                let msg = lifecycle.lower_to_message(call_id, tool_name);
+                messages.push(msg);
+            }
             NodePayload::Compaction {
                 summary,
                 read_files,

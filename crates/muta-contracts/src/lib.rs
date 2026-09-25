@@ -180,11 +180,12 @@ pub mod context_lifecycle;
 
 pub mod session_ir;
 pub use session_ir::{
-    BudgetPolicy, CacheBoundary, CapabilityPolicy, CausalGraph, CausalNode, CompilationArtifact,
-    CompilationStats, CompilerError, CompilerOptions, ExecutionStatus, GuardrailPolicy, NodeId,
-    NodeKind, NodePayload, RuleSet, SessionDelta, SessionIR, SessionPolicy, SessionState,
-    StateUpdate, SuspensionReason, SystemNoticePayload, TerminationReason, TimelineCursor,
-    TimelineKind, compile_session_request,
+    BeliefState, BudgetPolicy, CacheBoundary, CapabilityPolicy, CausalGraph, CausalNode,
+    CompilationArtifact, CompilationStats, CompilerError, CompilerOptions, ExecutionStatus,
+    GuardrailPolicy, InvalidationReason, NodeId, NodeKind, NodePayload, ObservationLifecycle,
+    ObservationMetrics, RuleSet, SessionDelta, SessionIR, SessionPolicy, SessionState, StateUpdate,
+    SuspensionReason, SystemNoticePayload, TerminationReason, TimelineCursor, TimelineKind,
+    compile_session_request,
 };
 
 pub mod session_tree;
@@ -256,11 +257,12 @@ pub use monitor::{
     SessionStatus,
 };
 pub use pressure::{
-    CLEARED_TOOL_PREFIX, CompactionPolicy, ContextBudget, LayeredRequestWeights,
-    MessageContentFingerprint, MessageTokenWeights, PruneOutcome, RequestTokenEstimate,
+    CLEARED_TOOL_PREFIX, CRUISE_HIGH_WATERMARK, CRUISE_LOW_WATERMARK, CompactionPolicy,
+    ContextBudget, LayeredRequestWeights, MessageContentFingerprint, MessageTokenWeights,
+    PRUNE_QUANTUM_FLOOR_TOKENS, PruneOutcome, RequestTokenEstimate, TAIL_QUARANTINE_TOKENS,
     ToolSchemaWeights, estimate_bytes, estimate_draft_tokens, estimate_message_tokens,
     estimate_semantic_json_tokens, estimate_tokens, estimate_tokens_weighted, freeze_tool_output,
-    has_stale_tool_results, layered_request_weights, prune_tool_results,
+    layered_request_weights, prune_tool_results,
 };
 pub use secret::SecretString;
 pub use session_title::{SessionTitle, TITLE_MAX_LEN, clean_title};

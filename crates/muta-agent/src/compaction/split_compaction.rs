@@ -65,6 +65,15 @@ pub fn estimate_causal_node_tokens(node: &CausalNode) -> usize {
             chars.div_ceil(4)
         }
         NodePayload::Compaction { summary, .. } => summary.len().div_ceil(4),
+        NodePayload::Observation { lifecycle, .. } => match lifecycle {
+            muta_contracts::ObservationLifecycle::Raw { content } => content.len().div_ceil(4),
+            muta_contracts::ObservationLifecycle::ActiveTruncated {
+                head_preview,
+                tail_preview,
+                ..
+            } => (head_preview.len() + tail_preview.len() + 100).div_ceil(4),
+            muta_contracts::ObservationLifecycle::Retired { .. } => 32,
+        },
         NodePayload::Termination { partial_output, .. } => partial_output
             .as_ref()
             .map(|s| s.len().div_ceil(4))
@@ -180,6 +189,15 @@ pub fn serialize_nodes_for_summary(nodes: &[&CausalNode]) -> String {
             } => {
                 out.push_str(&format!("[System Notice from {}]\n{}\n\n", source, content));
             }
+            NodePayload::Observation {
+                call_id,
+                tool_name,
+                lifecycle,
+                ..
+            } => {
+                let msg = lifecycle.lower_to_message(call_id, tool_name);
+                out.push_str(&format!("[Tool Result ({tool_name})]\n{}\n\n", msg.content));
+            }
         }
     }
     out
@@ -249,6 +267,7 @@ pub async fn compact_causal_nodes(
         tokens_before: cut_point.tokens_before,
         read_files,
         modified_files,
+        belief_state: None,
     })
 }
 

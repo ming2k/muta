@@ -25,6 +25,19 @@ const ELIDED_MARKER: &str = " tokens elided to relieve context ...]";
 /// Marker text baked into a frozen tool output at record time.
 const RECENT_COMPACTED_MARKER: &str = "Previous turn output compacted";
 
+/// Minimum quantum tokens required for budget-driven pruning to execute (ADR-0283).
+/// Pruning for less than this floor causes cache thrashing without meaningful context relief.
+pub const PRUNE_QUANTUM_FLOOR_TOKENS: usize = 4_000;
+
+/// Default high watermark entry point for budget-driven pruning (ADR-0283).
+pub const CRUISE_HIGH_WATERMARK: f64 = 0.70;
+
+/// Target recovery low watermark for dual-band hysteresis loop (ADR-0283).
+pub const CRUISE_LOW_WATERMARK: f64 = 0.50;
+
+/// Hot-tail quarantine budget in tokens protected from budget pruning (ADR-0283).
+pub const TAIL_QUARANTINE_TOKENS: usize = 16_000;
+
 /// Token size of a tool result above which a prune candidate is first
 /// *truncated* (a gentler tier that keeps the shape of the output) rather
 /// than cleared outright. Below it, truncation would not save enough to be
@@ -107,11 +120,14 @@ impl CompactionPolicy {
         }
         .max(1);
         let threshold = |fraction: f64| (window as f64 * fraction) as usize;
+        let quantum_floor = PRUNE_QUANTUM_FLOOR_TOKENS.max(threshold(0.05));
         ContextBudget {
             window_tokens: window,
             prune_threshold_tokens: threshold(self.prune_utilization),
             compaction_threshold_tokens: threshold(self.utilization),
             target_tokens: threshold(self.target_utilization),
+            quantum_floor_tokens: quantum_floor,
+            cruise_low_tokens: threshold(CRUISE_LOW_WATERMARK),
         }
     }
 }
@@ -120,7 +136,7 @@ impl CompactionPolicy {
 /// [`CompactionPolicy`] against one active model. Projected request pressure is
 /// compared against these; content-level sizing (summary budgets, pruning
 /// protect budgets) is derived from them in characters.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContextBudget {
     /// Full provider context window used to derive the thresholds (or the
     /// fallback value when the model's window is unknown).
@@ -131,6 +147,10 @@ pub struct ContextBudget {
     pub compaction_threshold_tokens: usize,
     /// Post-compaction active-window target, in tokens.
     pub target_tokens: usize,
+    /// Quantum floor: minimum tokens that a prune pass must recover to execute (ADR-0283).
+    pub quantum_floor_tokens: usize,
+    /// Target low-watermark landing zone for hysteresis loop (ADR-0283).
+    pub cruise_low_tokens: usize,
 }
 
 /// Wire-size (bytes) of a message list: byte length of `content` +
@@ -270,13 +290,6 @@ pub fn prune_tool_results(
         return None;
     }
     Some(apply_prune(messages, plan, protect_recent_tokens))
-}
-
-/// Whether there are prunable tool results (such as superseded build commands,
-/// invalidated reads, or evicted images) that can be reclaimed outside the
-/// recent protection window (ADR-0254).
-pub fn has_stale_tool_results(messages: &[Message], protect_recent_tokens: usize) -> bool {
-    !plan_prune(messages, protect_recent_tokens).is_empty()
 }
 
 /// One planned degradation: replace `messages[index].content` with
@@ -504,13 +517,18 @@ fn apply_prune(
 fn degrade(content: &str, meta: &ToolMeta, stale: bool) -> String {
     // Stale (superseded on the same file) or already truncated -> clear fully.
     if stale || is_truncated(content) {
-        return cleared_placeholder(meta, content);
+        let reason = if stale {
+            Some("superseded")
+        } else {
+            Some("budget relief")
+        };
+        return cleared_placeholder_with_reason(meta, content, reason);
     }
     // Large and fresh -> truncate (gentler). Small -> clear directly.
     if tokenizer::count_tokens(content) >= TRUNCATE_MIN_TOKENS {
         truncate_middle(content, meta.call_id.as_deref())
     } else {
-        cleared_placeholder(meta, content)
+        cleared_placeholder_with_reason(meta, content, Some("budget relief"))
     }
 }
 
@@ -692,7 +710,12 @@ fn classify_file_touch(arguments: &str) -> (Option<(usize, usize)>, bool) {
 /// Informative cleared-placeholder carrying the tool label and the size that was
 /// dropped, so the model can decide whether to re-fetch. The size is in
 /// **tokens** (ADR-0120) — the model's own unit of context.
+#[allow(dead_code)]
 fn cleared_placeholder(meta: &ToolMeta, content: &str) -> String {
+    cleared_placeholder_with_reason(meta, content, None)
+}
+
+fn cleared_placeholder_with_reason(meta: &ToolMeta, content: &str, reason: Option<&str>) -> String {
     let label = if meta.label.is_empty() {
         "tool"
     } else {
@@ -700,10 +723,14 @@ fn cleared_placeholder(meta: &ToolMeta, content: &str) -> String {
     };
     let lines = content.lines().count().max(1);
     let tokens = tokenizer::count_tokens(content);
+    let reason_clause = match reason {
+        Some(r) => format!(" — reason: {r}"),
+        None => String::new(),
+    };
     if let Some(call_id) = &meta.call_id {
-        format!("{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens) — inspect with handle \"call:{call_id}\"]")
+        format!("{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens){reason_clause} — inspect with handle \"call:{call_id}\"]")
     } else {
-        format!("{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens)]")
+        format!("{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens){reason_clause}]")
     }
 }
 

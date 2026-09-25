@@ -24,7 +24,8 @@ pub use compiler::{
 };
 pub use delta::{SessionDelta, StateUpdate};
 pub use types::{
-    BudgetPolicy, CapabilityPolicy, CausalGraph, CausalNode, ExecutionStatus, GuardrailPolicy,
-    NodeId, NodeKind, NodePayload, RuleSet, SessionIR, SessionPolicy, SessionState,
-    SuspensionReason, SystemNoticePayload, TerminationReason, TimelineCursor, TimelineKind,
+    BeliefState, BudgetPolicy, CapabilityPolicy, CausalGraph, CausalNode, ExecutionStatus,
+    GuardrailPolicy, InvalidationReason, NodeId, NodeKind, NodePayload, ObservationLifecycle,
+    ObservationMetrics, RuleSet, SessionIR, SessionPolicy, SessionState, SuspensionReason,
+    SystemNoticePayload, TerminationReason, TimelineCursor, TimelineKind,
 };

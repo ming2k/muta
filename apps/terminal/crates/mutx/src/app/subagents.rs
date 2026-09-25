@@ -46,11 +46,18 @@ impl App {
         // not re-open on the just-spliced label (which would collapse to a
         // single exact match and, for slash commands, with a trailing space
         // fire the subcommand menu). Applies equally to Tab and Enter since
-        // both route through here. Project-scan `@path` *directory* accepts
-        // stay live so Tab keeps descending the directory tree.
+        // both route through here. Directory and namespace accepts (PathDir)
+        // stay live (ADR-0256 DrillDown) so Tab/Enter keeps descending the
+        // tree or exploring sub-entities.
         if !matches!(comp.kind, CompletionItemKind::PathDir) {
             self.suggestion_index = None;
             self.completion_dismissed = true;
+        } else {
+            self.suggestion_index = Some(0);
+            self.completion_dismissed = false;
+            self.backend_completions.clear();
+            self.completion_response_input = None;
+            self.completion_response_cursor = 0;
         }
     }
 

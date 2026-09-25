@@ -119,6 +119,7 @@ pub fn save_session_delta(conn: &Connection, delta: &SessionDelta) -> Result<()>
             for node in &delta.new_nodes {
                 let kind_str = match node.kind {
                     NodeKind::Dialogue => "dialogue",
+                    NodeKind::Observation => "observation",
                     NodeKind::Compaction => "compaction",
                     NodeKind::Termination => "termination",
                     NodeKind::SystemNotice => "system_notice",
@@ -271,6 +272,7 @@ pub fn load_session_ir(conn: &Connection, session_id: &str) -> Result<Option<Ses
         compaction_horizon: None,
         status,
         pending_notifications,
+        pruning_exhausted: false,
         round_counter,
     };
 
@@ -356,6 +358,7 @@ pub fn load_session_ir(conn: &Connection, session_id: &str) -> Result<Option<Ses
 
         let kind = match kind_str.as_str() {
             "dialogue" => NodeKind::Dialogue,
+            "observation" => NodeKind::Observation,
             "compaction" => NodeKind::Compaction,
             "termination" => NodeKind::Termination,
             "system_notice" => NodeKind::SystemNotice,

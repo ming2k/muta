@@ -499,30 +499,95 @@ fn accept_slash_completion_does_not_append_trailing_space() {
 
 #[test]
 fn accept_path_dir_completion_stays_live_for_descend() {
-    // `@file:` *directory* accepts stay live so Tab can keep descending the
-    // directory tree: the `@file:` trigger is kept and the popup re-triggers on the
-    // directory's contents. This guards against the terminal-accept logic
-    // accidentally suppressing directory navigation.
+    // Two-stage completion: bare `@` offers `@file:` (and `@skill:`).
+    // Accepting `@file:` stays live and descends into Stage 2 project files/dirs.
+    // Further accepting `@file:src/` stays live and descends into directory contents.
     let (mut app, _tmp) = app_in_tempdir(&["src/main.rs", "src/util.rs"], &["src"]);
     app.input = "@".to_string();
     app.cursor_position = 1;
     let completions = app.completions();
-    // The directory candidate (`@file:src/`).
+    // Stage 1: namespace candidate `@file:`.
+    let file_ns_idx = completions
+        .iter()
+        .position(|c| c.label == "@file:")
+        .expect("@file: namespace in Stage 1 candidates");
+    app.accept_completion(file_ns_idx);
+    assert!(
+        !app.completion_dismissed,
+        "namespace accept must stay live for Stage 2"
+    );
+    assert_eq!(app.input, "@file:");
+
+    // Stage 2: directory candidate (`@file:src/`).
+    let completions = app.completions();
     let dir_idx = completions
         .iter()
         .position(|c| c.label == "@file:src/")
-        .expect("src/ directory in candidates");
+        .expect("src/ directory in Stage 2 candidates");
     app.accept_completion(dir_idx);
     // Directory accept must NOT latch dismissal — descend continues.
     assert!(
         !app.completion_dismissed,
         "directory accept must stay live for descend"
     );
-    // The `@file:` trigger is kept so the popup re-triggers on `src/`'s contents.
+    assert_eq!(app.input, "@file:src/");
+
+    // Stage 2: file candidate (`@file:src/main.rs`).
+    let completions = app.completions();
+    let file_idx = completions
+        .iter()
+        .position(|c| c.label == "@file:src/main.rs")
+        .expect("src/main.rs in directory candidates");
+    app.accept_completion(file_idx);
     assert!(
-        app.input.starts_with("@file:src/"),
-        "dir accept keeps @file:: {}",
-        app.input
+        app.completion_dismissed,
+        "terminal file accept must latch dismissal"
+    );
+    assert_eq!(app.input, "@file:src/main.rs ");
+}
+
+#[test]
+fn two_stage_skill_completion_descends_and_terminates() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "@".to_string();
+    app.cursor_position = 1;
+    let completions = app.completions();
+    let skill_ns_idx = completions
+        .iter()
+        .position(|c| c.label == "@skill:")
+        .expect("@skill: in Stage 1 candidates");
+
+    // Accepting @skill: is a drilldown into Stage 2:
+    app.accept_completion(skill_ns_idx);
+    assert!(
+        !app.completion_dismissed,
+        "@skill: namespace accept must stay live for Stage 2 skills"
+    );
+    assert_eq!(app.input, "@skill:");
+
+    // Simulate backend skill arrival for Stage 2
+    let item = muta_contracts::InputCompletion {
+        label: "@skill:rust-expert".to_string(),
+        description: "Expert Rust developer".to_string(),
+        insert_text: "@skill:rust-expert ".to_string(),
+        replace_start: 0,
+        replace_end: 7,
+        kind: muta_contracts::InputCompletionKind::PathExplicit,
+        alias_of: None,
+        command: None,
+    };
+    app.apply_backend_completions(0, app.input.clone(), app.cursor_position, vec![item]);
+
+    let completions = app.completions();
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].label, "@skill:rust-expert");
+
+    // Accepting a terminal skill item completes and dismisses
+    app.accept_completion(0);
+    assert_eq!(app.input, "@skill:rust-expert ");
+    assert!(
+        app.completion_dismissed,
+        "terminal skill accept must latch dismissal"
     );
 }
 
@@ -532,7 +597,7 @@ fn accept_path_file_completion_is_terminal_and_formats_canonical() {
     // formats it as `@file:path `, appends a trailing space, and latches
     // the dismissal flag so the popup stays closed while typing resumes.
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
-    app.input = "@Ca".to_string();
+    app.input = "@file:Ca".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let idx = completions
@@ -553,11 +618,11 @@ fn accept_path_file_completion_inline_preserves_surrounding_text() {
     // An inline `@mention` mid-sentence: accepting a file formats it as `@file:path`
     // and splices the canonical mention in place, preserving surrounding prose.
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml"], &[]);
-    // Cursor sits right after the `@Cargo` token, inside the mention.
-    // `look at @Cargo please`: `look at ` is 8 chars, `@Cargo` is 6 → cursor
-    // at char index 14 sits just past the `o`.
-    app.input = "look at @Cargo please".to_string();
-    app.cursor_position = 14;
+    // Cursor sits right after the `@file:Cargo` token, inside the mention.
+    // `look at @file:Cargo please`: `look at ` is 8 chars, `@file:Cargo` is 11 → cursor
+    // at char index 19 sits just past the `o`.
+    app.input = "look at @file:Cargo please".to_string();
+    app.cursor_position = 19;
     let completions = app.completions();
     let idx = completions
         .iter()

@@ -499,8 +499,7 @@ fn custom_connection_submits_with_the_typed_model_and_url() {
 
 #[test]
 fn completions_path_returns_top_level_for_bare_at() {
-    // A bare `@` lists top-level entries only: the file plus the
-    // synthesized top-level directory entry.
+    // Stage 1: bare `@` lists entity namespaces (@file:, @skill:).
     let (mut app, _tmp) = app_in_tempdir(&["Cargo.toml", "src/main.rs", "README.md"], &["src"]);
     app.input = "@".to_string();
     app.cursor_position = 1;
@@ -508,27 +507,35 @@ fn completions_path_returns_top_level_for_bare_at() {
     assert_eq!(app.completion_kind(), CompletionKind::Path);
 
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
-    // Dirs come first alphabetically, then files alphabetically.
+    assert!(labels.contains(&"@file:"));
+    assert!(labels.contains(&"@skill:"));
+    // Bare `@` must NOT dump raw files (two-stage completion).
+    assert!(!labels.contains(&"@file:Cargo.toml"));
+
+    // Stage 2: selecting or typing `@file:` lists top-level entries.
+    app.input = "@file:".to_string();
+    app.cursor_position = 6;
+    let completions = app.completions();
+    let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     assert!(labels.contains(&"@file:src/"));
     assert!(labels.contains(&"@file:Cargo.toml"));
     assert!(labels.contains(&"@file:README.md"));
-    // No nested paths leak into the bare-`@` menu.
+    // No nested paths leak into top-level @file: menu.
     assert!(!labels.iter().any(|l| l.contains("main.rs")));
-    // The backend edit owns the whole mention, including the `@` trigger.
     for c in &completions {
         assert_eq!(c.replace_start, 0);
-        assert_eq!(c.replace_end, 1);
+        assert_eq!(c.replace_end, 6);
     }
 }
 
 #[test]
 fn completions_path_descends_into_subdirectory() {
-    // `@src/` triggers directory descend: only paths under `src/` match.
+    // Stage 2: `@file:src/` triggers directory descend: only paths under `src/` match.
     let (mut app, _tmp) = app_in_tempdir(
         &["src/main.rs", "src/util/mod.rs", "tests/smoke.rs"],
         &["src", "src/util", "tests"],
     );
-    app.input = "@src/".to_string();
+    app.input = "@file:src/".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
@@ -542,9 +549,9 @@ fn completions_path_descends_into_subdirectory() {
 
 #[test]
 fn completions_path_substring_match_picks_files_across_dirs() {
-    // `@main` finds `src/main.rs` via substring match.
+    // Stage 2: `@file:main` finds `src/main.rs` via substring match.
     let (mut app, _tmp) = app_in_tempdir(&["src/main.rs", "lib/other.rs"], &["src", "lib"]);
-    app.input = "@main".to_string();
+    app.input = "@file:main".to_string();
     app.cursor_position = app.input.chars().count();
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
@@ -554,13 +561,13 @@ fn completions_path_substring_match_picks_files_across_dirs() {
 
 #[test]
 fn completions_path_skips_dotgit_directory() {
-    // `.git/` is always excluded even though hidden files are kept.
+    // `.git/` is always excluded even though hidden files are kept in Stage 2.
     let (mut app, _tmp) = app_in_tempdir(
         &[".git/HEAD", ".git/config", "src/main.rs", ".env"],
         &[".git", "src"],
     );
-    app.input = "@".to_string();
-    app.cursor_position = 1;
+    app.input = "@file:".to_string();
+    app.cursor_position = 6;
     let completions = app.completions();
     let labels: Vec<&str> = completions.iter().map(|c| c.label.as_str()).collect();
     // Hidden files like `.env` are listed; `.git/` and its contents are not.

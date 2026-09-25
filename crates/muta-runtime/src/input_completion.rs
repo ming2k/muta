@@ -66,8 +66,7 @@ impl InputCompletionEngine {
         } else if is_explicit_path_prefix(query) {
             self.complete_explicit_path(input, query, at_start, cursor_end)
         } else {
-            self.complete_project_and_skills(input, query, at_start, cursor_end)
-                .await
+            self.complete_namespaces(input, query, at_start, cursor_end)
         }
     }
 
@@ -98,18 +97,12 @@ impl InputCompletionEngine {
 
         let mut items = Vec::new();
 
-        if (query == "skill" || query == "skills") && !all_skills.is_empty() {
-            items.push(skill_namespace_item(input, at_start, cursor_end));
-        }
-
         let filter_lower = filter.to_lowercase();
         for skill in &all_skills {
             if !skill.enabled || skill.quarantined {
                 continue;
             }
             if !filter_lower.is_empty()
-                && filter != "skill"
-                && filter != "skills"
                 && !skill.name.to_lowercase().contains(&filter_lower)
             {
                 continue;
@@ -133,11 +126,6 @@ impl InputCompletionEngine {
         at_start: usize,
         cursor_end: usize,
     ) -> Vec<InputCompletion> {
-        let mut items = Vec::new();
-        if query == "file" || query == "files" {
-            items.push(file_namespace_item(input, at_start, cursor_end));
-        }
-
         let filter = query
             .strip_prefix("files:")
             .or_else(|| query.strip_prefix("file:"))
@@ -171,11 +159,10 @@ impl InputCompletionEngine {
             })
             .collect::<Vec<_>>();
         sort_path_completions(&mut path_items);
-        items.extend(path_items);
-        items
+        path_items
     }
 
-    async fn complete_project_and_skills(
+    fn complete_namespaces(
         &self,
         input: &str,
         query: &str,
@@ -183,58 +170,18 @@ impl InputCompletionEngine {
         cursor_end: usize,
     ) -> Vec<InputCompletion> {
         let mut items = Vec::new();
+        let q_lower = query.to_lowercase();
 
-        if query.is_empty() {
+        let matches_file_ns = "file:".starts_with(&q_lower) || "files:".starts_with(&q_lower);
+        let matches_skill_ns = "skill:".starts_with(&q_lower) || "skills:".starts_with(&q_lower);
+
+        if matches_file_ns {
             items.push(file_namespace_item(input, at_start, cursor_end));
-            if self.skills_registry.is_some() {
-                items.push(skill_namespace_item(input, at_start, cursor_end));
-            }
+        }
+        if matches_skill_ns && self.skills_registry.is_some() {
+            items.push(skill_namespace_item(input, at_start, cursor_end));
         }
 
-        if let Some(registry) = &self.skills_registry
-            && !query.is_empty()
-        {
-            let guard = registry.lock();
-            let query_lower = query.to_lowercase();
-            for skill in guard.list() {
-                if !skill.enabled || skill.quarantined {
-                    continue;
-                }
-                if skill.name.to_lowercase().contains(&query_lower) {
-                    items.push(skill_item(input, &skill, "skill:", at_start, cursor_end));
-                }
-            }
-        }
-
-        let root = self.project_root.clone();
-        let entries = self
-            .project_entries
-            .get_or_init(|| async move {
-                tokio::task::spawn_blocking(move || scan_project_files(&root))
-                    .await
-                    .unwrap_or_default()
-            })
-            .await;
-        let mut path_items = entries
-            .iter()
-            .filter(|path| path_query_match(path, query))
-            .take(MAX_PATH_COMPLETIONS)
-            .map(|path| {
-                path_item(
-                    input,
-                    path,
-                    at_start,
-                    cursor_end,
-                    if path.ends_with('/') {
-                        InputCompletionKind::PathDir
-                    } else {
-                        InputCompletionKind::PathFile
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        sort_path_completions(&mut path_items);
-        items.extend(path_items);
         items
     }
 
@@ -473,20 +420,16 @@ pub fn complete_for_frontend_test(
         return Vec::new();
     };
     let query = &input[at_start + 1..cursor_end];
-    let query_filter = query
-        .strip_prefix("files:")
-        .or_else(|| query.strip_prefix("file:"))
-        .unwrap_or(query);
-    if is_explicit_path_prefix(query) {
-        engine.complete_explicit_path(input, query, at_start, cursor_end)
-    } else {
-        let mut items = Vec::new();
-        if query == "file" || query == "files" {
-            items.push(file_namespace_item(input, at_start, cursor_end));
-        }
-        let mut file_items = scan_project_files(&engine.project_root)
+    if is_skill_query(query) {
+        engine.complete_skills(input, query, at_start, cursor_end)
+    } else if is_file_query(query) {
+        let filter = query
+            .strip_prefix("files:")
+            .or_else(|| query.strip_prefix("file:"))
+            .unwrap_or(query);
+        let mut path_items = scan_project_files(&engine.project_root)
             .iter()
-            .filter(|path| path_query_match(path, query_filter))
+            .filter(|path| path_query_match(path, filter))
             .take(MAX_PATH_COMPLETIONS)
             .map(|path| {
                 path_item(
@@ -502,8 +445,22 @@ pub fn complete_for_frontend_test(
                 )
             })
             .collect::<Vec<_>>();
-        sort_path_completions(&mut file_items);
-        items.extend(file_items);
+        sort_path_completions(&mut path_items);
+        path_items
+    } else if is_explicit_path_prefix(query) {
+        engine.complete_explicit_path(input, query, at_start, cursor_end)
+    } else {
+        let mut items = Vec::new();
+        let q_lower = query.to_lowercase();
+        let matches_file_ns = "file:".starts_with(&q_lower) || "files:".starts_with(&q_lower);
+        let matches_skill_ns = "skill:".starts_with(&q_lower) || "skills:".starts_with(&q_lower);
+
+        if matches_file_ns {
+            items.push(file_namespace_item(input, at_start, cursor_end));
+        }
+        if matches_skill_ns {
+            items.push(skill_namespace_item(input, at_start, cursor_end));
+        }
         items
     }
 }
@@ -532,17 +489,11 @@ fn slash_item(
 }
 
 fn is_skill_query(query: &str) -> bool {
-    query.starts_with("skill:")
-        || query.starts_with("skills:")
-        || query == "skill"
-        || query == "skills"
+    query.starts_with("skill:") || query.starts_with("skills:")
 }
 
 fn is_file_query(query: &str) -> bool {
-    query.starts_with("file:")
-        || query.starts_with("files:")
-        || query == "file"
-        || query == "files"
+    query.starts_with("file:") || query.starts_with("files:")
 }
 
 fn file_namespace_item(
@@ -1159,7 +1110,7 @@ mod tests {
         std::fs::write(temp.path().join("src/main.rs"), "fn main() {}").unwrap();
         let engine = InputCompletionEngine::new(catalog(), temp.path().to_path_buf());
         let AgentResponse::ComposerCompletions { items, .. } =
-            engine.complete(1, "look @main".into(), 10).await
+            engine.complete(1, "look @file:main".into(), 15).await
         else {
             panic!("unexpected response")
         };
@@ -1246,5 +1197,29 @@ mod tests {
                 .iter()
                 .any(|i| i.label == "@skill:" && i.insert_text == "@skill:")
         );
+
+        // 4. Two-stage completion: bare `@` strictly offers namespaces, no file spam
+        let input = "@";
+        let AgentResponse::ComposerCompletions { items, .. } = engine
+            .complete(103, input.into(), 1)
+            .await
+        else {
+            panic!("unexpected response")
+        };
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"@file:"));
+        assert!(labels.contains(&"@skill:"));
+        assert!(!labels.iter().any(|l| l.contains("Cargo.toml")));
+
+        // 5. Prefix `@sk` narrows down to @skill: namespace item
+        let input = "@sk";
+        let AgentResponse::ComposerCompletions { items, .. } = engine
+            .complete(104, input.into(), 3)
+            .await
+        else {
+            panic!("unexpected response")
+        };
+        assert_eq!(items[0].label, "@skill:");
+        assert_eq!(items[0].kind, InputCompletionKind::PathDir);
     }
 }
