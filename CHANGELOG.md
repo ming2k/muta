@@ -5,6 +5,20 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.12] - 2026-09-25
+
+### Fixed
+
+- **Context meter no longer experiences artificial downward jumps between rounds (ADR-0284).**
+  The legacy `near_tail_stale` pre-round check and `has_stale_tool_results` heuristic have been
+  completely eradicated from the orchestrator and contracts. Tool output truncation occurs strictly
+  at tool observation egress time as a physical admission limit (persisting raw streams to CAS with
+  epistemic claim-check handles), not as an eager context compression pass.
+- **Protected Cruise Zone zero-mutation invariant enforced (ADR-0283, ADR-0284).**
+  In the sub-threshold cruise zone (< 70% watermark), budget-driven pruning is completely
+  deactivated, preserving 100% byte-stability for provider KV-cache prefixes across round
+  boundaries and eliminating micro-pruning scrap yields.
+
 ## [0.50.11] - 2026-09-23
 
 ### Added
@@ -7906,7 +7920,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.11...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.12...HEAD
+[0.50.12]: https://github.com/ming2k/muta/compare/v0.50.11...v0.50.12
 [0.50.11]: https://github.com/ming2k/muta/compare/v0.50.10...v0.50.11
 [0.50.10]: https://github.com/ming2k/muta/compare/v0.50.9...v0.50.10
 [0.50.9]: https://github.com/ming2k/muta/compare/v0.50.8...v0.50.9
