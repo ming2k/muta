@@ -18,9 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-writer advisory lock contention (`db.owner.lock`) when a background daemon is running,
   eliminating false quarantine status reports in external CLI tools like `muta skill ls`.
 - **Automatic Skill Discovery on Session Startup (ADR-0165).**
-  `SkillRegistry::spawn_reactive_watcher()` now triggers an immediate background discovery scan
-  upon session bootstrap, populating the registry with trusted workspace assets without requiring
-  manual `/trust` invocation or external file mutation events to awaken skills.
+  `SkillRegistry::load().await` is now awaited synchronously during session bootstrap and
+  `SkillRegistry::spawn_reactive_watcher()` triggers an immediate background discovery scan,
+  populating the registry with trusted workspace assets before the first frame connects without
+  requiring manual `/trust` invocation or external file mutation events to awaken skills.
+- **Symmetric Skill Path Security Attestation (ADR-0140, ADR-0165).**
+  `SKILLS_PATHS` in `muta-persistence` now attests both `.muta/skills` and `skills` root directories,
+  aligning with discovery sources and preventing untracked project-level skill directories.
 
 ## [0.50.12] - 2026-09-25
 

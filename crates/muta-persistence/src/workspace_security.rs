@@ -19,7 +19,7 @@ const CURRENT_VERSION: u32 = 2;
 
 const MCP_PATHS: &[&str] = &[".muta/mcp.json"];
 
-const SKILLS_PATHS: &[&str] = &[".muta/skills"];
+const SKILLS_PATHS: &[&str] = &[".muta/skills", "skills"];
 
 const HOOK_PATHS: &[&str] = &[".muta/hooks"];
 

@@ -310,20 +310,18 @@ pub async fn assemble(params: BootstrapParams) -> Result<Bootstrap, Box<dyn std:
 
     let agent_provider = Arc::new(ProxyProvider::new(provider_holder));
 
-    // Shared skills registry for the skill tools. The registry starts EMPTY so
-    // discovering skills (scanning local dirs, cloning/fetching remote repos)
-    // never blocks the first frame; the background refresh loop re-scans all
-    // sources immediately on spawn and then every hour. The `Arc` is shared
-    // across the skill tools, the subagent profile, and the frontend, so once the
-    // background load lands they all observe the populated state.
+    // Shared skills registry for the skill tools and session context. Discover
+    // and load all available skills immediately on session assembly (ADR-0165),
+    // then spawn a reactive filesystem watcher so subsequent disk mutations
+    // automatically hot-reload in place without requiring manual `/trust`.
     //
     // Pin the session's project root into the skills config so the
-    // project-local sources (`.muta/skills` etc.) resolve from this
+    // project-local sources (`.muta/skills`, `skills`) resolve from this
     // session's project — not the daemon process's cwd, which under the
     // unified daemon (ADR-0096) belongs to whichever client first spawned it.
     let mut skills_config = config.skills.clone();
     skills_config.project_root = workspace_root.clone();
-    let skills_registry = Arc::new(SkillRegistry::empty_with_config(&skills_config));
+    let skills_registry = Arc::new(SkillRegistry::load(&skills_config).await);
     // A content-admitted `.muta/skills/<name>/SKILL.md` wins over a same-named
     // user or remote skill by priority. Surface every newly observed shadow so
     // that prompt injection cannot hide behind normal precedence. Install the
