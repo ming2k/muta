@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Read-only persistence queries through `PersistenceHandle::reader()` no longer fail due to
   single-writer advisory lock contention (`db.owner.lock`) when a background daemon is running,
   eliminating false quarantine status reports in external CLI tools like `muta skill ls`.
+- **Automatic Skill Discovery on Session Startup (ADR-0165).**
+  `SkillRegistry::spawn_reactive_watcher()` now triggers an immediate background discovery scan
+  upon session bootstrap, populating the registry with trusted workspace assets without requiring
+  manual `/trust` invocation or external file mutation events to awaken skills.
 
 ## [0.50.12] - 2026-09-25
 

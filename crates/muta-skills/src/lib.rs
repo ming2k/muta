@@ -172,6 +172,9 @@ impl SkillRegistry {
 
         Some(tokio::spawn(async move {
             let _watcher = watcher;
+            // Immediate initial discovery on startup: populates the empty registry (ADR-0165)
+            registry.reload().await;
+
             while let Ok(event) = events_rx.recv().await {
                 tracing::debug!(
                     "reactive skill filesystem event: {:?}, reloading...",
@@ -427,5 +430,41 @@ mod tests {
             reloaded,
             "registry should automatically update via reactive fs watcher"
         );
+    }
+
+    #[tokio::test]
+    async fn reactive_watcher_populates_empty_registry_on_startup() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_root = temp.path().to_path_buf();
+        let skills_dir = project_root.join(".muta/skills/demo");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(
+            skills_dir.join("SKILL.md"),
+            "---\nname: demo\ndescription: auto-loaded on startup\n---\n# Demo\n",
+        )
+        .unwrap();
+
+        let config = SkillsConfig {
+            project_root: Some(project_root.clone()),
+            ..Default::default()
+        };
+
+        // Registry starts empty
+        let registry = SkillRegistry::empty_with_config(&config);
+        assert!(registry.lock().list().is_empty());
+
+        // Spawn reactive watcher
+        let _watcher_task = registry.spawn_reactive_watcher();
+
+        // Must populate automatically without manual reload or /trust
+        let mut loaded = false;
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            if registry.lock().get("demo").is_some() {
+                loaded = true;
+                break;
+            }
+        }
+        assert!(loaded, "empty registry must be populated automatically on watcher startup");
     }
 }
