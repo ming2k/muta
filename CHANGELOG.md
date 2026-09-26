@@ -5,6 +5,19 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.13] - 2026-09-26
+
+### Fixed
+
+- **Unified Entity Mentions with Fuzzy Completions (ADR-0256).**
+  Composer `@<query>` mentions now concurrently fuzzy-match workspace skills and project files,
+  automatically committing the canonical `@{namespace}:{target}` representation upon acceptance
+  without requiring manual typing of `skill:` or `file:` namespace prefixes.
+- **Concurrent SQLite WAL Reader Access (ADR-0231).**
+  Read-only persistence queries through `PersistenceHandle::reader()` no longer fail due to
+  single-writer advisory lock contention (`db.owner.lock`) when a background daemon is running,
+  eliminating false quarantine status reports in external CLI tools like `muta skill ls`.
+
 ## [0.50.12] - 2026-09-25
 
 ### Fixed
@@ -7920,7 +7933,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.12...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.13...HEAD
+[0.50.13]: https://github.com/ming2k/muta/compare/v0.50.12...v0.50.13
 [0.50.12]: https://github.com/ming2k/muta/compare/v0.50.11...v0.50.12
 [0.50.11]: https://github.com/ming2k/muta/compare/v0.50.10...v0.50.11
 [0.50.10]: https://github.com/ming2k/muta/compare/v0.50.9...v0.50.10
