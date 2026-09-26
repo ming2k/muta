@@ -592,6 +592,37 @@ fn two_stage_skill_completion_descends_and_terminates() {
 }
 
 #[test]
+fn fuzzy_at_mention_directly_completes_skills_and_commits_canonical() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.input = "@wright".to_string();
+    app.cursor_position = app.input.chars().count();
+
+    // Simulate backend returning ADR-0256 fuzzy match for @wright
+    let item = muta_contracts::InputCompletion {
+        label: "@skill:wright-plan-authoring".to_string(),
+        description: "Author and write wright plan.toml manifests".to_string(),
+        insert_text: "@skill:wright-plan-authoring ".to_string(),
+        replace_start: 0,
+        replace_end: 7,
+        kind: muta_contracts::InputCompletionKind::PathExplicit,
+        alias_of: None,
+        command: None,
+    };
+    app.apply_backend_completions(0, app.input.clone(), app.cursor_position, vec![item]);
+
+    let completions = app.completions();
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].label, "@skill:wright-plan-authoring");
+
+    app.accept_completion(0);
+    assert_eq!(app.input, "@skill:wright-plan-authoring ");
+    assert!(
+        app.completion_dismissed,
+        "accepting fuzzy skill completion must latch dismissal and commit canonical representation"
+    );
+}
+
+#[test]
 fn accept_path_file_completion_is_terminal_and_formats_canonical() {
     // Project file accepts are terminal canonical mentions: selecting a file
     // formats it as `@file:path `, appends a trailing space, and latches

@@ -66,7 +66,7 @@ impl InputCompletionEngine {
         } else if is_explicit_path_prefix(query) {
             self.complete_explicit_path(input, query, at_start, cursor_end)
         } else {
-            self.complete_namespaces(input, query, at_start, cursor_end)
+            self.complete_unified_entities(input, query, at_start, cursor_end).await
         }
     }
 
@@ -162,7 +162,7 @@ impl InputCompletionEngine {
         path_items
     }
 
-    fn complete_namespaces(
+    async fn complete_unified_entities(
         &self,
         input: &str,
         query: &str,
@@ -181,6 +181,54 @@ impl InputCompletionEngine {
         if matches_skill_ns && self.skills_registry.is_some() {
             items.push(skill_namespace_item(input, at_start, cursor_end));
         }
+
+        // Bare '@' without query: preserve clean two-stage entry (ADR-0256 Stage 1), no file spam
+        if query.is_empty() {
+            return items;
+        }
+
+        // Unified entity mentions (ADR-0256): typing bare query matches skills and files simultaneously
+        if let Some(registry) = &self.skills_registry {
+            let guard = registry.lock();
+            for skill in guard.list() {
+                if !skill.enabled || skill.quarantined {
+                    continue;
+                }
+                if skill.name.to_lowercase().contains(&q_lower) {
+                    items.push(skill_item(input, &skill, "skill:", at_start, cursor_end));
+                }
+            }
+        }
+
+        let root = self.project_root.clone();
+        let entries = self
+            .project_entries
+            .get_or_init(|| async move {
+                tokio::task::spawn_blocking(move || scan_project_files(&root))
+                    .await
+                    .unwrap_or_default()
+            })
+            .await;
+        let mut path_items = entries
+            .iter()
+            .filter(|path| path_query_match(path, query))
+            .take(MAX_PATH_COMPLETIONS)
+            .map(|path| {
+                path_item(
+                    input,
+                    path,
+                    at_start,
+                    cursor_end,
+                    if path.ends_with('/') {
+                        InputCompletionKind::PathDir
+                    } else {
+                        InputCompletionKind::PathFile
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        sort_path_completions(&mut path_items);
+        items.extend(path_items);
 
         items
     }
@@ -461,6 +509,40 @@ pub fn complete_for_frontend_test(
         if matches_skill_ns {
             items.push(skill_namespace_item(input, at_start, cursor_end));
         }
+        if query.is_empty() {
+            return items;
+        }
+        if let Some(registry) = &engine.skills_registry {
+            let guard = registry.lock();
+            for skill in guard.list() {
+                if !skill.enabled || skill.quarantined {
+                    continue;
+                }
+                if skill.name.to_lowercase().contains(&q_lower) {
+                    items.push(skill_item(input, &skill, "skill:", at_start, cursor_end));
+                }
+            }
+        }
+        let mut path_items = scan_project_files(&engine.project_root)
+            .iter()
+            .filter(|path| path_query_match(path, query))
+            .take(MAX_PATH_COMPLETIONS)
+            .map(|path| {
+                path_item(
+                    input,
+                    path,
+                    at_start,
+                    cursor_end,
+                    if path.ends_with('/') {
+                        InputCompletionKind::PathDir
+                    } else {
+                        InputCompletionKind::PathFile
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        sort_path_completions(&mut path_items);
+        items.extend(path_items);
         items
     }
 }
@@ -1221,5 +1303,21 @@ mod tests {
         };
         assert_eq!(items[0].label, "@skill:");
         assert_eq!(items[0].kind, InputCompletionKind::PathDir);
+
+        // 6. ADR-0256 Fuzzy mention: typing bare `@creat` directly matches skills
+        let input = "@creat";
+        let AgentResponse::ComposerCompletions { items, .. } = engine
+            .complete(105, input.into(), input.chars().count())
+            .await
+        else {
+            panic!("unexpected response")
+        };
+        let match_item = items
+            .iter()
+            .find(|i| i.label == "@skill:skill-creator")
+            .expect("bare @creat must fuzzy match @skill:skill-creator");
+        assert_eq!(match_item.insert_text, "@skill:skill-creator ");
+        assert_eq!(match_item.replace_start, 0);
+        assert_eq!(match_item.replace_end, 6);
     }
 }

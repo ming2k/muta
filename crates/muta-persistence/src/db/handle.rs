@@ -504,8 +504,14 @@ impl PersistenceHandle {
     /// with the writer — so this returns immediately instead of queueing
     /// behind a slow write.
     pub fn reader(&self) -> Result<DbReader> {
-        self.ensure_ready()
-            .map_err(rusqlite::Error::InvalidParameterName)?;
+        if let Some(error) = &self.startup_error {
+            // When another process already holds the single-writer advisory lock (e.g. background daemon),
+            // this process cannot become the supervisor, but SQLite WAL mode safely allows concurrent read-only queries.
+            let is_lock_contention = error.contains("could not acquire advisory lock");
+            if !is_lock_contention {
+                return Err(rusqlite::Error::InvalidParameterName(error.to_string()));
+            }
+        }
         let permit = self.readers.clone().try_acquire_owned().map_err(|_| {
             rusqlite::Error::InvalidParameterName("database reader capacity exhausted".into())
         })?;
