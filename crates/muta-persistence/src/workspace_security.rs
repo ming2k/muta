@@ -413,7 +413,11 @@ fn compute_files_digest(
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = meta.permissions().mode();
-            hasher.update(mode.to_le_bytes());
+            // Normalize permissions using git convention: only the executable bit matters (100755 vs 100644).
+            // This prevents spurious trust invalidation from local umask differences or editor atomic renames.
+            let is_exec = (mode & 0o111) != 0;
+            let normalized_mode: u32 = if is_exec { 0o100755 } else { 0o100644 };
+            hasher.update(normalized_mode.to_le_bytes());
             hasher.update([0]);
         }
         let bytes = std::fs::read(&abs).map_err(|error| {

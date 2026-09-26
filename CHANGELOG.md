@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Symmetric Skill Path Security Attestation (ADR-0140, ADR-0165).**
   `SKILLS_PATHS` in `muta-persistence` now attests both `.muta/skills` and `skills` root directories,
   aligning with discovery sources and preventing untracked project-level skill directories.
+- **Permission Normalization in Workspace Asset Attestation (ADR-0140, ADR-0252).**
+  Asset file SHA-256 digests now normalize unix file modes to git conventions (100755 for executable vs 100644 for regular),
+  eliminating spurious trust revocation caused by local umask differences or editor atomic saves while
+  strictly protecting against unauthorized executable bit escalation.
 
 ## [0.50.12] - 2026-09-25
 
