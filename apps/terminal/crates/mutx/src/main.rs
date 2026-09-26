@@ -274,9 +274,10 @@ async fn run_dashboard(
     unattended_at_start: bool,
     confined_at_start: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let project_root = project_override
+    let raw_root = project_override
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let project_root = muta_paths::paths::find_project_root(&raw_root);
     let info = client::ensure_daemon(&project_root).await?;
     if !client::versions_compatible(&info) {
         return Err(client::incompatibility_error(&info).into());
@@ -339,9 +340,10 @@ async fn run_attached(
     initial_overlay: mutx::StartupOverlay,
     mut initial_prompt: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let project_root = project_override
+    let raw_root = project_override
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    let project_root = muta_paths::paths::find_project_root(&raw_root);
     let info = client::ensure_daemon(&project_root).await?;
     // Version skew (ADR-0100 rule 4): a daemon from another build speaks a
     // wire protocol this client may not share. Fail loud with the fix

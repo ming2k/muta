@@ -342,21 +342,9 @@ fn is_inside_hidden_dir(root: &Path, path: &Path) -> bool {
 }
 
 /// Find the project root by walking upward from `start` looking for common
-/// markers. Falls back to `start` if no marker is found.
+/// markers. Delegates to canonical [`paths::find_project_root`].
 fn find_project_root(start: &Path) -> PathBuf {
-    const MARKERS: &[&str] = &[".muta", ".git", "Cargo.toml", "package.json"];
-    let temp_dir = std::env::temp_dir();
-    for ancestor in start.ancestors() {
-        if ancestor == temp_dir && ancestor != start {
-            break;
-        }
-        for marker in MARKERS {
-            if ancestor.join(marker).exists() {
-                return ancestor.to_path_buf();
-            }
-        }
-    }
-    start.to_path_buf()
+    paths::find_project_root(start)
 }
 
 fn expand_tilde(path: &str) -> PathBuf {

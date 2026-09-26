@@ -998,9 +998,10 @@ async fn handle_wire_stream(
     // falls back to its own process cwd — which is whatever the first client
     // that spawned the daemon happened to use, so it is only correct by
     // coincidence.
-    let caller_project = project.clone().unwrap_or_else(|| {
+    let raw_project = project.clone().unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
+    let caller_project = muta_persistence::paths::find_project_root(&raw_project);
     // A modern client *declared* its project; a legacy client did not and the
     // daemon is guessing from its own cwd. Auto-binding a lone cross-project
     // session is the "launched in project A, working in project B" trap, but

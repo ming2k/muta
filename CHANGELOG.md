@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Asset file SHA-256 digests now normalize unix file modes to git conventions (100755 for executable vs 100644 for regular),
   eliminating spurious trust revocation caused by local umask differences or editor atomic saves while
   strictly protecting against unauthorized executable bit escalation.
+- **Canonical Project Root Normalization Across Subdirectories (ADR-0085, ADR-0096).**
+  Both `mutx` and the runtime daemon now normalize caller working directories through `muta_paths::paths::find_project_root()`.
+  Starting `mutx` from any sub-path (e.g. `.muta/skills/<name>/` or a nested package) correctly binds to the
+  enclosing repository root, ensuring project skills, configuration, and security attestation resolve seamlessly.
 
 ## [0.50.12] - 2026-09-25
 

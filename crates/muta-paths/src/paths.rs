@@ -659,6 +659,25 @@ fn app_dir_from_root(root: PathBuf) -> PathBuf {
     }
 }
 
+/// Find the project root by walking upward from `start` looking for common
+/// repository and project markers (`.muta`, `.git`, `Cargo.toml`, `package.json`, etc.).
+/// Falls back to `start` if no marker is found.
+pub fn find_project_root(start: &Path) -> PathBuf {
+    const MARKERS: &[&str] = &[".muta", ".git", "Cargo.toml", "package.json", "pyproject.toml", "go.mod"];
+    let temp_dir = std::env::temp_dir();
+    for ancestor in start.ancestors() {
+        if ancestor == temp_dir && ancestor != start {
+            break;
+        }
+        for marker in MARKERS {
+            if ancestor.join(marker).exists() {
+                return ancestor.to_path_buf();
+            }
+        }
+    }
+    start.to_path_buf()
+}
+
 /// Map a project root (cwd) to a stable, ASCII-safe bucket name. Uses the first
 /// 16 hex chars of SHA-256 so the layout is reproducible across processes,
 /// Rust versions, and platforms, and so the cwd is not leaked in the path
