@@ -5,6 +5,16 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.14] - 2026-09-27
+
+### Added
+
+- **Multimodal Claim-Check Lifecycle and Lease-Bounded Rehydration (ADR-0285).**
+  - First-class multimodal observation governance: tool companion and user visual images entering the system are automatically published to Content-Addressed Storage (CAS) `BlobStore` under SHA-256 digests and registered in SQLite `blob_refs` to prevent garbage collection reclamation.
+  - Epistemic visual invoices: context pressure pruning evicts high-entropy Base64 payloads outside recency quarantine while preserving structured claim-check placeholders with immutable handles (`call:<call_id>` or `artifact:<sha256>`).
+  - Demand-paged visual rehydration: `InspectTool` natively delivers `ToolOutput::Image` via `inspect(handle: ...)` onto the active round's tail with zero historical mutation, preserving 100% KV-cache prefix stability.
+  - Symmetrical projection directives: `DirectivePayload::Prune` now captures both tool outputs and media artifacts via `PrunedMediaOutput`, maintaining mathematical wire equivalence on replay.
+
 ## [0.50.13] - 2026-09-26
 
 ### Fixed
@@ -7949,7 +7959,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.13...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.14...HEAD
+[0.50.14]: https://github.com/ming2k/muta/compare/v0.50.13...v0.50.14
 [0.50.13]: https://github.com/ming2k/muta/compare/v0.50.12...v0.50.13
 [0.50.12]: https://github.com/ming2k/muta/compare/v0.50.11...v0.50.12
 [0.50.11]: https://github.com/ming2k/muta/compare/v0.50.10...v0.50.11
