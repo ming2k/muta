@@ -11,10 +11,11 @@ use serde_json::{Value, json};
 
 use muta_contracts::{OffstreamRegistry, Tool, ToolOutput};
 
-const INSPECT_DESCRIPTION: &str = "Inspect offstream epistemic memory (ADR-0262). \
+const INSPECT_DESCRIPTION: &str = "Inspect offstream epistemic memory (ADR-0262, ADR-0285). \
 Retrieve detailed historical context that has exited the active model window: \
 subagent transcripts ('sub:<session_id>'), pruned tool results ('call:<tool_call_id>'), \
-and folded compaction subgraphs ('fold:<compaction_node_id>'). \
+folded compaction subgraphs ('fold:<compaction_node_id>'), or visual artifacts ('artifact:<blob_hash>'). \
+Supports automatic multimodal visual rehydration for pruned image observations. \
 Use action 'list' to see available artifacts, or 'read' to page through content.";
 
 /// Tool enabling master agents to read offstream memory artifacts.
@@ -157,6 +158,15 @@ impl Tool for InspectTool {
                     )
                     .await?;
 
+                // ADR-0285: Multimodal rehydration. If the retrieved artifact carries media,
+                // rehydrate it directly as ToolOutput::Image so the active round sees the pixels.
+                if let Some(media) = paged.media {
+                    return Ok(ToolOutput::Image {
+                        mime: media.mime,
+                        data: media.data,
+                    });
+                }
+
                 let mut content = paged.text;
                 if let Some(next_cursor) = paged.next_cursor {
                     content.push_str(&format!(
@@ -211,11 +221,7 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join("\n");
             }
-            Ok(PagedOffstreamContent {
-                text,
-                next_cursor: None,
-                total_lines: 2,
-            })
+            Ok(PagedOffstreamContent::new(text, None, 2))
         }
     }
 
@@ -291,11 +297,37 @@ mod tests {
             _query: Option<&str>,
             _budget: usize,
         ) -> Result<PagedOffstreamContent, String> {
-            Ok(PagedOffstreamContent {
-                text: "Page 1 content".to_string(),
-                next_cursor: Some("cursor_page_2".to_string()),
-                total_lines: 50,
-            })
+            Ok(PagedOffstreamContent::new("Page 1 content", Some("cursor_page_2".to_string()), 50))
+        }
+    }
+
+    struct VisualMediaSource;
+
+    #[async_trait]
+    impl OffstreamSource for VisualMediaSource {
+        fn scheme(&self) -> &'static str {
+            "media"
+        }
+
+        async fn enumerate(&self, _session_id: &str) -> Result<Vec<OffstreamEntry>, String> {
+            Ok(vec![])
+        }
+
+        async fn read(
+            &self,
+            _key: &str,
+            _cursor: Option<&str>,
+            _query: Option<&str>,
+            _budget: usize,
+        ) -> Result<PagedOffstreamContent, String> {
+            Ok(PagedOffstreamContent::new(
+                "[Visual Media]",
+                None,
+                1,
+            ).with_media(muta_contracts::ImagePart {
+                mime: "image/png".to_string(),
+                data: "base64_rehydrated_png_data".to_string(),
+            }))
         }
     }
 
@@ -311,5 +343,24 @@ mod tests {
         assert!(res.contains("Page 1 content"));
         assert!(res.contains("Truncated to fit budget (50 lines)"));
         assert!(res.contains("cursor = \"cursor_page_2\""));
+    }
+
+    #[tokio::test]
+    async fn test_inspect_rehydrates_visual_media() {
+        let registry = Arc::new(OffstreamRegistry::new(vec![Arc::new(VisualMediaSource)]));
+        let tool = InspectTool::new(registry, "session-test");
+
+        let out = tool
+            .call_structured(r#"{"action":"read","handle":"media:screenshot_1"}"#)
+            .await
+            .unwrap();
+
+        match out {
+            ToolOutput::Image { mime, data } => {
+                assert_eq!(mime, "image/png");
+                assert_eq!(data, "base64_rehydrated_png_data");
+            }
+            other => panic!("expected ToolOutput::Image, got {:?}", other),
+        }
     }
 }

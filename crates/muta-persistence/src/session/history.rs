@@ -928,12 +928,13 @@ fn translate_projection(
         }
     }
 
-    // Prune: same length, only tool-result bodies replaced.
+    // Prune: same length, only tool-result bodies and media replaced.
     if current.len() == target.len() && !current.is_empty() {
         let mut elided = Vec::new();
+        let mut pruned_media = Vec::new();
         let mut pruneable = true;
         let mut last_was_pruned_tool = false;
-        for (before, after) in current.iter().zip(target.iter()) {
+        for (idx, (before, after)) in current.iter().zip(target.iter()).enumerate() {
             if before.semantic_wire_eq(after) {
                 last_was_pruned_tool = false;
                 continue;
@@ -961,22 +962,39 @@ fn translate_projection(
                     .origin
                     .as_ref()
                     .is_some_and(|o| o.kind == InjectionKind::ToolImage)
-                && after.content == "[cleared image payload]"
+                && after.content.starts_with("[cleared image payload")
                 && after.images.is_none();
             if is_companion_tool_image {
                 last_was_pruned_tool = false;
                 continue;
             }
+
+            // ADR-0285: User-uploaded visual media pruning
+            let is_pruned_user_image = before.role == Role::User
+                && before.images.is_some()
+                && after.role == Role::User
+                && after.images.is_none()
+                && after.content.contains("[cleared image payload");
+            if is_pruned_user_image {
+                let seq = transcript.entries[idx].seq;
+                pruned_media.push(muta_contracts::PrunedMediaOutput {
+                    seq,
+                    placeholder: after.content.clone(),
+                });
+                last_was_pruned_tool = false;
+                continue;
+            }
+
             pruneable = false;
             break;
         }
-        if pruneable && !elided.is_empty() {
+        if pruneable && (!elided.is_empty() || !pruned_media.is_empty()) {
             let last_seq = transcript.next_seq().saturating_sub(1);
             transcript.push_directive(muta_contracts::ProjectionDirective {
                 seq: 0,
                 kind: muta_contracts::DirectiveKind::Prune,
                 up_to_seq: last_seq,
-                payload: muta_contracts::DirectivePayload::Prune { elided },
+                payload: muta_contracts::DirectivePayload::Prune { elided, pruned_media },
             });
             if wire_eq(&transcript.project_messages(), target) {
                 return Some(());
@@ -985,4 +1003,111 @@ fn translate_projection(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::{ContextProjectionCheckpoint, ContextProjectionResult};
+    use muta_contracts::{
+        ImagePart, InjectionKind, InjectionOrigin, Message, Role, ToolCall,
+    };
+
+    #[test]
+    fn test_translate_projection_prunes_tool_and_companion_image() {
+        let mut transcript = muta_contracts::Transcript::new();
+        let call = ToolCall {
+            id: "call_img_1".to_string(),
+            name: "read_image".to_string(),
+            arguments: "{\"path\":\"ui.png\"}".to_string(),
+        };
+        let mut assistant_msg = Message::new(Role::Assistant, "");
+        assistant_msg.tool_calls = Some(vec![call.clone()]);
+        let tool_msg = Message::tool_result(&call, "[image: image/png]");
+        let companion_msg = Message::new(Role::User, "Image from read_image")
+            .with_images(vec![ImagePart {
+                mime: "image/png".to_string(),
+                data: "base64_data".to_string(),
+            }])
+            .with_origin(InjectionOrigin::new(InjectionKind::ToolImage));
+
+        transcript.push(muta_contracts::TranscriptEntry::from_message(
+            0,
+            &assistant_msg,
+        ));
+        transcript.push(muta_contracts::TranscriptEntry::from_message(1, &tool_msg));
+        transcript.push(muta_contracts::TranscriptEntry::from_message(
+            2,
+            &companion_msg,
+        ));
+
+        let mut target_messages = vec![
+            assistant_msg.clone(),
+            tool_msg.clone(),
+            companion_msg.clone(),
+        ];
+        let out =
+            muta_contracts::pressure::prune_tool_results(&mut target_messages, 0, 1).unwrap();
+        assert!(out.cleared_count >= 1);
+
+        let res = ContextProjectionResult {
+            model_window: target_messages,
+            archived_originals: Vec::new(),
+            checkpoint: ContextProjectionCheckpoint {
+                operation: crate::session::ContextProjectionKind::Prune,
+                archived_messages: 0,
+                active_messages: 3,
+                window_tokens_before: 2000,
+                window_tokens_after: 400,
+            },
+        };
+
+        let translated = translate_projection(&mut transcript, &res);
+        assert!(
+            translated.is_some(),
+            "translate_projection must successfully translate companion tool image pruning"
+        );
+        assert_eq!(transcript.project_messages(), res.model_window);
+    }
+
+    #[test]
+    fn test_translate_projection_prunes_user_uploaded_image() {
+        let mut transcript = muta_contracts::Transcript::new();
+        let user_msg = Message::new(Role::User, "User prompt with visual")
+            .with_images(vec![ImagePart {
+                mime: "image/png".to_string(),
+                data: "base64_data".to_string(),
+            }]);
+        let assistant_msg = Message::new(Role::Assistant, "I see the image.");
+
+        transcript.push(muta_contracts::TranscriptEntry::from_message(0, &user_msg));
+        transcript.push(muta_contracts::TranscriptEntry::from_message(
+            1,
+            &assistant_msg,
+        ));
+
+        let mut target_messages = vec![user_msg.clone(), assistant_msg.clone()];
+        let out =
+            muta_contracts::pressure::prune_tool_results(&mut target_messages, 0, 1).unwrap();
+        assert!(out.cleared_count >= 1);
+
+        let res = ContextProjectionResult {
+            model_window: target_messages,
+            archived_originals: Vec::new(),
+            checkpoint: ContextProjectionCheckpoint {
+                operation: crate::session::ContextProjectionKind::Prune,
+                archived_messages: 0,
+                active_messages: 2,
+                window_tokens_before: 2000,
+                window_tokens_after: 400,
+            },
+        };
+
+        let translated = translate_projection(&mut transcript, &res);
+        assert!(
+            translated.is_some(),
+            "translate_projection must successfully translate user image pruning"
+        );
+        assert_eq!(transcript.project_messages(), res.model_window);
+    }
 }

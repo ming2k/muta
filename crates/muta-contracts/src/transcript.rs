@@ -296,6 +296,9 @@ pub enum DirectivePayload {
         /// One record per elided tool result, keyed by the tool call it
         /// answers.
         elided: Vec<PrunedToolOutput>,
+        /// One record per pruned visual media artifact, keyed by entry seq (ADR-0285).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pruned_media: Vec<PrunedMediaOutput>,
     },
     /// Entries with `seq <= up_to_seq` are replaced in views by the single
     /// checkpoint entry at `checkpoint_seq`.
@@ -320,6 +323,16 @@ pub enum DirectivePayload {
 pub struct PrunedToolOutput {
     pub tool_call_id: String,
     /// Placeholder text presented in views (e.g. "[tool output elided: …]").
+    pub placeholder: String,
+}
+
+/// One pruned visual media artifact (e.g. user-uploaded image): the entry membership seq
+/// and the informative placeholder invoice that replaces its body in views (ADR-0285).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(optional_fields, export, export_to = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/web/src/lib/generated/wire.gen.ts"))]
+pub struct PrunedMediaOutput {
+    pub seq: u64,
+    /// Placeholder invoice text presented in views.
     pub placeholder: String,
 }
 
@@ -424,12 +437,17 @@ impl Transcript {
         let mut checkpoint_seq: Option<u64> = None;
         let mut elided: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        let mut pruned_media: std::collections::HashMap<u64, String> =
+            std::collections::HashMap::new();
         let mut frozen: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
         for directive in &self.directives {
             match &directive.payload {
-                DirectivePayload::Prune { elided: removed } => {
+                DirectivePayload::Prune { elided: removed, pruned_media: media_removed } => {
                     for item in removed {
                         elided.insert(item.tool_call_id.clone(), item.placeholder.clone());
+                    }
+                    for item in media_removed {
+                        pruned_media.insert(item.seq, item.placeholder.clone());
                     }
                 }
                 DirectivePayload::Compact { checkpoint_seq: cp } => {
@@ -452,7 +470,7 @@ impl Transcript {
         {
             view.push((entry.seq, message));
         }
-        let mut last_pruned_tool = false;
+        let mut last_pruned_tool: Option<String> = None;
         for entry in &self.entries {
             if entry.is_hidden_kind() {
                 continue;
@@ -472,18 +490,30 @@ impl Transcript {
                 message.content = placeholder.clone();
                 message.reasoning_content = None;
                 message.images = None;
-                last_pruned_tool = true;
-            } else if last_pruned_tool
+                last_pruned_tool = Some(tool_call_id.clone());
+            } else if let Some(last_call_id) = last_pruned_tool.take()
                 && message
                     .origin
                     .as_ref()
                     .is_some_and(|o| o.kind == crate::message::InjectionKind::ToolImage)
             {
-                message.content = "[cleared image payload]".to_string();
+                let mime = message
+                    .images
+                    .as_ref()
+                    .and_then(|imgs| imgs.first())
+                    .map(|img| img.mime.clone())
+                    .unwrap_or_else(|| "image".to_string());
+                message.content = format!(
+                    "[cleared image payload ({mime}) — rehydrate with inspect handle \"call:{last_call_id}\"]"
+                );
                 message.images = None;
-                last_pruned_tool = false;
             } else {
-                last_pruned_tool = false;
+                last_pruned_tool = None;
+            }
+            // ADR-0285: Entry-level media pruning (e.g. user-uploaded images)
+            if let Some(placeholder) = pruned_media.get(&entry.seq) {
+                message.content = placeholder.clone();
+                message.images = None;
             }
             if let Some(shape) = frozen.get(&entry.seq) {
                 message.content = shape.clone();
@@ -622,6 +652,7 @@ mod tests {
                     tool_call_id: "call-1".into(),
                     placeholder: "[elided call-1]".into(),
                 }],
+                pruned_media: vec![],
             },
         });
         let view = transcript.project();
@@ -802,8 +833,41 @@ mod tests {
             seq: 0,
             kind: DirectiveKind::Prune,
             up_to_seq: 1,
-            payload: DirectivePayload::Prune { elided: vec![] },
+            payload: DirectivePayload::Prune {
+                elided: vec![],
+                pruned_media: vec![],
+            },
         });
         assert_eq!(transcript.next_directive_seq(), 1);
+    }
+
+    #[test]
+    fn prune_replaces_user_media_with_invoice_placeholder() {
+        let mut transcript = Transcript::new();
+        let user_msg = Message::new(Role::User, "User prompt with image")
+            .with_images(vec![crate::ImagePart {
+                mime: "image/png".into(),
+                data: "base64data".into(),
+            }]);
+        transcript.push(TranscriptEntry::from_message(0, &user_msg));
+        transcript.push(message_entry(1, Role::Assistant, "I see the image"));
+
+        transcript.push_directive(ProjectionDirective {
+            seq: 0,
+            kind: DirectiveKind::Prune,
+            up_to_seq: 1,
+            payload: DirectivePayload::Prune {
+                elided: vec![],
+                pruned_media: vec![PrunedMediaOutput {
+                    seq: 0,
+                    placeholder: "User prompt with image\n[cleared image payload (image/png) — rehydrate with inspect handle \"artifact:abc\"]".into(),
+                }],
+            },
+        });
+
+        let view = transcript.project();
+        assert_eq!(view.len(), 2);
+        assert!(view[0].1.images.is_none());
+        assert!(view[0].1.content.contains("artifact:abc"));
     }
 }

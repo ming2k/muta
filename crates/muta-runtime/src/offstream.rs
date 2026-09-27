@@ -64,11 +64,7 @@ pub fn paginate_text(
         collected.push(line_fmt);
     }
 
-    PagedOffstreamContent {
-        text: collected.join("\n"),
-        next_cursor,
-        total_lines,
-    }
+    PagedOffstreamContent::new(collected.join("\n"), next_cursor, total_lines)
 }
 
 /// Source for inspecting subagent session lineages (`sub:<session_id>`).
@@ -246,7 +242,7 @@ impl OffstreamSource for PrunedToolSource {
         // 1. Scan transcript directives and entries
         if let Ok(Some(data)) = reader.load_session_full(sid) {
             for dir in &data.transcript().directives {
-                if let muta_contracts::DirectivePayload::Prune { elided } = &dir.payload {
+                if let muta_contracts::DirectivePayload::Prune { elided, pruned_media } = &dir.payload {
                     for item in elided {
                         if seen_calls.insert(item.tool_call_id.clone()) {
                             entries.push(OffstreamEntry {
@@ -255,6 +251,23 @@ impl OffstreamSource for PrunedToolSource {
                                 status: OffstreamStatus::Pruned,
                                 size_tokens: None,
                             });
+                        }
+                    }
+                    for item in pruned_media {
+                        if let Some(pos) = item.placeholder.find("artifact:") {
+                            let hash_part = &item.placeholder[pos + 9..];
+                            let hash: String = hash_part
+                                .chars()
+                                .take_while(|c| c.is_ascii_alphanumeric())
+                                .collect();
+                            if !hash.is_empty() && seen_calls.insert(format!("artifact:{hash}")) {
+                                entries.push(OffstreamEntry {
+                                    handle: format!("artifact:{hash}"),
+                                    label: item.placeholder.chars().take(80).collect(),
+                                    status: OffstreamStatus::Pruned,
+                                    size_tokens: None,
+                                });
+                            }
                         }
                     }
                 }
@@ -324,10 +337,39 @@ impl OffstreamSource for PrunedToolSource {
         // 1. Try transcript entries: entry.content in transcript.entries has the
         // unpruned, original verbatim text (Prune directive only affects projected views)
         if let Ok(Some(data)) = reader.load_session_full(&self.session_id) {
-            for entry in &data.transcript().entries {
+            let entries = &data.transcript().entries;
+            for (idx, entry) in entries.iter().enumerate() {
                 if let muta_contracts::EntryPayload::Message(payload) = &entry.payload
                     && payload.tool_call_id.as_deref() == Some(key)
                 {
+                    // ADR-0285: Check if tool entry itself has images
+                    if let Some(images) = &payload.images
+                        && let Some(first_img) = images.first()
+                    {
+                        return Ok(PagedOffstreamContent::new(
+                            format!("[Rehydrated visual media: mime={} | handle: call:{key}]", first_img.mime),
+                            None,
+                            1,
+                        ).with_media(first_img.clone()));
+                    }
+
+                    // ADR-0285: Check companion ToolImage message immediately following
+                    if let Some(next_entry) = entries.get(idx + 1)
+                        && let muta_contracts::EntryPayload::Message(next_payload) = &next_entry.payload
+                        && next_payload
+                            .injection
+                            .as_ref()
+                            .is_some_and(|o| o.kind == muta_contracts::InjectionKind::ToolImage)
+                        && let Some(images) = &next_payload.images
+                        && let Some(first_img) = images.first()
+                    {
+                        return Ok(PagedOffstreamContent::new(
+                            format!("[Rehydrated visual media: mime={} | handle: call:{key}]", first_img.mime),
+                            None,
+                            1,
+                        ).with_media(first_img.clone()));
+                    }
+
                     if let Some(blob_hash) = &payload.content_blob
                         && let Some(bytes) = self.blob_store.get(blob_hash)
                         && let Ok(text) = String::from_utf8(bytes)
@@ -349,6 +391,17 @@ impl OffstreamSource for PrunedToolSource {
                 if let NodePayload::Message { message } = &node.payload
                     && message.tool_call_id.as_deref() == Some(key)
                 {
+                    // ADR-0285: Check direct image attachment
+                    if let Some(images) = &message.images
+                        && let Some(first_img) = images.first()
+                    {
+                        return Ok(PagedOffstreamContent::new(
+                            format!("[Rehydrated visual media: mime={} | handle: call:{key}]", first_img.mime),
+                            None,
+                            1,
+                        ).with_media(first_img.clone()));
+                    }
+
                     if let Some(blob_hash) = &message.content_blob
                         && let Some(bytes) = self.blob_store.get(blob_hash)
                         && let Ok(text) = String::from_utf8(bytes)
@@ -499,11 +552,87 @@ impl OffstreamSource for FoldedCausalSource {
     }
 }
 
+/// Source for inspecting CAS blobs and visual artifacts (`artifact:<sha256>`) (ADR-0279, ADR-0285).
+pub struct ArtifactSource {
+    _session_id: String,
+    blob_store: BlobStore,
+}
+
+impl ArtifactSource {
+    pub fn new(session_id: impl Into<String>, blob_store: BlobStore) -> Self {
+        Self {
+            _session_id: session_id.into(),
+            blob_store,
+        }
+    }
+}
+
+#[async_trait]
+impl OffstreamSource for ArtifactSource {
+    fn scheme(&self) -> &'static str {
+        "artifact"
+    }
+
+    async fn enumerate(&self, _session_id: &str) -> Result<Vec<OffstreamEntry>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn read(
+        &self,
+        key: &str,
+        cursor: Option<&str>,
+        query: Option<&str>,
+        budget_tokens: usize,
+    ) -> Result<PagedOffstreamContent, String> {
+        let Some(bytes) = self.blob_store.get(key) else {
+            return Err(format!("Blob artifact '{key}' not found in CAS store"));
+        };
+
+        // Detect visual media format (PNG, JPEG, WebP, GIF)
+        if let Some(mime) = detect_image_mime(&bytes) {
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            let b64 = STANDARD.encode(&bytes);
+            return Ok(PagedOffstreamContent::new(
+                format!("[Rehydrated visual artifact: mime={mime} ({} bytes) | handle: artifact:{key}]", bytes.len()),
+                None,
+                1,
+            ).with_media(muta_contracts::ImagePart {
+                mime: mime.to_string(),
+                data: b64,
+            }));
+        }
+
+        // Fallback: try UTF-8 text
+        if let Ok(text) = String::from_utf8(bytes.clone()) {
+            return Ok(paginate_text(&text, cursor, query, budget_tokens));
+        }
+
+        // Binary non-image
+        let summary = format!("[Binary artifact: {} bytes | handle: artifact:{key}]", bytes.len());
+        Ok(PagedOffstreamContent::new(summary, None, 1))
+    }
+}
+
+fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
 /// Helper to build an [`OffstreamRegistry`] for a session.
 pub fn build_offstream_registry(session_id: &str, blob_store: BlobStore) -> Arc<OffstreamRegistry> {
     let mut registry = OffstreamRegistry::empty();
     registry.register(Arc::new(SubagentSource::new(session_id)));
-    registry.register(Arc::new(PrunedToolSource::new(session_id, blob_store)));
+    registry.register(Arc::new(PrunedToolSource::new(session_id, blob_store.clone())));
+    registry.register(Arc::new(ArtifactSource::new(session_id, blob_store)));
     registry.register(Arc::new(FoldedCausalSource::new(session_id)));
     Arc::new(registry)
 }
@@ -543,6 +672,22 @@ mod tests {
         let bytes = blob_store.get(&hash).unwrap();
         let retrieved = String::from_utf8(bytes).unwrap();
         assert_eq!(retrieved, unpruned_text);
+    }
+
+    #[tokio::test]
+    async fn test_artifact_source_reads_and_rehydrates_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blob_store = BlobStore::new(tmp.path().to_path_buf());
+        let fake_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRfakeimagebytes";
+        let hash = blob_store.put(fake_png).unwrap();
+
+        let source = ArtifactSource::new("test-session", blob_store);
+        let res = source.read(&hash, None, None, 1000).await.unwrap();
+
+        assert!(res.media.is_some());
+        let media = res.media.unwrap();
+        assert_eq!(media.mime, "image/png");
+        assert!(!media.data.is_empty());
     }
 }
 

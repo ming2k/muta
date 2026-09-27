@@ -46,7 +46,7 @@ pub use message::{
 pub mod transcript;
 pub use transcript::{
     DirectiveKind, DirectivePayload, EntryKind, EntryOrigin, EntryPayload, MessagePayload,
-    ProjectionDirective, PrunedToolOutput, StatePayload, SubagentRef, Transcript, TranscriptEntry,
+    ProjectionDirective, PrunedMediaOutput, PrunedToolOutput, StatePayload, SubagentRef, Transcript, TranscriptEntry,
 };
 
 pub mod instructions;

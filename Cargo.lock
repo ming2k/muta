@@ -1683,9 +1683,11 @@ name = "muta-contracts"
 version = "0.50.13"
 dependencies = [
  "async-trait",
+ "base64",
  "chrono",
  "dirs",
  "futures",
+ "hex",
  "inventory",
  "serde",
  "serde_json",
@@ -1752,6 +1754,7 @@ dependencies = [
 name = "muta-persistence"
 version = "0.50.13"
 dependencies = [
+ "base64",
  "chrono",
  "crc32c",
  "directories",
@@ -1825,6 +1828,7 @@ name = "muta-runtime"
 version = "0.50.13"
 dependencies = [
  "async-trait",
+ "base64",
  "bytes",
  "chrono",
  "dirs",

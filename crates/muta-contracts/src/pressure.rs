@@ -376,6 +376,20 @@ fn range_covers(outer: (usize, usize), inner: (usize, usize)) -> bool {
     outer.0 <= inner.0 && inner.1 <= outer.1
 }
 
+fn artifact_hash_for_base64(data: &str) -> String {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use sha2::{Digest, Sha256};
+    if let Ok(bytes) = STANDARD.decode(data) {
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        hex::encode(hasher.finalize())
+    } else {
+        let mut hasher = Sha256::new();
+        hasher.update(data.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+}
+
 /// Plan (without mutating) which tool results to degrade and how. Returns an
 /// empty vec when there is nothing to do.
 fn plan_prune(messages: &[Message], protect_recent_tokens: usize) -> Vec<PrunePlan> {
@@ -386,16 +400,35 @@ fn plan_prune(messages: &[Message], protect_recent_tokens: usize) -> Vec<PrunePl
         .filter(|(_, m)| m.role == Role::Tool && !is_cleared(&m.content))
         .map(|(i, _)| i)
         .collect();
-    if tools.is_empty() {
+
+    // ADR-0285: User-uploaded visual media candidates for eviction
+    let user_images: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| {
+            m.role == Role::User
+                && m.images.as_ref().is_some_and(|imgs| !imgs.is_empty())
+                && !m
+                    .origin
+                    .as_ref()
+                    .is_some_and(|o| o.kind == crate::message::InjectionKind::ToolImage)
+        })
+        .map(|(i, _)| i)
+        .collect();
+
+    if tools.is_empty() && user_images.is_empty() {
         return Vec::new();
     }
+
+    let mut all_candidates: Vec<usize> = tools.iter().chain(user_images.iter()).copied().collect();
+    all_candidates.sort_unstable();
 
     // Recency protection: protect newest results until the token budget is
     // met. Token-denominated (ADR-0120) — the byte accumulator this replaced
     // under-protected CJK-heavy sessions by 3–4×.
     let mut protected: HashSet<usize> = HashSet::new();
     let mut protected_tokens = 0usize;
-    for &i in tools.iter().rev() {
+    for &i in all_candidates.iter().rev() {
         if protected_tokens >= protect_recent_tokens {
             break;
         }
@@ -466,6 +499,38 @@ fn plan_prune(messages: &[Message], protect_recent_tokens: usize) -> Vec<PrunePl
             reclaim,
         });
     }
+
+    // ADR-0285: Evict user visual media that has exited the recency quarantine window
+    for &i in &user_images {
+        if protected.contains(&i) {
+            continue;
+        }
+        let msg = &messages[i];
+        let Some(images) = &msg.images else { continue; };
+        if images.is_empty() { continue; }
+
+        let mut invoices = Vec::new();
+        for img in images {
+            let hash = artifact_hash_for_base64(&img.data);
+            invoices.push(format!(
+                "[cleared image payload ({}) — rehydrate with inspect handle \"artifact:{hash}\"]",
+                img.mime
+            ));
+        }
+
+        let new_content = if msg.content.is_empty() {
+            invoices.join("\n")
+        } else {
+            format!("{}\n{}", msg.content, invoices.join("\n"))
+        };
+
+        let reclaim = 1600 * images.len();
+        plan.push(PrunePlan {
+            index: i,
+            new_content,
+            reclaim,
+        });
+    }
     plan
 }
 
@@ -485,7 +550,8 @@ fn apply_prune(
         messages[item.index].reasoning_content = None;
         // ADR-0254: Strip image attachments from pruned messages
         messages[item.index].images = None;
-        // ADR-0254: Also prune companion ToolImage user message if immediately following
+        let call_id = messages[item.index].tool_call_id.clone();
+        // ADR-0254 / ADR-0285: Also prune companion ToolImage user message if immediately following
         if let Some(next_msg) = messages.get_mut(item.index + 1)
             && next_msg
                 .origin
@@ -494,8 +560,17 @@ fn apply_prune(
             && next_msg.images.is_some()
         {
             outcome.originals.push(next_msg.clone());
+            let mime = next_msg
+                .images
+                .as_ref()
+                .and_then(|imgs| imgs.first())
+                .map(|img| img.mime.clone())
+                .unwrap_or_else(|| "image".to_string());
             next_msg.images = None;
-            next_msg.content = "[cleared image payload]".to_string();
+            let id_str = call_id.as_deref().unwrap_or("unknown");
+            next_msg.content = format!(
+                "[cleared image payload ({mime}) — rehydrate with inspect handle \"call:{id_str}\"]"
+            );
             outcome.reclaimed_tokens += 1600;
         }
         // A `task` result carries the subagent's whole transcript as
@@ -1576,6 +1651,24 @@ mod tests {
         let out = prune_tool_results(&mut messages, 0, 1).unwrap();
         assert!(out.cleared_count >= 1);
         assert!(messages[2].images.is_none());
-        assert_eq!(messages[2].content, "[cleared image payload]");
+        assert!(messages[2].content.starts_with("[cleared image payload"));
+        assert!(messages[2].content.contains("call:c1"));
+    }
+
+    #[test]
+    fn user_uploaded_image_is_evicted_with_artifact_invoice() {
+        let user_msg = Message::new(Role::User, "User prompt with visual")
+            .with_images(vec![crate::ImagePart {
+                mime: "image/png".into(),
+                data: "very_large_base64_data".into(),
+            }]);
+        let assistant_msg = Message::new(Role::Assistant, "I will analyze this.");
+        let mut messages = vec![user_msg, assistant_msg];
+
+        let out = prune_tool_results(&mut messages, 0, 1).unwrap();
+        assert!(out.cleared_count >= 1);
+        assert!(messages[0].images.is_none());
+        assert!(messages[0].content.starts_with("User prompt with visual"));
+        assert!(messages[0].content.contains("[cleared image payload (image/png) — rehydrate with inspect handle \"artifact:"));
     }
 }

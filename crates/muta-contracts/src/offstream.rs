@@ -62,6 +62,25 @@ pub struct PagedOffstreamContent {
     pub next_cursor: Option<String>,
     /// Total lines in the retrieved segment.
     pub total_lines: usize,
+    /// Optional rehydrated media payload (e.g. visual image) for multimodal artifacts (ADR-0285).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<crate::ImagePart>,
+}
+
+impl PagedOffstreamContent {
+    pub fn new(text: impl Into<String>, next_cursor: Option<String>, total_lines: usize) -> Self {
+        Self {
+            text: text.into(),
+            next_cursor,
+            total_lines,
+            media: None,
+        }
+    }
+
+    pub fn with_media(mut self, media: crate::ImagePart) -> Self {
+        self.media = Some(media);
+        self
+    }
 }
 
 /// Pluggable offstream data source provider (ADR-0262).

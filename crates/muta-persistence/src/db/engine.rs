@@ -583,6 +583,18 @@ impl DatabaseEngine {
                 c.clear();
             }
         }
+        // ADR-0285: Durable CAS publication for multimodal images
+        if let Some(blob_store) = &self.blob_store
+            && let muta_contracts::EntryPayload::Message(message_payload) = &payload
+            && let Some(images) = &message_payload.images
+        {
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            for img in images {
+                if let Ok(bytes) = STANDARD.decode(&img.data) {
+                    let _ = blob_store.put(&bytes);
+                }
+            }
+        }
         let payload = serde_json::to_string(&payload)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         self.upsert_entry_row(EntryEnvelope {
@@ -649,10 +661,18 @@ impl DatabaseEngine {
     ) -> Result<()> {
         let mut refs: Vec<String> = Vec::new();
         for entry in entries {
-            if let muta_contracts::EntryPayload::Message(payload) = &entry.payload
-                && let Some(hash) = &payload.content_blob
-            {
-                refs.push(hash.clone());
+            if let muta_contracts::EntryPayload::Message(payload) = &entry.payload {
+                if let Some(hash) = &payload.content_blob {
+                    refs.push(hash.clone());
+                }
+                if let Some(images) = &payload.images {
+                    use base64::{Engine, engine::general_purpose::STANDARD};
+                    for img in images {
+                        if let Ok(bytes) = STANDARD.decode(&img.data) {
+                            refs.push(crate::blobs::BlobStore::hash(&bytes));
+                        }
+                    }
+                }
             }
         }
         for row in unknown {

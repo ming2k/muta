@@ -546,6 +546,37 @@ fn delta_save_offloads_only_newly_inserted_rows() {
     let _ = std::fs::remove_dir_all(blob_store.root());
 }
 
+#[test]
+fn image_payload_is_saved_to_cas_blob_store() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use muta_contracts::{ImagePart, InjectionKind, InjectionOrigin, Message, Role, TranscriptEntry};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let blob_store = BlobStore::new(tmp.path().to_path_buf());
+    let mut data = crate::session::SessionData::default();
+    let fake_image_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRfakedata";
+    let b64 = STANDARD.encode(fake_image_bytes);
+
+    let companion_msg = Message::new(Role::User, "Image from tool")
+        .with_images(vec![ImagePart {
+            mime: "image/png".to_string(),
+            data: b64,
+        }])
+        .with_origin(InjectionOrigin::new(InjectionKind::ToolImage));
+
+    data.transcript.push(TranscriptEntry::from_message(0, &companion_msg));
+    let _engine = engine_blob_round_trip(&data, &blob_store);
+
+    let expected_hash = BlobStore::hash(fake_image_bytes);
+    let stored_bytes = blob_store.get(&expected_hash);
+    assert!(
+        stored_bytes.is_some(),
+        "Image bytes must be written to CAS BlobStore upon saving session"
+    );
+    assert_eq!(stored_bytes.unwrap(), fake_image_bytes);
+    let _ = std::fs::remove_dir_all(blob_store.root());
+}
+
 fn engine_blob_round_trip(
     data: &crate::session::SessionData,
     blob_store: &BlobStore,

@@ -56,6 +56,7 @@ syn = { version = "2", features = ["derive"] }
 quote = "1"
 proc-macro2 = "1"
 base64 = "0.22"
+hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 # TypeScript binding generation for the web app's wire types: muta-contracts
 # derives `ts_rs::TS` on the payload types and exports them to
