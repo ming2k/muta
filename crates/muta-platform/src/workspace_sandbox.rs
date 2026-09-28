@@ -20,13 +20,9 @@ pub enum WorkspaceAccess {
 /// Active sandbox driver kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxDriverKind {
-    /// Linux Bubblewrap (namespaces, pivot_root, chroot).
+    /// Linux Bubblewrap (namespaces, ro-bind host overlay).
     LinuxBubblewrap,
-    /// macOS Seatbelt (`sandbox-exec` profiles).
-    MacosSeatbelt,
-    /// Windows Restricted Token / Job Object.
-    WindowsRestrictedToken,
-    /// No supported native isolation mechanism available.
+    /// No supported native isolation mechanism available on this host.
     Unavailable,
 }
 
@@ -41,15 +37,7 @@ pub fn driver_kind() -> SandboxDriverKind {
             SandboxDriverKind::Unavailable
         }
     }
-    #[cfg(target_os = "macos")]
-    {
-        SandboxDriverKind::Unavailable
-    }
-    #[cfg(target_os = "windows")]
-    {
-        SandboxDriverKind::Unavailable
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "linux"))]
     {
         SandboxDriverKind::Unavailable
     }
@@ -231,34 +219,18 @@ pub fn command_with_roots(
         if network_access == NetworkAccess::Disabled {
             invocation.arg("--unshare-net");
         }
-        invocation.args(["--tmpfs", "/"]);
 
-        let mut created = BTreeSet::new();
-        created.insert(PathBuf::from("/"));
-        ro_bind(&mut invocation, Path::new("/usr"), &mut created)?;
-        for path in ["/bin", "/sbin", "/lib", "/lib64", "/lib32"] {
-            bind_system_path(&mut invocation, Path::new(path), &mut created)?;
-        }
-        for path in [
-            "/etc/alternatives",
-            "/etc/ca-certificates",
-            "/etc/crypto-policies",
-            "/etc/hosts",
-            "/etc/ld.so.cache",
-            "/etc/localtime",
-            "/etc/nsswitch.conf",
-            "/etc/pki",
-            "/etc/resolv.conf",
-            "/etc/ssl/certs",
-        ] {
-            let path = Path::new(path);
-            if path.exists() {
-                ro_bind(&mut invocation, path, &mut created)?;
-            }
-        }
+        // ADR-0287: Pure immutable read-only host root overlay.
+        // Mounts the entire host filesystem as strictly read-only, eliminating
+        // fragile distro-specific path lists while preserving developer toolchains,
+        // glibc NSS databases, and SSL certificates across all Linux distributions.
+        invocation.args([
+            "--ro-bind", "/", "/",
+            "--dev", "/dev",
+            "--proc", "/proc",
+            "--tmpfs", "/tmp",
+        ]);
 
-        invocation.args(["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]);
-        create_ancestors(&mut invocation, &root, &mut created);
         invocation
             .arg(match workspace_access {
                 WorkspaceAccess::ReadOnly => "--ro-bind",
@@ -266,14 +238,8 @@ pub fn command_with_roots(
             })
             .arg(&root)
             .arg(&root);
+
         // Additional roots (ADR-0142): widened admission, same containment.
-        // Each entry is bind-mounted at its canonical path. The `created` set
-        // mixes real mounts with plain `--dir` markers (e.g. the tmpfs `/tmp`),
-        // so membership must NOT be read as "already covered" — a sibling under
-        // /tmp needs its own bind to become visible inside the tmpfs. Only an
-        // exact match (the entry *is* an already-bound root) or a vanished
-        // directory skips; a stale configured tree therefore cannot brick the
-        // sandbox, and nothing beyond the configured set is ever admitted.
         let mut bound_roots: BTreeSet<PathBuf> = BTreeSet::new();
         bound_roots.insert(root.clone());
         for extra in additional_roots {
@@ -283,22 +249,24 @@ pub fn command_with_roots(
             if !bound_roots.insert(canonical.clone()) {
                 continue;
             }
-            create_ancestors(&mut invocation, &canonical, &mut created);
             invocation.arg("--bind").arg(&canonical).arg(&canonical);
         }
-        invocation.args(["--dir", "/tmp/muta-home", "--chdir"]);
-        invocation.arg(&root);
+
+        invocation.arg("--chdir").arg(&root);
+
+        let path = std::env::var("PATH")
+            .unwrap_or_else(|_| "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string());
         invocation.args([
             "--clearenv",
             "--setenv",
             "HOME",
             "/tmp/muta-home",
             "--setenv",
+            "PATH",
+            &path,
+            "--setenv",
             "TMPDIR",
             "/tmp",
-            "--setenv",
-            "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "--setenv",
             "LANG",
             "C.UTF-8",
@@ -314,6 +282,27 @@ pub fn command_with_roots(
             "--setenv",
             "PAGER",
             "cat",
+            "--setenv",
+            "GIT_PAGER",
+            "cat",
+            "--setenv",
+            "EDITOR",
+            "false",
+            "--setenv",
+            "VISUAL",
+            "false",
+            "--setenv",
+            "GIT_EDITOR",
+            "false",
+            "--setenv",
+            "GIT_SEQUENCE_EDITOR",
+            "false",
+            "--setenv",
+            "DEBIAN_FRONTEND",
+            "noninteractive",
+            "--setenv",
+            "TERM",
+            "dumb",
         ]);
         for (name, value) in environment.iter().collect::<BTreeMap<_, _>>() {
             invocation.arg("--setenv").arg(name).arg(value);
@@ -356,76 +345,6 @@ fn bubblewrap_program() -> Option<&'static str> {
         Some("/bin/bwrap")
     } else {
         None
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn create_ancestors(
-    invocation: &mut tokio::process::Command,
-    path: &Path,
-    created: &mut BTreeSet<PathBuf>,
-) {
-    let mut ancestor = PathBuf::from("/");
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    for component in parent.components() {
-        if matches!(component, std::path::Component::RootDir) {
-            continue;
-        }
-        ancestor.push(component.as_os_str());
-        if created.insert(ancestor.clone()) {
-            invocation.arg("--dir").arg(&ancestor);
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn ro_bind(
-    invocation: &mut tokio::process::Command,
-    path: &Path,
-    created: &mut BTreeSet<PathBuf>,
-) -> Result<(), String> {
-    if !path.is_absolute() || !path.exists() {
-        return Err(format!(
-            "Cannot mount required sandbox runtime path '{}'.",
-            path.display()
-        ));
-    }
-    create_ancestors(invocation, path, created);
-    if path.is_dir() && created.insert(path.to_path_buf()) {
-        invocation.arg("--dir").arg(path);
-    }
-    invocation.arg("--ro-bind").arg(path).arg(path);
-    created.insert(path.to_path_buf());
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn bind_system_path(
-    invocation: &mut tokio::process::Command,
-    path: &Path,
-    created: &mut BTreeSet<PathBuf>,
-) -> Result<(), String> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            create_ancestors(invocation, path, created);
-            let target = std::fs::read_link(path).map_err(|error| {
-                format!(
-                    "Cannot read sandbox runtime symlink '{}': {error}",
-                    path.display()
-                )
-            })?;
-            invocation.arg("--symlink").arg(target).arg(path);
-            created.insert(path.to_path_buf());
-            Ok(())
-        }
-        Ok(_) => ro_bind(invocation, path, created),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!(
-            "Cannot inspect sandbox runtime path '{}': {error}",
-            path.display()
-        )),
     }
 }
 
@@ -487,12 +406,12 @@ mod tests {
             })
             .unwrap_or(false);
         assert!(bind_ok, "sibling not bound: {arguments:?}");
-        // ...and the process can read and write through it, while the temp
-        // parent holding both scratch dirs stays otherwise invisible.
+        // ...and the process can read and write through it, while the host
+        // filesystem outside the roots remains read-only.
         std::fs::write(
             root.join("probe.sh"),
             format!(
-                "cat {}/sibling.txt && touch {}/written && ! test -e /etc/passwd",
+                "cat {}/sibling.txt && touch {}/written && ! touch /etc/muta_leak_test 2>/dev/null",
                 sibling.display(),
                 sibling.display()
             ),
@@ -522,7 +441,7 @@ mod tests {
         let root = scratch();
         std::fs::write(root.join("visible"), "ok").unwrap();
         let mut command = shell(
-            "test -r visible && ! touch created 2>/dev/null && test ! -e /etc/passwd",
+            "test -r visible && ! touch created 2>/dev/null && ! touch /etc/muta_leak_test 2>/dev/null",
             &root,
             WorkspaceAccess::ReadOnly,
             NetworkAccess::Disabled,

@@ -52,6 +52,7 @@ pub async fn run_episodic_command(
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         invocation.current_dir(env.workspace_root());
+        muta_platform::shell::configure_headless_env(&mut invocation);
         muta_platform::process::spawn_owned(&mut invocation)
     }
     .map_err(|e| format!("Failed to execute and contain process tree: {e}"))?;
@@ -88,29 +89,31 @@ pub async fn run_episodic_command(
 
     let mut collector = OutputCollector::new();
     let mut idle_blocked = false;
+    let mut interactive_blocked = false;
     let mut timed_out = false;
     let mut stream_guarded = false;
 
-    loop {
-        let idle = tokio::time::sleep(idle_budget);
-        let wall_timeout = tokio::time::sleep_until(timeout_deadline);
-        tokio::pin!(idle);
-        tokio::pin!(wall_timeout);
+    // ADR-0286: Telemetry-driven interactive wait-state detection.
+    // If stdin is Closed, an unattended command that stops producing output
+    // and enters a zero-CPU sleeping state is stalled on an interactive prompt
+    // or editor. Detect and trip the circuit breaker in seconds instead of 8 minutes.
+    let interactive_check_floor = Duration::from_secs(5);
+    let mut last_output_at = tokio::time::Instant::now();
+    let mut last_sample_at = tokio::time::Instant::now();
+    let mut last_sample = process_tree.sample_activity();
+    let mut ticker = tokio::time::interval(Duration::from_millis(250));
 
+    loop {
         tokio::select! {
             biased;
-            _ = &mut wall_timeout => {
-                timed_out = true;
-                break;
-            }
-            _ = &mut idle => {
-                idle_blocked = true;
-                break;
-            }
             msg = readers.rx.recv() => {
                 match msg {
                     Some((stream, text)) => {
                         collector.push_line(stream, text, on_stream);
+                        let now = tokio::time::Instant::now();
+                        last_output_at = now;
+                        last_sample_at = now;
+                        last_sample = process_tree.sample_activity();
                         // ADR-0257: Detect continuous streaming flood early in foreground execution.
                         if collector.is_stream_flooded(raw) {
                             stream_guarded = true;
@@ -120,10 +123,37 @@ pub async fn run_episodic_command(
                     None => break, // channel closed -> normal completion
                 }
             }
+            _ = ticker.tick() => {
+                let now = tokio::time::Instant::now();
+                if now >= timeout_deadline {
+                    timed_out = true;
+                    break;
+                }
+                if now.duration_since(last_output_at) >= idle_budget {
+                    idle_blocked = true;
+                    break;
+                }
+                if stdin_policy == muta_contracts::StdinPolicy::Closed
+                    && now.duration_since(last_output_at) >= interactive_check_floor
+                {
+                    let current_sample = process_tree.sample_activity();
+                    if current_sample.process_count > 0 && current_sample.all_sleeping {
+                        if now.duration_since(last_sample_at) >= Duration::from_secs(2)
+                            && current_sample.total_cpu_ticks == last_sample.total_cpu_ticks
+                        {
+                            interactive_blocked = true;
+                            break;
+                        }
+                    } else if current_sample.total_cpu_ticks > last_sample.total_cpu_ticks {
+                        last_sample = current_sample;
+                        last_sample_at = now;
+                    }
+                }
+            }
         }
     }
 
-    if timed_out || idle_blocked || stream_guarded {
+    if timed_out || idle_blocked || interactive_blocked || stream_guarded {
         let _ = process_tree.terminate();
         readers.stdout_task.abort();
         readers.stderr_task.abort();
@@ -135,7 +165,7 @@ pub async fn run_episodic_command(
     }
     collector.flush_stream(on_stream);
 
-    let exit = if timed_out || idle_blocked || stream_guarded {
+    let exit = if timed_out || idle_blocked || interactive_blocked || stream_guarded {
         None
     } else {
         child.wait().await.ok().and_then(|s| s.code())
@@ -143,6 +173,8 @@ pub async fn run_episodic_command(
 
     let termination = if timed_out {
         muta_contracts::tool_output::ShellTermination::Timeout
+    } else if interactive_blocked {
+        muta_contracts::tool_output::ShellTermination::InteractiveBlocked
     } else if idle_blocked {
         muta_contracts::tool_output::ShellTermination::IdleBlocked
     } else if stream_guarded {

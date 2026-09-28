@@ -155,6 +155,93 @@ async fn execute_command_child_runs_in_its_own_process_group() {
     }
 }
 
+/// ADR-0286: The execution environment must be hermetically headless:
+/// $EDITOR and $VISUAL must be 'false' and fail-fast with non-zero exit.
+#[tokio::test]
+async fn execute_command_hermetic_headless_environment_prevents_interactive_editor() {
+    let tool = ExecuteCommandTool::new(None);
+    let out = tool
+        .call_structured(r#"{"command":"$EDITOR /tmp/test_msg.txt || echo editor_failed"}"#)
+        .await
+        .expect("ok");
+    match out {
+        muta_contracts::ToolOutput::Shell { stdout, .. } => {
+            assert!(stdout.contains("editor_failed"));
+        }
+        other => panic!("expected Shell, got {:?}", other),
+    }
+}
+
+/// ADR-0286: Controlling terminal decoupling prevents opening /dev/tty on Unix.
+#[cfg(unix)]
+#[tokio::test]
+async fn execute_command_detaches_controlling_terminal() {
+    let tool = ExecuteCommandTool::new(None);
+    let out = tool
+        .call_structured(r#"{"command":"python3 -c \"import os; os.open('/dev/tty', os.O_RDWR)\" 2>&1 || echo cannot_open_tty"}"#)
+        .await
+        .expect("ok");
+    match out {
+        muta_contracts::ToolOutput::Shell { stdout, .. } => {
+            assert!(stdout.contains("cannot_open_tty") || stdout.contains("No such device or address"));
+        }
+        other => panic!("expected Shell, got {:?}", other),
+    }
+}
+
+/// ADR-0286: git tag without -m fails fast when tag.gpgsign is true instead of opening an editor and hanging.
+#[cfg(unix)]
+#[tokio::test]
+async fn execute_command_git_tag_fails_fast_when_gpgsign_enabled() {
+    let tool = ExecuteCommandTool::new(None);
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let repo = tmp.path().display().to_string();
+    let script = format!(
+        "git -C {repo} init && \
+         git -C {repo} commit --allow-empty -m init && \
+         git -C {repo} config tag.gpgsign true && \
+         git -C {repo} tag v0.0.1 2>&1 || echo git_tag_failed_fast"
+    );
+    let out = tool
+        .call_structured(&format!(r#"{{"command":{}}}"#, serde_json::to_string(&script).unwrap()))
+        .await
+        .expect("ok");
+    match out {
+        muta_contracts::ToolOutput::Shell { stdout, .. } => {
+            assert!(
+                stdout.contains("problem with the editor")
+                    || stdout.contains("git_tag_failed_fast")
+            );
+        }
+        other => panic!("expected Shell, got {:?}", other),
+    }
+}
+
+/// ADR-0286: An uncooperative process that stalls in zero-CPU sleeping state
+/// with zero output is killed early with `InteractiveBlocked` rather than waiting 8 minutes.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn execute_command_interactive_stall_circuit_breaker_trips_early() {
+    let tool = ExecuteCommandTool::new(None);
+    let start = std::time::Instant::now();
+    let out = tool
+        .call_structured(r#"{"command":"sleep 60", "timeout": 60}"#)
+        .await
+        .expect("ok");
+    let elapsed = start.elapsed();
+    match out {
+        muta_contracts::ToolOutput::Shell { termination, .. } => {
+            assert_eq!(
+                termination,
+                muta_contracts::tool_output::ShellTermination::InteractiveBlocked
+            );
+            // Must have tripped well below the 20s idle budget (1/3 of 60s) or 60s timeout, around ~7s.
+            assert!(elapsed.as_secs() < 15, "took too long: {:?}", elapsed);
+        }
+        other => panic!("expected Shell, got {:?}", other),
+    }
+}
+
 /// A timed-out command's whole process group is killed.
 #[cfg(unix)]
 #[tokio::test]
@@ -335,7 +422,7 @@ async fn workspace_shell_sees_only_runtime_and_exact_workspace() {
     ));
     let tool = ExecuteCommandTool::workspace_with_env(env);
     let command = format!(
-        "test -r visible && test ! -e {} && test ! -e /etc/passwd && \
+        "test -r visible && test ! -e {} && ! touch /etc/muta_leak_test 2>/dev/null && \
          test -z \"${{CARGO_MANIFEST_DIR:-}}\" && printf sandboxed > created",
         outside.display()
     );

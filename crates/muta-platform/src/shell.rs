@@ -50,7 +50,7 @@ impl ShellDialect {
 
     /// Build a non-interactive episodic shell command invocation for user script text.
     pub fn build_episodic_command(&self, script: &str) -> Command {
-        match self {
+        let mut command = match self {
             Self::Posix => {
                 let mut command = Command::new(self.executable_name());
                 command.arg("-c").arg(script);
@@ -71,12 +71,14 @@ impl ShellDialect {
                     ));
                 command
             }
-        }
+        };
+        configure_headless_env(&mut command);
+        command
     }
 
     /// Build a persistent interactive-like shell command reading from stdin.
     pub fn build_persistent_command(&self) -> Command {
-        match self {
+        let mut command = match self {
             Self::Posix => {
                 let mut command = Command::new(self.executable_name());
                 command.arg("-s");
@@ -94,7 +96,9 @@ impl ShellDialect {
                     .arg("-");
                 command
             }
-        }
+        };
+        configure_headless_env(&mut command);
+        command
     }
 
     /// Format a sentinel payload string written into stdin to execute `command`
@@ -143,6 +147,48 @@ impl ShellDialect {
             }
         }
     }
+}
+
+/// Configure standard hermetic headless environment invariants for non-interactive execution.
+///
+/// Implements ADR-0286:
+/// - Rejects interactive editor prompts fail-fast (`EDITOR=false`, `VISUAL=false`).
+/// - Suppresses credential and pager blocking (`GIT_TERMINAL_PROMPT=0`, `PAGER=cat`).
+/// - Sets ecosystem non-interactive consensus (`CI=1`, `DEBIAN_FRONTEND=noninteractive`, `TERM=dumb`).
+/// - Strips host terminal and display environment bindings (`GPG_TTY`, `DISPLAY`, `WAYLAND_DISPLAY`).
+pub fn configure_headless_env(command: &mut Command) {
+    command
+        .env("EDITOR", "false")
+        .env("VISUAL", "false")
+        .env("GIT_EDITOR", "false")
+        .env("GIT_SEQUENCE_EDITOR", "false")
+        .env("PAGER", "cat")
+        .env("GIT_PAGER", "cat")
+        .env("CI", "1")
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("TERM", "dumb")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GPG_TTY")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY");
+}
+
+/// Synchronous counterpart of [`configure_headless_env`] for standard process commands.
+pub fn configure_headless_env_std(command: &mut std::process::Command) {
+    command
+        .env("EDITOR", "false")
+        .env("VISUAL", "false")
+        .env("GIT_EDITOR", "false")
+        .env("GIT_SEQUENCE_EDITOR", "false")
+        .env("PAGER", "cat")
+        .env("GIT_PAGER", "cat")
+        .env("CI", "1")
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("TERM", "dumb")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GPG_TTY")
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY");
 }
 
 /// Detect the default native shell dialect of the host platform.

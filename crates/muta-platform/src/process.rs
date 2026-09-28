@@ -50,6 +50,23 @@ impl OwnedProcessTree {
     pub fn terminate(&self) -> io::Result<()> {
         self.native.terminate()
     }
+
+    /// Sample aggregate process activity and kernel wait states for this process tree.
+    #[must_use]
+    pub fn sample_activity(&self) -> ProcessActivitySample {
+        self.native.sample_activity()
+    }
+}
+
+/// Snapshot of kernel execution activity for an owned process tree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProcessActivitySample {
+    /// Number of live descendant processes observed in this process group.
+    pub process_count: usize,
+    /// Aggregate CPU ticks (user + system time) across all live processes in the group.
+    pub total_cpu_ticks: u64,
+    /// Whether all live processes in the group are in interruptible sleep (`state == 'S'`).
+    pub all_sleeping: bool,
 }
 
 /// Stable-enough native process identity used to avoid acting on a recycled
@@ -149,7 +166,18 @@ mod native {
     }
 
     pub(super) fn configure_owned(command: &mut Command) {
-        command.process_group(0);
+        // SAFETY: `setsid` is async-signal-safe, creates a new session, establishes
+        // the child as the session and process-group leader (PGID == PID), and
+        // completely detaches it from the host controlling terminal (/dev/tty)
+        // per ADR-0286.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
 
     pub(super) fn rollback_failed_attach(child: &Child) {
@@ -190,6 +218,60 @@ mod native {
                 } else {
                     Err(error)
                 }
+            }
+        }
+
+        pub(super) fn sample_activity(&self) -> super::ProcessActivitySample {
+            #[cfg(target_os = "linux")]
+            {
+                let mut sample = super::ProcessActivitySample {
+                    process_count: 0,
+                    total_cpu_ticks: 0,
+                    all_sleeping: true,
+                };
+                let Ok(entries) = std::fs::read_dir("/proc") else {
+                    return sample;
+                };
+                for entry in entries.flatten() {
+                    let Ok(file_name) = entry.file_name().into_string() else {
+                        continue;
+                    };
+                    if !file_name.chars().all(|c| c.is_ascii_digit()) {
+                        continue;
+                    }
+                    let stat_path = entry.path().join("stat");
+                    let Ok(stat) = std::fs::read_to_string(stat_path) else {
+                        continue;
+                    };
+                    let Some((_, tail)) = stat.rsplit_once(") ") else {
+                        continue;
+                    };
+                    let mut fields = tail.split_whitespace();
+                    let Some(state) = fields.next() else { continue };
+                    let _ppid = fields.next();
+                    let Some(pgid_str) = fields.next() else { continue };
+                    let Ok(proc_pgid) = pgid_str.parse::<libc::pid_t>() else { continue };
+                    if proc_pgid != self.pgid {
+                        continue;
+                    }
+
+                    sample.process_count += 1;
+                    if state != "S" {
+                        sample.all_sleeping = false;
+                    }
+                    // Fields: tail[0]=state, tail[1]=ppid, tail[2]=pgid,
+                    // tail[11]=utime, tail[12]=stime (skip 8 to reach tail[11])
+                    let mut remaining = fields.skip(8);
+                    let utime = remaining.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                    let stime = remaining.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                    sample.total_cpu_ticks += utime + stime;
+                }
+                sample
+            }
+
+            #[cfg(not(target_os = "linux"))]
+            {
+                super::ProcessActivitySample::default()
             }
         }
     }
@@ -402,6 +484,10 @@ mod native {
             } else {
                 Err(io::Error::last_os_error())
             }
+        }
+
+        pub(super) fn sample_activity(&self) -> super::ProcessActivitySample {
+            super::ProcessActivitySample::default()
         }
     }
 

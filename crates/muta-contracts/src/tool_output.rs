@@ -811,9 +811,10 @@ pub fn termination_model_note(termination: ShellTermination) -> Option<&'static 
              SUDO_ASKPASS) instead of repeating the same command.]",
         ),
         ShellTermination::InteractiveBlocked => Some(
-            "[not executed: the command was classified as interactive and no \
-             input was supplied. Pass the credential via a flag or env var and \
-             retry non-interactively.]",
+            "[killed by harness: command entered an interactive wait state (blocked with \
+             zero CPU activity and no output) in a non-interactive environment. \
+             Interactive prompts and editors are disabled. Supply all required \
+             messages, confirmations, or flags non-interactively in the command line.]",
         ),
         ShellTermination::Timeout => Some(
             "[killed by harness: wall-clock timeout reached — the command was \
