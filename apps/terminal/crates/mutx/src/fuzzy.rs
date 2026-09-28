@@ -37,6 +37,297 @@ const PENALTY_GAP: i64 = 3;
 const PENALTY_SCATTER_SPAN: i64 = 2;
 const NEG: i64 = i64::MIN / 4;
 
+use std::cell::RefCell;
+
+/// Pre-allocated scratchpad buffers reused across calls to eliminate heap allocations
+/// during fuzzy matching.
+pub struct Scratchpad {
+    pub h: Vec<char>,
+    pub dp: Vec<i64>,
+    pub back: Vec<Option<u32>>,
+}
+
+impl Default for Scratchpad {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Scratchpad {
+    pub fn new() -> Self {
+        Self {
+            h: Vec::with_capacity(512),
+            dp: Vec::with_capacity(512 * 64),
+            back: Vec::with_capacity(512 * 64),
+        }
+    }
+
+    #[inline]
+    fn prepare_tables(&mut self, total_cells: usize) {
+        if self.dp.len() < total_cells {
+            self.dp.resize(total_cells, NEG);
+        }
+        if self.back.len() < total_cells {
+            self.back.resize(total_cells, None);
+        }
+    }
+}
+
+thread_local! {
+    static THREAD_SCRATCHPAD: RefCell<Scratchpad> = RefCell::new(Scratchpad::new());
+}
+
+/// Pre-compiled search query (needle) optimized for high-throughput batch filtering.
+/// Compiles needle character representations once, enabling zero-allocation subsequence
+/// testing and hot DP matching over hundreds of thousands of candidate items.
+#[derive(Debug, Clone)]
+pub struct Matcher {
+    pub needle_chars: Vec<char>,
+    pub is_ascii: bool,
+    pub needle_bytes_lower: Vec<u8>,
+}
+
+impl Matcher {
+    /// Compile a query into a reusable `Matcher`.
+    pub fn new(query: &str) -> Self {
+        let is_ascii = query.is_ascii();
+        let needle_bytes_lower = if is_ascii {
+            query.bytes().map(|b| b.to_ascii_lowercase()).collect()
+        } else {
+            Vec::new()
+        };
+        Self {
+            needle_chars: query.chars().collect(),
+            is_ascii,
+            needle_bytes_lower,
+        }
+    }
+
+    /// Fast, zero-allocation pre-filter: returns whether needle is a case-insensitive
+    /// subsequence of haystack. Rejects non-matches in O(|haystack|) without allocations.
+    #[inline]
+    pub fn is_subsequence(&self, haystack: &str) -> bool {
+        if self.needle_chars.is_empty() {
+            return true;
+        }
+        if self.is_ascii && haystack.is_ascii() {
+            if haystack.len() < self.needle_bytes_lower.len() {
+                return false;
+            }
+            let mut n_idx = 0;
+            let n_len = self.needle_bytes_lower.len();
+            let mut target = self.needle_bytes_lower[0];
+            for &b in haystack.as_bytes() {
+                if b.to_ascii_lowercase() == target {
+                    n_idx += 1;
+                    if n_idx == n_len {
+                        return true;
+                    }
+                    target = self.needle_bytes_lower[n_idx];
+                }
+            }
+            return false;
+        }
+
+        // Unicode path
+        let mut needle_iter = self.needle_chars.iter();
+        let mut target = match needle_iter.next() {
+            Some(&c) => c,
+            None => return true,
+        };
+        for c in haystack.chars() {
+            if c.eq_ignore_ascii_case(&target) {
+                match needle_iter.next() {
+                    Some(&next_c) => target = next_c,
+                    None => return true,
+                }
+            }
+        }
+        false
+    }
+
+    /// Fuzzy-match against `haystack` using the given scratchpad buffer.
+    /// Completely zero-allocation on the match loop.
+    pub fn match_with_scratch(
+        &self,
+        haystack: &str,
+        scratch: &mut Scratchpad,
+    ) -> Option<FuzzyMatch> {
+        let n_len = self.needle_chars.len();
+        if n_len == 0 {
+            return Some(FuzzyMatch {
+                score: 0,
+                positions: Vec::new(),
+            });
+        }
+
+        // 1. Fast subsequence rejection: avoids DP and UTF-8 collecting on 99%+ of candidates.
+        if !self.is_subsequence(haystack) {
+            return None;
+        }
+
+        // 2. Collect haystack chars into reusable scratch buffer
+        scratch.h.clear();
+        scratch.h.extend(haystack.chars());
+        let h_len = scratch.h.len();
+        if h_len < n_len {
+            return None;
+        }
+
+        let total_cells = n_len * h_len;
+        scratch.prepare_tables(total_cells);
+
+        let n = &self.needle_chars;
+        let h = &scratch.h;
+
+        // Base case: needle[0] can match any single haystack char with no predecessor.
+        let n0 = n[0];
+        for j in 0..h_len {
+            if h[j].eq_ignore_ascii_case(&n0) {
+                scratch.dp[j] = char_bonus(h, j, n0);
+            } else {
+                scratch.dp[j] = NEG;
+            }
+            scratch.back[j] = None;
+        }
+
+        // Inductive case: one forward pass per needle char, maintaining a running
+        // max so the inner loop stays O(h_len) instead of O(h_len^2).
+        for i in 1..n_len {
+            let row_offset = i * h_len;
+            let prev_row_offset = (i - 1) * h_len;
+            let ni = n[i];
+
+            scratch.dp[row_offset..row_offset + h_len].fill(NEG);
+            scratch.back[row_offset..row_offset + h_len].fill(None);
+
+            let mut running_max = NEG;
+            let mut running_max_k: Option<u32> = None;
+
+            for j in 0..h_len {
+                // 1) Try matching needle[i] at haystack[j].
+                if h[j].eq_ignore_ascii_case(&ni) {
+                    let mut best_val = NEG;
+                    let mut best_k: Option<u32> = None;
+                    // Adjacent predecessor (k = j-1) earns the consecutive bonus.
+                    if j >= 1 {
+                        let prev_val = scratch.dp[prev_row_offset + j - 1];
+                        if prev_val != NEG {
+                            best_val = prev_val.saturating_add(BONUS_CONSECUTIVE);
+                            best_k = Some((j - 1) as u32);
+                        }
+                    }
+                    // Non-adjacent best from the running max beats the adjacent
+                    // candidate only when it strictly exceeds it, so ties keep
+                    // the adjacent path (visually tighter highlight run).
+                    if running_max != NEG && running_max > best_val {
+                        best_val = running_max;
+                        best_k = running_max_k;
+                    }
+                    if best_val != NEG {
+                        let total = best_val.saturating_add(char_bonus(h, j, ni));
+                        if total > scratch.dp[row_offset + j] {
+                            scratch.dp[row_offset + j] = total;
+                            scratch.back[row_offset + j] = best_k;
+                        }
+                    }
+                }
+
+                // 2) Extend the running max with k=j as a future predecessor
+                //    (contributes dp[i-1][j] with no gap when matched at j+1).
+                let prev_cell = scratch.dp[prev_row_offset + j];
+                if prev_cell != NEG && prev_cell > running_max {
+                    running_max = prev_cell;
+                    running_max_k = Some(j as u32);
+                }
+
+                // 3) Age the running max by one gap unit for the next iteration.
+                running_max = running_max.saturating_sub(PENALTY_GAP);
+            }
+        }
+
+        // Pick the best ending position for the last needle char. Strict `>`
+        // keeps the lowest-`j` end on ties, which visually favors earlier matches.
+        let last_row_offset = (n_len - 1) * h_len;
+        let mut best_end: Option<usize> = None;
+        let mut best_score = NEG;
+        for j in 0..h_len {
+            let cell = scratch.dp[last_row_offset + j];
+            if cell > best_score {
+                best_score = cell;
+                best_end = Some(j);
+            }
+        }
+        let end = best_end?;
+        if best_score == NEG {
+            return None;
+        }
+
+        // Reconstruct positions by following back-pointers from (n_len-1, end).
+        let mut positions: Vec<usize> = Vec::with_capacity(n_len);
+        let mut i = n_len - 1;
+        let mut j = end;
+        loop {
+            positions.push(j);
+            if i == 0 {
+                break;
+            }
+            let prev_j = scratch.back[i * h_len + j]? as usize;
+            j = prev_j;
+            i -= 1;
+        }
+        positions.reverse();
+        debug_assert_eq!(positions.len(), n_len);
+
+        // Multi-tier structural scoring bonuses (Industry Gold Standard):
+        // Tier 0: Exact full string match
+        // Tier 1: Exact whole-word match (bounded by whitespace/punctuation)
+        // Tier 2: Word prefix match (needle starts a word)
+        // Tier 3: Contiguous substring match (needle appears contiguous mid-word)
+        // Tier 4: Scattered subsequence (penalized proportionally to scatter span)
+        let is_contiguous = positions.windows(2).all(|w| w[1] == w[0] + 1);
+        let first_pos = *positions.first().unwrap_or(&0);
+        let last_pos = *positions.last().unwrap_or(&0);
+
+        let left_boundary =
+            first_pos == 0 || is_word_boundary(Some(h[first_pos - 1]), h[first_pos]);
+        let next_char = if last_pos + 1 < h_len {
+            Some(h[last_pos + 1])
+        } else {
+            None
+        };
+        let right_boundary = is_right_boundary(h[last_pos], next_char);
+
+        if is_contiguous {
+            if left_boundary && right_boundary {
+                if positions.len() == h_len {
+                    best_score = best_score.saturating_add(BONUS_EXACT_FULL);
+                } else {
+                    best_score = best_score.saturating_add(BONUS_EXACT_WORD);
+                }
+            } else if left_boundary {
+                best_score = best_score.saturating_add(BONUS_WORD_PREFIX);
+            } else {
+                best_score = best_score.saturating_add(BONUS_CONTIGUOUS_SUBSTRING);
+            }
+        } else {
+            let span = last_pos.saturating_sub(first_pos) + 1;
+            let excess_span = span.saturating_sub(n_len);
+            let scatter_penalty = (excess_span as i64).saturating_mul(PENALTY_SCATTER_SPAN);
+            best_score = best_score.saturating_sub(scatter_penalty);
+        }
+
+        // Compactness penalty: slight penalty for extremely long haystacks to favor compact prompts
+        let compactness_penalty = ((h_len.saturating_sub(n_len)) / 10).min(30) as i64;
+        best_score = best_score.saturating_sub(compactness_penalty);
+
+        Some(FuzzyMatch {
+            score: best_score,
+            positions,
+        })
+    }
+}
+
 /// True if the transition `prev → cur` is a word boundary: at the start of
 /// the haystack, just after whitespace or punctuation, or at a lower→upper
 /// camelCase boundary. Matched chars at boundaries get [`BONUS_BOUNDARY`] so
@@ -98,162 +389,16 @@ fn char_bonus(h: &[char], j: usize, needle_c: char) -> i64 {
 /// `positions` are char indices (not byte offsets) into `haystack`, in
 /// ascending order, one per needle char.
 pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<FuzzyMatch> {
-    let h: Vec<char> = haystack.chars().collect();
-    let n: Vec<char> = needle.chars().collect();
-
-    if n.is_empty() {
+    if needle.is_empty() {
         return Some(FuzzyMatch {
             score: 0,
             positions: Vec::new(),
         });
     }
-
-    let h_len = h.len();
-    let n_len = n.len();
-    if h_len < n_len {
-        return None;
-    }
-
-    // dp[i][j]: best score matching n[0..=i] ending exactly at h[j] (h[j]
-    // consumed). NEG means "impossible". back[i][j]: the j' matched to n[i-1]
-    // on the optimal path into dp[i][j], for reconstruction.
-    let mut dp = vec![vec![NEG; h_len]; n_len];
-    let mut back: Vec<Vec<Option<usize>>> = vec![vec![None; h_len]; n_len];
-
-    // Base case: needle[0] can match any single haystack char with no predecessor.
-    for j in 0..h_len {
-        if h[j].eq_ignore_ascii_case(&n[0]) {
-            dp[0][j] = char_bonus(&h, j, n[0]);
-        }
-    }
-
-    // Inductive case: one forward pass per needle char, maintaining a running
-    // max so the inner loop stays O(h_len) instead of O(h_len^2).
-    //
-    // running_max = max over k<j of (dp[i-1][k] - PENALTY_GAP * (j-1-k))
-    // running_max_k = the k achieving it (oldest on ties, refreshed lazily).
-    //
-    // At each j we also explicitly consider the immediately-adjacent
-    // predecessor k=j-1 because only it earns BONUS_CONSECUTIVE; the running
-    // max above already includes k=j-1 with no penalty, so we just compare
-    // "with consecutive bonus" against "best non-adjacent aged value".
-    for i in 1..n_len {
-        let mut running_max = NEG;
-        let mut running_max_k: Option<usize> = None;
-        for j in 0..h_len {
-            // 1) Try matching needle[i] at haystack[j].
-            if h[j].eq_ignore_ascii_case(&n[i]) {
-                let mut best_val = NEG;
-                let mut best_k: Option<usize> = None;
-                // Adjacent predecessor (k = j-1) earns the consecutive bonus.
-                if j >= 1 && dp[i - 1][j - 1] != NEG {
-                    best_val = dp[i - 1][j - 1].saturating_add(BONUS_CONSECUTIVE);
-                    best_k = Some(j - 1);
-                }
-                // Non-adjacent best from the running max beats the adjacent
-                // candidate only when it strictly exceeds it, so ties keep
-                // the adjacent path (visually tighter highlight run).
-                if running_max != NEG && running_max > best_val {
-                    best_val = running_max;
-                    best_k = running_max_k;
-                }
-                if best_val != NEG {
-                    let total = best_val.saturating_add(char_bonus(&h, j, n[i]));
-                    if total > dp[i][j] {
-                        dp[i][j] = total;
-                        back[i][j] = best_k;
-                    }
-                }
-            }
-
-            // 2) Extend the running max with k=j as a future predecessor
-            //    (contributes dp[i-1][j] with no gap when matched at j+1).
-            if dp[i - 1][j] != NEG && dp[i - 1][j] > running_max {
-                running_max = dp[i - 1][j];
-                running_max_k = Some(j);
-            }
-            // 3) Age the running max by one gap unit for the next iteration.
-            running_max = running_max.saturating_sub(PENALTY_GAP);
-        }
-    }
-
-    // Pick the best ending position for the last needle char. Strict `>`
-    // keeps the lowest-`j` end on ties, which visually favors earlier matches.
-    let mut best_end: Option<usize> = None;
-    let mut best_score = NEG;
-    for (j, &cell) in dp[n_len - 1].iter().enumerate() {
-        if cell > best_score {
-            best_score = cell;
-            best_end = Some(j);
-        }
-    }
-    let end = best_end?;
-    if best_score == NEG {
-        return None;
-    }
-
-    // Reconstruct positions by following back-pointers from (n_len-1, end).
-    let mut positions: Vec<usize> = Vec::with_capacity(n_len);
-    let mut i = n_len - 1;
-    let mut j = end;
-    loop {
-        positions.push(j);
-        if i == 0 {
-            break;
-        }
-        {
-            let prev_j = back[i][j]?;
-            j = prev_j;
-            i -= 1;
-        }
-    }
-    positions.reverse();
-    debug_assert_eq!(positions.len(), n_len);
-
-    // Multi-tier structural scoring bonuses (Industry Gold Standard):
-    // Tier 0: Exact full string match
-    // Tier 1: Exact whole-word match (bounded by whitespace/punctuation)
-    // Tier 2: Word prefix match (needle starts a word)
-    // Tier 3: Contiguous substring match (needle appears contiguous mid-word)
-    // Tier 4: Scattered subsequence (penalized proportionally to scatter span)
-    let is_contiguous = positions.windows(2).all(|w| w[1] == w[0] + 1);
-    let first_pos = *positions.first().unwrap_or(&0);
-    let last_pos = *positions.last().unwrap_or(&0);
-
-    let left_boundary = first_pos == 0 || is_word_boundary(Some(h[first_pos - 1]), h[first_pos]);
-    let next_char = if last_pos + 1 < h_len {
-        Some(h[last_pos + 1])
-    } else {
-        None
-    };
-    let right_boundary = is_right_boundary(h[last_pos], next_char);
-
-    if is_contiguous {
-        if left_boundary && right_boundary {
-            if positions.len() == h_len {
-                best_score = best_score.saturating_add(BONUS_EXACT_FULL);
-            } else {
-                best_score = best_score.saturating_add(BONUS_EXACT_WORD);
-            }
-        } else if left_boundary {
-            best_score = best_score.saturating_add(BONUS_WORD_PREFIX);
-        } else {
-            best_score = best_score.saturating_add(BONUS_CONTIGUOUS_SUBSTRING);
-        }
-    } else {
-        let span = last_pos.saturating_sub(first_pos) + 1;
-        let excess_span = span.saturating_sub(n_len);
-        let scatter_penalty = (excess_span as i64).saturating_mul(PENALTY_SCATTER_SPAN);
-        best_score = best_score.saturating_sub(scatter_penalty);
-    }
-
-    // Compactness penalty: slight penalty for extremely long haystacks to favor compact prompts
-    let compactness_penalty = ((h_len.saturating_sub(n_len)) / 10).min(30) as i64;
-    best_score = best_score.saturating_sub(compactness_penalty);
-
-    Some(FuzzyMatch {
-        score: best_score,
-        positions,
+    let matcher = Matcher::new(needle);
+    THREAD_SCRATCHPAD.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        matcher.match_with_scratch(haystack, &mut scratch)
     })
 }
 
@@ -261,12 +406,63 @@ pub fn fuzzy_match(haystack: &str, needle: &str) -> Option<FuzzyMatch> {
 /// original order on ties (stable). Returns `(original_index, FuzzyMatch)` for
 /// each item whose match is `Some`. An empty `query` matches every item with
 /// score `0` and no highlight positions, so the caller renders the full list.
+#[allow(dead_code)]
 pub fn rank<I: AsRef<str>>(items: &[I], query: &str) -> Vec<(usize, FuzzyMatch)> {
-    items
-        .iter()
-        .enumerate()
-        .filter_map(|(i, item)| fuzzy_match(item.as_ref(), query).map(|m| (i, m)))
-        .collect()
+    if query.is_empty() {
+        return items
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                (
+                    i,
+                    FuzzyMatch {
+                        score: 0,
+                        positions: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+    }
+
+    rank_iter(
+        items.iter().enumerate().map(|(i, item)| (i, item.as_ref())),
+        query,
+    )
+}
+
+/// Zero-allocation streaming rank: filter and score items provided by an indexed iterator.
+/// Reuses a compiled [`Matcher`] and thread-local scratchpad across all items.
+pub fn rank_iter<'a, I>(items: I, query: &str) -> Vec<(usize, FuzzyMatch)>
+where
+    I: IntoIterator<Item = (usize, &'a str)>,
+{
+    if query.is_empty() {
+        return items
+            .into_iter()
+            .map(|(i, _)| {
+                (
+                    i,
+                    FuzzyMatch {
+                        score: 0,
+                        positions: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+    }
+
+    let matcher = Matcher::new(query);
+    THREAD_SCRATCHPAD.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        items
+            .into_iter()
+            .filter_map(|(i, item)| {
+                matcher
+                    .match_with_scratch(item, &mut scratch)
+                    .map(|m| (i, m))
+            })
+            .collect()
+    })
 }
 
 /// Sort a list of `(index, FuzzyMatch)` in place by descending score, with
@@ -405,5 +601,43 @@ mod tests {
             assert_eq!(m.score, 0);
             assert!(m.positions.is_empty());
         }
+    }
+
+    /// Streaming rank_iter works identically to rank.
+    #[test]
+    fn rank_iter_matches_rank_results() {
+        let items = vec!["build all", "cargo test", "cat file", "scatter"];
+        let r1 = rank(&items, "cat");
+        let r2 = rank_iter(items.iter().enumerate().map(|(i, &s)| (i, s)), "cat");
+        assert_eq!(r1, r2);
+    }
+
+    /// Benchmarking/scale assertion: ranking 100,000 items is fast and returns valid results.
+    #[test]
+    fn batch_rank_100k_items_performance_and_correctness() {
+        let n = 100_000;
+        let mut items = Vec::with_capacity(n);
+        for i in 0..n {
+            if i % 1000 == 0 {
+                items.push("git commit -m 'fix bug'");
+            } else if i % 250 == 0 {
+                items.push("cargo build --release");
+            } else {
+                items.push("echo hello world from muta agent");
+            }
+        }
+
+        let start = std::time::Instant::now();
+        let mut ranked = rank_iter(items.iter().enumerate().map(|(i, &s)| (i, s)), "gcm");
+        sort_by_score(&mut ranked);
+        let elapsed = start.elapsed();
+
+        // 100 matches of "git commit -m 'fix bug'"
+        assert_eq!(ranked.len(), 100);
+        assert!(
+            elapsed.as_millis() < 500,
+            "100k items fuzzy ranking took {:?}, expected < 500ms in debug mode",
+            elapsed
+        );
     }
 }

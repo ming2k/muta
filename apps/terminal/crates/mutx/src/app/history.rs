@@ -74,15 +74,6 @@ impl App {
         // tail, so re-sort by created_at_ms (stable) to keep the panel's order
         // correct without mutating the stored Vec.
         let order: Vec<usize> = self.history_order();
-        let texts: Vec<&str> = order
-            .iter()
-            .map(|&i| {
-                self.input_history
-                    .get(i)
-                    .map(|e| e.text.as_str())
-                    .unwrap_or("")
-            })
-            .collect();
         if self.input.is_empty() {
             // Empty query → show everything newest-first, unhighlighted.
             return order
@@ -104,15 +95,17 @@ impl App {
             .map(|e| e.created_at_ms)
             .unwrap_or(0);
 
-        // `rank` returns indices into `texts`; map them back to the original
-        // `input_history` indices via `order`. The matched char positions are
-        // indices into the entry text itself, so they need no remap.
-        let mut ranked = fuzzy::rank(&texts, &self.input);
+        // Zero-allocation streaming rank: matches are filtered and scored in a single
+        // pass directly over the history entries without intermediate string allocations.
+        // `rank_iter` preserves the input `order` on ties (stable).
+        let items = order
+            .iter()
+            .filter_map(|&i| self.input_history.get(i).map(|e| (i, e.text.as_str())));
+        let mut ranked = fuzzy::rank_iter(items, &self.input);
 
         // Blend in recency decay and current session affinity (Industry Gold Standard)
-        for (ti, m) in &mut ranked {
-            let orig_idx = order[*ti];
-            if let Some(entry) = self.input_history.get(orig_idx) {
+        for (orig_idx, m) in &mut ranked {
+            if let Some(entry) = self.input_history.get(*orig_idx) {
                 // 1. Recency bonus: smooth decay based on age relative to newest item
                 if max_ts > 0 && entry.created_at_ms > 0 {
                     let age_ms = max_ts.saturating_sub(entry.created_at_ms);
@@ -145,7 +138,7 @@ impl App {
         }
 
         fuzzy::sort_by_score(&mut ranked);
-        ranked.into_iter().map(|(ti, m)| (order[ti], m)).collect()
+        ranked
     }
 
     /// The newest-first ordering of [`App::input_history`] by `created_at_ms`,

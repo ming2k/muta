@@ -1531,3 +1531,59 @@ async fn oldest_history_entry_up_arrow_does_not_cycle_cursor() {
     assert_eq!(app.input, "multiline\nentry\nbottom");
     assert_eq!(app.history_index, Some(0));
 }
+
+#[tokio::test]
+async fn history_rows_scales_to_100k_entries_without_lag() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.current_session_id = "session-scale".to_string();
+
+    let count = 100_000;
+    app.input_history.reserve(count);
+    for i in 0..count {
+        let text = if i % 1000 == 0 {
+            format!("git commit -m 'release {i}'")
+        } else if i % 200 == 0 {
+            format!("cargo test package_{i}")
+        } else {
+            format!("random prompt message line number {i}")
+        };
+        app.input_history.push(muta_contracts::HistoryEntry::new(
+            text,
+            Some("session-scale".to_string()),
+            Some("~/work".to_string()),
+            i as u64,
+        ));
+    }
+
+    assert_eq!(app.input_history.len(), count);
+
+    // 1. Empty query returns all 100,000 items newest-first
+    let t0 = std::time::Instant::now();
+    app.input.clear();
+    let rows_empty = app.history_rows();
+    let d0 = t0.elapsed();
+    assert_eq!(rows_empty.len(), count);
+    assert!(
+        d0.as_millis() < 500,
+        "empty query on 100k items took {:?}, expected < 500ms in debug mode",
+        d0
+    );
+
+    // 2. Filtered search with pre-filter pruning
+    let t1 = std::time::Instant::now();
+    app.input = "gcm".to_string();
+    let rows_filtered = app.history_rows();
+    let d1 = t1.elapsed();
+    // 100 matches of "git commit -m 'release {i}'"
+    assert_eq!(rows_filtered.len(), 100);
+    assert!(
+        d1.as_millis() < 250,
+        "search query on 100k items took {:?}, expected < 250ms in debug mode",
+        d1
+    );
+
+    // Verified results are ranked with highest scores first
+    for w in rows_filtered.windows(2) {
+        assert!(w[0].1.score >= w[1].1.score);
+    }
+}

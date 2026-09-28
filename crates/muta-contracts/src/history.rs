@@ -72,9 +72,15 @@ impl HistoryEntry {
     }
 }
 
+impl AsRef<str> for HistoryEntry {
+    fn as_ref(&self) -> &str {
+        &self.text
+    }
+}
+
 /// Cap on the number of history entries kept on disk. Matches the previous
 /// `Vec<String>` constant so the on-disk footprint stays bounded.
-pub const HISTORY_CAP: usize = 10_000;
+pub const HISTORY_CAP: usize = 100_000;
 
 /// Merge `incoming` into `existing`, taking the union and keeping the
 /// **newest** `created_at_ms` for each survivor, then sorting newest-first and
@@ -102,24 +108,25 @@ pub fn merge_history(
     // Preserve first-seen order from `existing`, then append `incoming`
     // entries whose identity is not already present, updating the timestamp
     // (and, under text-only identity, the origin) to the newer of the two
-    // when an identity collides.
+    // when an identity collides. O(N) index-backed lookup keeps this fast
+    // even at HISTORY_CAP (100,000 entries).
     let mut merged: Vec<HistoryEntry> = existing.to_vec();
-    for entry in incoming {
-        let slot = if dedup {
-            merged.iter_mut().find(|e| e.text == entry.text)
-        } else {
-            merged
-                .iter_mut()
-                .find(|e| e.text == entry.text && e.session_id == entry.session_id)
-        };
-        if let Some(slot) = slot {
-            if entry.created_at_ms > slot.created_at_ms {
-                slot.created_at_ms = entry.created_at_ms;
-                // Under text-only identity the newer entry's origin is the one
-                // the recall surfaces under — refresh it so ↑/↓ in the session
-                // that last sent the prompt still finds it. Only overwrite with
-                // a known origin; a legacy `None` never wipes a real one.
-                if dedup {
+
+    if dedup {
+        let mut index: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::with_capacity(existing.len() + incoming.len());
+        for (i, entry) in existing.iter().enumerate() {
+            index.entry(entry.text.as_str()).or_insert(i);
+        }
+        for entry in incoming {
+            if let Some(&idx) = index.get(entry.text.as_str()) {
+                let slot = &mut merged[idx];
+                if entry.created_at_ms > slot.created_at_ms {
+                    slot.created_at_ms = entry.created_at_ms;
+                    // Under text-only identity the newer entry's origin is the one
+                    // the recall surfaces under — refresh it so ↑/↓ in the session
+                    // that last sent the prompt still finds it. Only overwrite with
+                    // a known origin; a legacy `None` never wipes a real one.
                     if entry.session_id.is_some() {
                         slot.session_id = entry.session_id.clone();
                     }
@@ -127,11 +134,35 @@ pub fn merge_history(
                         slot.workspace = entry.workspace.clone();
                     }
                 }
+            } else {
+                let new_idx = merged.len();
+                index.insert(entry.text.as_str(), new_idx);
+                merged.push(entry.clone());
             }
-            continue;
         }
-        merged.push(entry.clone());
+    } else {
+        let mut index: std::collections::HashMap<(&str, Option<&str>), usize> =
+            std::collections::HashMap::with_capacity(existing.len() + incoming.len());
+        for (i, entry) in existing.iter().enumerate() {
+            index
+                .entry((entry.text.as_str(), entry.session_id.as_deref()))
+                .or_insert(i);
+        }
+        for entry in incoming {
+            let key = (entry.text.as_str(), entry.session_id.as_deref());
+            if let Some(&idx) = index.get(&key) {
+                let slot = &mut merged[idx];
+                if entry.created_at_ms > slot.created_at_ms {
+                    slot.created_at_ms = entry.created_at_ms;
+                }
+            } else {
+                let new_idx = merged.len();
+                index.insert(key, new_idx);
+                merged.push(entry.clone());
+            }
+        }
     }
+
     // Newest-first: stable sort keeps first-seen (disk) order among ties.
     merged.sort_by_key(|e| std::cmp::Reverse(e.created_at_ms));
     if merged.len() > HISTORY_CAP {
