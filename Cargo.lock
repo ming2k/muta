@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "muta"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "async-trait",
  "libc",
@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "muta-agent"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "async-trait",
  "base64",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "muta-client"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "muta-contracts",
  "muta-runtime",
@@ -1680,7 +1680,7 @@ dependencies = [
 
 [[package]]
 name = "muta-contracts"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "async-trait",
  "base64",
@@ -1700,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "muta-llm-client"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "async-trait",
  "base64",
@@ -1724,7 +1724,7 @@ dependencies = [
 
 [[package]]
 name = "muta-mcp"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "async-trait",
  "futures",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "muta-paths"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "directories",
  "muta-platform",
@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "muta-persistence"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "base64",
  "chrono",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "muta-platform"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "arboard",
  "base64",
@@ -1795,7 +1795,7 @@ dependencies = [
 
 [[package]]
 name = "muta-providers"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "aes",
  "async-trait",
@@ -1825,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "muta-runtime"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "async-trait",
  "base64",
@@ -1861,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "muta-skills"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "async-trait",
  "dirs",
@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "muta-tool-derive"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1892,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "mutx"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "arboard",
  "async-trait",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "mutx-engine"
-version = "0.50.14"
+version = "0.50.15"
 dependencies = [
  "bitflags",
  "crossterm",

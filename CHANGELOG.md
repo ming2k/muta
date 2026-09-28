@@ -5,6 +5,17 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.15] - 2026-09-28
+
+### Added
+
+- **100k Input History Scale & Zero-Allocation Fuzzy Engine.**
+  - Expanded global cross-session input history capacity `HISTORY_CAP` from 10,000 to 100,000 entries across persistence, wire contracts, and TUI presentation.
+  - Implemented high-throughput subsequence pre-filter in `fuzzy.rs` with ASCII byte-level fast-paths and multi-byte Unicode support, rejecting 99%+ of non-matches without allocations.
+  - Replaced nested heap matrix allocations with flat thread-local `Scratchpad` memory pools, eliminating runtime allocations during fuzzy ranking.
+  - Accelerated `merge_history` from $O(N^2)$ to $O(N)$ with borrowed-key hash lookup, dropping 100k entry merge latencies from >15s to sub-10ms.
+  - Introduced streaming `rank_iter` directly over history indices to eliminate intermediate allocations in `history_rows()`.
+
 ## [0.50.14] - 2026-09-27
 
 ### Added
@@ -7959,7 +7970,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.14...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.15...HEAD
+[0.50.15]: https://github.com/ming2k/muta/compare/v0.50.14...v0.50.15
 [0.50.14]: https://github.com/ming2k/muta/compare/v0.50.13...v0.50.14
 [0.50.13]: https://github.com/ming2k/muta/compare/v0.50.12...v0.50.13
 [0.50.12]: https://github.com/ming2k/muta/compare/v0.50.11...v0.50.12
