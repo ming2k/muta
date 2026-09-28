@@ -5,6 +5,20 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.17] - 2026-09-28
+
+### Added
+
+- **Hermetic Headless Execution & Physical Terminal Decoupling (ADR-0286).**
+  - Physical terminal decoupling: every owned subprocess calls `libc::setsid()` in `pre_exec` on Unix, detaching from the host controlling terminal (`ctty`). Any attempt to `open("/dev/tty")` fails instantaneously with `ENXIO`, mathematically guaranteeing zero TUI screen corruption.
+  - Universal headless environment baseline: standard injection of `CI=1`, `TERM=dumb`, `DEBIAN_FRONTEND=noninteractive`, `EDITOR=false`, `VISUAL=false`, `PAGER=cat`, `GIT_TERMINAL_PROMPT=0`, and severance of `GPG_TTY`, `DISPLAY`, `WAYLAND_DISPLAY`.
+  - Active interactive wait-state telemetry circuit breaker: samples process group kernel wait-states via `/proc/[pid]/stat`. When an unattended command with closed stdin produces zero output and has zero CPU progress with all processes sleeping, trips `ShellTermination::InteractiveBlocked` in ~5 seconds rather than waiting the blind 8-minute legacy budget.
+
+- **Hermetic Workspace Containment & Read-Only Host Overlay (ADR-0287).**
+  - Retired fragile 150-line handcrafted Linux filesystem path assembly (`/etc/crypto-policies`, `/etc/pki`, `/etc/alternatives`) in favor of pure immutable read-only host overlay (`--ro-bind / /`).
+  - Distro-agnostic native execution: works out-of-the-box across NixOS, Arch, Fedora, Debian, and Alpine with zero hardcoded path lists.
+  - Preserved developer toolchains (`cargo`, `rustup`, `node`, `python`) and glibc NSS user databases without toolchain amnesia while keeping the host filesystem strictly read-only (`EROFS`).
+
 ## [0.50.16] - 2026-09-28
 
 ### Added
