@@ -87,7 +87,7 @@ the `mutx` crate since ADR-0098; the shell addresses the view as
 | `event_loop.rs` | App loop: state sync, draw orchestration, action handling. |
 | `input/` | Event→`InputAction` keyboard/mouse dispatch. |
 | `terminal.rs` | Raw-mode / alt-screen setup-teardown, render-loop wiring. |
-| `completion.rs` | Slash-command / `@path` completion **logic** (`impl App`); the data types live in the view layer. |
+| `completion.rs` | Slash-command / `@` mention completion **logic** (`impl App`); the data types live in the view layer. |
 | `step_interaction.rs` | Transcript-step focus, toggle, keyboard interaction. |
 | `clipboard.rs` / `clipboard_ops.rs` | OSC52 + system clipboard, async copy. |
 | `question_model.rs` | Question-modal state machine. |

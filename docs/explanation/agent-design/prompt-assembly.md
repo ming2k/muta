@@ -88,6 +88,7 @@ a defined trigger, and each is recorded so the transcript remains faithful.
 | **Doom-loop block note** | The optional deterministic guard blocks a repeated watched tool signature before execution | Tell the model the call was refused and require a different command, file, query, or an explicit `abort` |
 | **Compaction checkpoint** | Context pressure triggers compaction | Wrap a model-written summary of archived rounds under a stable header that flags it as durable context, not a new request. See [Context compaction](context-compaction.md) |
 | **Implicit skill** | The latest user message mentions a skill name | Load the skill body so the model behaves as if it had explicitly invoked it. See [Skills](skills.md) |
+| **Implicit file** | The latest user message references a workspace path via `@file:` / `@files:` | Inject the referenced file's contents as a canonical `<file ref="@file:…">` envelope, so the model reads the source without a `read_text` call. See [Entity references](#entity-references) |
 | **Hook output** | A configured lifecycle hook returns injected context | Let user practice (lint failures, CI gates, reminders) re-enter the conversation. See [Lifecycle hooks](hooks.md) |
 | **Subagent steering** | A parent agent steers a running child | Land a visible user message directing the subagent, or a hidden inter-agent note. See [Subagent delegation](subagents.md) |
 | **Subagent task** | The harness starts a subagent or a session-review diagnostic | Open the child transcript with its delegated task or review input while retaining its non-user provenance |
@@ -103,6 +104,31 @@ The injected prompts follow a consistent provenance design. Every harness
 injection carries a structured record of *what* it is and *why* it is here, so
 the transcript stays reconstructible: resume, replay, and audit can answer
 "what was injected, when, and why" without fragile string-sniffing.
+
+## Entity references (`@`)
+
+`@` in a prompt is a **reference operator**, never content: `@file:{path}` and
+`@skill:{name}` are addresses for an asset, and an address is only meaningful
+once resolved. The user channel therefore carries two related things, and they
+must not be confused:
+
+- the user's own sentence, with each address **canonicalized** on the
+  provider-facing view (`@files:`/`@skills:`, bare `@name`, `skill://…`, and a
+  consumed `\@` escape all collapse to one spelling); the durable transcript
+  keeps the exact input;
+- one resolved **envelope** per mention, appended as a hidden user message:
+
+  ```text
+  <file path="src/main.rs" ref="@file:src/main.rs" bytes="10">…</file>
+  <skill name="rust-expert" scope="repo" ref="@skill:rust-expert">…</skill>
+  ```
+
+Outcome is an attribute, not prose: `status="rejected"` / `status="deferred"`
+with a `reason`, and `truncated="true"` / `total` for a partial file. A mention
+that is a *dispatch* target (`@session:`) is consumed by the harness and
+contributes zero bytes to the request. No unresolved `@`-literal ever reaches
+the provider. See
+[ADR-0288](../../adr/0288-entity-references-are-asset-references-and-canonical-wire-envelopes.md).
 
 ## Request-local temporary context
 

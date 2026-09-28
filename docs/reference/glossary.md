@@ -93,20 +93,25 @@ The architecture defines the Homogeneous Agent Model (ADR-0183): a single unifie
 | **skill discovery** | On-demand skill metadata returned by the `list_skills` tool; the system prompt carries no skills catalog. [Skills](../explanation/agent-design/skills.md) |
 | **skill body** | The full Markdown expertise document, delivered on demand through `use_skill` or an explicit implicit-invocation marker. [Skills](../explanation/agent-design/skills.md) |
 | **skill scope** | The ordered source priority cascade (lowest→highest): Remote, User, Extra, Repo. Higher scope overrides a same-named lower scope. [Skills](../explanation/agent-design/skills.md) |
-| **implicit invocation** | Explicit mention detection: the harness recognizes `@skill-name`, the disambiguated `@skill:name` / `@skills:name`, or `skill://…` and loads allowed skills as a hidden user message. Plain name occurrences do not trigger loading. [Skills](../explanation/agent-design/skills.md) |
+| **implicit invocation** | Explicit mention detection: the harness recognizes `@skill-name`, the disambiguated `@skill:name` / `@skills:name`, or `skill://…` and loads allowed skills as a canonical `<skill … ref="@skill:name">` hidden user message. Plain name occurrences do not trigger loading. [Skills](../explanation/agent-design/skills.md) |
 
 ## Input mentions
 
 The user input box recognizes `@`-prefixed mention syntax in the latest
-visible user message. Each mention form injects context or switches state
-before the round runs.
+visible user message. `@` is always a **reference to an asset** — a
+`@{namespace}:{target}` address — never content. Each address is resolved before
+the round runs and reaches the model as a canonical **envelope** (the asset
+itself), not as the bare token; the model never has to interpret an unresolved
+`@`-token. See [ADR-0288](../adr/0288-entity-references-are-asset-references-and-canonical-wire-envelopes.md).
 
 | Term | Definition |
 |------|------------|
-| **`@file:` mention** | Implicit file-content injection: `@file:src/main.rs` (or `@files:…`) reads that file and appends its contents as a hidden user message, so the model sees the source without an explicit `read_text` call. Sandboxed to the workspace root (symlink-hardened: absolute paths and `..` are rejected), capped at 50 KB per file and 10 files per round. Rejections surface as a hidden error note so the model learns why and can recover. |
-| **`@skill:` mention** | Disambiguated skill mention: `@skill:name` / `@skills:name` (plural mirrors `@files:`) load the named skill as a hidden user message, alongside the bare `@name` and `skill://…` forms. See [Skills](#skills) |
+| **`@file:` mention** | Implicit file-content injection: `@file:src/main.rs` (or `@files:…`) reads that file and appends its contents as a hidden user message, so the model sees the source without an explicit `read_text` call. The model receives a canonical `<file path="…" ref="@file:…" bytes="…">…</file>` envelope (rejections/truncation are attributes, not prose). Sandboxed to the workspace root (symlink-hardened: absolute paths and `..` are rejected), capped at 50 KB per file and 10 files per round. |
+| **`@skill:` mention** | Disambiguated skill mention: `@skill:name` / `@skills:name` (plural mirrors `@files:`) load the named skill as a hidden user message, alongside the bare `@name` and `skill://…` forms. The envelope carries `ref="@skill:name"`. See [Skills](#skills) |
+| **`@session:` mention** | Multi-session console dispatch target (`@session:{id}` / console `@N`). A **dispatch** reference consumed by the harness, never sent to the model: it contributes zero bytes to any provider request. |
+| **canonical address** | The one spelling of a reference on the wire: `@file:{path}` / `@skill:{name}`. `@files:`/`@skills:`, bare `@name`, `skill://…`, and a consumed `\@` escape all collapse to it in the request projection; the durable transcript keeps the user's exact input. |
 | **`/persona`** | Switch the active persona — identity *and* capability in one switch: `code` (default developer master), `architect`, `reviewer`, `security`, `code_analyst`, `conversational`. Aliases: `/role`, `/master`. [Slash commands](commands.md#persona) |
-| **`@path` mention** | TUI completion trigger only: typing `@` opens path completion; the `@` is dropped on accept. Not an injection form. [Input box](tui/input-box.md) |
+| **`@path` mention** | Composer completion trigger: typing `@` opens completion (namespaces `@file:` / `@skill:`, then project files/dirs/skills); selecting a candidate commits the canonical `@file:…` / `@skill:…` address. [Input box](tui/input-box.md) |
 
 ## TUI surfaces
 

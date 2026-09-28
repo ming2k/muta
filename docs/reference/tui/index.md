@@ -134,5 +134,5 @@ ADR-0079; paths below are relative to that directory.
 | `terminal.rs` | Terminal lifecycle: raw-mode/alt-screen setup-teardown, render-loop wiring |
 | `step_interaction.rs` | Transcript-step focus, toggle, and keyboard interaction |
 | `clipboard.rs` / `clipboard_ops.rs` | OSC52 + system clipboard integration; async copy/spawned-ops |
-| `completion.rs` | Slash-command / `@path` completion **logic** (`impl App`); reuses the view layer's data types |
+| `completion.rs` | Slash-command / `@` mention completion **logic** (`impl App`); reuses the view layer's data types |
 | `question_model.rs` | Question-modal state machine |

@@ -103,7 +103,7 @@ a paste inserts) in one keystroke, mirroring the chip-aware `Backspace`.
 
 ## Completion menu
 
-Typing a partial `/command` or an `@path` mention opens the completion
+Typing a partial `/command` or an `@mention` opens the completion
 popup above the composer. The menu follows the IDE-autocomplete contract:
 
 | Key | Behaviour while the menu is open |
@@ -129,6 +129,22 @@ command (the resolved state whose popup is deliberately hidden) and plain
 prose do not, so Tab never resurrects a menu the text no longer asks for.
 A keystroke (`InsertChar` / `Backspace`) also re-arms live completions on
 its own, clearing the dismissal latch.
+
+### Two-stage `@` completion is namespace-gated
+
+An `@` mention completes in two stages, and the namespace is a hard gate
+([ADR-0290](../adr/0290-two-stage-at-completion-is-namespace-gated.md)):
+
+1. **Stage 1 — namespaces.** A bare `@` (or a prefix of a namespace, e.g.
+   `@f`, `@sk`) offers only `@file:` / `@skill:`. A query that prefixes no
+   namespace (`@xyz`) offers **nothing** — it never leaks files or skills.
+2. **Stage 2 — content.** Files and skills appear only once a namespace is
+   committed (`@file:`, `@skill:`, or `@files:`/`@skills:`). Explicit
+   filesystem paths (`@./`, `@../`, `@~/`, `@/`) complete as raw paths.
+
+Selecting a candidate commits the canonical address (`@file:src/main.rs `,
+`@skill:rust-expert `); the namespace row and directory rows stay live so the
+menu descends, while a terminal file/skill row closes it.
 
 ## Selection
 

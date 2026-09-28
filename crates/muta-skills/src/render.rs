@@ -58,6 +58,11 @@ pub fn list_skill_files(root: &std::path::Path) -> Vec<String> {
 /// meta-prompting guidelines, scope, root directory, and auxiliary file listings.
 /// This guides the model to treat the content as authoritative standard operating
 /// procedures (SOP).
+///
+/// The `ref` attribute carries the **canonical address** of the skill
+/// (`@skill:{name}`, ADR-0288), mirroring `<file ref="…">`: the provider reads
+/// an asset reference, never a bare `@`-token whose spelling depends on how the
+/// user happened to write it.
 pub fn format_skill_injection(skill: &Skill, content: &str) -> String {
     let files = list_skill_files(&skill.root);
     let files_desc = if files.is_empty() {
@@ -70,7 +75,7 @@ pub fn format_skill_injection(skill: &Skill, content: &str) -> String {
     };
 
     format!(
-        "<skill name=\"{}\" scope=\"{}\">\n\
+        "<skill name=\"{}\" scope=\"{}\" ref=\"@skill:{}\">\n\
          <system_guidance>\n\
          The user activated domain skill \"{}\". Follow these standard operating procedures (SOP), \
          constraints, and guidelines for all subsequent related tasks.\n\
@@ -82,6 +87,7 @@ pub fn format_skill_injection(skill: &Skill, content: &str) -> String {
          </skill>",
         skill.name,
         skill.scope,
+        skill.name,
         skill.name,
         skill.root.display(),
         files_desc,
@@ -99,14 +105,29 @@ pub fn format_skill_injection(skill: &Skill, content: &str) -> String {
 /// A plain skill name as a loose token does NOT match — that was too eager
 /// and pulled skill bodies into context on coincidental word overlap.
 ///
-/// Matching is **token-boundary aware**: the mention forms are scanned out of
-/// the text as whole identifiers first, then compared for equality. So
-/// `@rust-expert` does not match a skill named `rust` (the identifier runs on
-/// past it), and neither does `@skill:rust-expert`. The previous
-/// substring-`contains` check could not distinguish these.
+/// Matching is **token-boundary aware**: mentions are scanned out of the text
+/// as whole identifiers by the shared grammar kernel
+/// ([`muta_contracts::mention::scan_references`]), then compared for equality.
+/// So `@rust-expert` does not match a skill named `rust` (the identifier runs on
+/// past it), and neither does `@skill:rust-expert`. Escaped mentions
+/// (`\@skill:…`) are literal text and do not match.
 pub fn resolve_mentions<'a>(text: &str, skills: &'a [Skill]) -> Vec<&'a Skill> {
-    let names = at_mention_names(text);
-    let uris = skill_uris(text);
+    use muta_contracts::mention::{Form, Namespace, scan_references};
+
+    let references = scan_references(text);
+    let mut names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut uris: Vec<&str> = Vec::new();
+    for reference in &references {
+        if reference.escaped || reference.namespace != Namespace::Skill {
+            continue;
+        }
+        match reference.form {
+            Form::Uri => uris.push(reference.target),
+            Form::Bare | Form::Qualified => {
+                names.insert(reference.target);
+            }
+        }
+    }
     if names.is_empty() && uris.is_empty() {
         return Vec::new();
     }
@@ -120,7 +141,7 @@ pub fn resolve_mentions<'a>(text: &str, skills: &'a [Skill]) -> Vec<&'a Skill> {
     {
         let uri_hit = uris
             .iter()
-            .any(|uri| uri == &skill.name || uri == &skill.source.to_string_lossy().to_string());
+            .any(|uri| *uri == skill.name || *uri == skill.source.to_string_lossy());
         let hit = names.contains(skill.name.as_str()) || uri_hit;
         if hit && seen.insert(skill.name.clone()) {
             matched.push(skill);
@@ -128,134 +149,6 @@ pub fn resolve_mentions<'a>(text: &str, skills: &'a [Skill]) -> Vec<&'a Skill> {
     }
 
     matched
-}
-
-/// Characters allowed inside a skill name or `skill://` path segment.
-/// Skill names are conventionally `[A-Za-z0-9._-]` (e.g. `rust-expert`,
-/// `code_review`, `v1.2`); the `skill://` form additionally permits `/` so a
-/// full source path like `skills/rust-expert/SKILL.md` round-trips.
-fn is_name_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '-' | '_' | '.')
-}
-
-/// Mask out inline (`...`) and fenced (```...```) code blocks with spaces,
-/// preserving exact UTF-8 byte lengths and newlines so that byte offsets align.
-fn mask_code_spans(text: &str) -> String {
-    let mut bytes = text.as_bytes().to_vec();
-    let n = bytes.len();
-    let mut i = 0;
-    while i < n {
-        if i + 2 < n && bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
-            let start = i;
-            i += 3;
-            while i + 2 < n && !(bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`') {
-                i += 1;
-            }
-            let end = if i + 2 < n { i + 3 } else { n };
-            for b in &mut bytes[start..end] {
-                if *b != b'\n' {
-                    *b = b' ';
-                }
-            }
-            i = end;
-        } else if bytes[i] == b'`' {
-            let start = i;
-            i += 1;
-            while i < n && bytes[i] != b'`' && bytes[i] != b'\n' {
-                i += 1;
-            }
-            if i < n && bytes[i] == b'`' {
-                let end = i + 1;
-                for b in &mut bytes[start..end] {
-                    *b = b' ';
-                }
-                i = end;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
-}
-
-/// Extract every skill identifier the text *explicitly* refers to via an
-/// `@`-mention, returning borrowed slices into `text`. The three forms all
-/// collapse to the bare name:
-/// - `@name`        — bare mention
-/// - `@skill:name`  — disambiguated namespace
-/// - `@skills:name` — plural namespace (mirrors `@files:`)
-///
-/// Because identifiers are read to their boundary, `@rust` in the text
-/// `@rust-expert` is never produced (the run-on `rust-expert` is), so prefix
-/// collisions cannot inflate matches.
-fn at_mention_names(text: &str) -> std::collections::HashSet<&str> {
-    let mut names = std::collections::HashSet::new();
-    let masked = mask_code_spans(text);
-    let mut search_from = 0;
-    while let Some(rel) = masked[search_from..].find('@') {
-        let at = search_from + rel;
-        let after_at = at + 1;
-
-        // 1. Backslash escape: \@skill:... is literal text
-        if at > 0 && text.as_bytes()[at - 1] == b'\\' {
-            search_from = after_at;
-            continue;
-        }
-
-        // 2. Word boundary check
-        if at > 0 {
-            let prev = text[..at].chars().next_back().unwrap();
-            let is_boundary = prev.is_whitespace() || matches!(prev, '(' | '[' | '{' | '"' | '\'' | '<');
-            if !is_boundary {
-                search_from = after_at;
-                continue;
-            }
-        }
-
-        let rest = text.get(after_at..).unwrap_or("");
-        // Optional `skill:` / `skills:` namespace prefix.
-        let name_start = rest
-            .strip_prefix("skills:")
-            .or_else(|| rest.strip_prefix("skill:"))
-            .map(|stripped| after_at + (rest.len() - stripped.len()))
-            .unwrap_or(after_at);
-        // Read the identifier to its boundary.
-        let mut end = name_start;
-        while let Some(ch) = text[end..].chars().next()
-            && is_name_char(ch)
-        {
-            end += ch.len_utf8();
-        }
-        if end > name_start {
-            names.insert(&text[name_start..end]);
-        }
-        search_from = after_at;
-    }
-    names
-}
-
-/// Extract `skill://{path}` references. The path segment admits `/` in
-/// addition to name chars so both `skill://rust-expert` and
-/// `skill://skills/rust-expert/SKILL.md` are captured whole.
-fn skill_uris(text: &str) -> Vec<String> {
-    const SCHEME: &str = "skill://";
-    let mut out = Vec::new();
-    let masked = mask_code_spans(text);
-    let mut search_from = 0;
-    while let Some(rel) = masked[search_from..].find(SCHEME) {
-        let start = search_from + rel + SCHEME.len();
-        let mut end = start;
-        while let Some(ch) = text[end..].chars().next()
-            && (is_name_char(ch) || ch == '/')
-        {
-            end += ch.len_utf8();
-        }
-        if end > start {
-            out.push(text[start..end].to_string());
-        }
-        search_from = start;
-    }
-    out
 }
 
 #[cfg(test)]
@@ -365,11 +258,28 @@ mod tests {
     fn format_skill_injection_produces_xml_envelope_with_guidance() {
         let skill = sample_skill("rust-expert");
         let formatted = format_skill_injection(&skill, "# Guidelines\nUse Result.");
-        assert!(formatted.starts_with("<skill name=\"rust-expert\" scope=\"repo\">"));
+        assert!(
+            formatted.starts_with(
+                "<skill name=\"rust-expert\" scope=\"repo\" ref=\"@skill:rust-expert\">"
+            )
+        );
         assert!(formatted.contains("<system_guidance>"));
         assert!(formatted.contains("The user activated domain skill \"rust-expert\"."));
         assert!(formatted.contains("Skill Root: skills/rust-expert"));
         assert!(formatted.contains("<instructions>\n# Guidelines\nUse Result.\n</instructions>"));
         assert!(formatted.ends_with("</skill>"));
+    }
+
+    /// ADR-0288: the envelope carries the canonical `@skill:` address so the
+    /// provider reads an asset reference, not the surface spelling the user
+    /// happened to type (`@name` / `@skills:` / `skill://`).
+    #[test]
+    fn skill_envelope_carries_canonical_address() {
+        let skill = sample_skill("pdf");
+        let formatted = format_skill_injection(&skill, "body");
+        assert!(
+            formatted.contains("ref=\"@skill:pdf\""),
+            "canonical address must travel in ref=: {formatted}"
+        );
     }
 }

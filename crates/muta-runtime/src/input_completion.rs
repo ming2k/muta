@@ -62,11 +62,13 @@ impl InputCompletionEngine {
         if is_skill_query(query) {
             self.complete_skills(input, query, at_start, cursor_end)
         } else if is_file_query(query) {
-            self.complete_files(input, query, at_start, cursor_end).await
+            self.complete_files(input, query, at_start, cursor_end)
+                .await
         } else if is_explicit_path_prefix(query) {
             self.complete_explicit_path(input, query, at_start, cursor_end)
         } else {
-            self.complete_unified_entities(input, query, at_start, cursor_end).await
+            self.complete_namespaces(input, query, at_start, cursor_end)
+                .await
         }
     }
 
@@ -86,37 +88,9 @@ impl InputCompletionEngine {
         };
         let guard = registry.lock();
         let all_skills = guard.list();
-
-        let (filter, explicit_prefix) = if let Some(rest) = query.strip_prefix("skills:") {
-            (rest, "skills:")
-        } else if let Some(rest) = query.strip_prefix("skill:") {
-            (rest, "skill:")
-        } else {
-            (query, "skill:")
-        };
-
-        let mut items = Vec::new();
-
-        let filter_lower = filter.to_lowercase();
-        for skill in &all_skills {
-            if !skill.enabled || skill.quarantined {
-                continue;
-            }
-            if !filter_lower.is_empty()
-                && !skill.name.to_lowercase().contains(&filter_lower)
-            {
-                continue;
-            }
-            items.push(skill_item(
-                input,
-                skill,
-                explicit_prefix,
-                at_start,
-                cursor_end,
-            ));
-        }
-
-        items
+        // Shared item builder: the filter/prefix derivation lives once in
+        // `skill_completion_items` (also used by the frontend-test adapter).
+        skill_completion_items(input, query, at_start, cursor_end, &all_skills)
     }
 
     async fn complete_files(
@@ -126,11 +100,6 @@ impl InputCompletionEngine {
         at_start: usize,
         cursor_end: usize,
     ) -> Vec<InputCompletion> {
-        let filter = query
-            .strip_prefix("files:")
-            .or_else(|| query.strip_prefix("file:"))
-            .unwrap_or(query);
-
         let root = self.project_root.clone();
         let entries = self
             .project_entries
@@ -140,97 +109,23 @@ impl InputCompletionEngine {
                     .unwrap_or_default()
             })
             .await;
-        let mut path_items = entries
-            .iter()
-            .filter(|path| path_query_match(path, filter))
-            .take(MAX_PATH_COMPLETIONS)
-            .map(|path| {
-                path_item(
-                    input,
-                    path,
-                    at_start,
-                    cursor_end,
-                    if path.ends_with('/') {
-                        InputCompletionKind::PathDir
-                    } else {
-                        InputCompletionKind::PathFile
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        sort_path_completions(&mut path_items);
-        path_items
+        file_completion_items(input, query, at_start, cursor_end, &entries)
     }
 
-    async fn complete_unified_entities(
+    async fn complete_namespaces(
         &self,
         input: &str,
         query: &str,
         at_start: usize,
         cursor_end: usize,
     ) -> Vec<InputCompletion> {
-        let mut items = Vec::new();
-        let q_lower = query.to_lowercase();
-
-        let matches_file_ns = "file:".starts_with(&q_lower) || "files:".starts_with(&q_lower);
-        let matches_skill_ns = "skill:".starts_with(&q_lower) || "skills:".starts_with(&q_lower);
-
-        if matches_file_ns {
-            items.push(file_namespace_item(input, at_start, cursor_end));
-        }
-        if matches_skill_ns && self.skills_registry.is_some() {
-            items.push(skill_namespace_item(input, at_start, cursor_end));
-        }
-
-        // Bare '@' without query: preserve clean two-stage entry (ADR-0256 Stage 1), no file spam
-        if query.is_empty() {
-            return items;
-        }
-
-        // Unified entity mentions (ADR-0256): typing bare query matches skills and files simultaneously
-        if let Some(registry) = &self.skills_registry {
-            let guard = registry.lock();
-            for skill in guard.list() {
-                if !skill.enabled || skill.quarantined {
-                    continue;
-                }
-                if skill.name.to_lowercase().contains(&q_lower) {
-                    items.push(skill_item(input, &skill, "skill:", at_start, cursor_end));
-                }
-            }
-        }
-
-        let root = self.project_root.clone();
-        let entries = self
-            .project_entries
-            .get_or_init(|| async move {
-                tokio::task::spawn_blocking(move || scan_project_files(&root))
-                    .await
-                    .unwrap_or_default()
-            })
-            .await;
-        let mut path_items = entries
-            .iter()
-            .filter(|path| path_query_match(path, query))
-            .take(MAX_PATH_COMPLETIONS)
-            .map(|path| {
-                path_item(
-                    input,
-                    path,
-                    at_start,
-                    cursor_end,
-                    if path.ends_with('/') {
-                        InputCompletionKind::PathDir
-                    } else {
-                        InputCompletionKind::PathFile
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        sort_path_completions(&mut path_items);
-        items.extend(path_items);
-
-        items
+        namespace_items(
+            input,
+            query,
+            at_start,
+            cursor_end,
+            self.skills_registry.is_some(),
+        )
     }
 
     fn complete_explicit_path(
@@ -471,79 +366,13 @@ pub fn complete_for_frontend_test(
     if is_skill_query(query) {
         engine.complete_skills(input, query, at_start, cursor_end)
     } else if is_file_query(query) {
-        let filter = query
-            .strip_prefix("files:")
-            .or_else(|| query.strip_prefix("file:"))
-            .unwrap_or(query);
-        let mut path_items = scan_project_files(&engine.project_root)
-            .iter()
-            .filter(|path| path_query_match(path, filter))
-            .take(MAX_PATH_COMPLETIONS)
-            .map(|path| {
-                path_item(
-                    input,
-                    path,
-                    at_start,
-                    cursor_end,
-                    if path.ends_with('/') {
-                        InputCompletionKind::PathDir
-                    } else {
-                        InputCompletionKind::PathFile
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        sort_path_completions(&mut path_items);
-        path_items
+        let entries = scan_project_files(&engine.project_root);
+        file_completion_items(input, query, at_start, cursor_end, &entries)
     } else if is_explicit_path_prefix(query) {
         engine.complete_explicit_path(input, query, at_start, cursor_end)
     } else {
-        let mut items = Vec::new();
-        let q_lower = query.to_lowercase();
-        let matches_file_ns = "file:".starts_with(&q_lower) || "files:".starts_with(&q_lower);
-        let matches_skill_ns = "skill:".starts_with(&q_lower) || "skills:".starts_with(&q_lower);
-
-        if matches_file_ns {
-            items.push(file_namespace_item(input, at_start, cursor_end));
-        }
-        if matches_skill_ns {
-            items.push(skill_namespace_item(input, at_start, cursor_end));
-        }
-        if query.is_empty() {
-            return items;
-        }
-        if let Some(registry) = &engine.skills_registry {
-            let guard = registry.lock();
-            for skill in guard.list() {
-                if !skill.enabled || skill.quarantined {
-                    continue;
-                }
-                if skill.name.to_lowercase().contains(&q_lower) {
-                    items.push(skill_item(input, &skill, "skill:", at_start, cursor_end));
-                }
-            }
-        }
-        let mut path_items = scan_project_files(&engine.project_root)
-            .iter()
-            .filter(|path| path_query_match(path, query))
-            .take(MAX_PATH_COMPLETIONS)
-            .map(|path| {
-                path_item(
-                    input,
-                    path,
-                    at_start,
-                    cursor_end,
-                    if path.ends_with('/') {
-                        InputCompletionKind::PathDir
-                    } else {
-                        InputCompletionKind::PathFile
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
-        sort_path_completions(&mut path_items);
-        items.extend(path_items);
-        items
+        // ADR-0290: Stage 1 is namespace-only; no content pass-through.
+        namespace_items(input, query, at_start, cursor_end, true)
     }
 }
 
@@ -571,11 +400,121 @@ fn slash_item(
 }
 
 fn is_skill_query(query: &str) -> bool {
-    query.starts_with("skill:") || query.starts_with("skills:")
+    muta_contracts::mention::SKILL_NAMESPACES
+        .iter()
+        .any(|ns| query.starts_with(ns))
 }
 
 fn is_file_query(query: &str) -> bool {
-    query.starts_with("file:") || query.starts_with("files:")
+    muta_contracts::mention::FILE_NAMESPACES
+        .iter()
+        .any(|ns| query.starts_with(ns))
+}
+
+/// Build skill completion items for a `@skill:` / `@skills:` (or bare, during
+/// Stage 2) query. Pure: the filter/prefix derivation and the enabled/quarantine
+/// and substring checks live here, so the daemon engine and the frontend-test
+/// adapter share one implementation (ADR-0290 `[INV-COMPLETE-03]`).
+fn skill_completion_items(
+    input: &str,
+    query: &str,
+    at_start: usize,
+    cursor_end: usize,
+    skills: &[muta_skills::Skill],
+) -> Vec<InputCompletion> {
+    // The namespace vocabulary is owned by the grammar kernel; derive the
+    // filter and the re-emitted prefix from it rather than re-typing the
+    // spellings here.
+    use muta_contracts::mention::SKILL_NAMESPACES;
+    let (filter, explicit_prefix) = SKILL_NAMESPACES
+        .iter()
+        .find_map(|ns| query.strip_prefix(ns).map(|rest| (rest, *ns)))
+        // `complete_skills` is only reached for a skill-namespace query, so the
+        // canonical (first) spelling is the correct default when none is found.
+        .unwrap_or((query, SKILL_NAMESPACES[0]));
+    let filter_lower = filter.to_lowercase();
+    let mut items = Vec::new();
+    for skill in skills {
+        if !skill.enabled || skill.quarantined {
+            continue;
+        }
+        if !filter_lower.is_empty() && !skill.name.to_lowercase().contains(&filter_lower) {
+            continue;
+        }
+        items.push(skill_item(
+            input,
+            skill,
+            explicit_prefix,
+            at_start,
+            cursor_end,
+        ));
+    }
+    items
+}
+
+/// Build file/dir completion items for a `@file:` / `@files:` query. Pure: the
+/// filter derivation and the path matching live here so the daemon engine and
+/// the frontend-test adapter share one implementation (ADR-0290
+/// `[INV-COMPLETE-03]`).
+fn file_completion_items(
+    input: &str,
+    query: &str,
+    at_start: usize,
+    cursor_end: usize,
+    entries: &[String],
+) -> Vec<InputCompletion> {
+    let filter = muta_contracts::mention::strip_file_namespace(query).unwrap_or(query);
+    let mut items = entries
+        .iter()
+        .filter(|path| path_query_match(path, filter))
+        .take(MAX_PATH_COMPLETIONS)
+        .map(|path| {
+            path_item(
+                input,
+                path,
+                at_start,
+                cursor_end,
+                if path.ends_with('/') {
+                    InputCompletionKind::PathDir
+                } else {
+                    InputCompletionKind::PathFile
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    sort_path_completions(&mut items);
+    items
+}
+
+/// Stage 1 of the two-stage `@` pipeline (ADR-0290): list only the entity
+/// **namespaces** (`@file:`, `@skill:`) whose name is a prefix of what has been
+/// typed so far.
+///
+/// This is the entire Stage 1 — there is no content pass-through. A query that
+/// is not a prefix of a namespace name yields nothing, so typing `@xyz` cannot
+/// leak files or skills (which live in Stage 2, reachable only *after* a
+/// namespace has been committed). This is the fix for ADR-0256's
+/// "fuzzy-at-mention", which let a bare `@query` bypass the namespace gate.
+fn namespace_items(
+    input: &str,
+    query: &str,
+    at_start: usize,
+    cursor_end: usize,
+    has_skills: bool,
+) -> Vec<InputCompletion> {
+    use muta_contracts::mention::{FILE_NAMESPACES, SKILL_NAMESPACES};
+
+    let q_lower = query.to_lowercase();
+    let prefixes_namespace =
+        |namespaces: &[&str]| namespaces.iter().any(|ns| ns.starts_with(&q_lower));
+    let mut items = Vec::new();
+    if prefixes_namespace(&FILE_NAMESPACES) {
+        items.push(file_namespace_item(input, at_start, cursor_end));
+    }
+    if has_skills && prefixes_namespace(&SKILL_NAMESPACES) {
+        items.push(skill_namespace_item(input, at_start, cursor_end));
+    }
+    items
 }
 
 fn file_namespace_item(
@@ -662,17 +601,19 @@ fn path_item(
     let (item_label, replace_start_byte, mut insert_text) = match kind {
         // A project directory keeps the `@file:` trigger so accepting it can ask
         // the backend for the next path segment.
-        InputCompletionKind::PathDir => {
-            (format!("@file:{label}"), at_start_byte, format!("@file:{label}"))
-        }
+        InputCompletionKind::PathDir => (
+            format!("@file:{label}"),
+            at_start_byte,
+            format!("@file:{label}"),
+        ),
         // Files inside the workspace are canonical `@file:...` entity mentions.
-        InputCompletionKind::PathFile => {
-            (format!("@file:{label}"), at_start_byte, format!("@file:{label}"))
-        }
+        InputCompletionKind::PathFile => (
+            format!("@file:{label}"),
+            at_start_byte,
+            format!("@file:{label}"),
+        ),
         // Explicit paths outside workspace (e.g. @../, @~/) expand to raw paths.
-        InputCompletionKind::PathExplicit => {
-            (label.to_string(), at_start_byte, label.to_string())
-        }
+        InputCompletionKind::PathExplicit => (label.to_string(), at_start_byte, label.to_string()),
         InputCompletionKind::Slash
         | InputCompletionKind::SlashAlias
         | InputCompletionKind::Intent => (label.to_string(), at_start_byte, label.to_string()),
@@ -715,33 +656,7 @@ fn char_to_byte(input: &str, char_index: usize) -> Option<usize> {
 }
 
 fn mention_range_at(input: &str, cursor_byte: usize) -> Option<(usize, usize)> {
-    if cursor_byte > input.len() || !input.is_char_boundary(cursor_byte) {
-        return None;
-    }
-    let mut chars_before = input[..cursor_byte].char_indices().collect::<Vec<_>>();
-    while let Some((idx, character)) = chars_before.pop() {
-        if character.is_whitespace() {
-            return None;
-        }
-        if character == '@' {
-            let is_escaped = chars_before
-                .last()
-                .map(|(_, previous)| *previous == '\\')
-                .unwrap_or(false);
-            if is_escaped {
-                return None;
-            }
-            let preceded_by_valid = chars_before
-                .last()
-                .map(|(_, previous)| {
-                    previous.is_whitespace()
-                        || matches!(previous, '(' | '[' | '{' | '"' | '\'' | '<')
-                })
-                .unwrap_or(true);
-            return preceded_by_valid.then_some((idx, cursor_byte));
-        }
-    }
-    None
+    muta_contracts::mention::mention_range_at(input, cursor_byte)
 }
 
 fn path_query_match(path: &str, query: &str) -> bool {
@@ -1197,9 +1112,8 @@ mod tests {
             panic!("unexpected response")
         };
         assert!(
-            items
-                .iter()
-                .any(|item| item.label == "@file:src/main.rs" && item.insert_text == "@file:src/main.rs ")
+            items.iter().any(|item| item.label == "@file:src/main.rs"
+                && item.insert_text == "@file:src/main.rs ")
         );
     }
 
@@ -1282,9 +1196,8 @@ mod tests {
 
         // 4. Two-stage completion: bare `@` strictly offers namespaces, no file spam
         let input = "@";
-        let AgentResponse::ComposerCompletions { items, .. } = engine
-            .complete(103, input.into(), 1)
-            .await
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(103, input.into(), 1).await
         else {
             panic!("unexpected response")
         };
@@ -1295,29 +1208,31 @@ mod tests {
 
         // 5. Prefix `@sk` narrows down to @skill: namespace item
         let input = "@sk";
-        let AgentResponse::ComposerCompletions { items, .. } = engine
-            .complete(104, input.into(), 3)
-            .await
+        let AgentResponse::ComposerCompletions { items, .. } =
+            engine.complete(104, input.into(), 3).await
         else {
             panic!("unexpected response")
         };
         assert_eq!(items[0].label, "@skill:");
         assert_eq!(items[0].kind, InputCompletionKind::PathDir);
 
-        // 6. ADR-0256 Fuzzy mention: typing bare `@creat` directly matches skills
-        let input = "@creat";
-        let AgentResponse::ComposerCompletions { items, .. } = engine
-            .complete(105, input.into(), input.chars().count())
-            .await
-        else {
-            panic!("unexpected response")
-        };
-        let match_item = items
-            .iter()
-            .find(|i| i.label == "@skill:skill-creator")
-            .expect("bare @creat must fuzzy match @skill:skill-creator");
-        assert_eq!(match_item.insert_text, "@skill:skill-creator ");
-        assert_eq!(match_item.replace_start, 0);
-        assert_eq!(match_item.replace_end, 6);
+        // 6. ADR-0290: a bare `@` query that is not a namespace prefix yields
+        //    NOTHING. Stage-2 content (skills, files) must never leak through a
+        //    bare `@query` — it is reachable only after `@skill:` / `@file:` has
+        //    been committed. This is the reversal of ADR-0256's
+        //    "fuzzy-at-mention" pass-through.
+        for bare in ["@creat", "@skill-creator", "@main", "@Cargo"] {
+            let AgentResponse::ComposerCompletions { items, .. } = engine
+                .complete(105, bare.into(), bare.chars().count())
+                .await
+            else {
+                panic!("unexpected response")
+            };
+            assert!(
+                items.is_empty(),
+                "bare {bare} must not leak Stage-2 content, got {:?}",
+                items.iter().map(|i| &i.label).collect::<Vec<_>>()
+            );
+        }
     }
 }

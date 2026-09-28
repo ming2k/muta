@@ -5,6 +5,27 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Single-Owner `@`-Reference Grammar Kernel (ADR-0291).**
+  - All `@`-reference lexical logic now lives once in `muta-contracts::mention`: code-span masking, the delimiter alphabets, the word-boundary/escape guard (`reference_start`), the `@`/`skill://` scanner (`scan_references`, yielding typed `Reference{namespace, form, target, span, escaped}`), and the cursor token-range (`mention_range_at`).
+  - Deleted the duplicated scanners and helpers: `at_mention_names`/`skill_uris`/local `mask_code_spans`/`is_name_char` in `muta-skills`, `parse_file_refs`'s inline scan in `muta-agent`, and the byte-identical `mention_range_at` copies in `muta-runtime` and `mutx`. Every extractor is now a filter over the one scanner.
+  - Removed the triplicated word-boundary guard; the decision is computed only by `mention::reference_start`. Admission to `muta-contracts` justified under ADR-0057 (shared by four layers, cycle-breaking, stable vocabulary).
+
+- **Two-Stage `@` Completion Is Namespace-Gated (ADR-0290).**
+  - A bare `@query` now offers only the namespaces it prefixes (`@file:` / `@skill:`); a query that prefixes no namespace (`@xyz`) yields **nothing**. Files and skills are reachable only after a namespace is committed.
+  - Removed ADR-0256's "fuzzy-at-mention" content pass-through, which let a bare `@query` reach Stage-2 files/skills via an unbounded substring match without ever committing a namespace.
+  - The daemon engine and the frontend-test mirror now share one Stage-1 helper so the two cannot drift.
+
+- **Entity References Are Asset References (ADR-0288).**
+  - `@` is now defined as a *reference operator*, never content: every `@file:` / `@skill:` mention resolves to exactly one canonical envelope and no unresolved `@`-literal reaches the provider.
+  - File injection emits `<file path="…" ref="@file:…" bytes="…">…</file>`, with `status="rejected"` / `status="deferred"` + `reason` and `truncated` / `total` as machine-readable attributes instead of prose.
+  - Skill injection's `<skill …>` envelope gains `ref="@skill:{name}"`, matching the file envelope.
+  - The request projection canonicalizes the visible address (`@files:`/`@skills:`, bare `@name`, `skill://…` → one spelling) and consumes `\@` escapes; the durable transcript stays verbatim (ADR-0050).
+  - Dedup recognizes legacy `[File '…' loaded]` / `[Skill '…' loaded]` markers so pre-upgrade sessions are not re-injected.
+
 ## [0.50.17] - 2026-09-28
 
 ### Added

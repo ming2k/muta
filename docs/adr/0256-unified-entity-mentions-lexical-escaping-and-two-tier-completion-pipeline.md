@@ -23,6 +23,14 @@ Prior to this decision, composer completions and prompt entity references suffer
 
 We establish a unified, uncompromised entity mention and completion architecture across contracts, agent context injection, runtime completion, and terminal TUI:
 
+> **Amendment (ADR-0288).** This ADR settled the *surface grammar* of entity
+> references. The *transmission contract* — that `@` is an asset **reference**
+> which must be resolved into a canonical envelope before it reaches a provider,
+> and never forwarded as a bare literal — is defined by
+> [ADR-0288](0288-entity-references-are-asset-references-and-canonical-wire-envelopes.md).
+> Read the two together: 0256 governs what the user types and how the composer
+> completes it; 0288 governs what the model receives.
+
 1. **Canonical Namespace Grammar**:
    - Every entity reference follows the strictly typed `@{namespace}:{target}` grammar:
      - `@file:{relative_path}` — Sandboxed workspace file content injection.
@@ -49,6 +57,14 @@ We establish a unified, uncompromised entity mention and completion architecture
   Rejected. Maintaining two competing grammars creates irreconcilable lexical ambiguity (e.g. distinguishing a skill named `test` from a file named `test`), perpetuates non-standard desugaring heuristics, and confuses users about which form guarantees context injection.
 - **Requiring manual typing of `file:`**:
   Rejected. User typing ergonomics are preserved via "fuzzy-at-mention": typing bare `@main` in the composer matches files and skills simultaneously with clear visual badges (`[File]`, `[Skill]`), while selection automatically commits the canonical `@file:src/main.rs` representation.
+
+  > **Reversed by [ADR-0290](0290-two-stage-at-completion-is-namespace-gated.md).**
+  > "Fuzzy-at-mention" was found to defeat the two-stage gate it claimed to
+  > preserve: a bare query that matches no namespace fell through to Stage-2
+  > content, so files and skills were reachable without committing a namespace,
+  > via an unbounded substring match. Two-stage completion is now strictly
+  > namespace-gated. The two-stage grammar and completion types defined above
+  > stand; only this pass-through is withdrawn.
 
 ## Consequences
 

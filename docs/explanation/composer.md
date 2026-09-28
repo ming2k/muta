@@ -78,8 +78,12 @@ Autocomplete in the composer covers two distinct candidate domains:
 
 1. **Harness & Slash Commands**: Fixed catalog of commands, subcommands,
    and descriptions.
-2. **Filesystem Mentions (`@path`)**: Dynamic project directory scans and
-   file paths.
+2. **Entity Mentions (`@`)**: A two-stage pipeline. Stage 1 (pure domain,
+   synchronous) offers the entity *namespaces* `@file:` and `@skill:`; Stage 2
+   (daemon, asynchronous) resolves content — project files/skills — only once a
+   namespace has been committed. The namespace is a hard gate: a bare `@query`
+   yields only the namespaces it prefixes and never leaks Stage-2 content
+   ([ADR-0290](../adr/0290-two-stage-at-completion-is-namespace-gated.md)).
 
 To eliminate frame drops and transient flicker when typing commands, mutx
 implements a **Two-Tier Completion Pipeline** with Stale-While-Revalidate
@@ -93,7 +97,7 @@ Keystroke Event
       │     └─ Authoritative candidates painted on current frame
       │
       └─► Tier 2: Asynchronous Daemon IPC (Background)
-            └─ Scans filesystem for @path mentions
+            └─ Resolves @file: / @skill: content (Stage 2, post-namespace)
             └─ Retains previous completions + optimistic client-side narrowing
             └─ Atomically swaps candidate list on arrival (monotonic generation)
 ```

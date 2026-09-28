@@ -357,6 +357,22 @@ impl Agent {
             .filter(|message| message.role != Role::System)
             .cloned()
             .collect();
+        // ADR-0288 `[INV-REF-03]`/`[INV-REF-04]`: canonicalize `@`-addresses
+        // and consume suppressed escapes on the provider-facing view only, and
+        // only where the user actually wrote a reference. Harness-injected
+        // messages (the hidden `<file>`/`<skill>` envelopes and every note) are
+        // resolved asset content, not reference sites — rewriting them would
+        // corrupt the asset (a referenced file whose body contains `@files:` or
+        // `\@file:` must reach the model verbatim). The durable `messages` are
+        // untouched, so the transcript stays verbatim (ADR-0050's fidelity
+        // axis). Handled here — not at injection — because this runs for every
+        // turn, including ones whose mentions were already resolved earlier.
+        for message in enriched.iter_mut() {
+            if crate::conversation_context::is_reference_site(message) {
+                message.content =
+                    crate::conversation_context::canonicalize_addresses(&message.content);
+            }
+        }
         // Skill injection is memory-only (bodies are cached in the registry),
         // so keeping it here costs no I/O and keeps the debug preview honest
         // about implicit loads.

@@ -55,6 +55,8 @@ pub use instructions::{InstructionBundle, InstructionSlice, InstructionTier};
 pub mod command;
 pub use command::{CommandRecord, CommandResult, CommandStatus, SearchHit};
 
+pub mod mention;
+
 pub mod completion;
 pub use completion::{
     CommandAlias, CommandCatalog, CommandExample, CommandSpec, CommandSubcommandSpec,

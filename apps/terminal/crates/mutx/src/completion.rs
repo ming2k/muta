@@ -181,33 +181,7 @@ pub fn resolved_slash_command_len(
 }
 
 pub(super) fn mention_range_at(input: &str, cursor_byte: usize) -> Option<(usize, usize)> {
-    if cursor_byte > input.len() || !input.is_char_boundary(cursor_byte) {
-        return None;
-    }
-    let mut chars_before = input[..cursor_byte].char_indices().collect::<Vec<_>>();
-    while let Some((idx, character)) = chars_before.pop() {
-        if character.is_whitespace() {
-            return None;
-        }
-        if character == '@' {
-            let is_escaped = chars_before
-                .last()
-                .map(|(_, previous)| *previous == '\\')
-                .unwrap_or(false);
-            if is_escaped {
-                return None;
-            }
-            let preceded_by_valid = chars_before
-                .last()
-                .map(|(_, previous)| {
-                    previous.is_whitespace()
-                        || matches!(previous, '(' | '[' | '{' | '"' | '\'' | '<')
-                })
-                .unwrap_or(true);
-            return preceded_by_valid.then_some((idx, cursor_byte));
-        }
-    }
-    None
+    muta_contracts::mention::mention_range_at(input, cursor_byte)
 }
 
 impl App {

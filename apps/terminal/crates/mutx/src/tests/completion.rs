@@ -592,18 +592,30 @@ fn two_stage_skill_completion_descends_and_terminates() {
 }
 
 #[test]
-fn fuzzy_at_mention_directly_completes_skills_and_commits_canonical() {
+fn bare_at_query_does_not_pass_through_to_stage2_content() {
+    // ADR-0290: typing `@wright` (no namespace committed) must NOT surface any
+    // Stage-2 skill/file content. The daemon engine returns nothing for a bare
+    // query that is not a namespace prefix; the composer mirrors that.
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.input = "@wright".to_string();
     app.cursor_position = app.input.chars().count();
 
-    // Simulate backend returning ADR-0256 fuzzy match for @wright
+    let completions = app.completions();
+    assert!(
+        completions.is_empty(),
+        "bare @wright must not leak Stage-2 content, got {:?}",
+        completions.iter().map(|c| &c.label).collect::<Vec<_>>()
+    );
+
+    // Stage-2 content IS reachable — but only after the namespace is committed.
+    app.input = "@skill:wright".to_string();
+    app.cursor_position = app.input.chars().count();
     let item = muta_contracts::InputCompletion {
         label: "@skill:wright-plan-authoring".to_string(),
         description: "Author and write wright plan.toml manifests".to_string(),
         insert_text: "@skill:wright-plan-authoring ".to_string(),
         replace_start: 0,
-        replace_end: 7,
+        replace_end: app.input.chars().count(),
         kind: muta_contracts::InputCompletionKind::PathExplicit,
         alias_of: None,
         command: None,
@@ -618,7 +630,7 @@ fn fuzzy_at_mention_directly_completes_skills_and_commits_canonical() {
     assert_eq!(app.input, "@skill:wright-plan-authoring ");
     assert!(
         app.completion_dismissed,
-        "accepting fuzzy skill completion must latch dismissal and commit canonical representation"
+        "accepting a terminal skill completion must latch dismissal"
     );
 }
 

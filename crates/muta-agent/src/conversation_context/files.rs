@@ -6,6 +6,22 @@
 //! size cap) and appends its contents as a hidden user message, so the model
 //! sees the referenced source without an explicit `read_text` call.
 //!
+//! ## Reference semantics (ADR-0288)
+//!
+//! `@file:` is an *address*, not content. This module resolves the address and
+//! emits exactly one canonical envelope per mention (`[INV-REF-02]`):
+//!
+//! ```text
+//! <file path="src/main.rs" ref="@file:src/main.rs" bytes="10">…</file>
+//! <file ref="@file:missing.rs" status="rejected" reason="…"/>
+//! ```
+//!
+//! The canonical address travels in `ref=`, outcome in `status=`, and size
+//! facts as attributes, so the model reads the asset (or the structured reason
+//! it has none) instead of parsing prose. `mentions::canonicalize_addresses`
+//! applies the matching rewrite to the visible prompt at request-projection
+//! time (`[INV-REF-03]`/`[INV-REF-04]`).
+//!
 //! ## Safety model
 //!
 //! Every candidate path is resolved against the agent's workspace root and
@@ -15,7 +31,7 @@
 //!   symlink hardening), or
 //! - it is a directory, a binary file, or larger than the size cap.
 //!
-//! Rejections are surfaced as a single hidden error note (one per file) so the
+//! Rejections are surfaced as a single hidden envelope (one per file) so the
 //! model learns *why* the file was not loaded and can recover (switch to
 //! `list_dir`, ask the user, etc.) instead of looping on the same path.
 
@@ -63,10 +79,17 @@ pub(crate) async fn inject_mentioned_files(
         return;
     }
 
+    // Deduplication ledger: the set of canonical addresses already resolved in
+    // this conversation. Legacy sessions persisted `[File '…' loaded]` prose
+    // notes, so both shapes are read (`[INV-REF-07]`).
     let already_attempted: HashSet<String> = messages
         .iter()
         .filter(|message| message.role == Role::User && message.hidden)
         .filter_map(|message| {
+            if let Some(address) = extract_file_envelope(&message.content) {
+                return Some(address);
+            }
+            // Legacy `[File '<path>' …]` marker.
             let prefix = "[File '";
             let start = message.content.find(prefix)? + prefix.len();
             let end = message.content[start..].find('\'')?;
@@ -75,20 +98,13 @@ pub(crate) async fn inject_mentioned_files(
         .collect();
 
     let mut injected = 0usize;
-    for raw in referenced {
-        if injected >= MAX_FILES_PER_ROUND {
-            push_error_note(
-                messages,
-                &raw,
-                format!(
-                    "not loaded: the per-round file-injection limit ({}) was reached. \
-                     Read the rest explicitly with `read_text`.",
-                    MAX_FILES_PER_ROUND
-                ),
-            );
+    for address in referenced {
+        if already_attempted.contains(&address) {
             continue;
         }
-        if already_attempted.contains(&raw) {
+        if injected >= MAX_FILES_PER_ROUND {
+            push_rejected(messages, &address, DEFERRED_REASON);
+            injected += 1;
             continue;
         }
         // Sandboxed resolution + read is real filesystem work (canonicalize,
@@ -96,27 +112,64 @@ pub(crate) async fn inject_mentioned_files(
         // blocks the executor. Injection happens once per prompt; later
         // requests and estimates reuse these bytes from the live window.
         let task_root = root.to_path_buf();
-        let task_raw = raw.clone();
-        match tokio::task::spawn_blocking(move || load_sandboxed(&task_root, &task_raw))
+        let task_address = address.clone();
+        match tokio::task::spawn_blocking(move || load_sandboxed(&task_root, &task_address))
             .await
-            .unwrap_or_else(|error| Err(format!("injection task aborted: {error}")))
+            .unwrap_or_else(|error| Err(reason_string(&format!("injection task aborted: {error}"))))
         {
-            Ok((resolved, bytes)) => {
-                let display = path_display(root, &resolved);
-                let content = render_file(&display, &bytes);
+            Ok(loaded) => {
+                let display = path_display(root, &loaded.canonical);
                 messages.push(super::hidden_user_with_reason(
                     InjectionKind::ImplicitFile,
                     &display,
-                    content,
+                    render_file(&display, &loaded),
                 ));
                 injected += 1;
             }
             Err(reason) => {
-                push_error_note(messages, &raw, format!("not loaded: {reason}"));
+                push_rejected(messages, &address, &reason);
                 injected += 1;
             }
         }
     }
+}
+
+/// Reason attached to the per-round cap rejection. A constant so the dedup
+/// ledger and the rendered attribute cannot drift.
+const DEFERRED_REASON: &str = "per-round file-injection limit reached";
+
+/// A successfully resolved file: its canonical workspace path, the bytes as
+/// injected (possibly truncated to [`MAX_FILE_BYTES`]), and the pre-truncation
+/// length so the envelope can disclose that it holds a partial asset.
+#[derive(Debug)]
+struct Loaded {
+    canonical: PathBuf,
+    bytes: Vec<u8>,
+    total: usize,
+}
+
+/// Extract the canonical address from an already-injected file envelope
+/// (`ref="@file:…"`). Returns `None` for every other message. This is the
+/// canonical half of the dedup reader.
+fn extract_file_envelope(content: &str) -> Option<String> {
+    if !content.starts_with("<file ") {
+        return None;
+    }
+    let start = content.find("ref=\"@file:")? + "ref=\"@file:".len();
+    let end = content[start..].find('"')?;
+    Some(content[start..start + end].to_string())
+}
+
+/// Normalize a raw load failure into a single wire-safe attribute value:
+/// attribute quotes are replaced, newlines flattened, and the trailing period
+/// dropped so the envelope never depends on prose phrasing.
+fn reason_string(reason: &str) -> String {
+    reason
+        .replace('"', "'")
+        .replace(['\n', '\r'], " ")
+        .trim()
+        .trim_end_matches('.')
+        .to_string()
 }
 
 /// The newest non-empty visible user message, joined if a round carries
@@ -131,116 +184,32 @@ fn latest_visible_user_text(messages: &[Message]) -> String {
         .join("\n")
 }
 
-/// Mask out inline (`...`) and fenced (```...```) code blocks with spaces,
-/// preserving exact UTF-8 byte lengths and newlines so that byte offsets align.
-fn mask_code_spans(text: &str) -> String {
-    let mut bytes = text.as_bytes().to_vec();
-    let n = bytes.len();
-    let mut i = 0;
-    while i < n {
-        if i + 2 < n && bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`' {
-            let start = i;
-            i += 3;
-            while i + 2 < n && !(bytes[i] == b'`' && bytes[i + 1] == b'`' && bytes[i + 2] == b'`') {
-                i += 1;
-            }
-            let end = if i + 2 < n { i + 3 } else { n };
-            for b in &mut bytes[start..end] {
-                if *b != b'\n' {
-                    *b = b' ';
-                }
-            }
-            i = end;
-        } else if bytes[i] == b'`' {
-            let start = i;
-            i += 1;
-            while i < n && bytes[i] != b'`' && bytes[i] != b'\n' {
-                i += 1;
-            }
-            if i < n && bytes[i] == b'`' {
-                let end = i + 1;
-                for b in &mut bytes[start..end] {
-                    *b = b' ';
-                }
-                i = end;
-            }
-        } else {
-            i += 1;
-        }
-    }
-    String::from_utf8(bytes).unwrap_or_else(|_| text.to_string())
-}
-
 /// Extract `@file:{path}` / `@files:{path}` references from `text`, in order,
-/// deduplicated. The path runs until the first whitespace or any character
-/// that cannot legally begin a relative path, so `@file:src/main.rs` and
-/// `@file:src/main.rs.` (trailing period) both yield `src/main.rs`.
+/// deduplicated. A thin filter over the shared grammar kernel
+/// ([`muta_contracts::mention::scan_references`]): escaped references are
+/// literal text and skipped here (the canonicalizer, not the injector, consumes
+/// the escape), and only file-namespace references are kept.
 fn parse_file_refs(text: &str) -> Vec<String> {
+    use muta_contracts::mention::{Namespace, scan_references};
+
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    let masked = mask_code_spans(text);
-    let mut search_from = 0;
-    while let Some(rel) = masked[search_from..].find('@') {
-        let at = search_from + rel;
-        let after_at = at + 1;
-
-        // 1. Backslash escape check: \@file:... is literal text
-        if at > 0 && text.as_bytes()[at - 1] == b'\\' {
-            search_from = after_at;
+    for reference in scan_references(text) {
+        if reference.escaped || reference.namespace != Namespace::File {
             continue;
         }
-
-        // 2. Word boundary check: must be start of string, whitespace, or open delimiter
-        if at > 0 {
-            let prev = text[..at].chars().next_back().unwrap();
-            let is_boundary = prev.is_whitespace() || matches!(prev, '(' | '[' | '{' | '"' | '\'' | '<');
-            if !is_boundary {
-                search_from = after_at;
-                continue;
-            }
+        if seen.insert(reference.target.to_string()) {
+            out.push(reference.target.to_string());
         }
-
-        let Some(rest) = text.get(after_at..) else {
-            break;
-        };
-        let Some(stripped) = rest
-            .strip_prefix("files:")
-            .or_else(|| rest.strip_prefix("file:"))
-        else {
-            search_from = after_at;
-            continue;
-        };
-        let path_start = after_at + (rest.len() - stripped.len());
-        let mut end = path_start;
-        while let Some(ch) = text[end..].chars().next()
-            && is_path_char(ch)
-        {
-            end += ch.len_utf8();
-        }
-        if end > path_start {
-            let raw = text[path_start..end].trim_end_matches('.').to_string();
-            if !raw.is_empty() && seen.insert(raw.clone()) {
-                out.push(raw);
-            }
-        }
-        search_from = end.max(after_at);
     }
     out
 }
 
-/// Characters permitted inside a raw `@file:` reference. Relative paths may
-/// contain path separators and the usual filename alphabet; whitespace, quotes,
-/// commas, and sentence punctuation terminate the reference so prose like
-/// "see @file:src/main.rs." reads cleanly.
-fn is_path_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '/' | '\\' | '_' | '-' | '.' | '+' | '~' | '@')
-}
-
 /// Resolve `raw` against `root`, sandbox it, and read it. Returns the
-/// canonicalized path and the file bytes (already capped to
-/// [`MAX_FILE_BYTES`]). Returns `Err(reason)` for every reject case so the
-/// caller can surface a single actionable note.
-fn load_sandboxed(root: &Path, raw: &str) -> Result<(PathBuf, Vec<u8>), String> {
+/// canonicalized path, the file bytes (already capped to [`MAX_FILE_BYTES`]),
+/// and the pre-truncation length. Returns `Err(reason)` for every reject case
+/// so the caller can surface a single actionable note.
+fn load_sandboxed(root: &Path, raw: &str) -> Result<Loaded, String> {
     // Reject anything that is not a plain relative path *before* touching the
     // filesystem: an absolute path (`/etc/passwd`) or a parent traversal
     // (`../secret`) cannot live under the workspace by construction.
@@ -306,21 +275,22 @@ fn load_sandboxed(root: &Path, raw: &str) -> Result<(PathBuf, Vec<u8>), String> 
 
     let bytes = std::fs::read(&canonical)
         .map_err(|e| format!("could not read '{}': {}", path_display(root, &canonical), e))?;
-    if bytes.len() > MAX_FILE_BYTES {
+    let total = bytes.len();
+    if total > MAX_FILE_BYTES {
         // Truncate rather than refuse: a large source file is still useful in
-        // context; the model just needs to know it is partial.
-        let mut truncated = bytes[..MAX_FILE_BYTES].to_vec();
-        truncated.extend_from_slice(
-            format!(
-                "\n\n[... file truncated at {} bytes; {} total bytes — read the rest with `read_text`]",
-                MAX_FILE_BYTES,
-                bytes.len()
-            )
-            .as_bytes(),
-        );
-        return Ok((canonical, truncated));
+        // context; the model just needs to know it is partial. The disclosure
+        // travels as envelope attributes (`truncated`/`total`), not prose.
+        return Ok(Loaded {
+            canonical,
+            bytes: bytes[..MAX_FILE_BYTES].to_vec(),
+            total,
+        });
     }
-    Ok((canonical, bytes))
+    Ok(Loaded {
+        canonical,
+        bytes,
+        total,
+    })
 }
 
 /// NUL or a disproportionate run of control bytes ⇒ binary. Same heuristic as
@@ -339,19 +309,42 @@ fn is_binary_content(buf: &[u8]) -> bool {
     control * 10 > buf.len()
 }
 
-/// Render the loaded file as the hidden context message body.
-fn render_file(display_path: &str, bytes: &[u8]) -> String {
-    let body = String::from_utf8_lossy(bytes);
-    format!("[File '{display_path}' loaded]\n{body}\n[/File]")
+/// Render a resolved file as its canonical envelope (`[INV-REF-02]`). The
+/// `ref` attribute is the canonical address the user's prompt named; `bytes`,
+/// `total`, and `truncated` are machine-readable size facts.
+fn render_file(display_path: &str, loaded: &Loaded) -> String {
+    let body = String::from_utf8_lossy(&loaded.bytes);
+    if loaded.total > loaded.bytes.len() {
+        format!(
+            "<file path=\"{display_path}\" ref=\"@file:{display_path}\" bytes=\"{}\" total=\"{}\" truncated=\"true\">\n{body}\n</file>",
+            loaded.bytes.len(),
+            loaded.total
+        )
+    } else {
+        format!(
+            "<file path=\"{display_path}\" ref=\"@file:{display_path}\" bytes=\"{}\">\n{body}\n</file>",
+            loaded.bytes.len()
+        )
+    }
 }
 
-/// Append a hidden note explaining why a referenced file was not loaded, so
-/// the model can recover instead of looping on the same path.
-fn push_error_note(messages: &mut Vec<Message>, raw: &str, reason: String) {
+/// Append a hidden envelope explaining why a referenced file was not loaded,
+/// so the model can recover instead of looping on the same path. `reason` is
+/// always a machine-readable attribute (`status="rejected"`/`"deferred"`),
+/// never prose the model has to parse.
+fn push_rejected(messages: &mut Vec<Message>, raw: &str, reason: &str) {
+    let status = if reason == DEFERRED_REASON {
+        "deferred"
+    } else {
+        "rejected"
+    };
     messages.push(super::hidden_user_with_reason(
         InjectionKind::ImplicitFile,
         raw,
-        format!("[File '{raw}' {reason}]"),
+        format!(
+            "<file ref=\"@file:{raw}\" status=\"{status}\" reason=\"{}\"/>",
+            reason_string(reason)
+        ),
     ));
 }
 
@@ -421,9 +414,10 @@ mod tests {
         let target = tmp.path().join("src").join("main.rs");
         std::fs::create_dir_all(target.parent().unwrap()).unwrap();
         std::fs::write(&target, "fn main() {}").unwrap();
-        let (resolved, bytes) = load_sandboxed(tmp.path(), "src/main.rs").unwrap();
-        assert!(resolved.ends_with("main.rs"));
-        assert_eq!(bytes, b"fn main() {}");
+        let loaded = load_sandboxed(tmp.path(), "src/main.rs").unwrap();
+        assert!(loaded.canonical.ends_with("main.rs"));
+        assert_eq!(loaded.bytes, b"fn main() {}");
+        assert_eq!(loaded.total, b"fn main() {}".len());
     }
 
     #[test]
@@ -463,14 +457,12 @@ mod tests {
         // Double the cap, all ASCII so it is not flagged binary.
         let big = "a".repeat(MAX_FILE_BYTES * 2);
         std::fs::write(tmp.path().join("big.txt"), &big).unwrap();
-        let (_, bytes) = load_sandboxed(tmp.path(), "big.txt").unwrap();
-        assert!(bytes.len() > MAX_FILE_BYTES);
-        assert!(bytes.len() < MAX_FILE_BYTES * 2);
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(
-            text.contains("truncated"),
-            "should carry the truncation marker"
-        );
+        let loaded = load_sandboxed(tmp.path(), "big.txt").unwrap();
+        // The injected bytes are capped; the pre-truncation length is disclosed
+        // separately so the envelope can carry it as an attribute (ADR-0288),
+        // not as prose baked into the body.
+        assert_eq!(loaded.bytes.len(), MAX_FILE_BYTES);
+        assert_eq!(loaded.total, MAX_FILE_BYTES * 2);
     }
 
     #[tokio::test]
@@ -481,8 +473,49 @@ mod tests {
         inject_mentioned_files(Some(tmp.path()), &mut messages).await;
         assert_eq!(messages.len(), 2);
         assert!(messages[1].hidden);
-        assert!(messages[1].content.contains("[File 'lib.rs' loaded]"));
-        assert!(messages[1].content.contains("pub fn x() {}"));
+        // Canonical envelope with the address in `ref=` (ADR-0288).
+        assert_eq!(
+            messages[1].content,
+            "<file path=\"lib.rs\" ref=\"@file:lib.rs\" bytes=\"13\">\npub fn x() {}\n</file>"
+        );
+    }
+
+    /// A rejected mention produces one structured envelope: success/failure is
+    /// an attribute, never prose the model must parse (`[INV-REF-02]`).
+    #[tokio::test]
+    async fn rejected_mention_emits_structured_envelope() {
+        let tmp = tempdir();
+        let mut messages = vec![Message::new(
+            Role::User,
+            "@file:non_existent.rs".to_string(),
+        )];
+        inject_mentioned_files(Some(tmp.path()), &mut messages).await;
+        assert_eq!(messages.len(), 2);
+        let note = &messages[1].content;
+        assert!(
+            note.starts_with("<file ref=\"@file:non_existent.rs\" status=\"rejected\" reason=\""),
+            "got: {note}"
+        );
+    }
+
+    /// The per-round cap is a `deferred` (recoverable) outcome, distinct from a
+    /// hard rejection, so the model knows it can read the rest explicitly.
+    #[tokio::test]
+    async fn over_limit_mention_is_deferred() {
+        let tmp = tempdir();
+        // 11 files: one past the cap. No file exists, so the first 10 are
+        // rejected and the 11th is deferred.
+        let refs = (0..=MAX_FILES_PER_ROUND)
+            .map(|i| format!("@file:f{i}.rs"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut messages = vec![Message::new(Role::User, refs)];
+        inject_mentioned_files(Some(tmp.path()), &mut messages).await;
+        let deferred = messages
+            .iter()
+            .filter(|message| message.content.contains("status=\"deferred\""))
+            .count();
+        assert_eq!(deferred, 1, "exactly one over-cap note");
     }
 
     #[tokio::test]
@@ -504,6 +537,25 @@ mod tests {
         inject_mentioned_files(Some(tmp.path()), &mut messages).await;
         // Only the user message was added; no new hidden injection notes.
         assert_eq!(messages.len(), 4);
+    }
+
+    /// `[INV-REF-07]`: sessions persisted by earlier versions carry the legacy
+    /// `[File '<path>' …]` marker; dedup must recognize it so those files are
+    /// not re-injected after an upgrade.
+    #[tokio::test]
+    async fn legacy_marker_still_deduplicates() {
+        let tmp = tempdir();
+        std::fs::write(tmp.path().join("lib.rs"), "pub fn x() {}").unwrap();
+        let mut messages = vec![
+            crate::conversation_context::hidden_user(
+                InjectionKind::ImplicitFile,
+                "[File 'lib.rs' loaded]\npub fn x() {}\n[/File]",
+            ),
+            Message::new(Role::User, "@file:lib.rs".to_string()),
+        ];
+        inject_mentioned_files(Some(tmp.path()), &mut messages).await;
+        // No new envelope: the legacy marker already recorded the address.
+        assert_eq!(messages.len(), 2);
     }
 
     #[test]
