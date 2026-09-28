@@ -5,6 +5,17 @@ All notable changes to **Muta** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.16] - 2026-09-28
+
+### Added
+
+- **Component-Driven Interactive Entry Architecture & Stack-Top Focus Interception.**
+  - Introduced `InteractiveEntry` trait defining declarative interactivity, target categorization, plain text extraction, and self-contained focus key handling across transcript entries.
+  - Implemented stack-top event interception: focused transcript components take highest priority in key event dispatch, allowing components to govern their own activations and internal interactions.
+  - Migrated transcript target navigation to `Ctrl+P` (`FocusPrevTarget`) and `Ctrl+N` (`FocusNextTarget`), eradicating ambiguous Escape-prefix collisions in Linux VT / getty console environments.
+  - Re-routed `CommandPalette` to canonical `Ctrl+L` and released global `Ctrl+N` for unambiguous session navigation.
+  - Fixed color quantization collapse in 16-color ANSI (`Theme::ansi16` / `TERM=linux`): preserved discrete `Color::Yellow` highlight tokens instead of lossy RGB float blending that previously collapsed to Gray.
+
 ## [0.50.15] - 2026-09-28
 
 ### Added
@@ -7970,7 +7981,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.15...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.16...HEAD
+[0.50.16]: https://github.com/ming2k/muta/compare/v0.50.15...v0.50.16
 [0.50.15]: https://github.com/ming2k/muta/compare/v0.50.14...v0.50.15
 [0.50.14]: https://github.com/ming2k/muta/compare/v0.50.13...v0.50.14
 [0.50.13]: https://github.com/ming2k/muta/compare/v0.50.12...v0.50.13
