@@ -102,18 +102,9 @@ impl App {
             .map(|y| self.scroll as usize + (y.saturating_sub(transcript_top_y) as usize));
 
         let toggled = resolve_focused_mut(messages, &self.focus_stack, mi).and_then(|message| {
-            if let Some(expanded) = message.tool_step_expanded() {
-                message.pin_tool_step_expanded(!expanded);
-                Some(!expanded)
-            } else if let Some(expanded) = message.command_result_expanded() {
-                message.pin_command_result_expanded(!expanded);
-                Some(!expanded)
-            } else if let Some(expanded) = message.reasoning_expanded() {
-                message.pin_reasoning_expanded(!expanded);
-                Some(!expanded)
-            } else if let Some(expanded) = message.notice_expanded() {
-                message.pin_notice_expanded(!expanded);
-                Some(!expanded)
+            use crate::model::interactive::InteractiveEntry;
+            if message.toggle_expanded() {
+                message.is_expanded()
             } else {
                 None
             }
@@ -187,17 +178,66 @@ impl App {
         true
     }
 
+    /// Dispatch a key event to the focused transcript component (stack-top focus).
+    pub(crate) fn dispatch_focused_target_key(
+        &mut self,
+        key: crate::keymap::Key,
+    ) -> crate::model::interactive::EntryKeyOutcome {
+        use crate::model::interactive::{EntryKeyOutcome, InteractiveEntry};
+        let Some(target) = self.focused_target else {
+            return EntryKeyOutcome::Unhandled;
+        };
+
+        let mut messages = std::mem::take(&mut self.messages);
+        let outcome = if let Some(message) =
+            resolve_focused_mut(&mut messages, &self.focus_stack, target.message_idx)
+        {
+            message.handle_focused_key(key)
+        } else {
+            EntryKeyOutcome::Unhandled
+        };
+
+        self.messages = messages;
+
+        match &outcome {
+            EntryKeyOutcome::EnterSubagent(id) => {
+                let id = id.clone();
+                self.enter_subagent(id);
+            }
+            EntryKeyOutcome::Handled { changed } => {
+                if *changed {
+                    self.follow_bottom = false;
+                    self.scroll_settle_pending = true;
+                    self.layout_height_cache.clear();
+                    self.transcript_changed_pending = true;
+                    self.selection = SelectionState::None;
+                }
+            }
+            EntryKeyOutcome::Unhandled => {}
+        }
+
+        outcome
+    }
+
     pub(crate) fn visible_interactive_targets(&self) -> Vec<InteractiveTarget> {
+        use crate::model::interactive::InteractiveEntry;
+        use crate::model::layout::InteractiveTargetKind;
         let mut targets = self.ui.document.interactive_targets();
         if let Some(message_idx) = self.sticky_step
             && let Some(message) = self.focused_messages().get(message_idx)
+            && message.is_focusable()
+            && let Some(kind) = message.target_kind()
         {
-            let target = if message.is_reasoning() {
-                InteractiveTarget::reasoning(message_idx)
-            } else if message.is_tool_step() || message.is_subagent_task() {
-                InteractiveTarget::tool_step(message_idx)
-            } else {
-                return targets;
+            let target = match kind {
+                InteractiveTargetKind::ToolStep => InteractiveTarget::tool_step(message_idx),
+                InteractiveTargetKind::Reasoning => InteractiveTarget::reasoning(message_idx),
+                InteractiveTargetKind::ProviderRetry => {
+                    InteractiveTarget::provider_retry(message_idx)
+                }
+                InteractiveTargetKind::CommandResult => {
+                    InteractiveTarget::command_result(message_idx)
+                }
+                InteractiveTargetKind::Notice => InteractiveTarget::notice(message_idx),
             };
             if !targets.contains(&target) {
                 targets.insert(0, target);

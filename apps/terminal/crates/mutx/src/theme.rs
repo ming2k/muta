@@ -401,6 +401,16 @@ impl Theme {
         theme
     }
 
+    /// Whether the active theme is running in DEC VT100 monochrome mode.
+    pub fn is_monochrome(&self) -> bool {
+        self.text == Color::Reset && self.app_bg == Color::Reset
+    }
+
+    /// Whether the active theme is running in 16-color ANSI mode.
+    pub fn is_ansi16(&self) -> bool {
+        matches!(self.text, Color::White) && matches!(self.text_muted, Color::Gray)
+    }
+
     /// Return all available color schemes: built-ins + custom theme files across workspace and user locations.
     pub fn available_color_schemes() -> Vec<ColorSchemePreset> {
         Self::available_color_schemes_with_workspace(None)

@@ -3,6 +3,7 @@
 //! the engine grid; they hold no drawing logic of their own.
 
 pub mod document;
+pub mod interactive;
 pub mod layout;
 mod markdown;
 pub mod selection;

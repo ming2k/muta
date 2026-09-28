@@ -143,7 +143,17 @@ pub fn summary_text_color(
     // body, the sticky pin when scrolled) — the old model's lesson was that
     // re-decorating the active state only muddies the disclosure signal.
     match (disclosure, interaction.color(theme)) {
-        (Disclosure::Collapsed, Some(hue)) => base.blend(hue, INTERACTION_HOVER_BLEND),
+        (Disclosure::Collapsed, Some(hue)) => {
+            // In 16-color ANSI (where hue and base are discrete named ANSI tokens, e.g. Color::Yellow vs Color::Gray),
+            // RGB float blending produces intermediate values that snap back to Gray during Euclidean quantization.
+            // When named discrete ANSI tokens are used, preserve the affordance token directly.
+            let is_named_ansi = !matches!(hue, Color::Rgb(..)) && !matches!(base, Color::Rgb(..));
+            if is_named_ansi {
+                hue
+            } else {
+                base.blend(hue, INTERACTION_HOVER_BLEND)
+            }
+        }
         _ => base,
     }
 }
@@ -386,6 +396,24 @@ mod tests {
         assert_eq!(
             Interaction::from_hover_focused(true, true),
             Interaction::Focused
+        );
+    }
+
+    /// Discrete ANSI 16 themes must not blend discrete tokens into RGB floats that collapse to Gray.
+    #[test]
+    fn ansi16_interaction_preserves_discrete_yellow() {
+        let theme = Theme::ansi16();
+        assert_eq!(
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Idle, &theme),
+            Color::Gray
+        );
+        assert_eq!(
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Focused, &theme),
+            Color::Yellow
+        );
+        assert_eq!(
+            summary_text_color(None, Disclosure::Collapsed, Interaction::Hovered, &theme),
+            Color::Yellow
         );
     }
 }

@@ -596,8 +596,8 @@ mod tests {
             (crate::keymap::Key::CTRL_R, Mode::Idle),
             (crate::keymap::Key::ALT_P, Mode::Idle),
             (crate::keymap::Key::ALT_N, Mode::Idle),
-            (crate::keymap::Key::ALT_UP, Mode::Idle),
-            (crate::keymap::Key::ALT_DOWN, Mode::FocusedTarget),
+            (crate::keymap::Key::CTRL_P, Mode::Idle),
+            (crate::keymap::Key::CTRL_N, Mode::FocusedTarget),
         ];
         for (key, mode) in owned {
             let c = ctx(*mode, |_| {});
@@ -621,7 +621,6 @@ mod tests {
             crate::keymap::Key::CTRL_W,
             crate::keymap::Key::CTRL_L,
             crate::keymap::Key::CTRL_O,
-            crate::keymap::Key::CTRL_N,
             crate::keymap::Key::PAGE_UP,
             crate::keymap::Key::PAGE_DOWN,
         ] {
@@ -633,6 +632,19 @@ mod tests {
                 "{key:?} must not be owned by the chat surface"
             );
         }
+
+        // Ctrl+P and Ctrl+N are canonical focus navigation verbs owned by the chat surface.
+        let c = ctx(Mode::Idle, |_| {});
+        let mut input = String::from("x");
+        let mut cursor = 1;
+        assert_eq!(
+            resolve_chat_surface_key(crate::keymap::Key::CTRL_P, &c, &mut input, &mut cursor),
+            Some(InputAction::FocusPrevTarget)
+        );
+        assert_eq!(
+            resolve_chat_surface_key(crate::keymap::Key::CTRL_N, &c, &mut input, &mut cursor),
+            Some(InputAction::FocusNextTarget)
+        );
     }
 
     #[test]

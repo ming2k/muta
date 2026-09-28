@@ -15,7 +15,6 @@ use crate::App;
 use crate::clipboard;
 use crate::clipboard_ops;
 use crate::input;
-use crate::model::layout::InteractiveTargetKind;
 use crate::model::selection::SelectionState;
 use crate::render;
 use crate::render::Theme;
@@ -23,7 +22,7 @@ use crate::surfaces::{DialogKind, SceneKind, SheetKind};
 
 use super::runtime::UiRuntime;
 use super::sync::show_local_toast;
-use super::transcript::{extract_focused_target_text, extract_selection_text, resolve_focused_mut};
+use super::transcript::{extract_focused_target_text, extract_selection_text};
 
 mod commands;
 mod host;
@@ -1629,55 +1628,12 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             app.cancel_history_recall();
         }
         input::InputAction::ActivateFocusedTarget => {
-            if let Some(target) = app.focused_target {
-                // ADR-0197 M1: the transcript document lives on `App` —
-                // take it, edit, restore (the loop is the sole writer).
-                let mut messages = std::mem::take(&mut app.messages);
-                let mut toggled = false;
-                match target.kind {
-                    InteractiveTargetKind::ToolStep => {
-                        let enter_id = resolve_focused_mut(
-                            &mut messages,
-                            &app.focus_stack,
-                            target.message_idx,
-                        )
-                        .and_then(|message| {
-                            if message.is_subagent_task() {
-                                message.tool_step_call_id().map(String::from)
-                            } else {
-                                None
-                            }
-                        });
-                        if let Some(id) = enter_id {
-                            app.messages = messages;
-                            app.enter_subagent(id);
-                        } else {
-                            // Enter mirrors the mouse click on a tool
-                            // step's summary: toggle its inline
-                            // disclosure (expand/collapse) rather than
-                            // popping a modal. Keeping keyboard and
-                            // pointer parity is the expected behavior
-                            // for the disclosure affordance.
-                            toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
-                            app.messages = messages;
-                        }
-                    }
-                    InteractiveTargetKind::Reasoning
-                    | InteractiveTargetKind::ProviderRetry
-                    | InteractiveTargetKind::CommandResult
-                    | InteractiveTargetKind::Notice => {
-                        // Enter mirrors the mouse click on the row's
-                        // summary: toggle its expandable body.
-                        toggled = app.toggle_step_pinned(&mut messages, target.message_idx);
-                        app.messages = messages;
-                    }
-                }
-                if toggled {
-                    app.layout_height_cache.clear();
-                    app.transcript_changed_pending = true;
-                    app.selection = SelectionState::None;
-                }
-            }
+            // Stack-top focus dispatch: delegate to the focused component's own
+            // interactive key handler (Enter activates: expand/collapse, subagent zoom, etc.).
+            app.dispatch_focused_target_key(crate::keymap::Key::ENTER);
+        }
+        input::InputAction::FocusedTargetKey(key) => {
+            app.dispatch_focused_target_key(key);
         }
         input::InputAction::Paste => {
             // Ctrl+V: read the system clipboard off the event loop.

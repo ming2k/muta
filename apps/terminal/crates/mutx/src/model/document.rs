@@ -1562,15 +1562,8 @@ impl TranscriptMessage {
     /// User-driven disclosure change: force `expanded` and mark it pinned so
     /// later transitions leave it alone.
     pub fn pin_command_result_expanded(&mut self, expanded: bool) {
-        if let MessageKind::CommandResult {
-            expanded: current,
-            user_pinned,
-            ..
-        } = &mut self.kind
-        {
-            *current = expanded;
-            *user_pinned = true;
-        }
+        use super::interactive::InteractiveEntry;
+        self.pin_expanded(expanded);
     }
 
     /// The invocation text shown on the collapsed command row (`/search foo`,
@@ -1639,16 +1632,8 @@ impl TranscriptMessage {
     /// User-driven disclosure change: force `expanded` and mark it pinned so
     /// later lifecycle transitions leave it alone.
     pub fn pin_tool_step_expanded(&mut self, expanded: bool) {
-        if let MessageKind::ToolStep {
-            expanded: current,
-            user_pinned,
-            ..
-        } = &mut self.kind
-        {
-            *current = expanded;
-            *user_pinned = true;
-            self.refresh_tool_step();
-        }
+        use super::interactive::InteractiveEntry;
+        self.pin_expanded(expanded);
     }
 
     /// A tool step that spawns a subagent — the read-only `subagent` tool or the
@@ -1937,22 +1922,8 @@ impl TranscriptMessage {
     }
 
     pub fn pin_notice_expanded(&mut self, expanded: bool) {
-        match &mut self.kind {
-            MessageKind::Notice {
-                expanded: current,
-                user_pinned,
-                ..
-            }
-            | MessageKind::ProviderRetry {
-                expanded: current,
-                user_pinned,
-                ..
-            } => {
-                *current = expanded;
-                *user_pinned = true;
-            }
-            _ => {}
-        }
+        use super::interactive::InteractiveEntry;
+        self.pin_expanded(expanded);
     }
 
     /// Construct a round-interrupt marker row (C11) unified as a Notice entry.
@@ -2312,15 +2283,8 @@ impl TranscriptMessage {
 
     /// User-driven disclosure change: force `expanded` and pin it.
     pub fn pin_reasoning_expanded(&mut self, expanded: bool) {
-        if let MessageKind::Reasoning {
-            expanded: current,
-            user_pinned,
-            ..
-        } = &mut self.kind
-        {
-            *current = expanded;
-            *user_pinned = true;
-        }
+        use super::interactive::InteractiveEntry;
+        self.pin_expanded(expanded);
     }
 
     pub fn set_reasoning_duration(&mut self, duration_ms: u64) {
@@ -2517,7 +2481,7 @@ impl TranscriptMessage {
         })
     }
 
-    fn refresh_tool_step(&mut self) {
+    pub(crate) fn refresh_tool_step(&mut self) {
         let MessageKind::ToolStep {
             id: _,
             name,

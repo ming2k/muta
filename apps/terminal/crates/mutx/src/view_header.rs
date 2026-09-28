@@ -871,7 +871,7 @@ mod tests {
         assert!(row.starts_with("   SESSION b3c4 [DEVELOPER] ~/projects/xx"));
         let pos = row.find("UNATTENDED").expect("mode flag on the right");
         assert!(
-            row[pos..].contains("Ctrl-p palette"),
+            row[pos..].contains("Ctrl-l palette"),
             "palette affordance after the mode flag: {row}"
         );
         assert!(row.trim_end().ends_with("palette"));

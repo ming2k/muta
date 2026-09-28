@@ -356,7 +356,7 @@ pub fn route_event(
             {
                 match cmd_id {
                     crate::keymap::CommandId::CommandPalette => {
-                        // Ctrl+P / Ctrl+L toggle the palette: open it at the
+                        // Ctrl+L toggles the palette: open it at the
                         // top level, and close it while it is already open.
                         if dispatch.overlay
                             == Some(crate::surfaces::OverlaySurface::Dialog(
@@ -366,12 +366,6 @@ pub fn route_event(
                         {
                             return InputAction::ViewSwitcherToggle;
                         }
-                        // Inside any other modal the chord is owned by that
-                        // surface — Ctrl+P toggles the queue block in the
-                        // queue panel. Ctrl+L over a modal is a dispatch-side
-                        // no-op (`can_open_switcher` is false), and we
-                        // swallow it here so it cannot fall through to the
-                        // printable-char arm.
                         if physical_key == crate::keymap::Key::CTRL_L {
                             return InputAction::None;
                         }
@@ -381,13 +375,6 @@ pub fn route_event(
                         // the model bar is session chrome, never visible
                         // behind a modal.
                         return InputAction::OpenTelemetry;
-                    }
-                    crate::keymap::CommandId::OpenActiveConnectionDetail
-                        if dispatch.overlay.is_none() =>
-                    {
-                        // Ctrl+N (model-bar connection keycap). Top level only,
-                        // matching the telemetry binding above.
-                        return InputAction::OpenActiveConnectionDetail;
                     }
                     crate::keymap::CommandId::OpenQueue if dispatch.overlay.is_none() => {
                         // Ctrl+Q (queue-bar expand keycap, ADR-0126's Ctrl row).

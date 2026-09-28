@@ -303,15 +303,17 @@ pub enum InputAction {
     /// bar's context meter and rate gauge. Keyboard twin of clicking those gauges (`Ctrl+O`).
     OpenTelemetry,
     /// Move keyboard focus to the next activatable target. When no target is
-    /// focused yet, focuses the first (oldest) step. Driven by `Alt+↓` and by
+    /// focused yet, focuses the first (oldest) step. Driven by `Ctrl+N` and by
     /// `↓` while a step is already focused.
     FocusNextTarget,
     /// Move keyboard focus to the previous activatable target. When no target
     /// is focused yet, focuses the last (nearest-to-prompt) step. Driven by
-    /// `Alt+↑`, `Alt+O`, and by `↑` while a step is already focused.
+    /// `Ctrl+P` and by `↑` while a step is already focused.
     FocusPrevTarget,
     /// Activate the current keyboard-focused target (`Enter`).
     ActivateFocusedTarget,
+    /// Send a key event to the focused transcript target at stack top.
+    FocusedTargetKey(crate::keymap::Key),
     /// Copy the content of the currently focused target (`y` or `c` while a step is focused).
     CopyFocusedTarget,
     /// Clear the keyboard-focused target, returning every key to its ordinary

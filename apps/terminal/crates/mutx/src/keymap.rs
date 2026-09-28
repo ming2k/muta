@@ -847,10 +847,10 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::CommandPalette,
         label: "Command Palette",
-        hint: "Ctrl-p",
+        hint: "Ctrl-l",
         category: CommandCategory::Global,
         scope: Scope::Global,
-        bindings: &[Key::CTRL_P, Key::CTRL_L],
+        bindings: &[Key::CTRL_L],
         slash: Some("/commands"),
         availability: avail_always,
         disclosure: DisclosurePriority::L0Footer,
@@ -1070,10 +1070,10 @@ pub static COMMAND_REGISTRY: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::OpenActiveConnectionDetail,
         label: "Active Connection Detail",
-        hint: "Ctrl-n",
+        hint: "/connections",
         category: CommandCategory::Navigate,
         scope: Scope::Global,
-        bindings: &[Key::CTRL_N],
+        bindings: &[],
         slash: None,
         availability: avail_always,
         disclosure: DisclosurePriority::L2Palette,
@@ -1810,11 +1810,11 @@ impl LiveHint {
 /// config (ADR-0172 §"user-overridable schemes").
 fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
     match cmd {
-        CommandId::CommandPalette => Some(Key::CTRL_P),
+        CommandId::CommandPalette => Some(Key::CTRL_L),
         CommandId::Quit => Some(Key::CTRL_C),
         CommandId::CopySelection => Some(Key::CTRL_SHIFT_C),
         CommandId::OpenTelemetry => Some(Key::CTRL_O),
-        CommandId::OpenActiveConnectionDetail => Some(Key::CTRL_N),
+        CommandId::OpenActiveConnectionDetail => None,
         // `Esc` is a real chord, not a placeholder: it is the registry's
         // declared binding for CancelOrBack and it resolves there. (It is also
         // the value the display path used to fall back to for *every* chordless
@@ -1829,16 +1829,14 @@ fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
 }
 
 /// The canonical resolution table (the hard-bound globals + the bar chords:
-/// Ctrl+P/L palette, Ctrl+O session stats, Ctrl+N connection detail,
+/// Ctrl+L palette, Ctrl+O session stats,
 /// Ctrl+Q queue, Esc back, Ctrl+C quit, Ctrl+Shift+C copy), ignoring user
 /// overrides.
 fn canonical_global_key(key: Key) -> Option<CommandId> {
-    if key == Key::CTRL_P || key == Key::CTRL_L {
+    if key == Key::CTRL_L {
         Some(CommandId::CommandPalette)
     } else if key == Key::CTRL_O {
         Some(CommandId::OpenTelemetry)
-    } else if key == Key::CTRL_N {
-        Some(CommandId::OpenActiveConnectionDetail)
     } else if key == Key::CTRL_Q {
         Some(CommandId::OpenQueue)
     } else if key == Key::ESC {
@@ -2019,9 +2017,9 @@ pub enum SurfaceVerb {
     /// Previous / next prompt-history recall (`Alt+P` / `Alt+N`).
     HistoryPrev,
     HistoryNext,
-    /// Enter or step backward through transcript step focus (`Alt+↑`).
+    /// Enter or step backward through transcript step focus (`Ctrl+P`).
     FocusPrevTarget,
-    /// Step forward through transcript step focus (`Alt+↓`).
+    /// Step forward through transcript step focus (`Ctrl+N`).
     FocusNextTarget,
     /// Clear step focus back to the composer (`Esc`).
     ClearFocusedTarget,
@@ -2042,8 +2040,8 @@ impl SurfaceVerb {
             SurfaceVerb::ToggleSendMode => Key::TAB,
             SurfaceVerb::HistoryPrev => Key::ALT_P,
             SurfaceVerb::HistoryNext => Key::ALT_N,
-            SurfaceVerb::FocusPrevTarget => Key::ALT_UP,
-            SurfaceVerb::FocusNextTarget => Key::ALT_DOWN,
+            SurfaceVerb::FocusPrevTarget => Key::CTRL_P,
+            SurfaceVerb::FocusNextTarget => Key::CTRL_N,
             SurfaceVerb::ClearFocusedTarget => Key::ESC,
             SurfaceVerb::ScrollTop => Key::HOME,
             SurfaceVerb::ScrollBottom => Key::END,
@@ -2185,20 +2183,12 @@ mod tests {
     #[test]
     fn global_keys_resolve_correctly() {
         assert_eq!(
-            resolve_global_key(Key::CTRL_P),
-            Some(CommandId::CommandPalette)
-        );
-        assert_eq!(
             resolve_global_key(Key::CTRL_L),
             Some(CommandId::CommandPalette)
         );
         assert_eq!(
             resolve_global_key(Key::CTRL_O),
             Some(CommandId::OpenTelemetry)
-        );
-        assert_eq!(
-            resolve_global_key(Key::CTRL_N),
-            Some(CommandId::OpenActiveConnectionDetail)
         );
         assert_eq!(resolve_global_key(Key::ESC), Some(CommandId::CancelOrBack));
         assert_eq!(resolve_global_key(Key::CTRL_C), Some(CommandId::Quit));
@@ -2211,6 +2201,9 @@ mod tests {
             resolve_global_key(Key::CMD_C),
             Some(CommandId::CopySelection)
         );
+        // Ctrl+P and Ctrl+N are session navigation verbs, not global commands.
+        assert_eq!(resolve_global_key(Key::CTRL_P), None);
+        assert_eq!(resolve_global_key(Key::CTRL_N), None);
     }
 
     #[test]
@@ -2353,7 +2346,7 @@ mod tests {
             resolve_global_key_with(Key::ctrl('k'), &o),
             Some(CommandId::CommandPalette)
         );
-        assert_eq!(resolve_global_key_with(Key::CTRL_P, &o), None);
+        assert_eq!(resolve_global_key_with(Key::CTRL_L, &o), None);
         // The remapped quit fires; canonical Ctrl+C / Ctrl+Q is dead.
         let ctrl_shift_q = Key {
             modifiers: KeyModifiers::CONTROL.union(KeyModifiers::SHIFT),

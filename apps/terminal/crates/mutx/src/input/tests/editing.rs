@@ -295,15 +295,15 @@ fn ctrl_b_moves_caret_back_one_char() {
 }
 
 #[test]
-fn alt_arrows_drive_step_selection() {
+fn ctrl_p_and_ctrl_n_drive_step_selection() {
     let mut input = String::new();
     let mut cursor = 0;
     assert_eq!(
         run_key(
             &mut input,
             &mut cursor,
-            KeyCode::Up,
-            KeyModifiers::ALT,
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL,
             SurfaceFixture::None,
             false,
         ),
@@ -313,8 +313,8 @@ fn alt_arrows_drive_step_selection() {
         run_key(
             &mut input,
             &mut cursor,
-            KeyCode::Down,
-            KeyModifiers::ALT,
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
             SurfaceFixture::None,
             true,
         ),
@@ -378,17 +378,17 @@ fn ctrl_arrows_page_scroll_modal_body() {
 /// On the no-modal baseline, Alt+↑ / Alt+↓ drive transcript step selection
 /// (ADR-0173: the step walk is verb-owned; PgUp/PgDn page the transcript).
 #[test]
-fn alt_arrows_drive_transcript_focus_on_no_modal() {
+fn ctrl_p_and_ctrl_n_drive_transcript_focus_on_no_modal() {
     let mut input = String::new();
     let mut cursor = 0;
     assert_eq!(
         run_key(
             &mut input,
             &mut cursor,
-            KeyCode::Up,
-            KeyModifiers::ALT,
+            KeyCode::Char('p'),
+            KeyModifiers::CONTROL,
             SurfaceFixture::None,
-            false
+            false,
         ),
         InputAction::FocusPrevTarget
     );
@@ -396,10 +396,10 @@ fn alt_arrows_drive_transcript_focus_on_no_modal() {
         run_key(
             &mut input,
             &mut cursor,
-            KeyCode::Down,
-            KeyModifiers::ALT,
+            KeyCode::Char('n'),
+            KeyModifiers::CONTROL,
             SurfaceFixture::None,
-            true
+            true,
         ),
         InputAction::FocusNextTarget
     );

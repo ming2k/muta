@@ -119,42 +119,10 @@ pub(crate) fn extract_focused_target_text(
     messages: &[crate::model::document::TranscriptMessage],
     target: crate::model::layout::InteractiveTarget,
 ) -> Option<String> {
-    let msg = messages.get(target.message_idx)?;
-    let text = match &msg.kind {
-        crate::model::document::MessageKind::ToolStep {
-            output,
-            arguments,
-            name,
-            ..
-        } => output
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| format!("{name} {arguments}")),
-        crate::model::document::MessageKind::Reasoning { content, .. } => content.clone(),
-        crate::model::document::MessageKind::CommandResult {
-            invocation, result, ..
-        } => {
-            let inv_str = format!("{} {}", invocation.name, invocation.args)
-                .trim()
-                .to_string();
-            result
-                .as_ref()
-                .map(|r| format!("{inv_str}: {r:?}"))
-                .unwrap_or(inv_str)
-        }
-        crate::model::document::MessageKind::Notice { parts, .. } => parts
-            .as_ref()
-            .map(|p| {
-                if let Some(detail) = &p.detail {
-                    format!("{}: {detail}", p.title)
-                } else {
-                    p.title.clone()
-                }
-            })
-            .unwrap_or_else(|| msg.raw.clone()),
-        _ => msg.raw.clone(),
-    };
-    Some(text)
+    use crate::model::interactive::InteractiveEntry;
+    messages
+        .get(target.message_idx)
+        .and_then(|m| m.extract_copy_text())
 }
 
 /// Format the current loop status into human-readable text.

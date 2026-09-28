@@ -307,23 +307,17 @@ fn model_bar_orders_context_then_model() {
         ctx_pos < telemetry_key,
         "keycap trails the context gauge: {wide:?}"
     );
-    let conn_key = wide.find("Ctrl-n").expect("connection keycap hint shown");
-    assert!(
-        inst_pos < conn_key,
-        "connection keycap trails the identity cluster: {wide:?}"
-    );
     // Justified split: the identity cluster pins flush to the row's
     // right edge (mirrored `inner` indent).
     assert!(
         wide.trim_end()
-            .ends_with("kimi-k2.7-code max @kimi-code Ctrl-n"),
+            .ends_with("kimi-k2.7-code max @kimi-code"),
         "identity must end at the right edge: {wide:?}"
     );
 
-    // Narrower row: the telemetry keycap hint drops first (48 still keeps the
-    // provenance suffix), then the instance suffix (35), while the
-    // context meter, model name, and effort tag survive in order.
-    let narrow = row_text(48);
+    // Narrower row: the telemetry keycap hint drops first, then the instance suffix (35),
+    // while the context meter, model name, and effort tag survive in order.
+    let narrow = row_text(42);
     assert!(
         !narrow.contains("Ctrl-o"),
         "telemetry keycap hint hides first: {narrow:?}"
@@ -477,7 +471,7 @@ fn model_bar_click_rects_follow_context_and_connection_layout() {
     assert_eq!(slice(ctx), "0 (0%) Ctrl-o", "context rect mismatch");
     assert_eq!(
         slice(conn),
-        "kimi-k2.7-code Ctrl-n",
+        "kimi-k2.7-code",
         "connection rect mismatch"
     );
     // The identity cluster sits right of the gauges, pinned to the row's
@@ -489,8 +483,8 @@ fn model_bar_click_rects_follow_context_and_connection_layout() {
         "identity must sit right of the context gauge: {row:?}"
     );
     assert_eq!(
-        &row[80 - 1 - "kimi-k2.7-code Ctrl-n".len()..80 - 1],
-        "kimi-k2.7-code Ctrl-n",
+        &row[80 - 1 - "kimi-k2.7-code".len()..80 - 1],
+        "kimi-k2.7-code",
         "model must end at the right indent: {row:?}"
     );
 }
