@@ -31,15 +31,20 @@ We execute an uncompromising, clean-break overhaul of the trust attestation pipe
 - **Fail-Safe PreAttach Cancellation**:
   `PreAttachState::apply` explicitly permits `QuestionAction::Cancel` while in `submitting` state. If an external subsystem or network delay stalls trust resolution, the operator can cleanly press `[Esc]` to abort and keep the workspace quarantined, eliminating indefinite UI lockup.
 
-### 2. Projection-Preserving Interrupted Turn Architecture
-- **Strict Decoupling of Model Memory vs. Projection Ledger**:
+### 2. Clean Interrupt Semantics and Eradication of Abandoned Draft Repeats
+- **Strict Decoupling of Model Memory vs. Stop Events**:
   - The model-visible conversation transcript (`model_window` in `SessionData`) remains strictly clean: partial, unclosed, or invalid assistant turns never enter `model_window`.
-  - The human-visible projection ledger preserves the accumulated in-flight stream text inside `RoundInterrupt.detail`.
-- **Durable Draft Capture**:
-  - In `orchestration.rs`, an in-flight draft accumulator captures live streamed assistant text deltas during turn execution.
-  - Upon interruption (`HarnessError::Interrupted`), the accumulated draft is trimmed and stamped directly into `RoundInterrupt.detail`.
-  - In TUI `TranscriptMessage::round_interrupted`, `NoticeParts.detail` reflects `record.detail`, allowing `draw_notice_view` to render the abandoned draft seamlessly beneath the interrupt marker (`▲ interrupted`).
-  - Upon session resume, the operator sees exactly what the assistant was generating before interruption, resolving the perceived "database loss" while maintaining 100% clean LLM context.
+  - An interruption (`User`, `Superseded`, `Terminated`) cleanly marks the turn boundary without polluting the event notification or SQLite with discarded drafts.
+- **`RoundInterrupt.detail` Reserved Strictly for Error Diagnostics**:
+  - `RoundInterrupt.detail` is strictly populated when `reason == RoundInterruptReason::Error` (e.g. fatal provider HTTP errors, rate limit exhaustion, network failure payload).
+  - For non-error interrupts (`User`, `Superseded`, `Terminated`), `RoundInterrupt.detail` is `None`. The TUI `TranscriptMessage::round_interrupted` creates a clean, self-contained notice row without repeating the aborted text underneath.
+- **Rejected Pattern: In-Flight Draft Capture into `RoundInterrupt.detail` (Superseded & Eradicated)**:
+  - Storing in-flight streaming assistant deltas into an `Arc<Mutex<String>>` draft accumulator and writing them into `RoundInterrupt.detail` was attempted and rejected.
+  - *Why it failed*:
+    1. **Live View Duplication**: During streaming, the assistant's partial prose is already rendered in the active transcript above the interrupt marker. Re-rendering `detail` in the notice banner duplicated the entire aborted output verbatim.
+    2. **Contradiction of User Intent**: When an operator presses `[Esc Esc]`, they explicitly intend to abort/discard the output. Regurgitating the aborted output inside the notification banner added noise and clutter.
+    3. **Streaming Hot-Path Overhead**: Grabbing a mutex and pushing to an accumulator on every single provider delta added lock contention and allocations across streaming turns.
+    4. **Persistence Bloat**: In-flight drafts permanently bloated SQLite `sessions.data` interrupt records with discarded data.
 
 ### 3. Exact Round Counter Admission
 - In `start_interactive_round`, `round_at_admission` is derived from `input.driver`:
@@ -52,8 +57,10 @@ We execute an uncompromising, clean-break overhaul of the trust attestation pipe
 ### Positive
 - **Zero-Stall Workspace Trust**: Trusting a workspace is instantaneous: single-writer SQLite delegation eliminates file lock thrashing, and unblocked event dispatch delivers instant transition to session view.
 - **Fail-Safe UI Resilience**: Operators are never trapped in a submission screen.
-- **Lossless Interrupted Experience**: In-flight assistant thoughts and drafts survive interruptions and reloads in the projection view without risking LLM context corruption.
+- **Clean Interrupted Experience**: Interrupt markers communicate the exact stop reason without regurgitating aborted draft prose; no redundant noise or duplicate text in the transcript.
+- **Zero Streaming Overhead**: Provider delta streaming runs lock-free without draft accumulator mutex acquisition.
+- **Compact Persistence**: SQLite interrupt records do not bloat with abandoned draft payloads.
 - **Accurate Telemetry & Audit**: Round numbers on interrupt records agree with session transcript headers.
 
 ### Negative / Neutral
-- `RoundInterrupt` records with draft details occupy slightly more storage in SQLite `sessions.data` (typically a few hundred bytes of text), which is negligible.
+- None. Abandoned drafts from intentionally aborted turns are discarded without residue.

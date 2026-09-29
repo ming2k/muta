@@ -935,7 +935,7 @@ fn round_interrupt_creates_structured_notice() {
         reason: RoundInterruptReason::User,
         round: Some(3),
         at_ms: 1_000,
-        detail: None,
+        detail: Some("draft text that must not be repeated".to_string()),
     });
     assert!(marker.is_notice());
     assert!(marker.is_round_interrupt());
@@ -945,6 +945,7 @@ fn round_interrupt_creates_structured_notice() {
     };
     let parts = parts.as_ref().expect("must have parts");
     assert_eq!(parts.topic.as_deref(), Some("interrupted"));
+    assert_eq!(parts.detail, None, "interrupted draft must not duplicate into notice detail");
     assert_eq!(
         parts.origin,
         Some(crate::model::document::NoticeOrigin::System {

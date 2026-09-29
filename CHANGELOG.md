@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Interrupt notices no longer duplicate aborted drafts as redundant detail (ADR-0185 update).**
+  When a round was interrupted (e.g. via `[Esc Esc]`), an in-flight draft
+  accumulator previously captured streaming deltas into `RoundInterrupt.detail`,
+  causing `draw_notice_view` to re-render the aborted text directly beneath
+  the `▲ interrupted` notice row even though the assistant prose was already
+  visible in the transcript. The draft accumulator on the streaming hot-path has
+  been completely removed, eliminating mutex acquisitions on every delta and
+  preventing database bloat; `RoundInterrupt.detail` is now reserved strictly for
+  fatal error diagnostic payloads. Non-error interrupt notices render solely
+  their canonical header (`Round N — cancelled via [Esc Esc]`).
+
 ## [0.51.0] - 2026-09-29
 
 ### Added

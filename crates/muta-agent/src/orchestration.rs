@@ -631,9 +631,6 @@ pub struct RoundContext {
     /// call `execute_round` internally and must not release a user's paused
     /// next-round outbox between their own continuation iterations.
     pub emit_round_completed: bool,
-    /// In-flight assistant draft text accumulator for preserving partial streamed output
-    /// upon interruption (ADR-0185).
-    pub in_flight_draft: Option<Arc<std::sync::Mutex<String>>>,
 }
 
 /// Which kind of round `execute_round` is about to run — a fresh round, or
@@ -774,8 +771,6 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
     // The spawned tail records the round-interrupt into its own store handle
     // (C11); `RoundContext` consumes `context.session`, so keep an extra Arc.
     let session_for_tail = Arc::clone(&context.session);
-    let in_flight_draft = Arc::new(std::sync::Mutex::new(String::new()));
-    let in_flight_draft_for_round = in_flight_draft.clone();
 
     tokio::spawn(async move {
         // Supervised round task: the tail below (close_user_input_round →
@@ -800,7 +795,6 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                     retry_base_ms: context.retry_base_ms,
                     retry_max_ms: context.retry_max_ms,
                     emit_round_completed: true,
-                    in_flight_draft: Some(in_flight_draft_for_round),
                 },
                 input,
             );
@@ -843,12 +837,6 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
             Ok(RoundCompletion::Completed) | Ok(RoundCompletion::NotStarted) => false,
             Err(_) => true,
         };
-        let draft_detail = {
-            let mut g = in_flight_draft.lock().unwrap_or_else(|e| e.into_inner());
-            let text = g.trim().to_string();
-            g.clear();
-            if text.is_empty() { None } else { Some(text) }
-        };
         let interrupt_record = if stopped {
             // Attribution: this round's own admitted number, not the live
             // agent counter — by the time a superseded round's tail runs
@@ -865,7 +853,7 @@ pub async fn start_interactive_round(context: InteractiveRoundContext, input: Ro
                     reason: parked.reason,
                     at_ms: parked.at_ms,
                     round: result.as_ref().err().map(|_| round_at_admission),
-                    detail: draft_detail,
+                    detail: None,
                 })
                 .or_else(|| {
                     if let Err(error) = &result {
@@ -982,7 +970,6 @@ pub async fn execute_round(
         retry_base_ms,
         retry_max_ms,
         emit_round_completed,
-        in_flight_draft,
     } = context;
     // Bind accounting to the session that admitted this round. The master
     // agent survives `/session open` and `/resume`, so its construction-time
@@ -1303,7 +1290,6 @@ pub async fn execute_round(
         attempt += 1;
         let activity_for_run = tool_activity.clone();
         let streamed_for_run = streamed_text.clone();
-        let draft_for_run = in_flight_draft.clone();
         let accounting_ledger = agent.token_ledger();
         let accounting_session = Arc::clone(&session);
         let accounting_session_id = session_id.clone();
@@ -1315,20 +1301,6 @@ pub async fn execute_round(
                 |event| {
                     if matches!(event, AgentEvent::ToolCall { .. }) {
                         activity_for_run.store(true, Ordering::SeqCst);
-                    }
-                    if let AgentEvent::AssistantDelta { ref delta, .. } = event
-                        && let Some(ref draft) = draft_for_run
-                        && let Ok(mut g) = draft.lock()
-                    {
-                        g.push_str(delta);
-                    }
-                    if matches!(
-                        event,
-                        AgentEvent::ToolCall { .. } | AgentEvent::AssistantEnd(..)
-                    ) && let Some(ref draft) = draft_for_run
-                        && let Ok(mut g) = draft.lock()
-                    {
-                        g.clear();
                     }
                     if matches!(event, AgentEvent::ModelRequestStarted { .. })
                         && let Some(ledger) = accounting_ledger.clone()
@@ -1557,11 +1529,6 @@ pub async fn execute_round(
     // Only emit saving activity on natural completion. An interrupted or failed
     // round must never re-arm the activity bar that was already idled.
     if result.is_ok() {
-        if let Some(ref draft) = in_flight_draft
-            && let Ok(mut g) = draft.lock()
-        {
-            g.clear();
-        }
         let _ = tx.send(round_response(
             &session_id,
             RoundEvent::Activity("saving response".to_string()),

@@ -2062,7 +2062,7 @@ impl TranscriptMessage {
                 }),
                 topic: Some("interrupted".to_string()),
                 title: raw.clone(),
-                detail: record.detail.clone(),
+                detail: None,
             },
         };
         Self::notice(severity, raw).with_notice_parts(parts)
