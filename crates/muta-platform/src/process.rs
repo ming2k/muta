@@ -98,6 +98,25 @@ impl PtyMaster {
             ))
         }
     }
+
+    /// Check how many unconsumed bytes remain pending in the terminal input queue.
+    pub(crate) fn pending_input_bytes(&self) -> io::Result<usize> {
+        #[cfg(unix)]
+        {
+            let mut nbytes: libc::c_int = 0;
+            // SAFETY: `fd` is a live master fd owned by this handle.
+            let ret = unsafe { libc::ioctl(self.fd, libc::FIONREAD, &mut nbytes) };
+            if ret < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(nbytes.max(0) as usize)
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(0)
+        }
+    }
 }
 
 impl Drop for PtyMaster {
