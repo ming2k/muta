@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.50.18] - 2026-09-29
+
 ### Added
 
 - **Runtime-supervised command input with a controlling terminal (ADR-0292).**
@@ -8089,7 +8091,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.16...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.18...HEAD
+[0.50.18]: https://github.com/ming2k/muta/compare/v0.50.17...v0.50.18
 [0.50.16]: https://github.com/ming2k/muta/compare/v0.50.15...v0.50.16
 [0.50.15]: https://github.com/ming2k/muta/compare/v0.50.14...v0.50.15
 [0.50.14]: https://github.com/ming2k/muta/compare/v0.50.13...v0.50.14
