@@ -617,7 +617,7 @@ fn resize_event_routes_to_terminal_resized_with_dimensions() {
 }
 
 #[test]
-fn ctrl_x_initiates_leader_chord() {
+fn ctrl_x_arms_the_scene_namespace() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -631,104 +631,116 @@ fn ctrl_x_initiates_leader_chord() {
         &SceneKeys::default(),
         &mut drag,
     );
+    assert_eq!(action, InputAction::SetSceneNamespaceArmed(true));
+}
+
+/// ADR-0298 §1: every second stroke resolves through the namespace's own verb
+/// table (`keymap::scene_namespace`) — the same table the which-key card
+/// renders. Case is folded, because a leader chord is typed blind.
+#[test]
+fn scene_namespace_second_strokes_resolve_through_the_verb_table() {
+    use crate::keymap::scene_namespace::{SceneVerb, strokes_of};
+
+    let armed = Dispatch {
+        scene_namespace_armed: true,
+        ..Default::default()
+    };
+    let press = |code: KeyCode, mods: KeyModifiers, dispatch: Dispatch| {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        route_event(
+            Event::Key(KeyEvent::new(code, mods)),
+            &mut input,
+            &mut cursor,
+            dispatch,
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &SceneKeys::default(),
+            &mut drag,
+        )
+    };
+
+    // Every declared stroke maps to the action its verb names.
+    for stroke in strokes_of() {
+        let verb = SceneVerb::from_stroke(stroke).expect("declared stroke resolves");
+        let expected = match verb {
+            SceneVerb::Leave => InputAction::CloseScene,
+            SceneVerb::Switcher => InputAction::ViewSwitcherToggle,
+            SceneVerb::Quit => InputAction::CtrlC,
+        };
+        if let KeyCode::Char(c) = stroke.code {
+            // Lowercase spelling.
+            assert_eq!(
+                press(KeyCode::Char(c), stroke.modifiers, armed.clone()),
+                expected,
+                "{verb:?} lowercase"
+            );
+            // Uppercase spelling (`C-x W`) folds to the same verb.
+            if !stroke.modifiers.contains(KeyModifiers::CONTROL) {
+                assert_eq!(
+                    press(
+                        KeyCode::Char(c.to_ascii_uppercase()),
+                        stroke.modifiers,
+                        armed.clone()
+                    ),
+                    expected,
+                    "{verb:?} uppercase folds"
+                );
+            }
+        }
+    }
+
+    // `Esc` and `C-g` cancel; so does any unclaimed stroke — a half-typed
+    // chord must never fall through and fire a global.
+    for (code, mods) in [
+        (KeyCode::Esc, KeyModifiers::NONE),
+        (KeyCode::Char('g'), KeyModifiers::CONTROL),
+        (KeyCode::Char('z'), KeyModifiers::NONE),
+        (KeyCode::Enter, KeyModifiers::NONE),
+    ] {
+        assert_eq!(
+            press(code, mods, armed.clone()),
+            InputAction::CancelSceneNamespace,
+            "{code:?}+{mods:?} cancels"
+        );
+    }
+
+    // Re-pressing the opener re-arms rather than cancelling.
     assert_eq!(
-        action,
-        InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX)
+        press(KeyCode::Char('x'), KeyModifiers::CONTROL, armed),
+        InputAction::SetSceneNamespaceArmed(true)
     );
 }
 
+/// A bare `c` carries no meaning inside the namespace: only `C-c` is the quit
+/// verdict, so a mistyped `c` cancels instead of quitting the app.
 #[test]
-fn ctrl_x_w_and_k_route_to_close_scene() {
+fn scene_namespace_bare_c_does_not_quit() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
-    let dispatch = Dispatch {
-        leader_chord: crate::app::LeaderChord::CtrlX,
-        ..Default::default()
-    };
-    let action_w = route_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        dispatch.clone(),
-        &ModalKeys::default(),
-        &SheetKeys::default(),
-        &SceneKeys::default(),
-        &mut drag,
-    );
-    assert_eq!(action_w, InputAction::CloseScene);
-
-    let action_k = route_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        dispatch,
-        &ModalKeys::default(),
-        &SheetKeys::default(),
-        &SceneKeys::default(),
-        &mut drag,
-    );
-    assert_eq!(action_k, InputAction::CloseScene);
-}
-
-#[test]
-fn ctrl_x_p_and_b_route_to_view_switcher() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let dispatch = Dispatch {
-        leader_chord: crate::app::LeaderChord::CtrlX,
-        ..Default::default()
-    };
     let action = route_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+        Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
         &mut input,
         &mut cursor,
-        dispatch,
+        Dispatch {
+            scene_namespace_armed: true,
+            ..Default::default()
+        },
         &ModalKeys::default(),
         &SheetKeys::default(),
         &SceneKeys::default(),
         &mut drag,
     );
-    assert_eq!(action, InputAction::ViewSwitcherToggle);
+    assert_eq!(action, InputAction::CancelSceneNamespace);
 }
 
+/// ADR-0298: the scenes have **no** `q` exit. `q` is an ordinary printable on
+/// the Dashboard (it seeds the console composer) and an unclaimed char on
+/// Settings, so leaving either is the `C-x` namespace alone.
 #[test]
-fn ctrl_x_esc_and_ctrl_g_cancel_leader_chord() {
-    let mut input = String::new();
-    let mut cursor = 0;
-    let mut drag = SelectionDrag::default();
-    let dispatch = Dispatch {
-        leader_chord: crate::app::LeaderChord::CtrlX,
-        ..Default::default()
-    };
-    let action_esc = route_event(
-        Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        &mut input,
-        &mut cursor,
-        dispatch.clone(),
-        &ModalKeys::default(),
-        &SheetKeys::default(),
-        &SceneKeys::default(),
-        &mut drag,
-    );
-    assert_eq!(action_esc, InputAction::CancelLeaderChord);
-
-    let action_cg = route_event(
-        Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
-        &mut input,
-        &mut cursor,
-        dispatch,
-        &ModalKeys::default(),
-        &SheetKeys::default(),
-        &SceneKeys::default(),
-        &mut drag,
-    );
-    assert_eq!(action_cg, InputAction::CancelLeaderChord);
-}
-
-#[test]
-fn q_in_dashboard_routes_to_close_modal() {
+fn q_is_not_a_scene_exit_on_dashboard() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -750,11 +762,15 @@ fn q_in_dashboard_routes_to_close_modal() {
         &SceneKeys::default(),
         &mut drag,
     );
-    assert_eq!(action, InputAction::CloseModal);
+    assert_eq!(
+        action,
+        InputAction::HostPromptSeed('q'),
+        "`q` types like every other unclaimed letter on the console"
+    );
 }
 
 #[test]
-fn q_in_settings_categories_routes_to_config_back() {
+fn q_is_not_a_scene_exit_on_settings() {
     let mut input = String::new();
     let mut cursor = 0;
     let mut drag = SelectionDrag::default();
@@ -776,5 +792,42 @@ fn q_in_settings_categories_routes_to_config_back() {
         &SceneKeys::default(),
         &mut drag,
     );
-    assert_eq!(action, InputAction::ConfigBack);
+    assert_eq!(
+        action,
+        InputAction::None,
+        "the Settings scene owns no exit chord, so `q` is unclaimed"
+    );
+}
+
+/// ADR-0298 §2: Esc on a scene never leaves it. On the Dashboard and Settings
+/// scenes it resolves to the scene-local step-back verb, whatever sub-layer is
+/// open — the scene's own exit is `C-x w`/`C-x k` (or `q`) only.
+#[test]
+fn esc_on_dashboard_and_settings_is_scene_local_back() {
+    for scene in [
+        crate::surfaces::SceneKind::Dashboard,
+        crate::surfaces::SceneKind::Settings,
+    ] {
+        let mut input = String::new();
+        let mut cursor = 0;
+        let mut drag = SelectionDrag::default();
+        let action = route_event(
+            Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            &mut input,
+            &mut cursor,
+            Dispatch {
+                scene,
+                ..Default::default()
+            },
+            &ModalKeys::default(),
+            &SheetKeys::default(),
+            &SceneKeys::default(),
+            &mut drag,
+        );
+        assert_eq!(
+            action,
+            InputAction::SceneBack,
+            "Esc is a step back, never a scene exit, on {scene:?}"
+        );
+    }
 }

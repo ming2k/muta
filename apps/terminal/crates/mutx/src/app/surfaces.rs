@@ -348,7 +348,10 @@ impl App {
         }
     }
 
-    /// Dismiss active dialog or return from non-conversation scene (ADR-0205).
+    /// Dismiss the active dialog overlay, restoring the dialog underneath (if
+    /// any). Strictly **overlay-scoped**: it never leaves the Scene. A Scene's
+    /// exit is `close_scene`, a deliberate verb — never the universal dismiss
+    /// chord (ADR-0205 `[INV-TUI-CLEAN-02]`, ADR-0298 §2).
     pub(crate) fn dismiss_active_dialog(&mut self) -> bool {
         if let Some(id) = self.active_dialog() {
             self.deactivate_dialog(id);
@@ -357,22 +360,114 @@ impl App {
                 self.restore_dialog_state(underlying);
             }
             true
-        } else if self.current_scene() != SceneKind::Conversation {
-            let leaving = self.current_scene();
-            self.surfaces.back_scene();
-            if leaving == SceneKind::TaskInspection {
-                self.focus_stack.clear();
-                self.reset_view_state();
-            }
-            if leaving == SceneKind::Aside {
-                self.in_side_view = false;
-                self.side_session_id = None;
-                self.reset_view_state();
-            }
-            self.deactivate_scene(leaving);
-            true
         } else {
             false
+        }
+    }
+
+    /// Leave a root scene back to the scene it came from (ADR-0205 lifecycle:
+    /// the scene history the router keeps for TaskInspection and Aside, and a
+    /// direct return to Conversation for the peer scenes). Returns `false`
+    /// when already on the Conversation scene.
+    ///
+    /// This is the *only* scene-leaving path besides the aside/subagent exits
+    /// in [`App::close_scene`]; nothing on the Esc chord calls it.
+    pub(crate) fn leave_scene(&mut self) -> bool {
+        let leaving = self.current_scene();
+        if leaving == SceneKind::Conversation {
+            return false;
+        }
+        self.surfaces.back_scene();
+        if leaving == SceneKind::TaskInspection {
+            self.focus_stack.clear();
+            self.reset_view_state();
+        }
+        if leaving == SceneKind::Aside {
+            self.in_side_view = false;
+            self.side_session_id = None;
+            self.reset_view_state();
+        }
+        self.deactivate_scene(leaving);
+        true
+    }
+
+    /// Actively leave the current Scene: the `C-x` scene namespace's exit
+    /// (`C-x w` / `C-x k`, ADR-0298 §1) and each scene's own `q`.
+    ///
+    /// Overlay-agnostic by design — an overlay floating above the scene is the
+    /// visual foreground, so the dispatcher dismisses it *first* and the scene
+    /// is left on the next press. Returns `true` when a scene was actually
+    /// left (i.e. the view was not already the home Conversation).
+    pub(crate) fn close_scene(&mut self) -> bool {
+        self.scene_namespace_armed = false;
+        match self.current_scene() {
+            SceneKind::Aside => {
+                // `/btw`: detach from the aside view and return to the primary
+                // transcript (ADR-0103). Detach is non-destructive — the aside
+                // keeps running. The interrupt arm is cleared so the main
+                // view's next Esc starts a fresh confirmation.
+                self.exit_side_view();
+                self.arm_esc(None);
+                self.send_intent(muta_contracts::AgentRequest::ExitSideView);
+                true
+            }
+            SceneKind::TaskInspection => {
+                if self.exit_subagent() {
+                    true
+                } else {
+                    self.leave_scene()
+                }
+            }
+            SceneKind::Dashboard | SceneKind::Settings => self.leave_scene(),
+            SceneKind::Conversation => false,
+        }
+    }
+
+    /// Step back one level **inside** the active Scene: a dropdown, a drill-in
+    /// pane, the dashboard's preview or inline prompt. Esc produces this on the
+    /// Dashboard and Settings scenes (ADR-0298 §2). It is scene-local by
+    /// construction — there is no arm that leaves the Scene, so Esc can never
+    /// navigate between scenes. The Conversation, TaskInspection and Aside
+    /// scenes own their Esc in their own schemes and never reach this.
+    pub(crate) fn scene_back(&mut self) {
+        if self.current_scene() == SceneKind::Settings {
+            if self.config_dropdown.is_some() {
+                self.config_dropdown = None;
+                return;
+            }
+            if self.config_focus == crate::overlays::ConfigFocus::Detail {
+                if self.config_category == 0 {
+                    // Leaving the theme pane reverts the live preview to the
+                    // persisted color scheme.
+                    let ws_path = if self.current_workspace.is_empty() {
+                        None
+                    } else {
+                        Some(std::path::Path::new(&self.current_workspace))
+                    };
+                    self.theme = Theme::from_color_scheme_with_workspace(
+                        &self.color_scheme,
+                        &self.custom_color_scheme,
+                        ws_path,
+                    );
+                    self.config_detail_index =
+                        Theme::color_scheme_index_with_workspace(&self.color_scheme, ws_path);
+                }
+                self.config_focus = crate::overlays::ConfigFocus::Categories;
+            }
+            return;
+        }
+        if self.current_scene() == SceneKind::Dashboard {
+            if self.host_preview.is_some() {
+                self.host_preview = None;
+                self.host_preview_scroll = 0;
+                return;
+            }
+            if self.host_prompting {
+                self.host_prompting = false;
+                self.host_prompt_new = false;
+                self.input.clear();
+                self.set_cursor(0);
+            }
         }
     }
 

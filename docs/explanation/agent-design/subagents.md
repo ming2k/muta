@@ -227,10 +227,12 @@ When zoomed in:
 
 - The entire footer — activity bar, input box, hint bar — is
   hidden. The subagent view is read-only chrome.
-- A one-row navigation band at the bottom shows the position (`N of M`) on the
-  left and `Esc back   [ prev   ] next` on the right.
-- `Esc` pops back up the focus stack; `[` and `]` cycle sibling `subagent`
-  steps at the current depth.
+- Its head band carries the identity: `SUBAGENT`, the `[ROLE]` tag, the task
+  label, and the `(N of M)` sibling position on the right; row 2 carries the
+  `Main › Subagent[role]` breadcrumb and the `Ctrl-x scene` namespace.
+- `Ctrl-x w` / `Ctrl-x k` pops back up the focus stack; `[` and `]` cycle
+  sibling `subagent` steps at the current depth. `Esc` clears step/browse focus
+  and stops there — it never leaves the zoom (ADR-0298 §2).
 
 On session resume (`/sessions <id>` or the picker), persisted child transcripts repopulate the step's children, so the
 zoom view rebuilds from disk. The live event stream always wins over the

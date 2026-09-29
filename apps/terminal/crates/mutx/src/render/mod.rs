@@ -52,8 +52,8 @@ pub use crate::theme::{COLOR_SCHEMES, Theme};
 use crate::view_header;
 #[allow(unused_imports)]
 pub(crate) use crate::view_header::{
-    AsidesChip, BtwHead, SessionHead, ViewHeader, ViewHints, ViewKind, draw_view_header,
-    draw_view_header_hints,
+    AsidesChip, BtwHead, DashboardHead, SessionHead, ViewHeader, ViewHints, ViewKind,
+    draw_view_header, draw_view_header_hints,
 };
 #[allow(unused_imports)]
 pub use crate::views::settings::*;
@@ -234,11 +234,6 @@ pub struct TranscriptProps<'a> {
     /// non-empty or the guidance variant does not rotate.
     pub carousel_index: usize,
     pub theme: &'a Theme,
-    /// Effective global chords (`[keybindings]` config, ADR-0172). Persistent
-    /// keycaps (the head's palette affordance, the model bar's telemetry /
-    /// connection keycaps) render the effective binding so a remapped chord
-    /// advertises exactly what fires.
-    pub key_overrides: crate::keymap::GlobalOverrides,
     /// Which layout strategy to arrange messages with. Selectable via
     /// `[tui] transcript_layout`; defaults to [`layout::Strategy::TurnBand`].
     pub layout: layout::Strategy,
@@ -643,7 +638,6 @@ pub fn draw_transcript(
         guidance,
         carousel_index,
         theme,
-        key_overrides,
         layout,
         height_cache,
     } = props;
@@ -884,7 +878,7 @@ pub fn draw_transcript(
     // it, so it was already split from `full` above; just paint it here.
     // Row 1 carries identity/status; row 2 the view-affordance legend.
     if let (Some(header), Some(rect)) = (view_header.as_ref(), head_rect) {
-        draw_view_header(frame, rect, header, theme, &key_overrides);
+        draw_view_header(frame, rect, header, theme);
     }
     if let (Some(hints), Some(rect)) = (page_hints_view.as_ref(), hints_rect) {
         draw_view_header_hints(frame, rect, hints, theme);

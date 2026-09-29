@@ -292,12 +292,7 @@ fn compose_frame(
             total: app.btw_list.len(),
             running: aside_running,
         }),
-        interruptible: viewed_running,
-        parent_note: "",
         breadcrumbs: breadcrumbs_string.as_deref(),
-        back_key: app
-            .key_overrides
-            .effective_binding(crate::keymap::CommandId::CancelOrBack),
     };
 
     // Empty-state guidance policy (ADR-0057/0104): the app shell picks the
@@ -368,7 +363,6 @@ fn compose_frame(
                 cell_selection: app.drag.cell_info.as_ref(),
                 activity: &status,
                 backoff_clause: backoff_clause.as_deref(),
-                key_overrides: app.key_overrides.clone(),
                 // A pending permission request forces the activity bar on (and
                 // tints it warning) so it stays the visible anchor above the
                 // permission sheet even if the loop has gone idle.
@@ -414,6 +408,11 @@ fn compose_frame(
                     unattended: app.unattended,
                     confined: app.confined,
                     switching_target: app.switching_session.as_deref(),
+                    // ADR-0238: chrome renders the chord that fires, so a user
+                    // remap shows through; an unbound palette has no keycap.
+                    palette_key: app
+                        .key_overrides
+                        .effective_binding(crate::keymap::CommandId::CommandPalette),
                 }),
                 // View-scoped: the elapsed-timer origin belongs to the viewed
                 // session's round (an aside view times the aside's round, not
@@ -1231,15 +1230,17 @@ fn compose_frame(
                 )),
                 SheetKind::OAuthPending => {
                     let title: &'static str = match &app.custom_auth {
-                        muta_contracts::ConnectionAuth::Subscription { provider } => match provider.as_ref() {
-                            "chatgpt" => "ChatGPT Subscription",
-                            "copilot" => "Copilot",
-                            "xai" => "xAI",
-                            "google-antigravity" => "Google Antigravity",
-                            "qoder" => "Qoder",
-                            "opencode" | "opencode-go" => "OpenCode Go",
-                            _ => "Subscription",
-                        },
+                        muta_contracts::ConnectionAuth::Subscription { provider } => {
+                            match provider.as_ref() {
+                                "chatgpt" => "ChatGPT Subscription",
+                                "copilot" => "Copilot",
+                                "xai" => "xAI",
+                                "google-antigravity" => "Google Antigravity",
+                                "qoder" => "Qoder",
+                                "opencode" | "opencode-go" => "OpenCode Go",
+                                _ => "Subscription",
+                            }
+                        }
                         muta_contracts::ConnectionAuth::ApiKey => "OAuth",
                     };
                     Some(render::draw_oauth_pending(
@@ -1432,14 +1433,19 @@ fn compose_frame(
         );
     }
 
-    // Floating Which-Key guide overlay when two-stroke leader chord is active
-    let has_surface_to_close = app.active_dialog().is_some()
-        || app.current_scene() != crate::surfaces::SceneKind::Conversation;
+    // Floating which-key card while the `Ctrl+X` scene namespace is armed. The
+    // leave row spells the *resolved* action for the current surface stack (an
+    // overlay dismiss, a scene exit, or a spent gesture at the home scene)
+    // rather than a fixed promise (ADR-0238).
+    let close_label = crate::components::which_key::close_label_for(
+        app.active_dialog().is_some(),
+        app.current_scene() != crate::surfaces::SceneKind::Conversation,
+    );
     crate::components::which_key::draw_which_key_overlay(
         f,
         &app.theme,
-        app.leader_chord,
-        has_surface_to_close,
+        app.scene_namespace_armed,
+        close_label,
         f.area(),
     );
 

@@ -90,39 +90,46 @@ restored sessions), so the answer surfaces without opening the zoom.
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
+│   SUBAGENT [EXPLORE] explore the codebase          (1/2) │  ← head row 1
+│   Main › Subagent[explore]                    Ctrl-x scene│  ← head row 2
 │                                                          │
 │   ... the focused task's child messages, rendered        │
 │   exactly like the root conversation (user messages,     │
 │   assistant text, tool steps, thinking steps, ...)       │
 │                                                          │
-├──────────────────────────────────────────────────────────┤
-│ Task  explore the codebase  (1 of 3)   Esc back  [ prev  ] next │  ← subagent bar
 └──────────────────────────────────────────────────────────┘
 ```
 
 The message stream above is rendered by the same `draw_transcript` pass as
 the root conversation, just against `focused_messages()` instead of
-`self.messages`. The footer (activity bar, input box, model bar)
-collapses to 0 height — the zoomed view is read-only, and the navigation
-bar is its only chrome. See [Frame layout → Subagent zoom view](layout.md#subagent-zoom-view)
-for the rect math.
+`self.messages`. The footer (activity bar, input box, model bar) collapses to
+0 height — the zoomed view is read-only, and its head band is its only chrome.
+See [Frame layout → Subagent zoom view](layout.md#subagent-zoom-view) for the
+rect math.
 
-### Subagent bar
+### Head band
 
-Drawn by `draw_subagent_bar` at the bottom of the transcript chunk, across
-the full transcript width inside the `app_bg` gutters. The layout is
-left / spacer / right:
+The zoom's whole chrome is the head band (ADR-0103 §3 / ADR-0104). Row 1 is
+identity: the `SUBAGENT` title, the `[ROLE]` tag, the focused task's label as
+the primary context, and the `(N/M)` sibling index on the right (only when the
+task has siblings). Row 2 is the view-stack breadcrumb `Main › Subagent[role]`
+plus the `Ctrl-x scene` namespace.
 
 | Region | Contents | Style |
 |--------|----------|-------|
-| Left label | ` Task` | `fg` bold on `theme.body()` |
-| Description | the focused task's label | `theme.brand()` |
-| Sibling count | ` (N of M) ` when `M > 1`, else a single space | `theme.muted()` |
-| Spacer | pad to fill the row | `theme.body()` |
-| Right hint | `Esc back   [ prev   ] next ` | `theme.muted()` |
+| Row 1 title | ` SUBAGENT ` | BOLD `text_primary` |
+| Role tag | `[EXPLORE]` | BOLD `text_brand` |
+| Description | the focused task's label | BOLD `text_brand` |
+| Sibling count | ` (N/M) ` when `M > 1` | `text_muted` |
+| Row 2 | breadcrumb + `Ctrl-x scene` | `fg` crumb, keycap `text_brand` + bold |
 
-The bar uses `theme.body()` (not `theme.panel()`) so it reads as a thin
-navigation strip rather than as another modal panel.
+The scene carries **no scene-exit chord of its own**. Esc clears step/browse
+focus and dismisses a completion, and stops there; leaving the zoom is the
+`Ctrl-x` namespace alone (`C-x w` / `C-x k`, ADR-0298). Esc does not close
+Scenes (ADR-0205 `[INV-TUI-CLEAN-02]`). The sibling walk
+(`[` / `]`, remappable via `session.prev_sibling` / `session.next_sibling`) is
+not advertised on the band — a fixed keycap row cannot render a remap
+faithfully (ADR-0238) — and is discovered through the Command Palette.
 
 ## Focus stack
 
@@ -142,7 +149,7 @@ subagent's children.
 | Action | Effect on focus stack |
 |--------|-----------------------|
 | `Enter` / click on an inline `subagent` summary | Push that step's call id; `reset_view_state` clears scroll, selection, sticky pinning |
-| `Esc` from a zoomed view | Pop the top; if the stack is now empty, restore the root view |
+| `Ctrl-x w` / `Ctrl-x k` | Pop the top; if the stack is now empty, restore the root view |
 | `[` (left bracket) | Pop the top and re-push the previous sibling's call id — cycle to the previous sibling task at this depth |
 | `]` (right bracket) | Pop the top and re-push the next sibling's call id — cycle to the next sibling |
 

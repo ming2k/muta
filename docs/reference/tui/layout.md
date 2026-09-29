@@ -82,12 +82,15 @@ identity and status; on the Main session view it shows `SESSION`, the
 session-id tail, and the workspace path on the left, plus the session mode
 (`DELEGATED`) on the right. Row 2 — the view stack breadcrumb trail and affordance
 legend — renders only while the view has stack depth or page-specific items to announce:
-view stack breadcrumbs (`Main › Subagent[...] › *Diff*` with `Ctrl+X menu`),
-the main view's live aside chip + `F5 asides`, or the aside view's `Ctrl+C back` /
-`F5 asides` / `Esc interrupt aside`. When single-view and no asides, row 2 collapses
-to 0 rows (`PAGE_HEADER_ROWS = 1`). Two-stroke leader chords (`Ctrl+X`, `Ctrl+C`) render
-as a floating Which-Key overlay card at the top shell layer without shifting the
-transcript layout. See [Head band](status-bar.md).
+view stack breadcrumbs (`Main › Subagent[...] › *Diff*` with `Ctrl-x scene`),
+the main view's live aside chip + `F5 asides`, or the `Ctrl-x scene` namespace
+that the Settings and Dashboard scenes always carry. When single-view and no
+asides, row 2 collapses to 0 rows (`PAGE_HEADER_ROWS = 1`). The scene namespace
+renders as a floating which-key card at the top shell layer without shifting the
+transcript layout. Every scene draws its head through the same
+`draw_view_header` band (ADR-0298 §4) — no scene hand-rolls one — and Esc never
+appears on row 2 as a scene exit: it does not close Scenes (ADR-0205
+`[INV-TUI-CLEAN-02]`). See [Head band](status-bar.md).
 
 ### Footer stack
 
@@ -164,10 +167,8 @@ not the root conversation.
 │                                                              │
 │   …user / assistant / tool steps / thinking steps…           │
 │                                                              │
-├──────────────────────────────────────────────────────────────┤
-│  Task  explore the codebase  (1 of 3)   Esc back  [ prev  ] next │  ← subagent bar
 └──────────────────────────────────────────────────────────────┘
-  (bottom edge: the subagent bar pins flush — no bottom viewport margin)
+  (the zoom's chrome is its head band alone — no footer at all)
 ```
 
 | Region | Constraint | Height |

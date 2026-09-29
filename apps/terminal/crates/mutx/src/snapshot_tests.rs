@@ -663,7 +663,6 @@ fn render_transcript_frame(
                 logo: None,
                 guidance: EmptyStateGuidance::Tour,
                 carousel_index: 0,
-                key_overrides: Default::default(),
                 theme: &theme,
                 layout: crate::layout::Strategy::default(),
                 height_cache,

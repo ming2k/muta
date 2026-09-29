@@ -6,7 +6,7 @@
 //! - Header uses breadcrumb hierarchy: `{Dialog} › Keys`.
 //! - Body lists registry-derived verbs scoped to the dialog (`Scope::Dialog(dialog)`),
 //!   followed by common navigation verbs.
-//! - Footer provides standard navigation hints (`↑↓ scroll`, `?/Esc back`).
+//! - Footer provides standard navigation hints (`↑↓ scroll`, `?/Esc close`).
 
 use mutx_engine::{
     Frame, Modifier, Rect, Span, {Line, Style},

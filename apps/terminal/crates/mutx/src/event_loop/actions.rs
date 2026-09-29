@@ -232,12 +232,12 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
         app.arm_ctrl_c(None);
     }
 
-    // While the leader chord is armed, any action other than SetLeaderChord
-    // resets the leader chord state.
-    if app.leader_chord != crate::app::LeaderChord::None
-        && !matches!(action, input::InputAction::SetLeaderChord(_))
+    // An armed scene namespace survives exactly one keystroke: any action other
+    // than re-arming it disarms it, so a half-typed chord cannot linger and
+    // change the meaning of a later, unrelated key (ADR-0298 §1).
+    if app.scene_namespace_armed && !matches!(action, input::InputAction::SetSceneNamespaceArmed(_))
     {
-        app.leader_chord = crate::app::LeaderChord::None;
+        app.scene_namespace_armed = false;
     }
 
     match action {
@@ -1035,32 +1035,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
                 app.config_detail_scroll = 0;
             }
         }
-        input::InputAction::ConfigBack => {
-            if app.current_scene() == SceneKind::Settings {
-                if app.config_dropdown.is_some() {
-                    app.config_dropdown = None;
-                } else if app.config_focus == crate::overlays::ConfigFocus::Detail {
-                    if app.config_category == 0 {
-                        // Revert preview theme to persisted color scheme
-                        let ws_path = if app.current_workspace.is_empty() {
-                            None
-                        } else {
-                            Some(std::path::Path::new(&app.current_workspace))
-                        };
-                        app.theme = Theme::from_color_scheme_with_workspace(
-                            &app.color_scheme,
-                            &app.custom_color_scheme,
-                            ws_path,
-                        );
-                        app.config_detail_index =
-                            Theme::color_scheme_index_with_workspace(&app.color_scheme, ws_path);
-                    }
-                    app.config_focus = crate::overlays::ConfigFocus::Categories;
-                } else {
-                    app.dismiss_surface();
-                }
-            }
-        }
         input::InputAction::McpToggle => {
             // Connect/disconnect the selected server for the session.
             // The "enabled intent" is the inverse of its disabled flag;
@@ -1386,28 +1360,27 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             modals::handle_close_modal(app, viewed_session_id);
         }
         input::InputAction::CloseScene => {
-            app.leader_chord = crate::app::LeaderChord::None;
+            // An overlay floating above the scene is the visual foreground, so
+            // it is dismissed first; the scene itself is left on the next
+            // press (ADR-0298 §1). Leaving a *standalone* scene (a startup
+            // `mutx dashboard` / `mutx settings` with no requested
+            // conversation) is a program exit instead: there is no
+            // conversation to return to. The leader arm itself is cleared by
+            // the shared pre-dispatch reset, so neither branch repeats it.
             if app.active_dialog().is_some() {
                 app.dismiss_surface();
-            } else if app.in_side_view || app.current_scene() == crate::surfaces::SceneKind::Aside {
-                app.exit_side_view();
-                app.arm_esc(None);
-                app.send_intent(AgentRequest::ExitSideView);
-            } else if app.in_subagent_view()
-                || app.current_scene() == crate::surfaces::SceneKind::TaskInspection
-            {
-                if !app.exit_subagent() {
-                    app.dismiss_surface();
-                }
-            } else {
-                app.dismiss_surface();
+            } else if !modals::quit_standalone_scene_at_startup(app) {
+                app.close_scene();
             }
         }
-        input::InputAction::SetLeaderChord(chord) => {
-            app.leader_chord = chord;
+        input::InputAction::SceneBack => {
+            app.scene_back();
         }
-        input::InputAction::CancelLeaderChord => {
-            app.leader_chord = crate::app::LeaderChord::None;
+        input::InputAction::SetSceneNamespaceArmed(armed) => {
+            app.scene_namespace_armed = armed;
+        }
+        input::InputAction::CancelSceneNamespace => {
+            app.scene_namespace_armed = false;
         }
         input::InputAction::TelemetryActivate => {
             if app.active_dialog() == Some(DialogKind::Telemetry) {
@@ -1652,23 +1625,6 @@ pub(super) async fn dispatch_action<W: std::io::Write>(
             // is already in hand, so route it directly through the same
             // chip-or-inline logic as Ctrl+V without an async hop.
             clipboard_ops::apply_clipboard_paste(app, clipboard::ClipboardRead::Text(text));
-        }
-        input::InputAction::ExitSubagent => {
-            app.exit_subagent();
-        }
-        input::InputAction::ExitSideView => {
-            // `/btw`: detach from the aside view and return to the primary
-            // transcript (ADR-0103). Optimistically flip the view for
-            // snappiness and tell the harness to detach its active pointer —
-            // the aside keeps running. `SideViewClosed` is the backstop in
-            // case this fires twice. The interrupt arm is cleared too so the
-            // main view's next Esc starts a fresh interrupt confirmation
-            // instead of firing a leftover armed state.
-            if app.in_side_view {
-                app.exit_side_view();
-                app.arm_esc(None);
-                app.send_intent(AgentRequest::ExitSideView);
-            }
         }
         input::InputAction::InterruptSide => {
             // Esc inside an aside view (ADR-0103 §2): interrupt the viewed
@@ -2793,6 +2749,12 @@ pub(crate) mod host_test_shims {
     pub(crate) fn kill_cancel(app: &mut App) {
         host::cancel_kill_confirm(app);
     }
+
+    /// The scene-exit verb's standalone-startup carve-out (see
+    /// `modals::quit_standalone_scene_at_startup`).
+    pub(crate) fn quit_standalone_scene_at_startup(app: &mut App) -> bool {
+        super::modals::quit_standalone_scene_at_startup(app)
+    }
 }
 
 /// Cycle a capability-override tri-state (ADR-0149 layer 1): unset (inherit
@@ -2819,14 +2781,18 @@ async fn execute_command_by_id(
     match cmd_id {
         CommandId::CommandPalette => {}
         CommandId::CancelOrBack => {
-            if app.surfaces.active_overlay().is_some()
-                || app.current_scene() != SceneKind::Conversation
-            {
+            // The palette-invoked twin of the Esc chord, and therefore the
+            // same scope: dismiss the overlay if one is up, else clear focus,
+            // else step back one level *inside* the Scene. It never navigates
+            // between Scenes (ADR-0298 §2).
+            if app.surfaces.active_overlay().is_some() {
                 modals::handle_close_modal(app, viewed_session_id);
             } else if app.focused_target.is_some() {
                 app.focused_target = None;
             } else if app.has_settled_background_tasks() {
                 app.dismiss_settled_background_tasks();
+            } else {
+                app.scene_back();
             }
         }
         CommandId::InterruptTask => {

@@ -209,22 +209,13 @@ pub fn draw_settings_view(frame: &mut Frame, mut props: SettingsProps<'_>) -> Co
 
     // 1. Top Header Row (Settings only)
     let header = ViewHeader::Settings;
-    draw_view_header(
-        frame,
-        header_rect,
-        &header,
-        props.theme,
-        &crate::keymap::GlobalOverrides::default(),
-    );
+    draw_view_header(frame, header_rect, &header, props.theme);
 
     // 2. View Stack Breadcrumbs & Affordance
     let view_hints = ViewHints {
         kind: ViewKind::Settings,
         asides: None,
-        interruptible: false,
-        parent_note: "",
         breadcrumbs: props.breadcrumbs,
-        back_key: None,
     };
     draw_view_header_hints(frame, subhead_rect, &view_hints, props.theme);
 

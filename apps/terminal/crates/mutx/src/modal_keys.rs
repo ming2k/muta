@@ -426,9 +426,7 @@ pub(crate) fn resolve_modal_key(
                     _ => None,
                 }
             }
-            OverlaySurface::Dialog(DialogKind::Connections) => {
-                resolve_picker_key(c, false, keys)
-            }
+            OverlaySurface::Dialog(DialogKind::Connections) => resolve_picker_key(c, false, keys),
             OverlaySurface::Dialog(DialogKind::Sessions) if !keys.session_info_detail => match c {
                 'd' => Some(InputAction::DeleteSelectedSession),
                 'n' | 'N' => Some(InputAction::CreateNewSession),
@@ -534,12 +532,11 @@ pub(crate) fn live_history_hints() -> &'static [LiveHint] {
 /// Question sheet: `space` toggles the selection (unless the free-text
 /// "Other" row is highlighted), `1..9` picks an option, anything else types
 /// into the focused field.
-/// Settings modal: `space` activates the row; in the Detail pane `1`/`h` and
-/// `2`/`l` step segments.
+/// Settings scene: `space` activates the row; in the Detail pane `1`/`h` and
+/// `2`/`l` step segments. The scene has **no exit verb of its own**: leaving is
+/// the `Ctrl+X` namespace alone (ADR-0298), so no printable letter is
+/// overloaded here.
 fn resolve_config_key(c: char, keys: &ModalKeys) -> Option<InputAction> {
-    if c == 'q' && keys.config_focus == crate::overlays::ConfigFocus::Categories {
-        return Some(InputAction::ConfigBack);
-    }
     if c == ' ' {
         return Some(InputAction::ConfigActivate);
     }
@@ -620,10 +617,11 @@ fn resolve_picker_key(c: char, is_models: bool, keys: &ModalKeys) -> Option<Inpu
 /// Dashboard (Host) console verbs. Every printable key is an action here —
 /// never literal input — with `a` attach, `i` interrupt, `k` kill, `s`
 /// suspend, `p`/`n` opening the inline prompt / new-session field, and any
-/// other char seeding the console composer.
+/// other char seeding the console composer ("typing is opening"). The scene has
+/// **no exit verb of its own**: leaving is the `Ctrl+X` namespace alone
+/// (ADR-0298), so `q` types like every other unclaimed letter.
 fn resolve_host_key(c: char) -> Option<InputAction> {
     match c {
-        'q' => Some(InputAction::CloseModal),
         'a' => Some(InputAction::HostSwitchSelected),
         'i' => Some(InputAction::HostInterruptSelected),
         'k' => Some(InputAction::HostKillSelected),
@@ -638,9 +636,8 @@ fn resolve_host_key(c: char) -> Option<InputAction> {
 /// inline-prompt stage): printable keys and Backspace edit the borrowed
 /// prompt line, Delete forward-deletes (no chip handling — the dashboard
 /// prompt never stages attachments), ←/→ move the caret, Enter submits, Esc
-/// closes (the event loop cancels the prompt on CloseModal while
-/// `host_prompting` is set), and every other key is swallowed so the prompt
-/// owns the keyboard.
+/// cancels the prompt (the scene-local step back), and every other key is
+/// swallowed so the prompt owns the keyboard.
 fn resolve_host_prompt_key(
     key: crate::keymap::Key,
     input: &mut String,
@@ -671,7 +668,9 @@ fn resolve_host_prompt_key(
             InputAction::None
         }
         KeyCode::Enter => InputAction::HostPromptSubmit,
-        KeyCode::Esc => InputAction::CloseModal,
+        // Esc cancels the prompt — a scene-local step back, never a scene exit
+        // (ADR-0298 §2).
+        KeyCode::Esc => InputAction::SceneBack,
         _ => InputAction::None,
     }
 }
@@ -852,7 +851,8 @@ mod tests {
         );
         assert_eq!(
             resolve_scene(SceneKind::Dashboard, key('q'), &c),
-            Some(InputAction::CloseModal)
+            Some(InputAction::HostPromptSeed('q')),
+            "`q` is an ordinary console char — the scene has no `q` exit"
         );
         assert_eq!(
             resolve_scene(SceneKind::Dashboard, key('z'), &c),

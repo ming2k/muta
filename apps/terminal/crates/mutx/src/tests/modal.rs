@@ -1242,19 +1242,29 @@ fn reentering_a_running_aside_shows_its_own_chrome() {
 
 #[test]
 fn config_view_reopen_keeps_pane_and_category() {
-    // Settings is a full-screen view (ADR-0141) whose fields persist
+    // Settings is a full-screen scene (ADR-0141) whose fields persist
     // natively on `App`: the enter ritual (pane reset + current-scheme
     // positioning) runs on every enter; a reopen keeps the category/pane
-    // the user left. Esc's three-step back (editor → detail → categories →
-    // hide) ends in the shared dismiss verb.
+    // the user left. Esc's step-backs unwind the pane/dropdown *inside* the
+    // scene and stop there (ADR-0298 §2); leaving the scene is `close_scene`
+    // (`C-x w` / `C-x k`, or the scene's own `q`).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.switch_scene(crate::surfaces::SceneKind::Settings);
     assert_eq!(app.current_scene(), crate::surfaces::SceneKind::Settings);
 
-    // The user walks into a category and the Detail pane, then hides.
+    // Esc's back never leaves the scene, whatever sub-layer is open.
     app.config_category = 2;
     app.config_focus = crate::overlays::ConfigFocus::Detail;
-    assert!(app.dismiss_surface());
+    app.scene_back();
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Settings,
+        "Esc steps back inside the scene, it does not leave it"
+    );
+
+    // The deliberate exit verb leaves.
+    app.config_focus = crate::overlays::ConfigFocus::Detail;
+    app.close_scene();
     assert_eq!(
         app.current_scene(),
         crate::surfaces::SceneKind::Conversation
@@ -1267,6 +1277,109 @@ fn config_view_reopen_keeps_pane_and_category() {
         app.config_focus,
         crate::overlays::ConfigFocus::Detail,
         "pane retained across hide"
+    );
+}
+
+/// ADR-0298 §2 / ADR-0205 `[INV-TUI-CLEAN-02]`: Esc is never a scene exit.
+/// Sweeps every scene and every Esc-reachable dispatch surface (the router's
+/// Esc arm, the shared close-modal handler, the `CancelOrBack` command, and the
+/// scene-local back verb) and asserts the current scene survives all of them.
+/// Only `close_scene` — the `C-x` namespace's leave verb — may leave a scene.
+#[test]
+fn esc_never_leaves_a_scene_anywhere_in_the_dispatch() {
+    use crate::surfaces::SceneKind;
+
+    for scene in [
+        SceneKind::Dashboard,
+        SceneKind::Settings,
+        SceneKind::TaskInspection,
+        SceneKind::Aside,
+    ] {
+        let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+        app.switch_scene(scene);
+
+        // 1. The shared close-modal handler (Esc over a resolved overlay).
+        crate::event_loop::handle_close_modal(&mut app, "s1");
+        assert_eq!(
+            app.current_scene(),
+            scene,
+            "the overlay dismiss verb must never leave {scene:?}"
+        );
+
+        // 2. The scene-local step back (Esc on the scene's own chrome).
+        app.scene_back();
+        assert_eq!(
+            app.current_scene(),
+            scene,
+            "the step-back verb must never leave {scene:?}"
+        );
+
+        // 3. The shared dismiss verb (its old signature returned `true` for a
+        //    scene, which is exactly how Esc used to navigate).
+        assert!(
+            !app.dismiss_surface(),
+            "a dismiss on a bare {scene:?} has nothing to act on"
+        );
+        assert_eq!(
+            app.current_scene(),
+            scene,
+            "the dismiss verb must never leave {scene:?}"
+        );
+
+        // The scene's own exit verb is the one that leaves.
+        app.close_scene();
+        assert_eq!(
+            app.current_scene(),
+            SceneKind::Conversation,
+            "`close_scene` leaves {scene:?}"
+        );
+    }
+}
+
+/// The Conversation scene is the home: `close_scene` there is a spent gesture,
+/// not a navigation (there is nowhere to go).
+#[test]
+fn close_scene_at_home_is_a_spent_gesture() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Conversation
+    );
+    assert!(
+        !app.close_scene(),
+        "leaving the home scene reports no navigation"
+    );
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Conversation
+    );
+}
+
+/// `C-x w` / `C-x k` dismiss a foreground dialog before touching the scene —
+/// the overlay is the visual foreground, so one press spends itself on it and
+/// the scene survives (ADR-0298 §1). Regression: the chord used to treat any
+/// dialog as "the scene", so the second press could land on a demoted view.
+#[test]
+fn close_scene_spends_itself_on_a_foreground_dialog_first() {
+    let (mut app, _tmp) = app_in_tempdir(&[], &[]);
+    app.switch_scene(crate::surfaces::SceneKind::Dashboard);
+    app.open_dialog(crate::surfaces::DialogKind::Tools);
+    assert!(app.active_dialog().is_some());
+
+    // Press 1: the dialog is dismissed, the scene stays.
+    app.dismiss_surface();
+    assert!(app.active_dialog().is_none(), "the dialog is gone");
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Dashboard,
+        "the dismiss stopped at the overlay"
+    );
+
+    // Press 2: now the scene itself leaves.
+    app.close_scene();
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Conversation
     );
 }
 
@@ -1308,8 +1421,18 @@ fn config_view_navigation_and_theme_preview() {
             .surface()
     );
 
-    // Dismissing surface from Categories closes the settings view
-    assert!(app.dismiss_surface());
+    // Leaving from Categories is the scene-exit verb — a dismiss on the bare
+    // scene is a spent gesture and never navigates (ADR-0298 §2).
+    assert!(
+        !app.dismiss_surface(),
+        "a dismiss has nothing to close on a bare scene"
+    );
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Settings,
+        "a dismiss never leaves the scene"
+    );
+    app.close_scene();
     assert_eq!(
         app.current_scene(),
         crate::surfaces::SceneKind::Conversation
@@ -1503,8 +1626,10 @@ fn pop_sublayer_pops_telemetry_turn_page_before_round_detail() {
 
 #[test]
 fn dashboard_reopen_keeps_selection_and_log() {
-    // The dashboard is a full-screen view (ADR-0141) whose dock selection
-    // and cockpit log persist natively on `App` across hide.
+    // The dashboard is a full-screen scene (ADR-0141) whose dock selection
+    // and cockpit log persist natively on `App` across hide. Leaving is the
+    // scene-exit verb (`close_scene`) — a dismiss never navigates
+    // (ADR-0298 §2).
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
     app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     app.host_console_log
@@ -1514,7 +1639,11 @@ fn dashboard_reopen_keeps_selection_and_log() {
             text: "ok".to_string(),
         });
     app.modal_index = 3;
-    assert!(app.dismiss_surface());
+    app.close_scene();
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Conversation
+    );
 
     app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     assert_eq!(app.modal_index, 3, "dock selection retained");

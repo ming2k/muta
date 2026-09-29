@@ -47,8 +47,9 @@ pub struct Dispatch {
     /// A scene component above the application surfaces owns the event. Its
     /// component handler declined the key, so only global chords may run.
     pub scene_blocked: bool,
-    /// Active two-stroke leader chord state (`Ctrl+X`).
-    pub leader_chord: crate::app::LeaderChord,
+    /// Whether the `Ctrl+X` scene namespace is armed, awaiting its second
+    /// stroke (ADR-0298).
+    pub scene_namespace_armed: bool,
 }
 
 /// Classify one terminal event into the keyboard family resolved by the
@@ -316,37 +317,36 @@ pub fn route_event(
 
             let physical_key = crate::keymap::Key::from_event(key);
 
-            // Two-stroke Leader Chord resolution (Ctrl+X)
-            if dispatch.leader_chord == crate::app::LeaderChord::CtrlX {
-                return match key.code {
-                    KeyCode::Char('w')
-                    | KeyCode::Char('W')
-                    | KeyCode::Char('k')
-                    | KeyCode::Char('K') => InputAction::CloseScene,
-                    KeyCode::Char('p')
-                    | KeyCode::Char('P')
-                    | KeyCode::Char('b')
-                    | KeyCode::Char('B') => InputAction::ViewSwitcherToggle,
-                    KeyCode::Char('c') | KeyCode::Char('C')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        InputAction::CtrlC
-                    }
-                    KeyCode::Esc => InputAction::CancelLeaderChord,
-                    KeyCode::Char('g') | KeyCode::Char('G')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        InputAction::CancelLeaderChord
-                    }
-                    _ => InputAction::CancelLeaderChord,
+            // The `Ctrl+X` scene namespace's second stroke (ADR-0298 §1). The
+            // verb table is `keymap::scene_namespace` — the same table the
+            // which-key card renders, so dispatch and advertisement cannot
+            // drift (ADR-0238). A second stroke is typed without looking, so
+            // case is folded before resolution; `Esc` and `C-g` cancel, and
+            // anything unrecognized cancels rather than falling through (a
+            // half-typed chord must never fire a global).
+            if dispatch.scene_namespace_armed {
+                use crate::keymap::scene_namespace::{SceneVerb, opens};
+                // `C-x C-x` re-arms rather than cancelling: the namespace's own
+                // opening stroke is idempotent, matching how a repeated prefix
+                // behaves in every leader-chord editor.
+                if opens(physical_key) {
+                    return InputAction::SetSceneNamespaceArmed(true);
+                }
+                return match SceneVerb::from_second_stroke(physical_key) {
+                    Some(SceneVerb::Leave) => InputAction::CloseScene,
+                    Some(SceneVerb::Switcher) => InputAction::ViewSwitcherToggle,
+                    // `C-x C-c` is the namespace's quit spelling; a bare `c`
+                    // carries no meaning here (it is not in the verb's strokes).
+                    Some(SceneVerb::Quit) => InputAction::CtrlC,
+                    // `Esc` / `C-g` / anything unrecognized cancels. A
+                    // half-typed chord must never fall through to a global.
+                    None => InputAction::CancelSceneNamespace,
                 };
             }
 
-            // Initiate Ctrl+X two-stroke leader chord
-            if (key.code == KeyCode::Char('x') || key.code == KeyCode::Char('X'))
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-            {
-                return InputAction::SetLeaderChord(crate::app::LeaderChord::CtrlX);
+            // Open the `Ctrl+X` scene namespace.
+            if crate::keymap::scene_namespace::opens(physical_key) {
+                return InputAction::SetSceneNamespaceArmed(true);
             }
 
             // Stage 5: Global Hard-Bound Shortcuts
@@ -501,10 +501,15 @@ pub fn route_event(
                         InputAction::QuestionCancel
                     } else if dispatch.sheet == Some(crate::sheet::SheetKind::InputInjection) {
                         InputAction::InputCancel
-                    } else if dispatch.scene == crate::surfaces::SceneKind::Settings {
-                        InputAction::ConfigBack
-                    } else if dispatch.scene == crate::surfaces::SceneKind::Dashboard {
-                        InputAction::CloseModal
+                    } else if dispatch.scene == crate::surfaces::SceneKind::Settings
+                        || dispatch.scene == crate::surfaces::SceneKind::Dashboard
+                    {
+                        // Esc steps back one *scene-owned* sub-layer (a
+                        // dropdown, a drill-in pane, the dashboard's preview or
+                        // inline prompt) and nothing else. It never leaves the
+                        // scene (ADR-0205 `[INV-TUI-CLEAN-02]`): the scene's
+                        // own exit is `C-x w`/`C-x k` (ADR-0298 §1).
+                        InputAction::SceneBack
                     } else {
                         InputAction::None
                     }

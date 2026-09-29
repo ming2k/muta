@@ -56,16 +56,6 @@ pub enum ComposerSendMode {
     FollowUp,
 }
 
-/// Active two-stroke leader chord state (ADR-0169 / ADR-0205).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LeaderChord {
-    /// No leader active.
-    #[default]
-    None,
-    /// `Ctrl+X` leader active (View stack / Scene navigation / Window management).
-    CtrlX,
-}
-
 /// A user message owned by the compact outbox (the **next-round** queue).
 ///
 /// Follow-up content and a busy-Enter steer whose round ended before admission
@@ -592,7 +582,8 @@ pub struct App {
     pub tree_modal_follow: bool,
     /// `true` while the sessions picker is drilled into the session-info
     /// sub-view (`i`). The detail body renders from [`Self::session_detail`];
-    /// Esc backs out to the list (mirrors the TokenReport drill-in).
+    /// Esc backs out to the list (mirrors the TokenReport drill-in) — one
+    /// sub-layer of the modal, never the Scene (ADR-0298).
     pub session_info_detail: bool,
     /// Full detail for the session under the info sub-view cursor. Populated by
     /// an on-demand `QuerySessionDetail` round-trip when the sub-view opens
@@ -926,8 +917,11 @@ pub struct App {
     pub pending_dispatch: VecDeque<QueuedDispatch>,
     /// Target queue mode for the live composer while a round is running.
     pub composer_send_mode: ComposerSendMode,
-    /// Active two-stroke leader chord state (`Ctrl+X`).
-    pub leader_chord: LeaderChord,
+    /// Whether the `Ctrl+X` scene namespace is armed, awaiting its second
+    /// stroke (ADR-0298). A plain flag: the namespace has exactly one opening
+    /// stroke, so an enum with a single non-`None` variant was a two-state
+    /// type wearing three.
+    pub scene_namespace_armed: bool,
     /// Sessions whose outbox is hard-blocked by the user. While a session is
     /// blocked, no queued message auto-drains — not even after its round
     /// reaches natural completion and the harness goes idle. The queue modal

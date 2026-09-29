@@ -179,8 +179,9 @@ pub fn draw_sessions_modal(
     ];
 
     // Detail sub-view (`i`): a focused read-out of the selected session. Its
-    // own footer (Esc → back to list) and own scroll slot; Esc is handled by
-    // the event loop's CloseModal arm (first Esc backs out, second closes).
+    // own footer (`Esc` → back to list) and own scroll slot; Esc is handled by
+    // the event loop's CloseModal arm, which backs out one sub-layer per press
+    // (a sub-page back-out never leaves the Scene, ADR-0298).
     // The header is a breadcrumb (`Sessions › Info`) — the modal hierarchy
     // convention: a sub-page keeps the same modal but shows where it sits.
     if session_info_detail {

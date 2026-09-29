@@ -192,73 +192,122 @@ pub fn draw_dashboard(
         show_caret,
     } = props;
     // A true full-screen surface: clear the whole frame and paint our own
-    // backdrop, then lay out inside the viewport margins.
+    // backdrop.
     frame.render_widget(Clear, frame.area());
     frame.render_widget(
         RtBlock::default().style(Style::default().bg(theme.app_bg)),
         frame.area(),
     );
+    // The head band spans the terminal's full width at the top edge; the body
+    // below it keeps the shared viewport's horizontal insets and bottom margin,
+    // starting one row lower than the viewport so the band's two rows are not
+    // overlapped.
+    let full = frame.area();
     let area = viewport_rect(frame);
     let tier = LayoutTier::from_rect(area, theme.elevation);
+    /// The shared head band's height: identity row + namespace row (ADR-0298 §4).
+    const BAND_ROWS: u16 = 2;
+    let body = Rect {
+        y: area.y.saturating_add(BAND_ROWS),
+        height: area.height.saturating_sub(BAND_ROWS),
+        ..area
+    };
 
     let entries = dock_entries(rows);
     let selected = selected.min(entries.len().saturating_sub(1));
 
     // Two-tier responsive layout (ADR-0097 §3 evolution):
     // - Wide (width >= 90): Dual-pane side-by-side (Sessions list left, Cognitive Dossier + Console right).
-    // - Compact (width < 90): Vertical stack (Header, Sessions dock top, Cognitive Dossier + Console bottom, Footer).
-    let (header_rect, dock_rect, console_rect, footer_rect, card_columns) = if tier.is_wide() {
-        let v_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // header
-                Constraint::Length(1), // gap
-                Constraint::Min(0),    // main body
-                Constraint::Length(1), // gap
-                Constraint::Length(3), // footer
-            ])
-            .split(area);
-        let header = v_chunks[0];
-        let main_body = v_chunks[2];
-        let footer = v_chunks[4];
+    // - Compact (width < 90): Vertical stack (head band, Sessions dock top, Cognitive Dossier + Console bottom, footer).
+    //
+    // The head band is the shared two-row band every other scene carries
+    // (ADR-0298 §4): row 1 is identity + fleet summary, row 2 is the `C-x`
+    // scene namespace. It replaces this surface's former homegrown one-row
+    // header plus gap row, so the dashboard's chrome can no longer drift from
+    // the rest of the app.
+    //
+    // The band spans the full terminal width (its background owns every cell of
+    // the row), pinned flush to the top edge exactly as every other scene draws
+    // it (ADR-0298 §4: one head band). The body below sits inside the viewport
+    // margins, offset past the band's two rows.
+    let (header_rect, hints_rect, dock_rect, console_rect, footer_rect, card_columns) =
+        if tier.is_wide() {
+            let v_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(0),    // main body
+                    Constraint::Length(1), // gap
+                    Constraint::Length(3), // footer
+                ])
+                .split(body);
+            let main_body = v_chunks[0];
+            let footer = v_chunks[2];
 
-        let h_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(38), // Sessions pane
-                Constraint::Length(1),      // gap
-                Constraint::Percentage(62), // Console & Mission Dossier pane
-            ])
-            .split(main_body);
-        let dock = h_cols[0];
-        let console = h_cols[2];
-        let cols = dock_columns(dock.width);
-        (header, dock, console, footer, cols)
-    } else {
-        let cols = dock_columns(area.width);
-        let dock_rows = entries.len().div_ceil(cols);
-        let dock_height = (dock_rows.max(1) as u16 + 1).min(area.height / 2);
+            let h_cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(38), // Sessions pane
+                    Constraint::Length(1),      // gap
+                    Constraint::Percentage(62), // Console & Mission Dossier pane
+                ])
+                .split(main_body);
+            let dock = h_cols[0];
+            let console = h_cols[2];
+            let cols = dock_columns(dock.width);
+            (
+                Rect::new(full.x, full.y, full.width, 1),
+                Rect::new(full.x, full.y.saturating_add(1), full.width, 1),
+                dock,
+                console,
+                footer,
+                cols,
+            )
+        } else {
+            let cols = dock_columns(body.width);
+            let dock_rows = entries.len().div_ceil(cols);
+            let dock_height = (dock_rows.max(1) as u16 + 1).min(body.height / 2);
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),           // header
-                Constraint::Length(1),           // gap
-                Constraint::Min(0),              // console (Mission Dossier + Log)
-                Constraint::Length(1),           // gap
-                Constraint::Length(dock_height), // sessions dock
-                Constraint::Length(1),           // gap
-                Constraint::Length(3),           // footer
-            ])
-            .split(area);
-        let header = chunks[0];
-        let console = chunks[2];
-        let dock = chunks[4];
-        let footer = chunks[6];
-        (header, dock, console, footer, cols)
-    };
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(0),              // console (Mission Dossier + Log)
+                    Constraint::Length(1),           // gap
+                    Constraint::Length(dock_height), // sessions dock
+                    Constraint::Length(1),           // gap
+                    Constraint::Length(3),           // footer
+                ])
+                .split(body);
+            let console = chunks[0];
+            let dock = chunks[2];
+            let footer = chunks[4];
+            (
+                Rect::new(full.x, full.y, full.width, 1),
+                Rect::new(full.x, full.y.saturating_add(1), full.width, 1),
+                dock,
+                console,
+                footer,
+                cols,
+            )
+        };
 
-    draw_header(frame, header_rect, rows, theme);
+    // The head band, drawn by the shared renderer so the dashboard is
+    // chrome-identical to every other scene.
+    let (summary, needs_attention) = header_content(rows);
+    let head = crate::render::ViewHeader::Dashboard(crate::render::DashboardHead {
+        summary,
+        needs_attention,
+    });
+    crate::render::draw_view_header(frame, header_rect, &head, theme);
+    crate::render::draw_view_header_hints(
+        frame,
+        hints_rect,
+        &crate::render::ViewHints {
+            kind: crate::render::ViewKind::Dashboard,
+            asides: None,
+            breadcrumbs: None,
+        },
+        theme,
+    );
 
     let console_body = draw_console(
         frame,
@@ -291,7 +340,6 @@ pub fn draw_dashboard(
         prompt_create_new,
         prompt_text,
         theme,
-        false,
         show_caret,
     );
 
@@ -302,10 +350,13 @@ pub fn draw_dashboard(
     }
 }
 
-/// The dashboard's head row: `DASHBOARD` identity and scope on the left, a
-/// live session-count summary on the right. Matches the head chrome every
-/// other view (session / subagent / btw) carries on its first row.
-fn draw_header(frame: &mut Frame, header: Rect, rows: &[MonitoredSession], theme: &Theme) {
+/// The dashboard's head-row context: the fleet summary the shared head band
+/// renders on its right edge.
+///
+/// The row itself is drawn by [`crate::render::draw_view_header`] — the same
+/// band every other scene uses (ADR-0298 §3: one head, one row-2 legend). This
+/// function only computes the scene's own content for it.
+fn header_content(rows: &[MonitoredSession]) -> (String, bool) {
     let needing = rows
         .iter()
         .filter(|r| {
@@ -335,32 +386,7 @@ fn draw_header(frame: &mut Frame, header: Rect, rows: &[MonitoredSession], theme
         }
         format!("{} ", parts.join("  "))
     };
-
-    let title = " DASHBOARD ";
-    let context = "all projects";
-    let fill = Style::default().bg(theme.body());
-    let title_width = title.len();
-    let context_width = 1 + context.len(); // leading space separator
-    let summary_width = summary.len();
-    let gap = (header.width as usize).saturating_sub(title_width + context_width + summary_width);
-
-    let line = Line::from(vec![
-        Span::styled(
-            title.to_string(),
-            fill.fg(theme.fg()).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {context}"), fill.fg(theme.brand())),
-        Span::styled(" ".repeat(gap), fill),
-        Span::styled(
-            summary,
-            if needing > 0 {
-                fill.fg(theme.warn()).add_modifier(Modifier::BOLD)
-            } else {
-                fill.fg(theme.muted())
-            },
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), header);
+    (summary, needing > 0)
 }
 
 /// Render the session list. Returns the body rect used for rows (the scroll
@@ -701,7 +727,6 @@ fn render_footer(
     prompt_create_new: bool,
     prompt_text: &str,
     theme: &Theme,
-    keymap_page: bool,
     // The frame-level caret verdict (ADR-0205): the Dashboard's inline prompt
     // borrows the composer buffer but owns the cursor through its own footer
     // band, so this flag comes from `App::caret_owner() == CaretOwner::Scene`
@@ -769,31 +794,31 @@ fn render_footer(
         return;
     }
 
-    let pairs: Vec<(&'static str, &'static str)> = if keymap_page {
-        vec![("Esc", "close"), ("?", "close")]
-    } else {
-        match focus {
-            DashboardFocus::List => vec![
-                ("↑/↓", "navigate"),
-                ("Tab", "switch pane"),
-                ("Enter", "preview"),
-                ("a", "attach"),
-                ("p", "prompt"),
-                ("n", "new session"),
-                ("i", "interrupt"),
-                ("k", "kill"),
-                ("s", "suspend"),
-                ("q/Esc", "back"),
-            ],
-            DashboardFocus::Detail => vec![
-                ("↑/↓", "scroll"),
-                ("Tab", "switch pane"),
-                ("n", "new session"),
-                ("p", "prompt"),
-                ("a", "attach"),
-                ("q/Esc", "back"),
-            ],
-        }
+    // One verb list, no branches: the console's footer advertises the scene's
+    // own verbs plus the namespace's leave entry. (`keymap_page` used to switch
+    // this to a dead `Esc close / ? close` pair — a leftover from the retired
+    // in-dialog keymap sub-page, ADR-0172 — whose only caller passed `false`.)
+    let pairs: Vec<(&'static str, &'static str)> = match focus {
+        DashboardFocus::List => vec![
+            ("↑/↓", "navigate"),
+            ("Tab", "switch pane"),
+            ("Enter", "preview"),
+            ("a", "attach"),
+            ("p", "prompt"),
+            ("n", "new session"),
+            ("i", "interrupt"),
+            ("k", "kill"),
+            ("s", "suspend"),
+            ("C-x", "scene"),
+        ],
+        DashboardFocus::Detail => vec![
+            ("↑/↓", "scroll"),
+            ("Tab", "switch pane"),
+            ("n", "new session"),
+            ("p", "prompt"),
+            ("a", "attach"),
+            ("C-x", "scene"),
+        ],
     };
 
     const PAIR_GAP: usize = 3;
@@ -1368,6 +1393,69 @@ fn console_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-0298 §4: the dashboard is chrome-identical to every other scene. Its
+    /// head is the shared two-row band — row 1 identity + fleet summary, row 2
+    /// the `Ctrl-x scene` namespace — not the homegrown one-row header plus gap
+    /// row it used to carry. This pins the rendered rows end to end, because the
+    /// layout split is what makes the namespace row reachable at all.
+    #[test]
+    fn dashboard_head_renders_the_shared_two_row_band() {
+        let theme = Theme::default();
+        let rows = vec![row("a-1", 100, "/work/app", SessionStatus::Running)];
+        let mut terminal = mutx_engine::TestTerminal::new(100, 24);
+        let mut list_scroll = 0usize;
+        let mut detail_scroll = 0usize;
+        terminal.draw(|f| {
+            draw_dashboard(
+                f,
+                DashboardProps {
+                    rows: &rows,
+                    selected: 0,
+                    focus: DashboardFocus::List,
+                    list_scroll: &mut list_scroll,
+                    list_follow: true,
+                    detail_scroll: &mut detail_scroll,
+                    log: &[],
+                    prompting: false,
+                    prompt_create_new: false,
+                    prompt_text: "",
+                    current_session_id: "a-1",
+                    show_caret: false,
+                },
+                &theme,
+            );
+        });
+
+        let buffer = terminal.buffer();
+        let row_text = |y: u16| -> String {
+            buffer
+                .content
+                .iter()
+                .skip(y as usize * 100)
+                .take(100)
+                .map(|c| c.symbol())
+                .collect()
+        };
+
+        // Row 1: identity, scope, and the live fleet summary.
+        let head = row_text(0);
+        assert!(head.contains("DASHBOARD"), "identity on row 1: {head:?}");
+        assert!(head.contains("all projects"), "scope on row 1: {head:?}");
+        assert!(head.contains("1 session(s)"), "fleet summary: {head:?}");
+        assert!(head.contains("1 running"), "running count: {head:?}");
+
+        // Row 2: the namespace legend — the row the old layout had no slot for.
+        let legend = row_text(1);
+        assert!(
+            legend.contains("Ctrl-x") && legend.contains("scene"),
+            "row 2 advertises the scene namespace: {legend:?}"
+        );
+        assert!(
+            !legend.contains("Esc"),
+            "Esc is never advertised as a scene exit: {legend:?}"
+        );
+    }
 
     fn row(
         id: &str,

@@ -173,25 +173,36 @@ fn escape_clears_focus() {
     );
 }
 
+/// ADR-0298 §2: Esc does not close a Scene. On the TaskInspection zoom it is
+/// inert once a completion and step/browse focus are clear — the scene's own
+/// exit is `q` (or `C-x w`/`C-x k`).
 #[test]
-fn escape_exits_subagent_view() {
+fn escape_never_exits_subagent_view() {
     let mut input = String::new();
     assert_eq!(
         key_in_view(KeyCode::Esc, true, &mut input),
-        InputAction::ExitSubagent
+        InputAction::None
     );
     assert_eq!(
         key_in_view(KeyCode::Esc, false, &mut input),
         InputAction::None
     );
+    // The zoom has no exit chord of its own: leaving is the C-x namespace.
+    assert_ne!(
+        key_in_view(KeyCode::Char('q'), true, &mut input),
+        InputAction::CloseScene,
+        "`q` is never a scene exit"
+    );
 }
 
+/// ADR-0298 §2 / ADR-0103 §2: Esc in an aside interrupts the aside's round and
+/// never leaves the view; `Ctrl+C` is the detach gesture.
 #[test]
-fn escape_in_side_view_exits_side_view() {
+fn escape_in_side_view_never_exits_side_view() {
     let mut input = String::new();
     assert_eq!(
         key_in_side_view(KeyCode::Esc, &mut input),
-        InputAction::ExitSideView
+        InputAction::None
     );
 }
 

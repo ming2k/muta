@@ -789,10 +789,12 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
 /// `mutx dashboard` opens the session dashboard (`Modal::Host`) over a
 /// carrier session at startup. The user asked for a dashboard, not a
 /// conversation, so leaving the screen must quit the whole TUI — the
-/// dashboard is the app while it is open. These tests lock the three exits:
+/// dashboard is the app while it is open. These tests lock the exits:
 ///
-/// 1. Esc quits immediately (existing behavior, mirrored here for the
-///    dashboard arm of `handle_close_modal`).
+/// 1. The scene-exit verb (`C-x w` / `C-x k` / `q` → `CloseScene`) quits
+///    immediately when it would otherwise demote the dashboard to a carrier
+///    conversation the user never asked for. **Esc is not an exit** — it only
+///    unwinds scene-local sub-layers (ADR-0298 §2).
 /// 2. Ctrl+C follows the app-wide double-press contract: first press arms
 ///    the 2s quit window WITHOUT closing the dashboard, second press quits.
 ///    Regression: Ctrl+C used to hit the generic modal-close arm and drop
@@ -800,7 +802,7 @@ fn ctrl_c_at_startup_picker_quits_instead_of_dropping_to_empty_session() {
 /// 3. Ctrl+C never lands in the conversation even after the arm expires —
 ///    pressing again re-arms rather than closing.
 #[test]
-fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
+fn esc_at_startup_dashboard_steps_back_and_the_scene_exit_quits() {
     use std::sync::atomic::Ordering;
 
     let (mut app, _tmp) = app_in_tempdir(&[], &[]);
@@ -808,11 +810,49 @@ fn esc_at_startup_dashboard_quits_instead_of_dropping_to_carrier_chat() {
     app.switch_scene(crate::surfaces::SceneKind::Dashboard);
     assert!(!app.should_quit.load(Ordering::SeqCst));
 
-    // Esc from the dashboard itself (no preview/prompt sub-layer open).
-    super::event_loop::handle_close_modal(&mut app, "carrier");
+    // Esc from the dashboard itself (no preview/prompt sub-layer open) is a
+    // spent gesture: scene-local, so nothing happens and nothing quits.
+    // Routed through the real pipeline — the Dashboard scene's Esc arm.
+    let action = crate::input::route_event(
+        crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+        &mut String::new(),
+        &mut 0,
+        crate::input::Dispatch {
+            scene: crate::surfaces::SceneKind::Dashboard,
+            ..Default::default()
+        },
+        &crate::modal_keys::ModalKeys::default(),
+        &crate::sheet::SheetKeys::default(),
+        &crate::session::SceneKeys::default(),
+        &mut crate::model::selection::SelectionDrag::default(),
+    );
+    assert_eq!(
+        action,
+        crate::input::InputAction::SceneBack,
+        "Esc on a scene is a scene-local step back"
+    );
+    app.scene_back();
+    assert!(
+        !app.should_quit.load(Ordering::SeqCst),
+        "Esc never exits a scene, standalone or not"
+    );
+    assert_eq!(
+        app.current_scene(),
+        crate::surfaces::SceneKind::Dashboard,
+        "Esc left the dashboard untouched"
+    );
+
+    // The scene-exit verb (what `C-x w` / `q` dispatch to) quits the TUI
+    // rather than demoting the dashboard to the carrier conversation. The
+    // handler is `if !quit_standalone_scene_at_startup(app) { app.close_scene() }`,
+    // so a `true` here means the scene was never left.
+    assert!(crate::event_loop::host_test_shims::quit_standalone_scene_at_startup(&mut app));
     assert!(
         app.should_quit.load(Ordering::SeqCst),
-        "Esc from the startup dashboard quits the TUI"
+        "the scene-exit verb quits the TUI"
     );
     assert_eq!(
         app.current_scene(),

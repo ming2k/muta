@@ -205,8 +205,6 @@ pub enum InputAction {
     ConfigSegmentNext,
     /// Toggle focus between Categories and Detail in the Settings View. Bound to `Tab`.
     ConfigFocusToggle,
-    /// Return focus to Categories or close the Settings View. Bound to `Esc`.
-    ConfigBack,
     /// Move the tool-selection cursor in the session-context dashboard when it
     /// still hosts the tools list, and in the tools manager modal otherwise.
     /// `forward` = down, else up.
@@ -495,12 +493,6 @@ pub enum InputAction {
         x: u16,
         y: u16,
     },
-    /// Leave the current subagent view and return to the parent.
-    ExitSubagent,
-    /// Detach from the `/btw` aside view and return to the primary transcript
-    /// (ADR-0103). Non-destructive: the aside keeps running. Mapped from
-    /// Ctrl+C while the aside view is focused.
-    ExitSideView,
     /// Open the `/btw` asides list modal (ADR-0103 §5). Mapped from F5.
     OpenBtwList,
     /// Open the global view quick switcher (ADR-0139, `Ctrl+L`). A transient
@@ -540,10 +532,18 @@ pub enum InputAction {
     PrevSibling,
     /// Move to the next sibling subagent task.
     NextSibling,
-    /// Arm a two-stroke leader chord (`Ctrl+X`).
-    SetLeaderChord(crate::app::LeaderChord),
-    /// Cancel the active leader chord without performing an action.
-    CancelLeaderChord,
+    /// Arm the `Ctrl+X` scene namespace, awaiting its second stroke. The router
+    /// emits this for the opening stroke; re-arming is idempotent.
+    SetSceneNamespaceArmed(bool),
+    /// Cancel an armed scene namespace without acting (`Esc`, `C-g`, or an
+    /// unrecognized second stroke).
+    CancelSceneNamespace,
+    /// Step back one level inside the active Scene — a dropdown, a drill-in
+    /// pane, the dashboard's preview or inline prompt. Esc on a scene produces
+    /// this (ADR-0298 §2). It never leaves the Scene: a Scene's own exit is
+    /// [`InputAction::CloseScene`] (`C-x w` / `C-x k`), never the universal
+    /// dismiss chord (ADR-0205 `[INV-TUI-CLEAN-02]`).
+    SceneBack,
     /// Explicitly close/exit the active scene or dialog (e.g. via `C-x w`).
     CloseScene,
     /// Terminal was resized (SIGWINCH). The event loop forces a redraw and

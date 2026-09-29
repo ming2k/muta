@@ -6,11 +6,14 @@
 //! live on the head row; they live on row 2 (ADR-0103 §3). Row 2 is
 //! demand-driven (ADR-0104): it exists only while the scene has something to
 //! say that no other surface already says. The aside and TaskInspection scenes
-//! are identified by a breadcrumb, so their row 2 is that crumb plus `Esc back`
-//! — and nothing else, because their remaining chords are remappable and a
-//! fixed keycap row cannot advertise a remap faithfully (ADR-0205: chrome never
-//! advertises what it cannot honour). Keeping this outside disclosure rendering
-//! also leaves one clear extension point for future focused scenes.
+//! are identified by a breadcrumb, so their row 2 is that crumb plus the `C-x`
+//! scene namespace's opening key — and nothing else, because their remaining
+//! chords are remappable and a fixed keycap row cannot advertise a remap
+//! faithfully (ADR-0205: chrome never advertises what it cannot honour).
+//! Esc is never the advertised exit: it does not close Scenes (ADR-0205
+//! `[INV-TUI-CLEAN-02]`), so the legend points at the namespace that does
+//! (ADR-0298 §3). Keeping this outside disclosure rendering also leaves one
+//! clear extension point for future focused scenes.
 
 use mutx_engine::{Frame, Line, Modifier, Paragraph, Rect, Span, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -27,10 +30,29 @@ pub(crate) enum ViewHeader<'a> {
     Btw(BtwHead),
     /// The TaskInspection scene (ADR-0205): `SUBAGENT` identity, the task's
     /// role tag, its label, and the `N of M` sibling index; row 2 is the
-    /// `Main › Subagent[role]` breadcrumb plus `Esc back`.
+    /// `Main › Subagent[role]` breadcrumb plus the `Ctrl-x scene` namespace.
     Subagent(&'a SubagentBarInfo),
-    /// Full-screen Settings View (ADR-0141): `SETTINGS` identity.
+    /// Full-screen Settings scene (ADR-0141): `SETTINGS` identity.
     Settings,
+    /// The session dashboard (`/dashboard`): `DASHBOARD` identity, its scope,
+    /// and a live fleet summary on the right. It carries no breadcrumb (it is
+    /// a peer scene, not a drill-in), so row 2 is optional.
+    Dashboard(DashboardHead),
+}
+
+/// Row-1 context for the dashboard scene's head.
+///
+/// Owned (not borrowed) because the dashboard aggregates its own fleet summary
+/// from the live snapshot; there is no long-lived string to point at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DashboardHead {
+    /// Fleet count summary, pre-joined by the caller (the dashboard owns the
+    /// aggregation): e.g. `"3 session(s)  1 running  12k tokens"`. Empty
+    /// renders no right-side summary.
+    pub summary: String,
+    /// `true` while at least one monitored session needs attention, which
+    /// escalates the summary to the warning tone.
+    pub needs_attention: bool,
 }
 
 /// Row-1 content for the `/btw` aside view's head.
@@ -49,10 +71,14 @@ pub(crate) struct BtwHead {
 /// The band is **demand-driven** (ADR-0104): row 2 renders only when
 /// [`ViewHints::has_content`] is `true` — i.e. when this view genuinely has
 /// view-specific affordances to announce. Nothing renders a row for pairs
-/// that are either global (`F1 help` — every modal footer and the Help modal
-/// own that discovery) or already carried by a *more specific* surface: the
+/// that are either global or already carried by a *more specific* surface: the
 /// main view's interrupt lives on the activity bar (which spells the real
 /// double-Esc arming, `Esc Esc interrupt`).
+///
+/// The legend never spells a scene exit as `Esc`: Esc does not close Scenes
+/// (ADR-0205 `[INV-TUI-CLEAN-02]`). Leaving a Scene is the `C-x` scene
+/// namespace's job, so the breadcrumb line's affordance is that namespace's
+/// opening key (ADR-0298 §3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ViewHints<'a> {
     /// Which view the legend belongs to — decides the keycap set.
@@ -60,16 +86,8 @@ pub(crate) struct ViewHints<'a> {
     /// Live aside count + how many have a round in flight (main view only,
     /// ADR-0103 §3). `None` renders no aside segment.
     pub asides: Option<AsidesChip>,
-    /// `true` when the viewed view has an in-flight round the user can
-    /// interrupt (drives whether the interrupt pair is offered).
-    pub interruptible: bool,
-    /// Marker text for the aside view's legend (its parent's coarse state),
-    /// already formatted; empty renders none.
-    pub parent_note: &'a str,
     /// Optional view stack breadcrumbs.
     pub breadcrumbs: Option<&'a str>,
-    /// Dynamically resolved back key (ADR-0238 INV-1 / INV-3) from the key registry and overrides.
-    pub back_key: Option<crate::keymap::Key>,
 }
 
 impl ViewHints<'_> {
@@ -78,10 +96,12 @@ impl ViewHints<'_> {
     /// to a single row and the transcript reclaims the line.
     ///
     /// - **Breadcrumb-identified pages** (aside, subagent task): always — the
-    ///   crumb line plus `Esc back` *is* the row. See the notes below for why
-    ///   those pages advertise nothing else.
+    ///   crumb line plus the `Ctrl-x scene` namespace *is* the row. See the
+    ///   notes below for why those pages advertise nothing else.
     /// - **Session**: while asides are live — the chip plus the asides chord.
-    /// - **Settings**: always — `Esc back` is the center's only exit.
+    /// - **Settings**: always — the `Ctrl-x` namespace is the center's exit.
+    /// - **Dashboard**: always — same reason; it is a peer scene, not a
+    ///   drill-in, so it has no crumb but still needs its namespace row.
     /// - **Btw** / **Subagent** *without* a crumb:
     ///   unreachable (`event_loop::render` sets the crumb whenever it sets
     ///   those kinds) and deliberately blank. Their remaining chords (the
@@ -89,7 +109,7 @@ impl ViewHints<'_> {
     ///   (`session.prev_sibling` / `session.next_sibling`) and a fixed keycap
     ///   row cannot render a remap faithfully (ADR-0205: chrome never
     ///   advertises what it cannot honour), so they are left to the Command
-    ///   Palette and Help.
+    ///   Palette.
     pub(crate) fn has_content(&self) -> bool {
         // A breadcrumb-identified page always carries row 2.
         if self.breadcrumbs.is_some() {
@@ -97,7 +117,7 @@ impl ViewHints<'_> {
         }
         match self.kind {
             ViewKind::Session => self.asides.is_some(),
-            ViewKind::Settings => true,
+            ViewKind::Settings | ViewKind::Dashboard => true,
             // Crumb-less aside/subagent pages cannot occur
             // (`event_loop::render` sets the crumb with the kind); nothing to
             // render if one ever did.
@@ -120,12 +140,14 @@ pub(crate) enum ViewKind {
     Btw,
     Subagent,
     Settings,
+    Dashboard,
 }
 
 impl From<&ViewHeader<'_>> for ViewKind {
     fn from(header: &ViewHeader<'_>) -> Self {
         match header {
             ViewHeader::Session(_) => ViewKind::Session,
+            ViewHeader::Dashboard(_) => ViewKind::Dashboard,
             ViewHeader::Btw(_) => ViewKind::Btw,
             ViewHeader::Subagent(_) => ViewKind::Subagent,
             ViewHeader::Settings => ViewKind::Settings,
@@ -153,6 +175,10 @@ pub(crate) struct SessionHead<'a> {
     pub confined: bool,
     /// When switching to another session, holds the target session id.
     pub switching_target: Option<&'a str>,
+    /// The *effective* chord of the Command Palette (ADR-0238: chrome renders
+    /// the binding that fires, so a user remap shows through). `None` when the
+    /// command has no chord at all — then no keycap is drawn.
+    pub palette_key: Option<crate::keymap::Key>,
 }
 
 struct HeaderContent {
@@ -182,7 +208,6 @@ pub(crate) fn draw_view_header(
     rect: Rect,
     header: &ViewHeader<'_>,
     theme: &Theme,
-    key_overrides: &crate::keymap::GlobalOverrides,
 ) {
     let full_width = rect.width as usize;
     if full_width < STEP_MIN_WIDTH {
@@ -223,8 +248,9 @@ pub(crate) fn draw_view_header(
             badge: String::new(),
             primary: "Side conversation".to_string(),
             meta: parent_status_label(head.parent).to_string(),
-            // Row 1 is identity + status only — the exit affordance moved to
-            // the row-2 legend (ADR-0103 §3), so "Esc back" is gone here.
+            // Row 1 is identity + status only — the exit affordance lives on
+            // row 2 as the `Ctrl-x scene` namespace (ADR-0103 §3 / ADR-0298),
+            // so no exit pair appears here.
             action: String::new(),
         },
         // The Subagent head carries the page's whole identity: uppercase
@@ -257,6 +283,14 @@ pub(crate) fn draw_view_header(
             meta: String::new(),
             action: String::new(),
         },
+        ViewHeader::Dashboard(head) => HeaderContent {
+            title: " DASHBOARD ",
+            tag: String::new(),
+            badge: String::new(),
+            primary: "all projects".to_string(),
+            meta: String::new(),
+            action: head.summary.clone(),
+        },
     };
 
     let bg = theme.raised();
@@ -279,13 +313,16 @@ pub(crate) fn draw_view_header(
         }
         _ => fill.fg(theme.muted()),
     };
-    // The session mode flag (`DELEGATED`) reads as a persistent safety state,
-    // so it takes the warning tone; every other variant's right side is quiet
-    // metadata (the `/btw` return hint, the Subagent sibling count).
-    let action_style = if matches!(header, ViewHeader::Session(_)) {
-        fill.fg(theme.warn()).add_modifier(Modifier::BOLD)
-    } else {
-        fill.fg(theme.muted())
+    // The session mode flag (`DELEGATED`) and the dashboard's `⚠ need
+    // attention` fleet summary both read as persistent safety states, so they
+    // take the warning tone; every other variant's right side is quiet
+    // metadata (the Subagent sibling count, the dashboard's quiet fleet count).
+    let action_style = match header {
+        ViewHeader::Session(_) => fill.fg(theme.warn()).add_modifier(Modifier::BOLD),
+        ViewHeader::Dashboard(head) if head.needs_attention => {
+            fill.fg(theme.warn()).add_modifier(Modifier::BOLD)
+        }
+        _ => fill.fg(theme.muted()),
     };
 
     // The text column is the full row minus the shared horizontal inset on
@@ -313,10 +350,12 @@ pub(crate) fn draw_view_header(
     // session head. `Ctrl+P` is the Command Palette chord (the model bar and
     // footer hints advertise it), so surfacing it in the head's right-side
     // space keeps the shortcut discoverable on every session view.
-    let palette = matches!(header, ViewHeader::Session(_))
-        .then(|| key_overrides.effective_binding(crate::keymap::CommandId::CommandPalette))
-        .flatten()
-        .map(|key| crate::components::keycap::KeyAffordance::from_key(key, "palette"));
+    let palette = match header {
+        ViewHeader::Session(head) => head
+            .palette_key
+            .map(|key| crate::components::keycap::KeyAffordance::from_key(key, "palette")),
+        _ => None,
+    };
     let palette_width = palette.map(|a| a.width()).unwrap_or(0);
     let right_separator = usize::from(action_width > 0 && palette_width > 0);
     let right_reserved = action_width + palette_width + right_separator;
@@ -384,8 +423,16 @@ pub(crate) fn draw_view_header_hints(
 
     if let Some(crumbs) = hints.breadcrumbs {
         let left = Span::styled(format!("   {crumbs}"), Style::default().fg(theme.fg()));
-        let key = hints.back_key.unwrap_or(crate::keymap::Key::ESC);
-        let affordance = crate::components::keycap::KeyAffordance::from_key(key, "back");
+        // The crumb line's affordance is the scene namespace's opening key —
+        // never `Esc back`. Esc does not close Scenes (ADR-0205
+        // `[INV-TUI-CLEAN-02]`); `C-x` opens the namespace whose `w`/`k` do
+        // (ADR-0298 §3). The keycap names the namespace, not one of its verbs,
+        // because the crumb line is shared by pages that are already at their
+        // home scene (where `w`/`k` have nothing to close).
+        let affordance = crate::components::keycap::KeyAffordance::from_key(
+            crate::keymap::Key::CTRL_X,
+            SCENE_NAMESPACE_LABEL,
+        );
         let [key_span, label_span] = affordance.render_spans(theme, bg);
         let right_pad = Span::styled("   ", fill);
 
@@ -423,7 +470,7 @@ pub(crate) fn draw_view_header_hints(
                 format!("btw: {} total", chip.total)
             }
         }),
-        ViewKind::Btw | ViewKind::Subagent | ViewKind::Settings => None,
+        ViewKind::Btw | ViewKind::Subagent | ViewKind::Settings | ViewKind::Dashboard => None,
     };
 
     let pairs: Vec<crate::components::keycap::KeyAffordance> = match hints.kind {
@@ -437,10 +484,13 @@ pub(crate) fn draw_view_header_hints(
             }
             pairs
         }
-        ViewKind::Settings => {
-            let key = hints.back_key.unwrap_or(crate::keymap::Key::ESC);
+        ViewKind::Settings | ViewKind::Dashboard => {
+            // These scenes' own exit is the `C-x` namespace, so their legend
+            // names the namespace rather than a dismiss chord they do not have
+            // (ADR-0298 §3).
             vec![crate::components::keycap::KeyAffordance::from_key(
-                key, "back",
+                crate::keymap::Key::CTRL_X,
+                SCENE_NAMESPACE_LABEL,
             )]
         }
         // Unreachable — a crumb-less aside/subagent page is a caller bug,
@@ -495,6 +545,12 @@ pub(crate) fn draw_view_header_hints(
 
 const HEAD_HINTS_PAIR_GAP: usize = 3;
 const HEAD_HINTS_MARGIN_MIN: usize = 2;
+
+/// The row-2 legend's name for the `C-x` scene namespace (ADR-0298 §3). The
+/// keycap names the namespace rather than one of its verbs — `w`/`k` close a
+/// scene, but the same row is shared by pages already at their home scene,
+/// where there is nothing to close.
+const SCENE_NAMESPACE_LABEL: &str = "scene";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tone {
@@ -589,26 +645,22 @@ fn parent_status_label(parent: muta_contracts::ParentStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keymap::GlobalOverrides;
 
     fn rendered_row(width: u16, header: ViewHeader<'_>) -> String {
-        let theme = Theme::default();
-        let mut terminal = mutx_engine::TestTerminal::new(width, 1);
-        terminal.draw(|frame| {
-            draw_view_header(
-                frame,
-                frame.area(),
-                &header,
-                &theme,
-                &GlobalOverrides::default(),
-            );
-        });
-        terminal
-            .buffer()
-            .content
+        rendered_cells(width, header, &Theme::default())
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// The raw styled cells of a rendered head row — for assertions about
+    /// tone (which cell carries which foreground), not just content.
+    fn rendered_cells(width: u16, header: ViewHeader<'_>, theme: &Theme) -> Vec<mutx_engine::Cell> {
+        let mut terminal = mutx_engine::TestTerminal::new(width, 1);
+        terminal.draw(|frame| {
+            draw_view_header(frame, frame.area(), &header, theme);
+        });
+        terminal.buffer().content.clone()
     }
 
     #[test]
@@ -624,21 +676,17 @@ mod tests {
     }
 
     #[test]
-    fn aside_page_legend_is_its_breadcrumb_plus_esc_back() {
+    fn aside_page_legend_is_its_breadcrumb_plus_the_scene_namespace() {
         // The aside page is identified by its breadcrumb, and `draw_view_header_hints`
         // short-circuits on a crumb: the reachable row is the crumb line plus the
-        // single `Esc back` pair. (The hand-written aside legend — `F5 asides`,
-        // `Ctrl+C interrupt` — that this test used to pin was unreachable dead
-        // code; the aside's other chords are remappable and are left to the
-        // Command Palette and Help, ADR-0205/0237.)
+        // `C-x` scene-namespace pair. Esc is deliberately NOT offered — it does
+        // not close a Scene, and the aside's other chords are remappable, so
+        // they are left to the Command Palette (ADR-0205/0238/0298).
         let theme = Theme::default();
         let hints = ViewHints {
             kind: ViewKind::Btw,
             asides: None,
-            interruptible: true,
-            parent_note: "main running",
             breadcrumbs: Some("Main › Aside"),
-            back_key: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -651,57 +699,28 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(row.starts_with("   Main › Aside"), "crumb leads: {row}");
-        assert!(row.contains("Esc"), "the exit pair is offered: {row}");
-        assert!(row.contains("back"), "…spelt as the back action: {row}");
+        assert!(
+            row.contains("Ctrl-x"),
+            "the scene namespace is offered: {row}"
+        );
+        assert!(row.contains("scene"), "…spelt as the namespace: {row}");
+        assert!(
+            !row.contains("Esc"),
+            "Esc never advertises a scene exit: {row}"
+        );
         assert!(
             !row.contains("asides") && !row.contains("interrupt"),
             "the aside's remappable chords are not advertised on this row: {row}"
         );
-        assert!(
-            !row.contains("F1"),
-            "global help is not a view-level affordance: {row}"
-        );
     }
 
-    #[test]
-    fn aside_page_legend_respects_remapped_back_key() {
-        let theme = Theme::default();
-        let hints = ViewHints {
-            kind: ViewKind::Btw,
-            asides: None,
-            interruptible: true,
-            parent_note: "main running",
-            breadcrumbs: Some("Main › Aside"),
-            back_key: Some(crate::keymap::Key::CTRL_C),
-        };
-        let mut terminal = mutx_engine::TestTerminal::new(80, 1);
-        terminal.draw(|frame| {
-            draw_view_header_hints(frame, frame.area(), &hints, &theme);
-        });
-        let row: String = terminal
-            .buffer()
-            .content
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(row.starts_with("   Main › Aside"), "crumb leads: {row}");
-        assert!(row.contains("Ctrl-c"), "remapped chord: {row}");
-        assert!(row.contains("back"), "back action: {row}");
-    }
-
-    /// The crumb-less aside/subagent hint set is a caller bug, not a page with
-    /// a legend to invent: it renders nothing (and trips the debug assertion in
-    /// debug builds).
     #[test]
     fn crumb_less_aside_hints_render_nothing() {
         let theme = Theme::default();
         let hints = ViewHints {
             kind: ViewKind::Btw,
             asides: None,
-            interruptible: true,
-            parent_note: "main running",
             breadcrumbs: None,
-            back_key: None,
         };
         assert!(!hints.has_content(), "no crumb, no row");
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
@@ -729,10 +748,7 @@ mod tests {
         let hints = ViewHints {
             kind: ViewKind::Session,
             asides: None,
-            interruptible: true,
-            parent_note: "",
             breadcrumbs: None,
-            back_key: None,
         };
         assert!(!hints.has_content(), "no asides → no row at all");
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
@@ -757,10 +773,7 @@ mod tests {
                 total: 1,
                 running: 0,
             }),
-            interruptible: false,
-            parent_note: "",
             breadcrumbs: None,
-            back_key: None,
         };
         assert!(!mk(ViewKind::Session, false).has_content());
         assert!(mk(ViewKind::Session, true).has_content());
@@ -772,14 +785,11 @@ mod tests {
         assert!(!mk(ViewKind::Subagent, true).has_content());
 
         // A breadcrumb-identified page always carries the row, whichever kind
-        // it is: the crumb line plus `Esc back` is the legend.
+        // it is: the crumb line plus the `Ctrl-x` namespace is the legend.
         let crumbs = |kind: ViewKind| ViewHints {
             kind,
             asides: None,
-            interruptible: false,
-            parent_note: "",
             breadcrumbs: Some("Main › Aside"),
-            back_key: None,
         };
         assert!(crumbs(ViewKind::Btw).has_content());
         assert!(crumbs(ViewKind::Subagent).has_content());
@@ -795,10 +805,7 @@ mod tests {
                 total: 2,
                 running: 1,
             }),
-            interruptible: false,
-            parent_note: "",
             breadcrumbs: None,
-            back_key: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -816,15 +823,12 @@ mod tests {
     }
 
     #[test]
-    fn breadcrumbs_render_in_row_two() {
+    fn breadcrumbs_render_in_row_two_with_the_scene_namespace() {
         let theme = Theme::default();
         let hints = ViewHints {
             kind: ViewKind::Session,
             asides: None,
-            interruptible: false,
-            parent_note: "",
             breadcrumbs: Some("Main › Subagent[explore]"),
-            back_key: None,
         };
         let mut terminal = mutx_engine::TestTerminal::new(80, 1);
         terminal.draw(|frame| {
@@ -837,9 +841,14 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(row.contains("Main › Subagent[explore]"));
-        assert!(row.contains("Esc back"));
-        assert!(!row.contains("Ctrl-x"));
-        assert!(!row.contains("C-x"));
+        assert!(
+            row.contains("Ctrl-x scene"),
+            "the scene namespace is the crumb line's affordance: {row}"
+        );
+        assert!(
+            !row.contains("Esc"),
+            "Esc never advertises a scene exit on this row: {row}"
+        );
     }
 
     #[test]
@@ -857,6 +866,72 @@ mod tests {
         );
     }
 
+    /// ADR-0298 §3: the dashboard is chrome-identical to every other scene —
+    /// its head comes from the shared band, not a homegrown row. Row 1 carries
+    /// `DASHBOARD` + scope on the left and the fleet summary on the right; row 2
+    /// carries the `Ctrl-x scene` namespace (it has no breadcrumb: it is a peer
+    /// scene, not a drill-in).
+    #[test]
+    fn dashboard_head_is_the_shared_band_with_fleet_summary() {
+        let row = rendered_row(
+            80,
+            ViewHeader::Dashboard(DashboardHead {
+                summary: "3 session(s)  1 running  360 tokens ".to_string(),
+                needs_attention: false,
+            }),
+        );
+        assert!(row.starts_with("   DASHBOARD all projects"), "{row}");
+        assert!(
+            row.contains("3 session(s)"),
+            "fleet summary on the right: {row}"
+        );
+        assert!(row.trim_end().ends_with("tokens"), "{row}");
+
+        // A quiet fleet renders the summary muted; one needing attention
+        // escalates it to the warning tone.
+        let theme = Theme::default();
+        let quiet = rendered_cells(
+            80,
+            ViewHeader::Dashboard(DashboardHead {
+                summary: "1 session(s) ".to_string(),
+                needs_attention: false,
+            }),
+            &theme,
+        );
+        let urgent = rendered_cells(
+            80,
+            ViewHeader::Dashboard(DashboardHead {
+                summary: "1 need attention ⚠ ".to_string(),
+                needs_attention: true,
+            }),
+            &theme,
+        );
+        let summary_fg = |cells: &[mutx_engine::Cell]| {
+            let idx = cells
+                .iter()
+                .position(|c| c.symbol() == "1")
+                .expect("summary starts with the count");
+            cells[idx].fg
+        };
+        assert_eq!(summary_fg(&quiet), theme.muted(), "quiet fleet is muted");
+        assert_eq!(
+            summary_fg(&urgent),
+            theme.warn(),
+            "a fleet needing attention takes the warning tone"
+        );
+
+        // Row 2 always renders for the dashboard, and it names the namespace.
+        let hints = ViewHints {
+            kind: ViewKind::Dashboard,
+            asides: None,
+            breadcrumbs: None,
+        };
+        assert!(
+            hints.has_content(),
+            "the dashboard always carries its namespace row"
+        );
+    }
+
     #[test]
     fn session_header_shows_id_tail_workspace_and_unattended() {
         let head = SessionHead {
@@ -866,6 +941,7 @@ mod tests {
             unattended: true,
             confined: true,
             switching_target: None,
+            palette_key: Some(crate::keymap::Key::CTRL_L),
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 [DEVELOPER] ~/projects/xx"));
@@ -886,6 +962,7 @@ mod tests {
             unattended: false,
             confined: true,
             switching_target: None,
+            palette_key: Some(crate::keymap::Key::CTRL_L),
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 [PHILOSOPHIST]"));
@@ -901,6 +978,7 @@ mod tests {
             unattended: false,
             confined: true,
             switching_target: None,
+            palette_key: Some(crate::keymap::Key::CTRL_L),
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
         assert!(row.starts_with("   SESSION b3c4 [SECURITY-AUDITOR] ~/projects/xx"));
@@ -915,6 +993,7 @@ mod tests {
             unattended: false,
             confined: true,
             switching_target: Some("7c405d7e"),
+            palette_key: Some(crate::keymap::Key::CTRL_L),
         };
         let row = rendered_row(80, ViewHeader::Session(&head));
         assert!(
@@ -933,16 +1012,11 @@ mod tests {
             unattended: true,
             confined: true,
             switching_target: None,
+            palette_key: Some(crate::keymap::Key::CTRL_L),
         };
         let mut terminal = mutx_engine::TestTerminal::new(60, 1);
         terminal.draw(|frame| {
-            draw_view_header(
-                frame,
-                frame.area(),
-                &ViewHeader::Session(&head),
-                &theme,
-                &GlobalOverrides::default(),
-            );
+            draw_view_header(frame, frame.area(), &ViewHeader::Session(&head), &theme);
         });
         for cell in &terminal.buffer().content {
             assert_eq!(cell.bg, theme.raised());

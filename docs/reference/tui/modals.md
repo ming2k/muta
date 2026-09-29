@@ -531,7 +531,6 @@ them, so the live status surface stays visible even while browsing history.
 | `↑` / `↓` | Move selection |
 | `Tab` | Toggle a full-text **preview** of the selected entry (selectable text: drag + `Ctrl+Shift+C` copies the prompt) |
 | `Enter` | Insert the focused entry into the composer (browse or search) |
-| `Ctrl+X` | **Clear the entire history** — arms a confirmation (`y` wipes, any other key cancels) |
 | `Esc` (search) | Leave search → back to browse |
 | `Esc` (browse) | Close the modal |
 

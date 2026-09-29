@@ -279,6 +279,7 @@ impl Key {
 
     pub const CTRL_L: Key = Key::ctrl('l');
     pub const CTRL_C: Key = Key::ctrl('c');
+    pub const CTRL_X: Key = Key::ctrl('x');
     pub const CTRL_P: Key = Key::ctrl('p');
     pub const CTRL_Q: Key = Key::ctrl('q');
     pub const CTRL_R: Key = Key::ctrl('r');
@@ -1806,8 +1807,163 @@ impl LiveHint {
     }
 }
 
+/// The `Ctrl+X` **scene namespace**: a two-stroke chord whose second stroke is
+/// a scene-lifecycle verb (ADR-0298).
+///
+/// This table is the single owner of the namespace. The router resolves the
+/// second stroke through [`SceneVerb::from_key`] and the which-key card renders
+/// rows straight from [`SceneVerb::ALL`] — so a verb cannot be dispatchable
+/// without being advertised, nor advertised without being dispatchable (the
+/// defect class ADR-0238 exists to prevent: the queue bar once rendered a
+/// `Ctrl-q` that resolved to nothing).
+pub mod scene_namespace {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    use super::Key;
+
+    /// The namespace's opening stroke.
+    pub const OPEN: Key = Key::CTRL_X;
+
+    /// One scene-lifecycle verb reachable as `C-x <stroke>`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum SceneVerb {
+        /// Leave the current scene (or dismiss a foreground dialog first).
+        Leave,
+        /// Open (or close) the Command Palette / surface switcher.
+        Switcher,
+        /// Quit muta — the same armed double-press as the global `Ctrl+C`.
+        Quit,
+    }
+
+    impl SceneVerb {
+        /// Every verb, in advertisement order. The which-key card renders this
+        /// slice; the router resolves against it. One list, two consumers.
+        pub const ALL: &'static [SceneVerb] =
+            &[SceneVerb::Leave, SceneVerb::Switcher, SceneVerb::Quit];
+
+        /// The second-stroke chords that fire this verb. More than one spelling
+        /// is allowed when a convention is genuinely shared (Emacs' `C-x w`
+        /// close and vi's `q`-adjacent `k`); the first entry is the one the
+        /// card advertises.
+        pub const fn strokes(self) -> &'static [Key] {
+            match self {
+                // `w` (Emacs `C-x C-w`-family window/`C-x w` muscle memory) and
+                // `k` (the close-window convention). Case-insensitive: the
+                // router folds the second stroke, since a leader chord is
+                // typed blind.
+                SceneVerb::Leave => &[
+                    Key {
+                        modifiers: KeyModifiers::NONE,
+                        code: KeyCode::Char('w'),
+                    },
+                    Key {
+                        modifiers: KeyModifiers::NONE,
+                        code: KeyCode::Char('k'),
+                    },
+                ],
+                // `p` (palette) and `b` (buffer/switch — the Emacs `C-x b`
+                // muscle memory for "switch what I'm looking at").
+                SceneVerb::Switcher => &[
+                    Key {
+                        modifiers: KeyModifiers::NONE,
+                        code: KeyCode::Char('p'),
+                    },
+                    Key {
+                        modifiers: KeyModifiers::NONE,
+                        code: KeyCode::Char('b'),
+                    },
+                ],
+                // `C-c` mirrors the global quit chord's spelling inside the
+                // namespace (Emacs' `C-x C-c`).
+                SceneVerb::Quit => &[Key {
+                    modifiers: KeyModifiers::CONTROL,
+                    code: KeyCode::Char('c'),
+                }],
+            }
+        }
+
+        /// The chord the which-key card advertises for this verb.
+        pub const fn advertised_stroke(self) -> Key {
+            self.strokes()[0]
+        }
+
+        /// The card's label for this verb. The leave verb's wording is
+        /// state-dependent and is supplied by the caller
+        /// (`components::which_key::close_label_for`); this is its fallback.
+        pub const fn label(self) -> &'static str {
+            match self {
+                SceneVerb::Leave => "leave scene",
+                SceneVerb::Switcher => "command palette",
+                SceneVerb::Quit => "quit muta",
+            }
+        }
+
+        /// The chord the which-key card prints for this verb, in the card's own
+        /// two-stroke notation: a plain letter prints bare (`w`), a modified
+        /// one prints its `C-` spelling (`C-c`), because the card is already
+        /// inside the `C-x …` prefix.
+        pub const fn advertised_stroke_display(self) -> &'static str {
+            match self.advertised_stroke().modifiers {
+                KeyModifiers::NONE => match self.advertised_stroke().code {
+                    KeyCode::Char('w') => "w",
+                    KeyCode::Char('k') => "k",
+                    KeyCode::Char('p') => "p",
+                    KeyCode::Char('b') => "b",
+                    _ => "?",
+                },
+                _ => match self.advertised_stroke().code {
+                    KeyCode::Char('c') => "C-c",
+                    _ => "C-?",
+                },
+            }
+        }
+
+        /// Resolve a second stroke to its verb. `stroke` is the *folded* key
+        /// (the router lowercases a shifted letter before calling): a leader
+        /// chord is typed without looking, so case carries no meaning here.
+        pub fn from_stroke(stroke: Key) -> Option<Self> {
+            Self::ALL
+                .iter()
+                .copied()
+                .find(|verb| verb.strokes().contains(&stroke))
+        }
+
+        /// Resolve a raw second-stroke keypress. Terminals deliver `C-x W` as
+        /// `Char('W')` (the shift bit is folded into the character), so the
+        /// case is normalized here rather than at each call site — the
+        /// namespace is case-insensitive by design.
+        pub fn from_second_stroke(key: Key) -> Option<Self> {
+            let folded = match key.code {
+                KeyCode::Char(c) => Key {
+                    modifiers: key.modifiers,
+                    code: KeyCode::Char(c.to_ascii_lowercase()),
+                },
+                _ => key,
+            };
+            Self::from_stroke(folded)
+        }
+    }
+
+    /// Whether `key` is the namespace's opening stroke.
+    pub fn opens(key: Key) -> bool {
+        key == OPEN
+    }
+
+    /// Every second-stroke chord the namespace resolves, across all verbs. Used
+    /// by tests to assert the table is internally consistent.
+    pub fn strokes_of() -> Vec<Key> {
+        SceneVerb::ALL
+            .iter()
+            .flat_map(|verb| verb.strokes().iter().copied())
+            .collect()
+    }
+}
+
 /// The canonical global chords a user may remap via the `[keybindings]`
-/// config (ADR-0172 §"user-overridable schemes").
+/// config (ADR-0172 §"user-overridable schemes"). `Ctrl+X` is deliberately
+/// absent: it is the two-stroke *scene namespace*'s opening stroke
+/// ([`scene_namespace`]), resolved in the router before this table, so it has
+/// no single-stroke `CommandId` to name (ADR-0298 §1).
 fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
     match cmd {
         CommandId::CommandPalette => Some(Key::CTRL_L),
@@ -1830,8 +1986,9 @@ fn canonical_global_chord(cmd: CommandId) -> Option<Key> {
 
 /// The canonical resolution table (the hard-bound globals + the bar chords:
 /// Ctrl+L palette, Ctrl+O session stats,
-/// Ctrl+Q queue, Esc back, Ctrl+C quit, Ctrl+Shift+C copy), ignoring user
-/// overrides.
+/// Ctrl+Q queue, Esc dismiss/step-back, Ctrl+C quit, Ctrl+Shift+C copy),
+/// ignoring user overrides. Esc resolves to [`CommandId::CancelOrBack`], which
+/// never navigates between Scenes (ADR-0298).
 fn canonical_global_key(key: Key) -> Option<CommandId> {
     if key == Key::CTRL_L {
         Some(CommandId::CommandPalette)
@@ -2512,5 +2669,95 @@ mod tests {
             find_by_slash("/commands").map(|c| c.id),
             Some(CommandId::CommandPalette)
         );
+    }
+
+    /// ADR-0298 §1: the `Ctrl+X` namespace's verb table is the single owner of
+    /// both dispatch and advertisement. This is the guard that would have caught
+    /// the queue bar's hardcoded `Ctrl-q` (ADR-0238) had the namespace been
+    /// written the same way — a stroke that renders but resolves to nothing, or
+    /// resolves but is never advertised.
+    #[test]
+    fn scene_namespace_is_internally_consistent() {
+        use scene_namespace::{SceneVerb, strokes_of};
+
+        // Every declared stroke resolves back to the verb that declares it,
+        // under both case spellings a terminal can deliver.
+        for verb in SceneVerb::ALL {
+            for stroke in verb.strokes() {
+                assert_eq!(
+                    SceneVerb::from_stroke(*stroke),
+                    Some(*verb),
+                    "declared stroke {stroke:?} of {verb:?} does not resolve"
+                );
+                assert_eq!(
+                    SceneVerb::from_second_stroke(*stroke),
+                    Some(*verb),
+                    "declared stroke {stroke:?} of {verb:?} fails case-folding"
+                );
+                if let KeyCode::Char(c) = stroke.code {
+                    let upper = Key {
+                        modifiers: stroke.modifiers,
+                        code: KeyCode::Char(c.to_ascii_uppercase()),
+                    };
+                    assert_eq!(
+                        SceneVerb::from_second_stroke(upper),
+                        Some(*verb),
+                        "the uppercase spelling of {stroke:?} must fold"
+                    );
+                }
+            }
+        }
+
+        // No stroke is claimed by two verbs: a colliding table would make
+        // `from_stroke` order-dependent and the card ambiguous.
+        let mut seen: Vec<Key> = Vec::new();
+        for stroke in strokes_of() {
+            assert!(
+                !seen.contains(&stroke),
+                "stroke {stroke:?} is claimed by more than one scene verb"
+            );
+            seen.push(stroke);
+        }
+
+        // The advertised stroke is always one of the verb's real strokes — the
+        // card can never print a key the dispatcher does not honour.
+        for verb in SceneVerb::ALL {
+            assert!(
+                verb.strokes().contains(&verb.advertised_stroke()),
+                "{verb:?} advertises a stroke it does not declare"
+            );
+        }
+
+        // No advertised stroke is a bare `c`: `C-x c` must stay inert so a
+        // mistyped `C-c` cannot quit the app through the namespace.
+        for verb in SceneVerb::ALL {
+            let stroke = verb.advertised_stroke();
+            if stroke.code == KeyCode::Char('c') {
+                assert!(
+                    stroke.modifiers.contains(KeyModifiers::CONTROL),
+                    "{verb:?} advertises a bare `c`, which would shadow the quit chord"
+                );
+            }
+        }
+
+        // The opening stroke is not itself a verb stroke (it re-arms).
+        assert!(
+            !strokes_of().contains(&scene_namespace::OPEN),
+            "the opening stroke must not double as a verb stroke"
+        );
+    }
+
+    /// Every verb the card can print has a label, and the leave verb's label is
+    /// only a fallback — the caller supplies the state-dependent wording.
+    #[test]
+    fn scene_namespace_verbs_all_carry_labels() {
+        for verb in scene_namespace::SceneVerb::ALL {
+            assert!(!verb.label().is_empty(), "{verb:?} has no label");
+            assert!(
+                !verb.advertised_stroke_display().is_empty()
+                    && !verb.advertised_stroke_display().contains('?'),
+                "{verb:?} prints an unrenderable stroke"
+            );
+        }
     }
 }

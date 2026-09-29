@@ -548,7 +548,7 @@ async fn process_one_event(
                     keyboard_path.first(),
                     Some(crate::ui::UiKey::ConfigDropdown | crate::ui::UiKey::ProviderDelete)
                 ),
-                leader_chord: app.leader_chord,
+                scene_namespace_armed: app.scene_namespace_armed,
             },
             &crate::modal_keys::ModalKeys {
                 model_searching,

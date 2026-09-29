@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One scene-exit mechanism: the `C-x` namespace owns scene lifecycle, and Esc
+  never closes a scene (ADR-0298).** Esc is now strictly a *dismiss*: it
+  dismisses a top overlay, unwinds a scene-local sub-layer (a config dropdown, a
+  drill-in pane, the dashboard's preview or inline prompt), clears step/browse
+  focus, dismisses a completion, and (armed twice) interrupts a round. It can no
+  longer change the active scene, in any surface.
+  - **No scene carries an exit chord of its own.** The `q` exits are deleted
+    from the Dashboard console, the Settings categories pane, and the
+    TaskInspection zoom — three hand-rolled copies of "leave this scene", each
+    with its own bespoke guard conditions. `q` is an ordinary printable
+    everywhere now (on the Dashboard it seeds the console composer like any
+    other unclaimed letter). The `Ctrl-x` namespace is the one exit.
+  - **The namespace is one table, read twice.** `keymap::scene_namespace`
+    declares each verb's strokes once; the router resolves second strokes
+    through it and the which-key card renders one row per verb from it. A verb
+    can no longer be dispatchable without being advertised, nor advertised
+    without being dispatchable (the defect class ADR-0238 exists to kill), and
+    the `C-x W`/`C-x w` case duplication collapses into one normalizer.
+    `C-x C-x` re-arms; `C-x b`/`C-x p` opens the palette; `C-x C-c` quits;
+    `C-x Esc`, `C-x C-g` and any unclaimed stroke cancel. A bare `C-x c`
+    cancels rather than quitting.
+  - **The head band's row 2 advertises `Ctrl-x scene`** instead of the retired
+    `Esc back` pair — on the aside/subagent breadcrumb line, on Settings, and
+    now on the Dashboard, which previously had no namespace row at all.
+  - **The Dashboard renders through the shared head band**, replacing its
+    homegrown `draw_header` and one-row layout. Its footer's `q/Esc back` legend
+    (whose Esc half had already stopped being true) becomes `C-x scene`.
+  - `C-x w` / `C-x k` dismiss a foreground *dialog* first and leave the scene on
+    the next press; a decision-bearing *sheet* is transparent to the namespace,
+    so the chord never silently discards a pending question.
+  - Restores ADR-0103 §2: inside a `/btw` aside, `Ctrl+C` leaves the view and
+    Esc interrupts the aside's round — an idle Esc no longer exits the view.
+
+### Removed
+
+- **Dead chrome and dispatch surface retired with the unification (ADR-0298).**
+  `LeaderChord` (a two-state enum with one non-`None` variant) is now a `bool`;
+  `InputAction::{ExitSubagent, ExitSideView}` are gone (absorbed by
+  `close_scene`); `InputAction::ConfigBack` is gone (its only producer was the
+  Settings Esc exit); `draw_view_header`'s `key_overrides` parameter and
+  `TranscriptProps::key_overrides` are gone (every non-Session caller passed a
+  dummy `GlobalOverrides::default()` — `SessionHead` now carries its own
+  `palette_key`); `ViewHints::interruptible` and `ViewHints::parent_note` are
+  gone (written by eight constructors, read by nothing); `render_footer`'s
+  `keymap_page` parameter and its dead `Esc close / ? close` branch are gone.
+
 ### Fixed
 
 - **Interrupt notices no longer duplicate aborted drafts as redundant detail (ADR-0185 update).**
@@ -19,6 +67,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preventing database bloat; `RoundInterrupt.detail` is now reserved strictly for
   fatal error diagnostic payloads. Non-error interrupt notices render solely
   their canonical header (`Round N — cancelled via [Esc Esc]`).
+- **Dismissing an overlay on the Dashboard or Settings scene no longer demotes
+  the scene underneath (ADR-0298).** `handle_close_modal` ended with a
+  `reset_to_conversation()` for any non-Models/Connections dialog, so
+  Esc-dismissing a dialog while standing on a Scene also left that Scene. A
+  dismiss is now overlay-scoped and never navigates
+  (`[INV-SCENE-EXIT-04]`); `App::dismiss_active_dialog` returns `false` on a
+  bare scene.
+- **Standalone startup scenes quit instead of stranding the user in a carrier
+  conversation (ADR-0298).** `mutx dashboard` / `mutx settings` opened with no
+  requested conversation previously made *Esc* quit the program. That carve-out
+  moved off the Esc path entirely — it now hangs off the scene-exit verbs, so
+  Esc and the exit verb are no longer two spellings of "quit" depending on how
+  the binary was launched.
 
 ## [0.51.0] - 2026-09-29
 

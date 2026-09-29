@@ -429,8 +429,12 @@ pub(super) fn handle_submit_model_editor(app: &mut App) -> ActionFlow {
     ActionFlow::Handled
 }
 
-/// Loop stage (input dispatch): the `CloseModal` arm (Esc / generic close
-/// routing per open surface).
+/// Loop stage (input dispatch): the `CloseModal` arm — the generic overlay
+/// dismiss. **Overlay-scoped**: every branch below closes, backs out of, or
+/// quits *from* an overlay. No branch leaves a Scene (ADR-0205
+/// `[INV-TUI-CLEAN-02]`): Esc over a Scene's own chrome produces
+/// [`InputAction::SceneBack`] instead, and a Scene's exit is
+/// [`InputAction::CloseScene`] (`C-x w` / `C-x k`, ADR-0298 §1).
 pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
     // Sub-page back-out is checked FIRST (deepest level wins),
     // so Esc from a drill-in always returns to its parent view
@@ -451,22 +455,6 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
         // (not a sub-view — those are handled above) must quit
         // the program rather than drop into an empty chat.
         tracing::info!(reason = "startup_picker_cancelled", "app exiting");
-        app.should_quit.store(true, Ordering::SeqCst);
-    } else if app.startup_overlay == crate::StartupOverlay::Dashboard
-        && app.current_scene() == SceneKind::Dashboard
-    {
-        // `mutx dashboard` opened the dashboard over a carrier
-        // session the user never asked to converse with: Esc
-        // here quits rather than dropping into that chat. Enter
-        // on a row (HostSwitchSelected) re-attaches as usual.
-        tracing::info!(reason = "startup_dashboard_cancelled", "app exiting");
-        app.should_quit.store(true, Ordering::SeqCst);
-    } else if matches!(app.startup_overlay, crate::StartupOverlay::Settings { .. })
-        && app.current_scene() == SceneKind::Settings
-    {
-        // `mutx settings` (or MUTX_STARTUP_VIEW=settings) opened the settings
-        // view directly: Esc here quits rather than dropping into chat.
-        tracing::info!(reason = "startup_settings_cancelled", "app exiting");
         app.should_quit.store(true, Ordering::SeqCst);
     } else {
         // Retained browse dialogs hide instead of closing (ADR-0205), and the
@@ -493,13 +481,37 @@ pub(crate) fn handle_close_modal(app: &mut App, _viewed_session_id: &str) {
             app.modal_index = 0;
             app.pop_transient_surface();
         }
-        if !matches!(
-            app.active_dialog(),
-            Some(DialogKind::Models | DialogKind::Connections)
-        ) {
-            app.reset_to_conversation();
-        }
+        // Nothing left to dismiss: the gesture is spent. The Scene beneath is
+        // deliberately left exactly as it was — a dismiss never navigates
+        // (ADR-0298 §2). (A trailing `reset_to_conversation()` used to demote
+        // the Scene here, which made every overlay-dismiss on the Dashboard or
+        // Settings scene a back-door scene exit.)
     }
+}
+
+/// Loop stage (input dispatch): leaving a root scene that has no other way
+/// out, when that scene was opened *standalone* at startup (`mutx dashboard`,
+/// `mutx settings` with no carrier session the user asked to converse with).
+///
+/// This is a **program exit**, not a scene transition: with no conversation
+/// ever requested, "returning" to the carrier chat would trap the user in an
+/// empty session (the trap ADR-0205's startup carve-outs exist to prevent).
+/// Called from the scene-exit verbs (`C-x w`/`C-x k`, each scene's own `q`)
+/// after the scene itself declined to navigate. Returns `true` when it handled
+/// the exit by quiting.
+pub(crate) fn quit_standalone_scene_at_startup(app: &mut App) -> bool {
+    let reason = match app.startup_overlay {
+        crate::StartupOverlay::Dashboard if app.current_scene() == SceneKind::Dashboard => {
+            "startup_dashboard_cancelled"
+        }
+        crate::StartupOverlay::Settings { .. } if app.current_scene() == SceneKind::Settings => {
+            "startup_settings_cancelled"
+        }
+        _ => return false,
+    };
+    tracing::info!(reason, "app exiting");
+    app.should_quit.store(true, Ordering::SeqCst);
+    true
 }
 
 /// Loop stage (input dispatch): the `ModalUp` arm (per-modal ↑ navigation).

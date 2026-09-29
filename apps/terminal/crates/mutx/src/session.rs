@@ -222,7 +222,7 @@ pub(crate) fn resolve_chat_surface_key(
     }
 }
 
-/// The Subagent scene's own scheme (ADR-0205): the zoom owns its exit (`Esc`)
+/// The Subagent scene's own scheme (ADR-0205): the zoom owns its exit (`q`)
 /// and sibling navigation (`[`/`]`, a remappable `session.prev_sibling` /
 /// `session.next_sibling` verb), and delegates every other key to the shared
 /// chat core for step-focus walking.
@@ -243,32 +243,19 @@ pub(crate) fn resolve_subagent_key(
     if ov.matches(key, SurfaceVerb::NextSibling) && !keys.focused_target && input.is_empty() {
         return Some(InputAction::NextSibling);
     }
-    match key.code {
-        // Subagent zoom: Esc returns to the parent scene once completion is
-        // dismissed and step/browse focus is cleared (following the stepwise unwind cascade).
-        // When not composing, 'q' also exits (standard TUI inspection convention).
-        KeyCode::Esc
-            if keys.completion_kind == crate::completion::CompletionKind::None
-                && !keys.focused_target
-                && !keys.transcript_focused =>
-        {
-            Some(InputAction::ExitSubagent)
-        }
-        KeyCode::Char('q')
-            if keys.completion_kind == crate::completion::CompletionKind::None
-                && !keys.focused_target
-                && !keys.transcript_focused
-                && input.is_empty() =>
-        {
-            Some(InputAction::ExitSubagent)
-        }
-        _ => resolve_chat_surface_key(key, keys, input, cursor_position),
-    }
+    // The zoom owns no scene-exit chord: leaving is the `C-x` namespace's job
+    // alone (ADR-0298), and `Esc` never closes a Scene (ADR-0205
+    // `[INV-TUI-CLEAN-02]`). Every other key is the shared chat core — `↑`/`↓`
+    // and `Alt+↑`/`Alt+↓` walk steps, `Enter` activates the focused one, `Esc`
+    // clears focus, and printables reach the shared editing layer exactly as
+    // they always have.
+    resolve_chat_surface_key(key, keys, input, cursor_position)
 }
 
-/// The Side scene's own scheme (ADR-0205): the aside owns its exit (`Esc`
-/// returns to the main session), and every other key is the full chat scheme
-/// — an aside is a normal transcript + composer.
+/// The Side scene's own scheme (ADR-0205): the aside is a normal transcript +
+/// composer, and every key is the full chat scheme. Leaving the aside is
+/// `Ctrl+C` (ADR-0103 §2) or the `C-x` scene namespace (ADR-0298); `Esc`
+/// keeps only its interrupt meaning (armed twice, like the primary).
 pub(crate) fn resolve_side_key(
     key: crate::keymap::Key,
     keys: &SceneKeys,
@@ -276,19 +263,16 @@ pub(crate) fn resolve_side_key(
     cursor_position: &mut usize,
 ) -> Option<InputAction> {
     match key.code {
-        // Esc in an aside:
-        // - if responding: interrupt the viewed aside's round (ADR-0103 §2)
-        // - otherwise: return to the primary transcript once completion and focus are clear
+        // Esc in an aside interrupts the viewed aside's round (ADR-0103 §2)
+        // once a completion and step/browse focus are clear. It never leaves
+        // the view: `Esc` is the universal interrupt, not a scene exit.
         KeyCode::Esc
             if keys.completion_kind == crate::completion::CompletionKind::None
                 && !keys.focused_target
-                && !keys.transcript_focused =>
+                && !keys.transcript_focused
+                && keys.is_responding =>
         {
-            if keys.is_responding {
-                Some(InputAction::InterruptSide)
-            } else {
-                Some(InputAction::ExitSideView)
-            }
+            Some(InputAction::InterruptSide)
         }
         _ => resolve_chat_surface_key(key, keys, input, cursor_position),
     }
@@ -584,14 +568,14 @@ mod tests {
     fn every_owned_chord_resolves_in_its_mode() {
         // The chat surface's owned chords, paired with the run state they act
         // in. Each must resolve (ADR-0172: an owned chord is never dead).
+        // Esc is an *interrupt* on every scene, so its owned entries are the
+        // running states — a scene exit is not an Esc arm (ADR-0298 §2).
         let owned: &[(crate::keymap::Key, Mode)] = &[
             (crate::keymap::Key::ENTER, Mode::Idle),
             (crate::keymap::Key::ENTER, Mode::Running),
             (crate::keymap::Key::ENTER, Mode::FocusedTarget),
             (crate::keymap::Key::ESC, Mode::Running),
             (crate::keymap::Key::ESC, Mode::FocusedTarget),
-            (crate::keymap::Key::ESC, Mode::Side),
-            (crate::keymap::Key::ESC, Mode::Subagent),
             (crate::keymap::Key::TAB, Mode::Running),
             (crate::keymap::Key::CTRL_R, Mode::Idle),
             (crate::keymap::Key::ALT_P, Mode::Idle),
@@ -607,6 +591,40 @@ mod tests {
             assert!(
                 resolved.is_some(),
                 "owned chord {key:?} did not resolve in {mode:?}"
+            );
+        }
+
+        // The subagent and aside scenes own Esc only while their viewed round
+        // is interruptible; idle, it is inert (they have no Esc exit).
+        for mode in [Mode::Subagent, Mode::Side] {
+            let mut c = ctx(mode, |c| c.is_responding = true);
+            let mut input = String::new();
+            let mut cursor = 0;
+            let resolved = resolve_scene_key(
+                scene_of(mode),
+                crate::keymap::Key::ESC,
+                &c,
+                &mut input,
+                &mut cursor,
+            );
+            assert!(
+                matches!(
+                    resolved,
+                    Some(InputAction::Interrupt | InputAction::InterruptSide)
+                ),
+                "a running {mode:?} scene owns Esc as its interrupt: {resolved:?}"
+            );
+            c.is_responding = false;
+            assert!(
+                resolve_scene_key(
+                    scene_of(mode),
+                    crate::keymap::Key::ESC,
+                    &c,
+                    &mut input,
+                    &mut cursor
+                )
+                .is_none(),
+                "an idle {mode:?} scene has no Esc arm at all"
             );
         }
     }
@@ -1002,10 +1020,11 @@ mod tests {
     }
 
     #[test]
-    fn subagent_and_side_own_their_esc_and_navigation() {
+    fn subagent_and_side_never_exit_on_esc_and_keep_their_navigation() {
         use crate::keymap::Key;
 
-        // Subagent: Esc clears step focus first, then exits on next Esc.
+        // Subagent: Esc clears step focus, and otherwise resolves to nothing —
+        // it never exits the scene (ADR-0298 §2). `q` is the scene's own exit.
         assert_eq!(
             resolve_scene_key(
                 SceneKind::TaskInspection,
@@ -1014,7 +1033,22 @@ mod tests {
                 &mut String::new(),
                 &mut 0
             ),
-            Some(InputAction::ExitSubagent)
+            None,
+            "an idle zoom has no Esc arm; leaving is the `C-x` namespace"
+        );
+        assert_eq!(
+            resolve_scene_key(
+                SceneKind::TaskInspection,
+                Key {
+                    modifiers: KeyModifiers::NONE,
+                    code: KeyCode::Char('q'),
+                },
+                &ctx(Mode::Subagent, |_| {}),
+                &mut String::new(),
+                &mut 0
+            ),
+            None,
+            "the zoom has no scene-exit chord of its own"
         );
         assert_eq!(
             resolve_scene_key(
@@ -1025,7 +1059,7 @@ mod tests {
                 &mut 0
             ),
             Some(InputAction::ClearFocusedTarget),
-            "subagent Esc clears focused step first"
+            "subagent Esc clears the focused step"
         );
         // `[` / `]` walk siblings while the composer is empty and no step is
         // focused; a focused step bounces the key to the composer instead.
@@ -1055,7 +1089,8 @@ mod tests {
             "focused step absorbs `[` and does not bounce"
         );
 
-        // Side: Esc returns to the main session, unless a completion is up.
+        // Side: Esc interrupts a running aside round and never returns to the
+        // main session (ADR-0103 §2 — `Ctrl+C` detaches).
         assert_eq!(
             resolve_scene_key(
                 SceneKind::Aside,
@@ -1064,7 +1099,19 @@ mod tests {
                 &mut String::new(),
                 &mut 0
             ),
-            Some(InputAction::ExitSideView)
+            None,
+            "an idle aside has no Esc arm"
+        );
+        assert_eq!(
+            resolve_scene_key(
+                SceneKind::Aside,
+                Key::ESC,
+                &ctx(Mode::Side, |c| c.is_responding = true),
+                &mut String::new(),
+                &mut 0
+            ),
+            Some(InputAction::InterruptSide),
+            "a running aside's Esc is its interrupt"
         );
         assert_eq!(
             resolve_scene_key(
@@ -1078,7 +1125,7 @@ mod tests {
                 &mut 0
             ),
             Some(InputAction::CloseCompletion),
-            "side Esc dismisses a completion before returning"
+            "side Esc dismisses a completion first"
         );
 
         // The Conversation scene never emits the subagent/side exits.
@@ -1090,8 +1137,7 @@ mod tests {
             &mut String::new(),
             &mut 0,
         );
-        assert_ne!(action, Some(InputAction::ExitSubagent));
-        assert_ne!(action, Some(InputAction::ExitSideView));
+        assert_ne!(action, Some(InputAction::CloseScene));
     }
 
     /// ADR-0192: Esc while the inline ↑/↓ pointer sits on a history row
