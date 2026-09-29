@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-09-29
+
+### Added
+
+- **Session IR Native Provenance and Cryptographic Wire Envelope Projection (ADR-0297).**
+  - Added target dialect/protocol lowering in Pass 4 of the Session IR compiler, preventing Google HTTP 400 (`Function call is missing a thought_signature`) when switching models or replaying foreign tool executions.
+  - Added strongly-typed `wire_protocol()` to the `Provider` trait across all provider implementations.
+  - Added defense-in-depth serializer enforcement in Google Gemini request construction.
+- **Universal Causal Compaction, Interactive State Machine, and Inspectable Checkpoint Cards (ADR-0296).**
+  - Rebuilt `/compact` workflow with causal DAG checkpointing and foldable transcript summary cards.
+
 ## [0.50.19] - 2026-09-29
 
 ### Fixed
@@ -8128,7 +8139,8 @@ TUI, tool use, on-demand skills, plan mode, and durable sessions.
   `neenee-agent` ← `neenee-cli`) with typed errors and a unified agent loop.
 - Standardized on MIT-only licensing.
 
-[Unreleased]: https://github.com/ming2k/muta/compare/v0.50.19...HEAD
+[Unreleased]: https://github.com/ming2k/muta/compare/v0.51.0...HEAD
+[0.51.0]: https://github.com/ming2k/muta/compare/v0.50.19...v0.51.0
 [0.50.19]: https://github.com/ming2k/muta/compare/v0.50.18...v0.50.19
 [0.50.18]: https://github.com/ming2k/muta/compare/v0.50.17...v0.50.18
 [0.50.16]: https://github.com/ming2k/muta/compare/v0.50.15...v0.50.16
