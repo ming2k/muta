@@ -261,20 +261,13 @@ pub struct InputExpectation {
     pub secret: bool,
 }
 
-/// Which channel a supervised child is blocked reading, resolved at runtime
-/// from the child's `fd 0` / controlling-terminal identity — not guessed from
-/// the command text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InputChannel {
-    /// The harness-held stdin pipe.
-    Stdin,
-    /// The child's controlling terminal (`/dev/tty`).
-    ControllingTty,
-}
-
 /// A runtime request for one line of operator input for a supervised command.
 /// Runtime-only (never crosses the wire as such); the agent layer translates
 /// it into an [`AgentEvent::StdinRequest`](crate::AgentEvent::StdinRequest).
+///
+/// The channel the answer goes to is not named here: in the supervised model
+/// the child's stdin *is* its controlling terminal, so there is exactly one
+/// channel and the platform seam owns it (ADR-0293).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputPrompt {
     /// The command awaiting input, shown for context.
@@ -284,8 +277,6 @@ pub struct InputPrompt {
     pub prompt: String,
     /// Mask the operator's typing.
     pub secret: bool,
-    /// The channel the answer will be written into.
-    pub channel: InputChannel,
 }
 
 /// Why a shell step stopped. Drives the themed termination footer (L6) so the

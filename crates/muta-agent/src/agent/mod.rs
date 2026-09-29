@@ -1637,10 +1637,9 @@ mod tests {
         let agent = stdin_test_agent();
         agent.set_unattended(false);
         agent.set_skip_interactive_input(true);
-        let tool = crate::tools::execute_command::ExecuteCommandTool::new(None);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let contract = agent.decide_command_input(r#"{"command":"sudo ls /root"}"#, &tool);
+        let contract = agent.decide_command_input(r#"{"command":"sudo ls /root"}"#);
         assert_eq!(
             contract,
             muta_contracts::InputContract::Sealed,
@@ -1653,9 +1652,8 @@ mod tests {
         let _ = tx;
     }
 
-    /// Without the opt-out (and attended, on a platform that can provide a
-    /// controlling terminal), the same `sudo` command must be **supervised** —
-    /// a held-open pipe + terminal for runtime examination, carrying the
+    /// Without the opt-out (and attended, on a platform that can fully
+    /// supervise), the same `sudo` command must be **supervised** — carrying the
     /// classifier's advisory expectation. Regression guard: a refactor must not
     /// silently route the interactive path to `Sealed` when the opt-out is off.
     #[tokio::test]
@@ -1663,10 +1661,11 @@ mod tests {
         let agent = stdin_test_agent();
         agent.set_unattended(false);
         agent.set_skip_interactive_input(false);
-        let tool = crate::tools::execute_command::ExecuteCommandTool::new(None);
 
-        let contract = agent.decide_command_input(r#"{"command":"sudo ls /root"}"#, &tool);
-        if muta_platform::process::controlling_terminal_supported() {
+        let contract = agent.decide_command_input(r#"{"command":"sudo ls /root"}"#);
+        if muta_platform::supervised::input_supervision()
+            == muta_platform::supervised::InputSupervision::Supervised
+        {
             match contract {
                 muta_contracts::InputContract::Supervised { expectation: Some(exp) } => {
                     assert!(exp.secret, "sudo expectation must be masked");
@@ -1674,6 +1673,8 @@ mod tests {
                 other => panic!("expected Supervised with a secret expectation, got {other:?}"),
             }
         } else {
+            // A platform without full supervision must fall back to Sealed —
+            // never induce interactivity it cannot service.
             assert_eq!(contract, muta_contracts::InputContract::Sealed);
         }
     }
@@ -1681,8 +1682,7 @@ mod tests {
     /// `apply_preset` must seed `skip_interactive_input` from the
     /// profile's runtime config — the wiring the bootstrap path relies on.
     #[test]
-    fn apply_preset_seeds_skip_interactive_input() {
-        let agent = stdin_test_agent();
+    fn apply_preset_seeds_skip_interactive_input() {        let agent = stdin_test_agent();
         assert!(!agent.skip_interactive_input(), "default off");
         let profile = muta_contracts::AgentRoleProfile::with_identity(
             "developer",
@@ -1697,5 +1697,37 @@ mod tests {
             agent.skip_interactive_input(),
             "profile overlay took effect"
         );
+    }
+
+    /// The capability gate is atomic and structural (ADR-0293): on a platform
+    /// that is not fully `Supervised`, an interactive command can NEVER be
+    /// dispatched as `Supervised` — it must fall back to `Sealed`. This is the
+    /// invariant that prevents "arm a terminal without detection" (the macOS
+    /// stall the seam removes).
+    #[tokio::test]
+    async fn non_supervised_platform_never_dispatches_supervised() {
+        let agent = stdin_test_agent();
+        agent.set_unattended(false);
+        agent.set_skip_interactive_input(false);
+
+        // Every interactive classification the classifier knows about.
+        for command in ["sudo ls", "gpg --decrypt f", "vim x", "passwd", "less a"] {
+            let args = serde_json::json!({ "command": command }).to_string();
+            let contract = agent.decide_command_input(&args);
+            if muta_platform::supervised::input_supervision()
+                != muta_platform::supervised::InputSupervision::Supervised
+            {
+                assert_eq!(
+                    contract,
+                    muta_contracts::InputContract::Sealed,
+                    "non-Supervised platform must seal '{command}'"
+                );
+            } else {
+                assert!(
+                    matches!(contract, muta_contracts::InputContract::Supervised { .. }),
+                    "Supervised platform must supervise '{command}', got {contract:?}"
+                );
+            }
+        }
     }
 }

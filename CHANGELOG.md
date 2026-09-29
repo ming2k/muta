@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The interactive-stall breaker was dead on macOS (ADR-0286, corrected by ADR-0293).**
+  Off Linux `sample_activity` returned `process_count == 0`, so the
+  `process_count > 0` guard could never trip and the session always paid the
+  8-minute idle budget. Supervised input is now gated by a single platform
+  capability (`muta_platform::supervised::input_supervision()`): macOS reports
+  `TerminalOnly` (a terminal is available but a genuine input wait cannot be
+  told apart from legitimate quiet computation), so the dispatch layer chooses
+  the sealed immediate-EOF contract and a prompting command fails fast instead
+  of stalling. Full supervision (`Supervised`) requires both a terminal and
+  reliable detection, which macOS does not yet provide. (Corrects the false
+  claim in the 0.50.18 notes, which said the detector reports `Sleeping` on
+  non-Linux.)
+
+### Changed
+
+- **Single-Owner Supervised-Input Capability Seam (ADR-0293).**
+  - The supervised-input mechanism (pty spawn, kernel-evidence wait detection,
+    answering) moved wholesale into `muta-platform::supervised`; the agent's
+    command runner now sees one capability value and one opaque handle and never
+    touches a pty, a `pre_exec` hook, or `/proc`.
+  - Capability is one atomic value, `supervised::input_supervision()`:
+    `Unsupported` (no terminal), `TerminalOnly` (terminal but no reliable
+    detection), `Supervised` (both). The dispatch layer consults it once; the
+    first two both fall back to the sealed contract, so a platform cannot arm a
+    terminal without detection.
+  - `SupervisedChild` owns spawn, containment (with rollback on attach failure,
+    matching `spawn_owned`), `kill_on_drop`, the terminal, and the examiner's
+    stability de-bounce; `Drop` reaps the tree.
+  - Deleted the dead duplicated channel vocabulary
+    (`muta_contracts::InputChannel`, `InputPrompt::channel`) and the now-redundant
+    `Tool::interactive_input_supported`; `process.rs`'s supervised internals are
+    `pub(crate)`.
+
 ## [0.50.18] - 2026-09-29
 
 ### Added

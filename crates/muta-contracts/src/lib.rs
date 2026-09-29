@@ -66,8 +66,8 @@ pub use completion::{
 
 pub mod tool_output;
 pub use tool_output::{
-    InputChannel, InputContract, InputExpectation, InputPrompt, PatchOp, ShellTermination,
-    ToolOutput, ToolStream, WebSearchHit,
+    InputContract, InputExpectation, InputPrompt, PatchOp, ShellTermination, ToolOutput, ToolStream,
+    WebSearchHit,
 };
 pub mod tool_access;
 pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};

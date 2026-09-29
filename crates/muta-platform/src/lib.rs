@@ -16,6 +16,7 @@ pub mod lock;
 pub mod opener;
 pub mod paths;
 pub mod process;
+pub mod supervised;
 pub mod secure_file;
 pub mod shell;
 pub mod workspace_sandbox;

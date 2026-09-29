@@ -18,6 +18,12 @@ negative_knowledge: true
 - **Supersedes:** the PTY rejection in [ADR-0043](0043-bash-stdin-execution-contract.md)
   §Alternatives ("A PTY for every command") and the `state == 'S'` heuristic in
   [ADR-0286](0286-hermetic-headless-execution-and-interactive-process-containment.md) §3.
+- **Refined by:** [ADR-0293](0293-single-owner-supervised-input-capability-seam.md)
+  — keeps this contract (kernel-evidence detection + controlling-terminal
+  injection) but relocates the mechanism behind one platform capability seam.
+  Where this ADR says "the tool cannot give the child a controlling terminal",
+  read the corrected, atomic gate
+  `muta_platform::supervised::input_supervision()`.
 
 ---
 

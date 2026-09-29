@@ -18,25 +18,86 @@ pub fn workspace_sandbox_shell(
     )
 }
 
-/// A running child whose output streams are being drained and whose input
-/// channels may remain writable. Owns the process tree so every exit path
-/// (answered, unanswered, timeout, cancel) reaps the whole group.
-struct RunningChild {
-    child: tokio::process::Child,
-    tree: muta_platform::process::OwnedProcessTree,
-    /// Child terminal master (supervised only). Because the child's stdin *is*
-    /// the terminal slave, an answer to either a stdin read or a `/dev/tty`
-    /// read is a write here.
-    tty: Option<muta_platform::process::PtyMaster>,
+/// A running command whose output is being drained. Two shapes exist, and the
+/// drain loop below is identical for both; only the input channel differs:
+///
+/// - **Plain** (sealed / prefilled): an owned child with no terminal. There is
+///   nothing to answer.
+/// - **Supervised**: a [`muta_platform::supervised::SupervisedChild`] that owns
+///   a private controlling terminal, examines whether the child is blocked on
+///   it, and can write an answer. All of that mechanism lives in the platform
+///   seam (ADR-0293); the loop only asks and reacts.
+enum Running {
+    Plain {
+        child: tokio::process::Child,
+        tree: muta_platform::process::OwnedProcessTree,
+    },
+    Supervised(muta_platform::supervised::SupervisedChild),
 }
 
-impl RunningChild {
+impl Running {
+    fn stdout(&mut self) -> Result<tokio::process::ChildStdout, String> {
+        match self {
+            Running::Plain { child, .. } => child
+                .stdout
+                .take()
+                .ok_or_else(|| "failed to capture child stdout".to_string()),
+            Running::Supervised(child) => child
+                .stdout()
+                .map_err(|e| format!("failed to capture child stdout: {e}")),
+        }
+    }
+
+    fn stderr(&mut self) -> Result<tokio::process::ChildStderr, String> {
+        match self {
+            Running::Plain { child, .. } => child
+                .stderr
+                .take()
+                .ok_or_else(|| "failed to capture child stderr".to_string()),
+            Running::Supervised(child) => child
+                .stderr()
+                .map_err(|e| format!("failed to capture child stderr: {e}")),
+        }
+    }
+
+    async fn wait(&mut self) -> Option<i32> {
+        match self {
+            Running::Plain { child, .. } => child.wait().await.ok().and_then(|s| s.code()),
+            Running::Supervised(child) => child.wait().await,
+        }
+    }
+
+    /// Terminate the whole process tree and reap the direct child.
+    async fn terminate(&mut self) {
+        match self {
+            Running::Plain { child, tree } => {
+                let _ = tree.terminate();
+                let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            }
+            Running::Supervised(child) => {
+                let _ = child.terminate();
+                let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+            }
+        }
+    }
+
+    /// Advance the input examiner one step. `None` for a plain child (no
+    /// terminal to examine).
+    fn poll_input_wait(&mut self) -> Option<muta_platform::supervised::InputWait> {
+        match self {
+            Running::Plain { .. } => None,
+            Running::Supervised(child) => Some(child.poll_input_wait()),
+        }
+    }
+
     /// Write one line of input into the child's terminal.
-    fn answer(&self, data: &str) -> std::io::Result<()> {
-        self.tty
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("no terminal to write the answer to"))?
-            .write_input(data)
+    fn answer(&mut self, data: &str) -> std::io::Result<()> {
+        match self {
+            Running::Supervised(child) => child.answer(data),
+            Running::Plain { .. } => Err(std::io::Error::other(
+                "no terminal on a non-supervised child",
+            )),
+        }
     }
 }
 
@@ -92,21 +153,18 @@ pub async fn run_episodic_command(
         muta_contracts::InputContract::Prefilled { data } => {
             invocation.stdin(std::process::Stdio::piped());
             let mut running = spawn_plain(&mut invocation)?;
-            if let Some(mut stdin) = running.child.stdin.take() {
+            if let Running::Plain { child, .. } = &mut running
+                && let Some(mut stdin) = child.stdin.take()
+            {
                 let _ = stdin.write_all(data.as_bytes()).await;
                 let _ = stdin.shutdown().await;
             }
             (running, None)
         }
         muta_contracts::InputContract::Supervised { expectation } => {
-            let spawned = muta_platform::process::spawn_supervised(&mut invocation)
+            let child = muta_platform::supervised::SupervisedChild::spawn(&mut invocation)
                 .map_err(|e| format!("Failed to execute and contain supervised process tree: {e}"))?;
-            let running = RunningChild {
-                child: spawned.child,
-                tree: spawned.tree,
-                tty: spawned.tty,
-            };
-            (running, expectation.clone())
+            (Running::Supervised(child), expectation.clone())
         }
     };
 
@@ -115,28 +173,24 @@ pub async fn run_episodic_command(
 
 /// Spawn an owned child with piped stdout/stderr (stdin already configured by
 /// the caller). Only used for the sealed/prefilled contracts.
-fn spawn_plain(invocation: &mut tokio::process::Command) -> Result<RunningChild, String> {
+fn spawn_plain(invocation: &mut tokio::process::Command) -> Result<Running, String> {
     invocation
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let (child, tree) = muta_platform::process::spawn_owned(invocation)
         .map_err(|e| format!("Failed to execute and contain process tree: {e}"))?;
-    Ok(RunningChild {
-        child,
-        tree,
-        tty: None,
-    })
+    Ok(Running::Plain { child, tree })
 }
 
-/// The single drain loop for every input contract. It always runs the semantic
-/// examiner: on detecting a genuine input wait it injects an answer when a
-/// handler is present (supervised), and fast-fails otherwise (sealed — the
-/// unattended path). Detection is kernel-evidence based (see
-/// [`muta_platform::process::WaitState`]), so legitimate quiet computation is
-/// never mistaken for a prompt.
+/// The single drain loop for every input contract. It asks the platform seam
+/// whether the child is waiting on its terminal (never inspecting output text):
+/// on a detected wait it injects an answer when a handler is present
+/// (supervised), and fast-fails otherwise (the unattended contract). Legitimate
+/// quiet computation is never mistaken for a prompt because detection rests on
+/// kernel evidence the platform owns (ADR-0292, ADR-0293).
 async fn run_loop(
     command: &str,
-    mut running: RunningChild,
+    mut running: Running,
     policy: RunPolicy<'_>,
     expectation: Option<muta_contracts::InputExpectation>,
     on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + '_),
@@ -146,16 +200,8 @@ async fn run_loop(
         raw,
         handler,
     } = policy;
-    let stdout = running
-        .child
-        .stdout
-        .take()
-        .ok_or("failed to capture child stdout")?;
-    let stderr = running
-        .child
-        .stderr
-        .take()
-        .ok_or("failed to capture child stderr")?;
+    let stdout = running.stdout()?;
+    let stderr = running.stderr()?;
     let mut readers = spawn_stream_readers(stdout, stderr);
 
     let idle_budget = idle_budget_for(timeout_duration);
@@ -165,11 +211,6 @@ async fn run_loop(
     let mut collector = OutputCollector::new();
     let mut last_output_at = tokio::time::Instant::now();
     let mut ticker = tokio::time::interval(Duration::from_millis(250));
-    // Consecutive AwaitingInput samples with no CPU progress (stability gate),
-    // and the previous sample for the progress comparison. Both are touched
-    // only on the examiner path, never per output line.
-    let mut stable_hits: u32 = 0;
-    let mut prev_sample: Option<muta_platform::process::ProcessActivitySample> = None;
 
     let outcome = loop {
         tokio::select! {
@@ -179,16 +220,15 @@ async fn run_loop(
                     Some((stream, text)) => {
                         collector.push_line(stream, text, on_stream);
                         // The arrival of a line is itself the proof of progress;
-                        // no kernel sample is needed. Sampling `/proc` here (once
-                        // per line) would cost O(host processes) per line — a
-                        // command emitting thousands of lines would be slowed to
-                        // a crawl.
+                        // the examiner is asked only on the quiet path below,
+                        // never per line (a per-line `/proc` scan would slow a
+                        // many-line command to a crawl).
                         last_output_at = tokio::time::Instant::now();
                         if collector.is_stream_flooded(raw) {
                             break Supervision::StreamGuarded;
                         }
                     }
-                    None => break Supervision::Exited(exit_code(&mut running.child).await),
+                    None => break Supervision::Exited(running.wait().await),
                 }
             }
             _ = ticker.tick() => {
@@ -197,55 +237,29 @@ async fn run_loop(
                     break Supervision::TimedOut;
                 }
                 let quiet_for = now.duration_since(last_output_at);
-                // Only examine once the command has been quiet past the floor;
-                // the ticker is coarse enough that this is a handful of samples
-                // per second at worst, and the expensive `/proc` scan happens
-                // only here — never on the per-line fast path.
-                if quiet_for >= examiner_floor {
-                    let sample = running.tree.sample_activity();
-                    match sample.wait_state {
-                        muta_platform::process::WaitState::AwaitingInput { channel } => {
-                            // Stability: require two consecutive samples with no
-                            // CPU progress, so a momentary block does not trip.
-                            let progressed = prev_sample
-                                .is_some_and(|prev| sample.total_cpu_ticks > prev.total_cpu_ticks);
-                            stable_hits = if progressed { 0 } else { stable_hits + 1 };
-                            prev_sample = Some(sample);
-                            if stable_hits >= 2 {
-                                stable_hits = 0;
-                                match handler {
-                                    Some(handler) => {
-                                        match await_answer(
-                                            command,
-                                            channel,
-                                            expectation.as_ref(),
-                                            handler,
-                                        )
-                                        .await
-                                        {
-                                            Some(data) => {
-                                                if let Err(error) = running.answer(&data) {
-                                                    tracing::warn!(%error, "failed to write operator input");
-                                                }
-                                                prev_sample = None;
-                                                last_output_at = tokio::time::Instant::now();
-                                            }
-                                            None => break Supervision::InputUnanswered,
-                                        }
+                // Examine only once the command has been quiet past the floor;
+                // a handful of examiner steps per second at worst.
+                if quiet_for >= examiner_floor
+                    && running.poll_input_wait()
+                        == Some(muta_platform::supervised::InputWait::Awaiting)
+                {
+                    match handler {
+                        Some(handler) => {
+                            match await_answer(command, expectation.as_ref(), handler).await {
+                                Some(data) => {
+                                    if let Err(error) = running.answer(&data) {
+                                        tracing::warn!(%error, "failed to write operator input");
                                     }
-                                    // No supervisor: fast-fail on the detected
-                                    // wait (the unattended contract).
-                                    None => break Supervision::InputUnanswered,
+                                    // The wait is understood, not silent: reset the
+                                    // idle clock so it cannot also trip IdleBlocked.
+                                    last_output_at = tokio::time::Instant::now();
                                 }
+                                None => break Supervision::InputUnanswered,
                             }
                         }
-                        muta_platform::process::WaitState::Running => {
-                            prev_sample = Some(sample);
-                            stable_hits = 0;
-                        }
-                        _ => {
-                            stable_hits = 0;
-                        }
+                        // No supervisor: fast-fail on the detected wait (the
+                        // unattended contract).
+                        None => break Supervision::InputUnanswered,
                     }
                 }
                 if quiet_for >= idle_budget {
@@ -275,41 +289,28 @@ async fn run_loop(
         Supervision::IdleBlocked => muta_contracts::tool_output::ShellTermination::IdleBlocked,
         Supervision::StreamGuarded => muta_contracts::tool_output::ShellTermination::StreamGuard,
     };
-    let _ = running.tree.terminate();
+    running.terminate().await;
     readers.stdout_task.abort();
     readers.stderr_task.abort();
     collector.drain_remaining_rx(&mut readers.rx);
-    let _ = tokio::time::timeout(Duration::from_secs(5), running.child.wait()).await;
     collector.flush_stream(on_stream);
     finish_output(command, collector, None, termination, raw)
 }
 
-async fn exit_code(child: &mut tokio::process::Child) -> Option<i32> {
-    child.wait().await.ok().and_then(|s| s.code())
-}
-
 /// Park the runtime input wait for the operator and return the answer, or
 /// `None` when no answer is supplied (cancelled, or no reachable human
-/// channel). The prompt names the channel the answer is written into.
+/// channel).
 async fn await_answer(
     command: &str,
-    channel: muta_platform::process::InputChannel,
     expectation: Option<&muta_contracts::InputExpectation>,
     handler: &dyn muta_contracts::InputHandler,
 ) -> Option<String> {
-    let channel = match channel {
-        muta_platform::process::InputChannel::Pipe => muta_contracts::InputChannel::Stdin,
-        muta_platform::process::InputChannel::Terminal => {
-            muta_contracts::InputChannel::ControllingTty
-        }
-    };
     let prompt = muta_contracts::InputPrompt {
         command: command.to_string(),
         prompt: expectation
             .map(|e| e.prompt.clone())
             .unwrap_or_else(|| format!("This command is waiting for input ({command}):")),
         secret: expectation.map(|e| e.secret).unwrap_or(false),
-        channel,
     };
     handler.resolve(prompt).await
 }
@@ -346,4 +347,5 @@ pub fn idle_budget_for(timeout: Duration) -> Duration {
     let third = timeout / 3;
     third.clamp(Duration::from_secs(5), Duration::from_secs(480))
 }
+
 

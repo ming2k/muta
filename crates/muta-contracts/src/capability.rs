@@ -776,18 +776,6 @@ pub trait Tool: Send + Sync {
         self.call_structured(invocation.arguments).await
     }
 
-    /// Whether this tool can execute a **supervised** command
-    /// ([`InputContract::Supervised`]): one that owns a controlling terminal
-    /// for a child that reads `/dev/tty`, with output still captured on clean
-    /// pipes. Default `false`. The agent dispatch layer consults this before
-    /// choosing `Supervised`; when `false`, it falls back to
-    /// [`Sealed`](InputContract::Sealed) — clean immediate-EOF semantics with
-    /// the classifier's pre-spawn refusal, and no risk of inducing interactive
-    /// behaviour the platform cannot service.
-    fn interactive_input_supported(&self) -> bool {
-        false
-    }
-
     /// Execute the tool while optionally emitting events (e.g. subagent steps).
     ///
     /// The default implementation simply calls `call()` and emits no events.

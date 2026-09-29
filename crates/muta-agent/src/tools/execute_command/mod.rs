@@ -228,10 +228,6 @@ impl Tool for ExecuteCommandTool {
         .await
     }
 
-    fn interactive_input_supported(&self) -> bool {
-        muta_platform::process::controlling_terminal_supported()
-    }
-
     async fn call_structured_with_events<'a>(
         &self,
         invocation: muta_contracts::ToolInvocation<'a>,

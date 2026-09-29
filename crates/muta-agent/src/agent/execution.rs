@@ -390,27 +390,20 @@ impl Agent {
         }
     }
 
-    /// Decide the [`InputContract`] for a command call (before spawn). The
-    /// three-way decision, in order:
+    /// Decide the [`InputContract`](muta_contracts::InputContract) for a command
+    /// call (before spawn). The three-way decision, in order:
     ///
     /// 1. **Model stdin** (opt-in): `allow_model_stdin` on AND the model
-    ///    supplied a `stdin` arg → `Prefilled{model}`. Structurally unreachable
-    ///    unless the flag exposed the schema field.
+    ///    supplied a `stdin` arg → `Prefilled{model}`.
     /// 2. **Pre-spawn refusal / supervision**: the interactive classifier
     ///    matched. Under unattended (or `skip_interactive_input`), or when the
-    ///    tool cannot give the child a controlling terminal, seal stdin — the
-    ///    command fails fast with the classifier's non-interactive remedy.
-    ///    Otherwise supervise: a held-open stdin pipe + controlling terminal +
-    ///    runtime examination, so a wait the classifier under- or over-guessed
-    ///    is resolved from kernel evidence at runtime.
+    ///    platform cannot fully supervise (`input_supervision()` is not
+    ///    `Supervised`), seal stdin — the command fails fast with the
+    ///    classifier's non-interactive remedy. Otherwise supervise.
     /// 3. **Sealed** (default hard floor): everything else.
     ///
     /// `arguments` is the raw JSON tool arguments.
-    pub(super) fn decide_command_input(
-        &self,
-        arguments: &str,
-        tool: &dyn muta_contracts::Tool,
-    ) -> muta_contracts::InputContract {
+    pub(super) fn decide_command_input(&self, arguments: &str) -> muta_contracts::InputContract {
         // (α) opt-in model stdin.
         if self.allow_model_stdin()
             && let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments)
@@ -426,14 +419,15 @@ impl Agent {
             .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_string))
             .unwrap_or_default();
         if let Some(kind) = crate::shell_input::classify(&command) {
-            // No human is reachable, or the operator opted out, or the platform
-            // cannot service a terminal — seal stdin so the command fails fast
-            // with a non-interactive remedy instead of hanging or (on a
-            // platform without a controlling terminal) inducing interactivity.
-            if self.unattended() || self.skip_interactive_input() {
-                return muta_contracts::InputContract::Sealed;
-            }
-            if !tool.interactive_input_supported() {
+            // No human is reachable, the operator opted out, or the platform
+            // cannot fully supervise (no terminal, or no reliable wait
+            // detection): seal stdin so the command fails fast with a
+            // non-interactive remedy instead of hanging or misfiring.
+            if self.unattended()
+                || self.skip_interactive_input()
+                || muta_platform::supervised::input_supervision()
+                    != muta_platform::supervised::InputSupervision::Supervised
+            {
                 return muta_contracts::InputContract::Sealed;
             }
             return muta_contracts::InputContract::Supervised {
@@ -609,7 +603,7 @@ impl Agent {
         //   3. sealed (default hard floor): everything else.
         // For other tools, Sealed is always correct (they ignore input).
         let input = if call.name == "run_command" {
-            self.decide_command_input(&call.arguments, tool.as_ref())
+            self.decide_command_input(&call.arguments)
         } else {
             muta_contracts::InputContract::default()
         };
