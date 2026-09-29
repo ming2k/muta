@@ -16,9 +16,7 @@ use crate::tools::helpers::{
 
 #[derive(ToolSchema, Deserialize)]
 struct ExecuteCommandArgs {
-    #[tool(
-        desc = "The shell command to execute. Commands MUST be finite and self-terminating."
-    )]
+    #[tool(desc = "The shell command to execute. Commands MUST be finite and self-terminating.")]
     command: String,
     #[tool(
         desc = "Overall timeout in seconds (default 1800 = 30 minutes). Enforced by StreamGuard (ADR-0257/0263)."
@@ -218,25 +216,30 @@ impl Tool for ExecuteCommandTool {
 
     async fn call_structured(&self, arguments: &str) -> Result<muta_contracts::ToolOutput, String> {
         self.call_structured_with_events(
-            "",
-            arguments,
+            muta_contracts::ToolInvocation {
+                call_id: "",
+                arguments,
+                input: muta_contracts::InputContract::default(),
+                input_handler: None,
+            },
             Box::new(|_| {}),
             &mut |_| {},
-            muta_contracts::StdinPolicy::default(),
         )
         .await
     }
 
+    fn interactive_input_supported(&self) -> bool {
+        muta_platform::process::controlling_terminal_supported()
+    }
+
     async fn call_structured_with_events<'a>(
         &self,
-        _call_id: &str,
-        arguments: &str,
+        invocation: muta_contracts::ToolInvocation<'a>,
         _on_event: Box<dyn FnMut(muta_contracts::SubagentEvent) + Send + 'a>,
         on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + 'a),
-        stdin_policy: muta_contracts::StdinPolicy,
     ) -> Result<muta_contracts::ToolOutput, String> {
-        let args: ExecuteCommandArgs =
-            serde_json::from_str(arguments).map_err(|e| format!("Invalid JSON: {}", e))?;
+        let args: ExecuteCommandArgs = serde_json::from_str(invocation.arguments)
+            .map_err(|e| format!("Invalid JSON: {}", e))?;
         let timeout_secs = args.timeout.unwrap_or(1800);
         let timeout_duration = Duration::from_secs(timeout_secs);
 
@@ -244,15 +247,17 @@ impl Tool for ExecuteCommandTool {
             .env
             .clone()
             .unwrap_or_else(|| env_from_root(&self.root));
-        let raw = args.raw.unwrap_or(false);
         episodic::run_episodic_command(
             &args.command,
-            timeout_duration,
             self.shell_isolation(),
             env,
-            stdin_policy,
+            invocation.input,
+            episodic::RunPolicy {
+                timeout: timeout_duration,
+                raw: args.raw.unwrap_or(false),
+                handler: invocation.input_handler,
+            },
             on_stream,
-            raw,
         )
         .await
     }

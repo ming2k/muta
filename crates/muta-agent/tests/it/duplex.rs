@@ -341,13 +341,16 @@ async fn subagent_tool_registry_routes_reply_into_live_subagent() {
     let task = tokio::spawn(async move {
         let mut on_stream = |_: muta_agent::ToolStream| ();
         tool.call_structured_with_events(
-            "parent_call_7",
-            r#"{"description":"d","prompt":"run the write tool"}"#,
+            muta_contracts::ToolInvocation {
+                call_id: "parent_call_7",
+                arguments: r#"{"description":"d","prompt":"run the write tool"}"#,
+                input: muta_contracts::InputContract::default(),
+                input_handler: None,
+            },
             Box::new(move |e| {
                 let _ = evt_tx.send(e);
             }),
             &mut on_stream,
-            muta_contracts::StdinPolicy::default(),
         )
         .await
     });

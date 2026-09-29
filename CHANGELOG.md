@@ -7,24 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Added
 
-- **Single-Owner `@`-Reference Grammar Kernel (ADR-0291).**
-  - All `@`-reference lexical logic now lives once in `muta-contracts::mention`: code-span masking, the delimiter alphabets, the word-boundary/escape guard (`reference_start`), the `@`/`skill://` scanner (`scan_references`, yielding typed `Reference{namespace, form, target, span, escaped}`), and the cursor token-range (`mention_range_at`).
-  - Deleted the duplicated scanners and helpers: `at_mention_names`/`skill_uris`/local `mask_code_spans`/`is_name_char` in `muta-skills`, `parse_file_refs`'s inline scan in `muta-agent`, and the byte-identical `mention_range_at` copies in `muta-runtime` and `mutx`. Every extractor is now a filter over the one scanner.
-  - Removed the triplicated word-boundary guard; the decision is computed only by `mention::reference_start`. Admission to `muta-contracts` justified under ADR-0057 (shared by four layers, cycle-breaking, stable vocabulary).
+- **Runtime-supervised command input with a controlling terminal (ADR-0292).**
+  A command that the interactive classifier recognizes can now be *supervised*:
+  the child's **stdin is a private pty slave** (which is also its controlling
+  terminal via `setsid` + `dup2` + `TIOCSCTTY`), while its stdout/stderr stay
+  clean pipes — so `sudo`/`gpg`/`pinentry`/`git`, which read `/dev/tty`, prompt
+  on a terminal the harness owns, and a stdin read is the *same* channel. The
+  examiner detects the wait from **kernel evidence** (`/proc/<pid>/wchan` plus
+  `fd 0`), not output text: a `wait_woken`/`n_tty_read` terminal wait or a
+  `pipe_wait_readable`/`anon_pipe_read` pipe read is a prompt, while
+  `hrtimer_nanosleep` (a `sleep`), `do_wait` (a `wait`/`flock`), and
+  `poll_schedule_timeout` (an idle socket) are correctly treated as legitimate
+  quiet computation. On detection the operator is prompted (the same
+  broker/oneshot path as `ask_user`) and the answer is written to the terminal;
+  with no supervisor (unattended, `skip_interactive_input`, or a platform
+  without a controlling terminal) the wait fast-fails with the new
+  `ShellTermination::InputUnanswered`. `StdinPolicy` is replaced by
+  `InputContract` (`Sealed`/`Prefilled`/`Supervised`), and
+  `Tool::call_structured_with_events` now takes a `ToolInvocation`. Supersedes
+  ADR-0043's PTY rejection (the PTY is the *controlling terminal and stdin*,
+  never the output channel) and ADR-0286's `state == 'S'` heuristic.
 
-- **Two-Stage `@` Completion Is Namespace-Gated (ADR-0290).**
-  - A bare `@query` now offers only the namespaces it prefixes (`@file:` / `@skill:`); a query that prefixes no namespace (`@xyz`) yields **nothing**. Files and skills are reachable only after a namespace is committed.
-  - Removed ADR-0256's "fuzzy-at-mention" content pass-through, which let a bare `@query` reach Stage-2 files/skills via an unbounded substring match without ever committing a namespace.
-  - The daemon engine and the frontend-test mirror now share one Stage-1 helper so the two cannot drift.
+### Fixed
+- **Per-output-line `/proc` scan made multi-line commands crawl (ADR-0292).**
+  The supervised drain loop called `sample_activity()` — a full scan of `/proc`
+  costing O(host processes), ~2 ms on a 450-process host — once for *every*
+  output line, just to reset timing. A command emitting thousands of lines was
+  slowed by seconds (`seq 1 900` took ~2 s). Line arrival is itself proof of
+  progress, so the sample is now taken only on the quiet path (at most a few
+  per second). `seq 1 900` now completes in ~4 ms; a regression test guards it.
 
-- **Entity References Are Asset References (ADR-0288).**
-  - `@` is now defined as a *reference operator*, never content: every `@file:` / `@skill:` mention resolves to exactly one canonical envelope and no unresolved `@`-literal reaches the provider.
-  - File injection emits `<file path="…" ref="@file:…" bytes="…">…</file>`, with `status="rejected"` / `status="deferred"` + `reason` and `truncated` / `total` as machine-readable attributes instead of prose.
-  - Skill injection's `<skill …>` envelope gains `ref="@skill:{name}"`, matching the file envelope.
-  - The request projection canonicalizes the visible address (`@files:`/`@skills:`, bare `@name`, `skill://…` → one spelling) and consumes `\@` escapes; the durable transcript stays verbatim (ADR-0050).
-  - Dedup recognizes legacy `[File '…' loaded]` / `[Skill '…' loaded]` markers so pre-upgrade sessions are not re-injected.
+- **`sleep`/`wait`/`flock` false-positived as interactive stalls (ADR-0292).**
+  The ADR-0286 circuit breaker treated any zero-CPU interruptible sleep as an
+  interactive prompt, so legitimate quiet computation could be killed early. The
+  examiner now requires a positive input-channel signal (`wchan` + `fd 0`).
+- **The interactive-stall breaker was dead on macOS (ADR-0286).** Off Linux
+  `sample_activity` returned `process_count == 0`, so the `process_count > 0`
+  guard could never trip and the session always paid the 8-minute idle budget.
+  The detector now reports `Sleeping` on non-Linux — consistent with the new
+  fast-fail routing, so unattended non-Linux sessions fail fast on a stall
+  instead of hanging.
+
 
 ## [0.50.17] - 2026-09-28
 

@@ -17,6 +17,20 @@ impl ShellInputKind {
     }
 }
 
+/// Build the advisory [`InputExpectation`] for a command the classifier
+/// recognized. Used to seed the operator input panel's prompt text and masking
+/// before the runtime examiner confirms the wait.
+pub(crate) fn expectation(command: &str, kind: ShellInputKind) -> muta_contracts::InputExpectation {
+    muta_contracts::InputExpectation {
+        prompt: if kind.is_secret() {
+            "Enter the secret this command is waiting for:".to_string()
+        } else {
+            format!("This command needs input ({command}):")
+        },
+        secret: kind.is_secret(),
+    }
+}
+
 /// Classify a shell command that is likely to block waiting for input.
 ///
 /// Every program token is scanned, including commands behind pipelines and

@@ -98,11 +98,15 @@ also overrides `call_structured_with_events` to stream stdout live via
 `ToolStream`.
 
 > **Note on `call_structured_with_events`.** If you override it (rare — only
-> `run_command` and the subagent `task` tool do), the signature now takes a final
-> `stdin: StdinPolicy` argument. Non-shell tools ignore it (it defaults to
-> `StdinPolicy::Closed`, which gives a child no stdin); the default
-> `call`/`call_structured` delegations pass `Closed` for you, so most tools
-> are unaffected. See ADR-0043 for the full stdin execution contract.
+> `run_command` and the subagent `task` tool do), the signature now takes a
+> [`ToolInvocation`] (carrying `call_id`, `arguments`, the `input` contract,
+> and an optional runtime `input_handler`). Non-shell tools ignore `input` (it
+> defaults to `InputContract::Sealed`, which gives a child no stdin); the
+> default `call`/`call_structured` delegations pass `Sealed` for you, so most
+> tools are unaffected. See ADR-0292 for the full command input-execution
+> contract (superseding ADR-0043).
+
+[`ToolInvocation`]: https://docs.rs/muta-contracts
 
 ## Choose a `ToolAccess`
 

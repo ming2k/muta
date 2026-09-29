@@ -496,12 +496,12 @@ impl Tool for SubagentTool {
 
     async fn call_structured_with_events<'a>(
         &self,
-        call_id: &str,
-        arguments: &str,
+        invocation: muta_contracts::ToolInvocation<'a>,
         on_event: Box<dyn FnMut(muta_contracts::SubagentEvent) + Send + 'a>,
         _on_stream: &mut (dyn FnMut(muta_contracts::ToolStream) + Send + 'a),
-        _stdin: muta_contracts::StdinPolicy,
     ) -> Result<muta_contracts::ToolOutput, String> {
+        let call_id = invocation.call_id;
+        let arguments = invocation.arguments;
         // Run the subagent, streaming its lifecycle as SubagentEvents to the
         // parent harness (so the live TUI builds the nested view in real
         // time), then return a structured payload carrying the full transcript

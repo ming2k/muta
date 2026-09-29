@@ -509,7 +509,11 @@ export type DirectivePayload = { "type": "prune",
  * One record per elided tool result, keyed by the tool call it
  * answers.
  */
-elided: Array<PrunedToolOutput>, } | { "type": "compact", 
+elided: Array<PrunedToolOutput>, 
+/**
+ * One record per pruned visual media artifact, keyed by entry seq (ADR-0285).
+ */
+pruned_media?: Array<PrunedMediaOutput>, } | { "type": "compact", 
 /**
  * The checkpoint entry's membership seq.
  */
@@ -1519,6 +1523,16 @@ metrics?: Array<UsageMetric>,
 updated_at_ms?: number | null, };
 
 /**
+ * One pruned visual media artifact (e.g. user-uploaded image): the entry membership seq
+ * and the informative placeholder invoice that replaces its body in views (ADR-0285).
+ */
+export type PrunedMediaOutput = { seq: number, 
+/**
+ * Placeholder invoice text presented in views.
+ */
+placeholder: string, };
+
+/**
  * One pruned tool result: the call it answered and the informative
  * placeholder that replaces its body in views.
  */
@@ -2131,7 +2145,7 @@ export type ShellStream = "Out" | "Err";
  * marker. Back-compat: restored sessions without this field deserialize as
  * [`ShellTermination::Exited`].
  */
-export type ShellTermination = "Exited" | "IdleBlocked" | "InteractiveBlocked" | "Detached" | "Timeout" | "Cancelled" | "StreamGuard";
+export type ShellTermination = "Exited" | "IdleBlocked" | "InteractiveBlocked" | "InputUnanswered" | "Detached" | "Timeout" | "Cancelled" | "StreamGuard";
 
 /**
  * Working-state snapshot carried by a `state` entry. Fields are additive;

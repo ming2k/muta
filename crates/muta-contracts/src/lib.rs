@@ -66,9 +66,9 @@ pub use completion::{
 
 pub mod tool_output;
 pub use tool_output::{
-    PatchOp, ShellTermination, StdinPolicy, ToolOutput, ToolStream, WebSearchHit,
+    InputChannel, InputContract, InputExpectation, InputPrompt, PatchOp, ShellTermination,
+    ToolOutput, ToolStream, WebSearchHit,
 };
-
 pub mod tool_access;
 pub use tool_access::{ToolAccess, ToolAccesses, ToolFileAccessOperation};
 
@@ -199,9 +199,9 @@ pub use shared_roots::{SharedAdditionalRoots, SharedConfinement};
 pub mod tool_registry;
 pub mod web_config;
 pub use capability::{
-    ModelRequest, Provider, ProviderEventStream, ProviderPromptHints, ProviderStreamEvent,
-    ProviderTextStream, ProviderTurnContext, ScopeTarget, Tool, ToolSpec, VariantSelection,
-    empty_variant_selection,
+    InputHandler, ModelRequest, Provider, ProviderEventStream, ProviderPromptHints,
+    ProviderStreamEvent, ProviderTextStream, ProviderTurnContext, ScopeTarget, Tool,
+    ToolInvocation, ToolSpec, VariantSelection, empty_variant_selection,
 };
 pub use catalog::{
     AnthropicMessagesDialect, Channel, GoogleGeminiDialect, GoogleGenerateContentDialect,
@@ -215,16 +215,15 @@ pub use connection_detail::{
 pub use dynamic::{DynamicCatalog, DynamicToolSink};
 pub use events::{
     AgentEvent, AgentNotice, AgentOp, AgentRequest, AgentResponse, BtwAsideSummary,
-    CatalogSyncFailure, ConnectStatus,
-    ConnectionPickerRow, ConnectionPickerSnapshot, ContextTokenSnapshot, ContextTokenSource,
-    HarnessSnapshot, InputReply, InputRequest, LoopStatus, McpServerInfo, ModelInfo, NoticeKind,
-    NoticeSeverity, NoticeSource, NoticeSurface, ParentStatus, PermissionDecision,
-    PermissionRequest, PermissionRuleInfo, ProviderModelInfo, ProviderPickerRow,
-    ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint, RetryResolution, RoundEvent,
-    RoundInterrupt, RoundInterruptReason, RoundSummary, SessionContextSnapshot, SessionDetail,
-    SessionForkKind, SessionOverview, SessionSnapshot, SkillInfo, StdinReply, StdinRequest,
-    SubagentEvent, ToolInfo, UserQuestion, UserQuestionOption, UserQuestionReply,
-    UserQuestionRequest, WebConfigUpdate, WebConfigView, WebCredentialUpdate,
+    CatalogSyncFailure, ConnectStatus, ConnectionPickerRow, ConnectionPickerSnapshot,
+    ContextTokenSnapshot, ContextTokenSource, HarnessSnapshot, InputReply, InputRequest,
+    LoopStatus, McpServerInfo, ModelInfo, NoticeKind, NoticeSeverity, NoticeSource, NoticeSurface,
+    ParentStatus, PermissionDecision, PermissionRequest, PermissionRuleInfo, ProviderModelInfo,
+    ProviderPickerRow, ProviderPickerSnapshot, QueueMode, QueuedMessage, RetryPoint,
+    RetryResolution, RoundEvent, RoundInterrupt, RoundInterruptReason, RoundSummary,
+    SessionContextSnapshot, SessionDetail, SessionForkKind, SessionOverview, SessionSnapshot,
+    SkillInfo, StdinReply, StdinRequest, SubagentEvent, ToolInfo, UserQuestion, UserQuestionOption,
+    UserQuestionReply, UserQuestionRequest, WebConfigUpdate, WebConfigView, WebCredentialUpdate,
     WebSearchConfigUpdate, WebSearchConfigView,
 };
 pub use provider_state::{
@@ -249,10 +248,10 @@ pub use job::{
 pub use mcp::{McpConnectionStatus, McpServerConfig};
 pub use model::{
     Availability, BaselineModels, CapabilityOverrides, ConnectionFilterPolicy, DeclaredModel,
-    FittedModel, Model, ModelCapabilities, ModelCapabilityPatch, ModelScopeConfig, ModelTargetScope,
-    NamedFilterPolicy, RemoteModelMetadata, RouteCapabilities, WireProtocol, baseline_models,
-    model_by_id, register_fitted_models, resolve as resolve_model, sanitize_model_id,
-    simple_glob_matches,
+    FittedModel, Model, ModelCapabilities, ModelCapabilityPatch, ModelScopeConfig,
+    ModelTargetScope, NamedFilterPolicy, RemoteModelMetadata, RouteCapabilities, WireProtocol,
+    baseline_models, model_by_id, register_fitted_models, resolve as resolve_model,
+    sanitize_model_id, simple_glob_matches,
 };
 pub use monitor::{
     MonitorAction, MonitorEvent, MonitorSnapshot, MonitoredSession, MonitoredTask, SessionHosting,

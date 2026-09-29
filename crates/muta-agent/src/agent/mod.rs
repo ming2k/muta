@@ -1627,63 +1627,55 @@ mod tests {
     }
 
     /// A `sudo` command (matched by the interactive classifier) must, with
-    /// `skip_interactive_input` on, run with stdin **closed** and emit **no**
-    /// `InputRequest` — the inline panel never pops. This is the opt-out's core
-    /// contract and mirrors the delegated-autonomous path.
+    /// `skip_interactive_input` on, be **sealed** and emit **no** `InputRequest`
+    /// — the inline panel never pops. This is the opt-out's core contract and
+    /// mirrors the delegated-autonomous path.
     #[tokio::test]
-    async fn skip_interactive_input_closes_stdin_without_input_request() {
-        use muta_contracts::{AgentEvent, StdinPolicy};
-        use tokio::sync::mpsc;
-        let agent = stdin_test_agent();
-        agent.set_unattended(false);
-        agent.set_skip_interactive_input(true);
-
-        let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let policy = agent
-            .decide_command_stdin(r#"{"command":"sudo ls /root"}"#, &tx)
-            .await;
-        assert_eq!(policy, StdinPolicy::Closed, "stdin must be closed");
-        assert!(
-            rx.try_recv().is_err(),
-            "no InputRequest must be emitted under skip_interactive_input"
-        );
-    }
-
-    /// Without the opt-out (and attended), the same `sudo` command must take the
-    /// interactive branch — i.e. emit an `InputRequest` and not return
-    /// synchronously. We drain one event then cancel the parked oneshot so the
-    /// task ends cleanly. Regression guard: a refactor must not silently route
-    /// the interactive path to `Closed` when the opt-out is off.
-    #[tokio::test]
-    async fn interactive_input_path_emits_request_when_opt_out_is_off() {
+    async fn skip_interactive_input_seals_without_input_request() {
         use muta_contracts::AgentEvent;
         use tokio::sync::mpsc;
         let agent = stdin_test_agent();
         agent.set_unattended(false);
-        agent.set_skip_interactive_input(false);
+        agent.set_skip_interactive_input(true);
+        let tool = crate::tools::execute_command::ExecuteCommandTool::new(None);
 
         let (tx, mut rx) = mpsc::unbounded_channel::<AgentEvent>();
-        let (tx_cancel, rx_cancel) = tokio::sync::oneshot::channel::<()>();
-        let handle = {
-            let args = r#"{"command":"sudo ls /root"}"#.to_string();
-            tokio::spawn(async move {
-                // Park until the test observes the InputRequest, then drop the
-                // agent handle via the cancel signal so the task ends.
-                let _ = agent.decide_command_stdin(&args, &tx).await;
-                let _ = rx_cancel.await;
-            })
-        };
-        let _ = tx_cancel; // keep ownership
+        let contract = agent.decide_command_input(r#"{"command":"sudo ls /root"}"#, &tool);
+        assert_eq!(
+            contract,
+            muta_contracts::InputContract::Sealed,
+            "input must be sealed under skip_interactive_input"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no InputRequest must be emitted under skip_interactive_input"
+        );
+        let _ = tx;
+    }
 
-        let got = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-            .await
-            .expect("timed out waiting for StdinRequest")
-            .expect("channel closed");
-        assert!(matches!(got, AgentEvent::StdinRequest(_)));
-        // Let the spawned task finish (its agent handle drops, resolving the
-        // parked oneshot to None on the next round-end guard in real use; here
-        // we just let it go out of scope).
-        handle.abort();
+    /// Without the opt-out (and attended, on a platform that can provide a
+    /// controlling terminal), the same `sudo` command must be **supervised** —
+    /// a held-open pipe + terminal for runtime examination, carrying the
+    /// classifier's advisory expectation. Regression guard: a refactor must not
+    /// silently route the interactive path to `Sealed` when the opt-out is off.
+    #[tokio::test]
+    async fn interactive_input_path_supervises_when_opt_out_is_off() {
+        let agent = stdin_test_agent();
+        agent.set_unattended(false);
+        agent.set_skip_interactive_input(false);
+        let tool = crate::tools::execute_command::ExecuteCommandTool::new(None);
+
+        let contract = agent.decide_command_input(r#"{"command":"sudo ls /root"}"#, &tool);
+        if muta_platform::process::controlling_terminal_supported() {
+            match contract {
+                muta_contracts::InputContract::Supervised { expectation: Some(exp) } => {
+                    assert!(exp.secret, "sudo expectation must be masked");
+                }
+                other => panic!("expected Supervised with a secret expectation, got {other:?}"),
+            }
+        } else {
+            assert_eq!(contract, muta_contracts::InputContract::Sealed);
+        }
     }
 
     /// `apply_preset` must seed `skip_interactive_input` from the

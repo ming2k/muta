@@ -1321,8 +1321,15 @@ fn termination_footer(
             warn_style,
         )),
         T::InteractiveBlocked => Some((
-            "interactive command not executed in autonomous mode — \
-             pass the credential via a flag or env var and retry."
+            "interactive command not executed — supply the input \
+             non-interactively on the command line and retry."
+                .to_string(),
+            warn_style,
+        )),
+        T::InputUnanswered => Some((
+            "killed by harness: the command was waiting for input and no \
+             answer was supplied — pass it non-interactively (flags, stdin \
+             flags, or env) and retry."
                 .to_string(),
             warn_style,
         )),

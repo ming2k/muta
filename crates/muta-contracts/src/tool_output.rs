@@ -209,45 +209,83 @@ pub enum PatchOp {
     Delete,
 }
 
-/// How a child process's stdin should be provisioned. This is the
-/// **execution contract** for the command tool: an autonomous agent can never
-/// "type" into a running process, so stdin is decided **before** spawn and
-/// provisioned once. The decision happens in the agent dispatch layer
-/// (see `StdinPolicy::decide`), which consults the command's interactive
-/// classifier and the active authorization (human input vs. an opt-in
-/// model-supplied buffer) — see the command disclosure design doc.
+/// How the harness provisions a spawned command's input channels, and whether
+/// it supervises the child for a *runtime* input wait. This is the
+/// **execution contract** for the command tool: decided *before* spawn by the
+/// agent dispatch layer (never from the model's writable JSON arguments), so
+/// "input only ever comes from a declared source" stays structural rather than
+/// conventional.
 ///
-/// Keeping stdin out of the model's writable JSON arguments (it lives on the
-/// tool trait's signature instead) makes the "input only ever comes from a
-/// declared source" contract structural rather than conventional: in a
-/// default session the model cannot supply stdin at all, mirroring how mature
-/// agent harnesses (e.g. Claude Code) deliberately omit a `stdin` parameter
-/// from their command tool's schema.
+/// The three variants are mutually exclusive and cover the whole space:
+///
+/// - [`Sealed`](Self::Sealed) — the immediate-EOF floor. A child that reads
+///   stdin gets EOF at once, so a `read`-style block is structurally
+///   impossible; interactive binaries the pre-spawn classifier recognizes are
+///   refused before spawn. This is the only contract an unattended session
+///   needs, and it never gives the child a terminal (so it cannot *induce*
+///   interactive behaviour in tools that branch on `isatty`).
+/// - [`Prefilled`](Self::Prefilled) — a harness-held pipe preloaded with bytes
+///   from a declared source (human or opt-in model), closed after the write.
+/// - [`Supervised`](Self::Supervised) — a real controlling terminal for the
+///   child **plus** a held-open stdin pipe **plus** runtime examination: the
+///   examiner detects the input wait from kernel evidence and parks for the
+///   operator's answer, then writes it to the channel the child is actually
+///   reading. Output stays on clean pipes, so no terminal control sequences
+///   ever reach the transcript.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StdinPolicy {
-    /// Connect stdin to `/dev/null` (EOF immediately). The default hard floor:
-    /// a child that blocks on `read(stdin)` gets instant EOF and fails fast
-    /// with a real exit code, instead of hanging silently until the wall-clock
-    /// timeout. This is the only policy that is *correct by default* for an
+pub enum InputContract {
+    /// Immediate-EOF stdin (`/dev/null`), no controlling terminal, no runtime
+    /// supervision. The default hard floor.
     #[default]
-    /// unattended agent.
-    Closed,
-    /// Provide `data` bytes via a pipe. Used in exactly two declared-source
-    /// situations, decided before spawn by the agent dispatch layer:
-    ///
-    /// 1. **Human input** (default authorization): the interactive classifier
-    ///    matched a known interactive binary (sudo/gpg/passwd/…), and the
-    ///    operator supplied the response (e.g. a password) through an inline
-    ///    TUI panel. The bytes are written into the stdin pipe before the
-    ///    child has a chance to block.
-    /// 2. **Model-supplied** (opt-in): a subagent profile or main config set
-    ///    `allow_model_stdin`, which dynamically exposed a `stdin` parameter
-    ///    in the command tool schema and the model filled it. For autonomous /
-    ///    delegated flows where no human is reachable.
-    ///
-    /// In both cases the bytes are buffered in the pipe ahead of the child's
-    /// first read, so ordering relative to stdout is irrelevant.
+    Sealed,
+    /// Harness-held stdin pipe prefilled with `data` (a declared source), then
+    /// closed so the child reads the bytes followed by EOF. No terminal.
     Prefilled { data: String },
+    /// Held-open stdin pipe, a child-owned controlling terminal (`/dev/tty`),
+    /// and runtime examination. `expectation` is the pre-spawn classifier's
+    /// advisory hint, used to seed the first prompt and to mask secrets; the
+    /// examiner is the source of truth for *whether* input is awaited.
+    Supervised {
+        expectation: Option<InputExpectation>,
+    },
+}
+
+/// The pre-spawn classifier's advisory guess about what an interactive command
+/// will ask for. Advisory only: correctness rests on the runtime examiner,
+/// which reports the command's *actual* wait state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputExpectation {
+    /// Human-facing instruction shown in the operator input panel.
+    pub prompt: String,
+    /// Mask the operator's typing (passwords / passphrases).
+    pub secret: bool,
+}
+
+/// Which channel a supervised child is blocked reading, resolved at runtime
+/// from the child's `fd 0` / controlling-terminal identity — not guessed from
+/// the command text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InputChannel {
+    /// The harness-held stdin pipe.
+    Stdin,
+    /// The child's controlling terminal (`/dev/tty`).
+    ControllingTty,
+}
+
+/// A runtime request for one line of operator input for a supervised command.
+/// Runtime-only (never crosses the wire as such); the agent layer translates
+/// it into an [`AgentEvent::StdinRequest`](crate::AgentEvent::StdinRequest).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputPrompt {
+    /// The command awaiting input, shown for context.
+    pub command: String,
+    /// Human-facing instruction (the classifier's expectation, or a description
+    /// of the detected wait state).
+    pub prompt: String,
+    /// Mask the operator's typing.
+    pub secret: bool,
+    /// The channel the answer will be written into.
+    pub channel: InputChannel,
 }
 
 /// Why a shell step stopped. Drives the themed termination footer (L6) so the
@@ -272,6 +310,12 @@ pub enum ShellTermination {
     /// command was *not* executed. Rendered as a `warn()`-coloured footer
     /// with the suggested non-interactive flags.
     InteractiveBlocked,
+    /// A supervised command reached an input wait, the operator was asked, and
+    /// no answer was supplied (declined, or no reachable channel); the child
+    /// was killed. Distinct from [`InteractiveBlocked`](Self::InteractiveBlocked)
+    /// (refused *before* spawn, by the classifier) — this is a wait the
+    /// examiner detected *at runtime*. Rendered with a remedy hint.
+    InputUnanswered,
     /// The sync budget expired while the child was still alive and producing
     /// output (ADR-0190 detach-on-budget): the process was *not* killed — it
     /// was adopted by the background-job fabric, results arrive via job
@@ -816,6 +860,12 @@ pub fn termination_model_note(termination: ShellTermination) -> Option<&'static 
              Interactive prompts and editors are disabled. Supply all required \
              messages, confirmations, or flags non-interactively in the command line.]",
         ),
+        ShellTermination::InputUnanswered => Some(
+            "[killed by harness: the command was waiting for interactive input and no \
+             answer was supplied. Retry non-interactively (e.g. `yes | …`, \
+             `--passphrase-file`, `--batch`, SUDO_ASKPASS) or provide every required \
+             input up front.]",
+        ),
         ShellTermination::Timeout => Some(
             "[killed by harness: wall-clock timeout reached — the command was \
              still producing output. Retry with a larger `timeout`, or split the \
@@ -831,9 +881,9 @@ pub fn termination_model_note(termination: ShellTermination) -> Option<&'static 
              `<cmd> | head -n 30`, or one-shot flags like `top -b -n 1`). Long-running daemons \
              must be executed by the operator outside the agent loop.]",
         ),
-        ShellTermination::Detached => Some(
-            "[legacy: detached job state. Commands must be finite.]",
-        ),
+        ShellTermination::Detached => {
+            Some("[legacy: detached job state. Commands must be finite.]")
+        }
     }
 }
 

@@ -31,7 +31,8 @@ windows-sys = { workspace = true, features = [
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "process", "time"] }
+uuid = { workspace = true }
 
 [lints]
 workspace = true

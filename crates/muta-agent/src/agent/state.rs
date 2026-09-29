@@ -699,25 +699,25 @@ impl Agent {
     }
 
     /// Whether the model may supply stdin for a `bash` call. Read at the
-    /// dispatch site to decide the [`StdinPolicy`] and whether the bash schema
-    /// exposes a `stdin` parameter.
+    /// dispatch site to decide the [`InputContract`](muta_contracts::InputContract)
+    /// and whether the bash schema exposes a `stdin` parameter.
     pub fn allow_model_stdin(&self) -> bool {
         self.interaction.allow_model_stdin()
     }
 
     /// Mirrors `[agent] skip_interactive_input` in `config.toml`. When on,
-    /// an interactive `bash` command (matched by the interactive classifier)
-    /// never pops the inline input panel and instead runs with stdin closed —
-    /// fast failure with a non-interactive remedy, as in delegated mode.
-    /// Lets an operator who finds the prompt disruptive opt out of it without
-    /// turning the agent itself delegated.
+    /// an interactive command (matched by the interactive classifier) is
+    /// never supervised — it runs sealed (immediate-EOF stdin), failing fast
+    /// with a non-interactive remedy, as in unattended mode. Lets an operator
+    /// who finds the prompt disruptive opt out without turning the agent
+    /// itself unattended.
     pub fn set_skip_interactive_input(&self, enabled: bool) {
         self.interaction.set_skip_interactive_input(enabled);
     }
 
-    /// Whether an interactive `bash` command should skip the operator input
-    /// panel and run with stdin closed instead. Read at the bash dispatch site
-    /// to decide the [`StdinPolicy`].
+    /// Whether an interactive command should skip operator-input supervision
+    /// and run sealed instead. Read at the command dispatch site to decide the
+    /// [`InputContract`](muta_contracts::InputContract).
     pub fn skip_interactive_input(&self) -> bool {
         self.interaction.skip_interactive_input()
     }

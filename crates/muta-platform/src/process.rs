@@ -31,6 +31,134 @@ pub fn spawn_owned(command: &mut Command) -> io::Result<(Child, OwnedProcessTree
     }
 }
 
+/// Whether this platform can give a supervised child its own controlling
+/// terminal (Unix: yes; Windows: no). Callers use this to decide between
+/// offering the supervised input path and falling back to the sealed
+/// immediate-EOF floor, so they never *induce* interactive behaviour the
+/// platform cannot service.
+#[must_use]
+pub const fn controlling_terminal_supported() -> bool {
+    cfg!(unix)
+}
+
+/// A supervised child's held-open input channels.
+///
+/// The child runs with stdout/stderr on clean pipes (so terminal control
+/// sequences never reach the transcript) while *also* owning a private
+/// controlling terminal: `sudo`/`gpg`/`pinentry`/`git`, which read
+/// `/dev/tty` rather than stdin, get a real terminal to prompt on, and the
+/// harness writes the operator's answer through [`PtyMaster::write_input`].
+/// `stdin` is a held-open pipe (never closed until the command ends) so a
+/// `read(stdin)`-style prompt blocks — and is therefore detectable — instead
+/// of receiving an immediate EOF.
+pub struct SupervisedSpawn {
+    pub child: Child,
+    pub tree: OwnedProcessTree,
+    /// The master side of the child's terminal. The child's stdin *is* the
+    /// slave side, so stdin reads and `/dev/tty` reads are the same channel and
+    /// both are answered here. `None` only when the platform cannot provide a
+    /// terminal.
+    pub tty: Option<PtyMaster>,
+}
+
+/// Master side of a supervised child's controlling terminal.
+pub struct PtyMaster {
+    #[cfg(unix)]
+    fd: std::os::fd::RawFd,
+}
+
+// SAFETY: a master pty fd is a plain file descriptor; it carries no thread
+// affinity and all access goes through `&self` syscalls.
+unsafe impl Send for PtyMaster {}
+unsafe impl Sync for PtyMaster {}
+
+/// Fork-safe child setup that acquires the control terminal. `Fn` (not
+/// `FnOnce`) and captured by reference so it satisfies `pre_exec`'s bounds.
+pub type PtyChildSetup = Box<dyn Fn() -> io::Result<()> + Send + Sync>;
+
+impl PtyMaster {
+    /// Write `data` to the terminal, then `\n` — the answer to a prompt the
+    /// child is reading from `/dev/tty`.
+    pub fn write_input(&self, data: &str) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            let mut bytes = data.as_bytes().to_vec();
+            bytes.push(b'\n');
+            let mut written = 0;
+            while written < bytes.len() {
+                // SAFETY: `fd` is a live master fd owned by this handle; the
+                // buffer is a valid slice.
+                let n = unsafe {
+                    libc::write(
+                        self.fd,
+                        bytes[written..].as_ptr().cast(),
+                        bytes.len() - written,
+                    )
+                };
+                if n < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                written += n as usize;
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = data;
+            Err(io::Error::other(
+                "controlling-terminal input is unsupported on this platform",
+            ))
+        }
+    }
+}
+
+impl Drop for PtyMaster {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            // SAFETY: `fd` is owned solely by this handle; closed exactly once.
+            unsafe {
+                libc::close(self.fd);
+            }
+        }
+    }
+}
+
+/// Spawn a **supervised** subprocess: owned process tree + held-open stdin pipe
+/// + private controlling terminal, with stdout/stderr captured on clean pipes.
+///
+/// On Unix the child becomes a session leader (`setsid`) and claims the slave
+/// pty as its controlling terminal (`TIOCSCTTY`), so an explicit
+/// `open("/dev/tty")` resolves to that terminal rather than the operator's;
+/// writing to the parent-held master feeds it. The child never sees the
+/// operator's real terminal. On Windows the terminal channel is unavailable,
+/// so this degrades to `tty: None` (held-open stdin pipe only).
+pub fn spawn_supervised(command: &mut Command) -> io::Result<SupervisedSpawn> {
+    // The placeholder stdin is replaced (via `dup2` in the child setup) by the
+    // pty slave once the terminal is opened; stdout/stderr stay clean pipes.
+    command.stdin(std::process::Stdio::null());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    // Order matters: `setsid` must establish the new session before the
+    // controlling-terminal acquiring `ioctl` can succeed.
+    native::configure_owned(command);
+    let (tty, acquire_ctty) = native::open_pty_master()?;
+    if let Some(acquire) = acquire_ctty {
+        // SAFETY: `pre_exec` runs between fork and exec; the closure performs
+        // only async-signal-safe syscalls (open, dup2, ioctl).
+        unsafe {
+            command.pre_exec(acquire);
+        }
+    }
+    let child = command.spawn()?;
+    let tree = OwnedProcessTree::attach(&child)?;
+    Ok(SupervisedSpawn { child, tree, tty })
+}
+
 /// Native lifetime guard for an owned subprocess tree.
 ///
 /// Keep this guard for the intended subprocess lifetime. Explicit
@@ -58,6 +186,52 @@ impl OwnedProcessTree {
     }
 }
 
+/// Classify a single process's wait state from kernel evidence. A thin test
+/// seam over the `native` classifier so the detector test and the sampler
+/// share exactly one implementation.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn classify_sleeping_process(pid: u32) -> WaitState {
+    native::classify_sleeping_pid(pid as libc::pid_t)
+}
+
+/// What a process group is currently blocked on, resolved from kernel
+/// scheduling evidence rather than from output text. Output is agnostic to the
+/// reason for a stall (a compiling build and a password prompt both emit
+/// nothing), so "is this command waiting for input?" is a question about
+/// process state, not stream contents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WaitState {
+    /// No live process observed in the group.
+    #[default]
+    Gone,
+    /// Group is running or runnable.
+    Running,
+    /// Blocked in interruptible sleep with no CPU progress, but not on an
+    /// input channel the harness owns (e.g. `flock`, a mutex, an unread
+    /// socket) — or blocked on a channel genuinely unidentifiable because
+    /// `wchan` symbols are restricted by the kernel. Treated as ambiguous: the
+    /// caller applies its idle-timeout floor rather than fast-failing.
+    Sleeping,
+    /// Blocked reading a channel the harness provisioned and can write into.
+    /// This is the unambiguous "awaiting input" signal.
+    AwaitingInput { channel: InputChannel },
+}
+
+/// Which harness-owned input channel a process is blocked reading.
+///
+/// Both variants name a channel the harness owns and can write an answer into.
+/// In the supervised design the child's stdin *is* its controlling terminal, so
+/// `Pipe` and `Terminal` are often the same underlying channel; the tag exists
+/// so a reader can still tell which fd the process holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputChannel {
+    /// A harness-held pipe (the child's fd 0 when not a terminal).
+    Pipe,
+    /// A terminal — the child's controlling terminal, reached either as its
+    /// stdin (slave side) or via an explicit `open("/dev/tty")`.
+    Terminal,
+}
+
 /// Snapshot of kernel execution activity for an owned process tree.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProcessActivitySample {
@@ -67,6 +241,9 @@ pub struct ProcessActivitySample {
     pub total_cpu_ticks: u64,
     /// Whether all live processes in the group are in interruptible sleep (`state == 'S'`).
     pub all_sleeping: bool,
+    /// The most informative wait state observed across the group, in the
+    /// priority order `AwaitingInput > Running > Sleeping > Gone`.
+    pub wait_state: WaitState,
 }
 
 /// Stable-enough native process identity used to avoid acting on a recycled
@@ -180,6 +357,66 @@ mod native {
         }
     }
 
+    /// Open a pty pair. Returns the parent-held master handle plus the
+    /// fork-safe closure that makes the child claim the slave as its
+    /// controlling terminal **and** use it as stdin. The child is already a
+    /// session leader from [`configure_owned`]; `pre_exec` runs after stdio
+    /// setup, so the `dup2` here overrides the placeholder stdin and leaves the
+    /// child reading/writing prompts on the terminal while stdout/stderr stay
+    /// pipes.
+    pub(super) fn open_pty_master() -> io::Result<(Option<super::PtyMaster>, Option<PtyChildSetup>)> {
+        // SAFETY: `posix_openpt`/`grantpt`/`unlockpt` operate on a freshly
+        // opened fd and perform no allocation.
+        let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+        if master < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let handle = super::PtyMaster { fd: master };
+        // SAFETY: `master` is a live pty master fd.
+        if unsafe { libc::grantpt(master) } != 0 || unsafe { libc::unlockpt(master) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // A zero-sized window makes some programs that query `TIOCGWINSZ`
+        // misbehave; give the terminal a conventional default size.
+        let winsize = libc::winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: `master` is a live pty master fd; suppressing the result is
+        // fine — a failed size hint only affects cosmetic wrapping.
+        unsafe {
+            libc::ioctl(master, libc::TIOCSWINSZ, &winsize);
+        }
+        // SAFETY: `ptsname` returns a static string for the given master fd.
+        let slave_ptr = unsafe { libc::ptsname(master) };
+        if slave_ptr.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `slave_ptr` is a valid NUL-terminated C string.
+        let slave_path = unsafe { std::ffi::CStr::from_ptr(slave_ptr) }
+            .to_string_lossy()
+            .into_owned();
+        let acquire: PtyChildSetup = Box::new(move || {
+            // SAFETY: async-signal-safe open + dup2 + ioctl between fork and exec.
+            let fd = unsafe { libc::open(slave_path.as_ptr().cast(), libc::O_RDWR) };
+            if fd < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // Make the terminal the child's stdin, so a `read(stdin)` and a
+            // `read("/dev/tty")` are the same channel the harness can answer.
+            if unsafe { libc::dup2(fd, 0) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if unsafe { libc::ioctl(0, libc::TIOCSCTTY, 0) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+        Ok((Some(handle), Some(acquire)))
+    }
+
     pub(super) fn rollback_failed_attach(child: &Child) {
         if let Some(pid) = child.id() {
             // SAFETY: configure_owned made this child the process-group
@@ -228,6 +465,7 @@ mod native {
                     process_count: 0,
                     total_cpu_ticks: 0,
                     all_sleeping: true,
+                    wait_state: super::WaitState::Gone,
                 };
                 let Ok(entries) = std::fs::read_dir("/proc") else {
                     return sample;
@@ -239,6 +477,9 @@ mod native {
                     if !file_name.chars().all(|c| c.is_ascii_digit()) {
                         continue;
                     }
+                    let Ok(pid) = file_name.parse::<libc::pid_t>() else {
+                        continue;
+                    };
                     let stat_path = entry.path().join("stat");
                     let Ok(stat) = std::fs::read_to_string(stat_path) else {
                         continue;
@@ -256,7 +497,8 @@ mod native {
                     }
 
                     sample.process_count += 1;
-                    if state != "S" {
+                    let sleeping = state == "S";
+                    if !sleeping {
                         sample.all_sleeping = false;
                     }
                     // Fields: tail[0]=state, tail[1]=ppid, tail[2]=pgid,
@@ -265,6 +507,22 @@ mod native {
                     let utime = remaining.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
                     let stime = remaining.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
                     sample.total_cpu_ticks += utime + stime;
+
+                    let candidate = if !sleeping {
+                        super::WaitState::Running
+                    } else {
+                        classify_sleeping_pid(pid)
+                    };
+                    // Priority: AwaitingInput > Running > Sleeping > Gone.
+                    sample.wait_state = match (sample.wait_state, candidate) {
+                        (super::WaitState::AwaitingInput { .. }, _) => sample.wait_state,
+                        (_, super::WaitState::AwaitingInput { channel }) => {
+                            super::WaitState::AwaitingInput { channel }
+                        }
+                        (_, super::WaitState::Running) => super::WaitState::Running,
+                        (super::WaitState::Gone, other) => other,
+                        (existing, _) => existing,
+                    };
                 }
                 sample
             }
@@ -274,6 +532,57 @@ mod native {
                 super::ProcessActivitySample::default()
             }
         }
+    }
+
+    /// Resolve the input-blocked status of one sleeping Linux process from
+    /// `/proc/<pid>/wchan` (the kernel function it sleeps in) and
+    /// `/proc/<pid>/fd/0` (the channel fd 0 resolves to).
+    ///
+    /// `wchan` names the wait *reason*: a read on a pipe the harness holds
+    /// (`pipe_wait_readable`, `anon_pipe_read`, `pipe_read`, `wait_for_partner`)
+    /// or on a terminal (`wait_woken`, `n_tty_read`) is an input wait;
+    /// `hrtimer_nanosleep`, `do_wait`, `poll_schedule_timeout` are legitimate
+    /// quiet computation and must never be mistaken for a prompt.
+    ///
+    /// A terminal-family wait is authoritative on its own: the child may read
+    /// `/dev/tty` on a *separate* fd while fd 0 is an unrelated pipe (exactly
+    /// the `sudo`/`gpg`/`pinentry` shape), so fd 0 must not gate it. A pipe
+    /// wait is only an input wait when fd 0 really is the pipe, which keeps a
+    /// socket read (`wait_woken` on an fd-0 socket) from being misclassified.
+    /// A process whose `wchan` is restricted by the kernel (reads `0`) falls
+    /// back to the ambiguous `Sleeping` state rather than guessing.
+    pub(super) fn classify_sleeping_pid(pid: libc::pid_t) -> super::WaitState {
+        let wchan = std::fs::read_to_string(format!("/proc/{pid}/wchan")).unwrap_or_default();
+        let wchan = wchan.trim();
+        if wchan.is_empty() || wchan == "0" {
+            return super::WaitState::Sleeping;
+        }
+        let fd0 = std::fs::read_link(format!("/proc/{pid}/fd/0"))
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let stdin_is_pipe = fd0.starts_with("pipe:") || fd0 == "pipe";
+        let stdin_is_terminal = fd0.starts_with("/dev/tty") || fd0.starts_with("/dev/pts/");
+        if matches!(wchan, "n_tty_read" | "wait_woken") {
+            return super::WaitState::AwaitingInput {
+                channel: if stdin_is_terminal {
+                    super::InputChannel::Terminal
+                } else if stdin_is_pipe {
+                    super::InputChannel::Pipe
+                } else {
+                    super::InputChannel::Terminal
+                },
+            };
+        }
+        if matches!(
+            wchan,
+            "pipe_wait_readable" | "anon_pipe_read" | "pipe_read" | "wait_for_partner"
+        ) && stdin_is_pipe
+        {
+            return super::WaitState::AwaitingInput {
+                channel: super::InputChannel::Pipe,
+            };
+        }
+        super::WaitState::Sleeping
     }
 
     impl Drop for OwnedProcessTree {
@@ -382,6 +691,153 @@ mod tests {
         assert_ne!(first.birth_token, 0);
         assert!(process_is_alive(first));
     }
+
+    /// The core discrimination: a `read(stdin)` block (harness-held pipe) is
+    /// classified `AwaitingInput`, while a legitimate quiet sleep is not. This
+    /// is what lets the supervised loop park on a real prompt without
+    /// fast-failing a compiling build.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wait_state_distinguishes_stdin_read_from_sleep() {
+        use std::process::{Command, Stdio};
+
+        // A child holding a silent, still-open stdin pipe and blocked on read.
+        let (mut reader, writer) = std::io::pipe().expect("pipe");
+        let prompt = Command::new("sh")
+            .arg("-c")
+            .arg("read line")
+            .stdin(Stdio::from(reader.try_clone().expect("clone")))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn prompt child");
+        // A child legitimately sleeping.
+        let sleeper = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn sleeper");
+
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let prompt_state = classify_sleeping_process(prompt.id());
+        let sleeper_state = classify_sleeping_process(sleeper.id());
+        let _ = &mut reader;
+
+        let mut prompt = prompt;
+        let mut sleeper = sleeper;
+        let _ = prompt.kill();
+        let _ = sleeper.kill();
+        let _ = prompt.wait();
+        let _ = sleeper.wait();
+        drop(writer);
+
+        assert_eq!(
+            prompt_state,
+            WaitState::AwaitingInput {
+                channel: InputChannel::Pipe
+            },
+            "a live-pipe read must be classified as awaiting stdin input"
+        );
+        assert_eq!(
+            sleeper_state,
+            WaitState::Sleeping,
+            "a nanosleep must NOT be mistaken for an input wait"
+        );
+    }
+
+    /// The rule that fixes the `sudo`/`gpg` shape: a terminal-family wait
+    /// (`wait_woken`) is an input wait even when fd 0 is an unrelated pipe,
+    /// because the program reads `/dev/tty` on a separate fd. This locks in the
+    /// distinction the former heuristic got wrong.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wait_state_classifies_stdin_terminal_read_as_terminal() {
+        use std::process::{Command, Stdio};
+
+        // Child whose stdin is a live pty slave: `read x` blocks on the
+        // terminal fd 0.
+        let (master, slave) = open_pty_for_test();
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("read x")
+            .stdin(Stdio::from(slave))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let state = classify_sleeping_process(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(master);
+        assert_eq!(
+            state,
+            WaitState::AwaitingInput {
+                channel: InputChannel::Terminal
+            },
+            "a read on a terminal stdio must classify as a terminal input wait"
+        );
+    }
+
+    /// Open a pty pair for tests, returning `(master_file, slave_file)`. Uses
+    /// the same primitives as the production path but as `std::fs::File`s.
+    #[cfg(unix)]
+    fn open_pty_for_test() -> (std::fs::File, std::fs::File) {
+        use std::os::fd::FromRawFd;
+        // SAFETY: fresh pty open; all calls check their result.
+        let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+        assert!(master >= 0, "posix_openpt failed");
+        assert_eq!(unsafe { libc::grantpt(master) }, 0, "grantpt failed");
+        assert_eq!(unsafe { libc::unlockpt(master) }, 0, "unlockpt failed");
+        let ptr = unsafe { libc::ptsname(master) };
+        assert!(!ptr.is_null(), "ptsname failed");
+        let path = unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned();
+        // SAFETY: path is a valid slave device name.
+        let slave = unsafe { libc::open(path.as_ptr().cast(), libc::O_RDWR | libc::O_NOCTTY) };
+        assert!(slave >= 0, "open slave failed");
+        // SAFETY: both fds are owned and valid.
+        unsafe {
+            (
+                std::fs::File::from_raw_fd(master),
+                std::fs::File::from_raw_fd(slave),
+            )
+        }
+    }
+
+    /// A controlled terminal must be assignable on Unix: the child's session
+    /// gets a slave pty as its controlling terminal, so an explicit
+    /// `/dev/tty` read resolves to the harness-held master.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn supervised_spawn_provides_a_controlling_terminal() {
+        let marker = std::env::temp_dir().join(format!(
+            "muta-ctty-{}.txt",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let script = format!("read x < /dev/tty && printf '%s' \"$x\" > {}", marker.display());
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg(script);
+        let mut spawned = spawn_supervised(&mut command).expect("supervised spawn");
+        assert!(spawned.tty.is_some(), "a pty master must be provided");
+        spawned
+            .tty
+            .as_ref()
+            .unwrap()
+            .write_input("hunter2")
+            .expect("write to master");
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), spawned.child.wait())
+            .await
+            .expect("child did not exit")
+            .expect("wait");
+        assert!(status.success(), "child exited with {status:?}");
+        let body = std::fs::read_to_string(&marker).unwrap_or_default();
+        let _ = std::fs::remove_file(&marker);
+        assert_eq!(body, "hunter2", "the child did not read our /dev/tty answer");
+    }
 }
 
 #[cfg(windows)]
@@ -419,6 +875,15 @@ mod native {
         // uncontained descendant. `attach` resumes the primary thread only
         // after assignment succeeds.
         command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED);
+    }
+
+    /// Windows has no controlling-terminal equivalent here, so a supervised
+    /// spawn degrades to a held-open stdin pipe only. The command exporting a
+    /// terminal does not skip this: the caller reports `unsupported` rather
+    /// than silently misbehaving.
+    pub(super) fn open_pty_master(
+    ) -> io::Result<(Option<super::PtyMaster>, Option<super::PtyChildSetup>)> {
+        Ok((None, None))
     }
 
     pub(super) struct OwnedProcessTree {
@@ -606,3 +1071,4 @@ mod native {
         true
     }
 }
+

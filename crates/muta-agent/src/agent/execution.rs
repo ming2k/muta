@@ -349,109 +349,98 @@ impl Agent {
         }
     }
 
-    /// Park an interactive-input request for a `bash` command (L3.5 β) and
-    /// await the operator's reply. Called from `execute_tool` when the
-    /// interactive classifier matches and no model-supplied stdin is
-    /// authorized. Emits [`AgentEvent::StdinRequest`]; the TUI shows an inline
-    /// input panel and the reply travels back via [`Self::reply_input`].
+    /// Park a runtime-input request for a supervised command and await the
+    /// operator's reply. Called by the command tool's examiner (through the
+    /// [`InputHandler`] this type implements) when a run of the command is
+    /// detected waiting on an input channel. Emits [`AgentEvent::StdinRequest`];
+    /// the TUI shows an inline input panel and the reply travels back via
+    /// [`Self::reply_input`].
     ///
-    /// Returns `Some(StdinPolicy::Prefilled)` with the operator's input, or
-    /// `None` if the operator cancelled (the caller then runs the command with
-    /// closed stdin → fast failure + non-interactive remedy footer).
-    async fn collect_input_injection(
+    /// Returns `Some(line)` with the operator's input, or `None` if no human
+    /// channel exists or the operator cancelled (the caller then kills the
+    /// command → `ShellTermination::InputUnanswered`).
+    async fn collect_runtime_input(
         &self,
-        command: &str,
-        prompt: &str,
-        secret: bool,
+        prompt: &muta_contracts::InputPrompt,
         event_tx: &mpsc::UnboundedSender<AgentEvent>,
-    ) -> Option<StdinPolicy> {
-        let request = InputRequest {
-            id: format!("input_{}", uuid::Uuid::new_v4()),
-            command: command.to_string(),
-            prompt: prompt.to_string(),
-            secret,
-        };
-        // ADR-0141 posture gate: with no human channel there is nobody to
-        // type into the panel. Do not park — run the command with closed
-        // stdin, exactly as if the operator had dismissed the prompt (the
-        // caller's non-interactive remedy path).
+    ) -> Option<String> {
+        // ADR-0141 posture gate: with no human channel there is nobody to type
+        // into the panel; do not park.
         if self.human_posture() == HumanChannelPosture::Autonomous {
             self.human_broker
                 .metrics_note_refused(HumanRequestKind::Stdin);
-            tracing::info!("autonomous posture: interactive stdin refused, running closed");
+            tracing::info!("autonomous posture: runtime input refused");
             return None;
         }
+        let request = InputRequest {
+            id: format!("input_{}", uuid::Uuid::new_v4()),
+            command: prompt.command.clone(),
+            prompt: prompt.prompt.clone(),
+            secret: prompt.secret,
+        };
         let receiver = self
             .human_broker
             .park(request.id.clone(), HumanRequestKind::Stdin);
-        tracing::info!(%secret, "requesting operator input for interactive command");
-        let _ = event_tx.send(AgentEvent::StdinRequest(request.clone()));
+        tracing::info!(secret = prompt.secret, "requesting operator input for a command waiting on input");
+        let _ = event_tx.send(AgentEvent::StdinRequest(request));
         let settled = receiver.await.ok().map(|s| s.reply);
         match settled {
-            Some(HumanReply::Stdin(Some(reply))) if !reply.text.is_empty() => {
-                Some(StdinPolicy::Prefilled { data: reply.text })
-            }
+            Some(HumanReply::Stdin(Some(reply))) if !reply.text.is_empty() => Some(reply.text),
             _ => None,
         }
     }
 
-    /// Three-way stdin policy for a `bash` call (L3 + L3.5). See the decision
-    /// block in [`Self::execute_tool`] for the contract. `arguments` is the
-    /// raw JSON tool arguments.
-    pub(super) async fn decide_command_stdin(
+    /// Decide the [`InputContract`] for a command call (before spawn). The
+    /// three-way decision, in order:
+    ///
+    /// 1. **Model stdin** (opt-in): `allow_model_stdin` on AND the model
+    ///    supplied a `stdin` arg → `Prefilled{model}`. Structurally unreachable
+    ///    unless the flag exposed the schema field.
+    /// 2. **Pre-spawn refusal / supervision**: the interactive classifier
+    ///    matched. Under unattended (or `skip_interactive_input`), or when the
+    ///    tool cannot give the child a controlling terminal, seal stdin — the
+    ///    command fails fast with the classifier's non-interactive remedy.
+    ///    Otherwise supervise: a held-open stdin pipe + controlling terminal +
+    ///    runtime examination, so a wait the classifier under- or over-guessed
+    ///    is resolved from kernel evidence at runtime.
+    /// 3. **Sealed** (default hard floor): everything else.
+    ///
+    /// `arguments` is the raw JSON tool arguments.
+    pub(super) fn decide_command_input(
         &self,
         arguments: &str,
-        event_tx: &mpsc::UnboundedSender<AgentEvent>,
-    ) -> StdinPolicy {
-        // (α) opt-in model stdin: only when the flag is on, which is what
-        // dynamically exposes the `stdin` schema field. Read it defensively
-        // (absent/invalid → not a model-supplied stdin).
+        tool: &dyn muta_contracts::Tool,
+    ) -> muta_contracts::InputContract {
+        // (α) opt-in model stdin.
         if self.allow_model_stdin()
             && let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments)
             && let Some(data) = v.get("stdin").and_then(|s| s.as_str())
             && !data.is_empty()
         {
-            return StdinPolicy::Prefilled {
+            return muta_contracts::InputContract::Prefilled {
                 data: data.to_string(),
             };
         }
-        // (β) human input: classify the command; if interactive, ask the
-        // operator. `command` is read from the args (bash's scope_target
-        // already extracts it, but re-reading here keeps this self-contained).
         let command = serde_json::from_str::<serde_json::Value>(arguments)
             .ok()
-            .and_then(|v| {
-                v.get("command")
-                    .and_then(|c| c.as_str())
-                    .map(str::to_string)
-            })
+            .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_string))
             .unwrap_or_default();
-        if let Some(input_kind) = crate::shell_input::classify(&command) {
-            // Delegated mode, or the operator has opted out of the interactive
-            // input panel: no one is going to type into the prompt, so the
-            // inline panel would either deadlock or just disrupt.
-            // Close stdin instead — the command then fails fast with a non-interactive remedy.
-            if self.unattended() {
-                tracing::info!(command = %command, "interactive command stdin closed in unattended mode");
-                return StdinPolicy::default();
+        if let Some(kind) = crate::shell_input::classify(&command) {
+            // No human is reachable, or the operator opted out, or the platform
+            // cannot service a terminal — seal stdin so the command fails fast
+            // with a non-interactive remedy instead of hanging or (on a
+            // platform without a controlling terminal) inducing interactivity.
+            if self.unattended() || self.skip_interactive_input() {
+                return muta_contracts::InputContract::Sealed;
             }
-            if self.skip_interactive_input() {
-                tracing::info!(command = %command, "interactive command stdin closed by skip_interactive_input");
-                return StdinPolicy::default();
+            if !tool.interactive_input_supported() {
+                return muta_contracts::InputContract::Sealed;
             }
-            let secret = input_kind.is_secret();
-            let prompt = if secret {
-                "Enter the secret this command is waiting for:".to_string()
-            } else {
-                format!("This command needs input ({command}):")
+            return muta_contracts::InputContract::Supervised {
+                expectation: Some(crate::shell_input::expectation(&command, kind)),
             };
-            return self
-                .collect_input_injection(&command, &prompt, secret, event_tx)
-                .await
-                .unwrap_or_default();
         }
-        // (default) closed hard floor.
-        StdinPolicy::default()
+        muta_contracts::InputContract::Sealed
     }
 
     pub(crate) async fn execute_tool(
@@ -611,19 +600,18 @@ impl Agent {
             return self.execute_ask_user(call, call_id, event_tx).await;
         }
 
-        // Stdin policy decision (L3 + L3.5)
-        // Decided here, before spawn, for run_command only. The three-way decision:
-        //   1. opt-in model stdin (α): `allow_model_stdin` on AND the model
-        //      supplied a `stdin` arg → Prefilled{model}. Structurally
-        //      unreachable unless the flag exposed the schema field.
-        //   2. human input (β, default): the interactive classifier matched →
-        //      ask the operator; Prefilled{human} or Closed (if cancelled).
-        //   3. closed (default hard floor): everything else.
-        // For other tools, Closed is always correct (they ignore stdin).
-        let stdin_policy = if call.name == "run_command" {
-            self.decide_command_stdin(&call.arguments, event_tx).await
+        // Input contract decision (before spawn), for run_command only:
+        //   1. opt-in model input (α): `allow_model_stdin` on AND the model
+        //      supplied a `stdin` arg → Prefilled{model}.
+        //   2. pre-spawn refusal / runtime supervision: the interactive
+        //      classifier matched → Sealed (unattended / skip / no platform
+        //      terminal) or Supervised (a controlled terminal + examiner).
+        //   3. sealed (default hard floor): everything else.
+        // For other tools, Sealed is always correct (they ignore input).
+        let input = if call.name == "run_command" {
+            self.decide_command_input(&call.arguments, tool.as_ref())
         } else {
-            StdinPolicy::default()
+            muta_contracts::InputContract::default()
         };
 
         // The Subagent / ToolStream events must carry the same id as the
@@ -640,10 +628,23 @@ impl Agent {
                 stream,
             });
         };
+        // Per-invocation input supervisor: captures this call's event channel so
+        // the command tool's examiner can park a detected input wait on the
+        // operator. Built here (not at factory time) because it is bound to the
+        // live event stream of this call.
+        let input_supervisor = AgentInputSupervisor {
+            agent: self,
+            event_tx: event_tx.clone(),
+        };
+        let invocation = muta_contracts::ToolInvocation {
+            call_id,
+            arguments: &call.arguments,
+            input,
+            input_handler: Some(&input_supervisor),
+        };
         match tool
             .call_structured_with_events(
-                call_id,
-                &call.arguments,
+                invocation,
                 Box::new(|event| {
                     let _ = event_tx.send(AgentEvent::Subagent {
                         parent_call_id: parent_call_id.clone(),
@@ -651,7 +652,6 @@ impl Agent {
                     });
                 }),
                 &mut on_stream,
-                stdin_policy,
             )
             .await
         {
@@ -786,5 +786,24 @@ impl Agent {
             Some(tool) => tool.accesses(&call.arguments),
             None => muta_contracts::ToolAccesses::none(),
         }
+    }
+}
+
+/// Per-invocation [`InputHandler`](muta_contracts::InputHandler): bridges the
+/// command tool's runtime examiner back into the agent's human-input channel.
+/// Constructed in [`Agent::execute_tool`] for the duration of one call, so it
+/// captures that call's event channel and emits the TUI's input panel request
+/// on the right stream.
+struct AgentInputSupervisor<'a> {
+    agent: &'a Agent,
+    event_tx: mpsc::UnboundedSender<AgentEvent>,
+}
+
+#[async_trait::async_trait]
+impl muta_contracts::InputHandler for AgentInputSupervisor<'_> {
+    async fn resolve(&self, prompt: muta_contracts::InputPrompt) -> Option<String> {
+        self.agent
+            .collect_runtime_input(&prompt, &self.event_tx)
+            .await
     }
 }

@@ -36,8 +36,8 @@ pub const THINKING_KEY: &str = "thinking";
 /// # means no hard stop — an opt-in execution budget only.
 /// # hard_stop_turns = 0
 ///
-/// # Never pop the interactive-input panel for a command needing stdin
-/// # (sudo/gpg/passwd/…). Instead run it with stdin closed so it fails fast
+/// # Never supervise a command needing stdin (sudo/gpg/passwd/…).
+/// # Instead run it sealed (immediate-EOF stdin) so it fails fast
 /// # with a non-interactive remedy hint.
 /// # skip_interactive_input = false
 ///
@@ -57,31 +57,32 @@ pub struct AgentConfig {
     /// `Agent::set_hard_stop_turns`.
     pub hard_stop_turns: usize,
     /// Whether the model may supply stdin bytes for a `bash` command it emits
-    /// (the opt-in "automatic flow" path, L3.5 α). Default `false`: the bash
+    /// (the opt-in "automatic flow" path, α). Default `false`: the command
     /// tool schema exposes no `stdin` parameter and a command that needs input
-    /// either gets it from a human (interactive-classifier → input panel) or
-    /// fails fast with a non-interactive remedy hint. When `true`, the bash
-    /// schema **dynamically** adds a `stdin` field the model can fill, and the
-    /// dispatch layer threads it through as `StdinPolicy::Prefilled`. This
-    /// is the explicit authorization that "input may come from the model" —
-    /// without it, stdin is structurally unreachable from the model's
-    /// arguments. Wired through `Agent::set_allow_model_stdin`.
+    /// either gets it from the operator (interactive-classifier →
+    /// runtime supervision) or fails fast with a non-interactive remedy hint.
+    /// When `true`, the schema **dynamically** adds a `stdin` field the model
+    /// can fill, and the dispatch layer threads it through as
+    /// `InputContract::Prefilled`. This is the explicit authorization that
+    /// "input may come from the model" — without it, stdin is structurally
+    /// unreachable from the model's arguments. Wired through
+    /// `Agent::set_allow_model_stdin`.
     pub allow_model_stdin: bool,
-    /// Whether an interactive `bash` command (one the interactive classifier
-    /// matches: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) should **never**
-    /// pop the inline input panel and instead run with stdin closed.
+    /// Whether an interactive command (one the interactive classifier
+    /// matches: `sudo`/`gpg`/`passwd`/TUI editors/`read`/…) should **never** be
+    /// supervised for runtime input.
     ///
-    /// Default `false`: a command needing input prompts the operator via the
-    /// input-injection panel (with the command + a masked/plain field). When
-    /// `true`, the panel is skipped — the command runs non-interactively,
-    /// reads EOF immediately, and fails fast with a non-interactive remedy
-    /// hint, exactly as it would in delegated autonomous mode. This is the right
-    /// setting for users who find the prompt disruptive and prefer to retry
-    /// the command themselves (or let the model retry with a non-interactive
-    /// form). Wired through `Agent::set_skip_interactive_input`.
+    /// Default `false`: a command needing input is run supervised (held-open
+    /// stdin pipe + controlling terminal), the runtime examiner detects the
+    /// wait, and the operator is prompted via the input panel. When `true`, the
+    /// command is run sealed — immediate-EOF stdin — and fails fast with a
+    /// non-interactive remedy hint, exactly as in unattended mode. This is the
+    /// right setting for users who find the prompt disruptive and prefer to
+    /// retry the command themselves (or let the model retry with a
+    /// non-interactive form). Wired through `Agent::set_skip_interactive_input`.
     ///
-    /// Note: this only governs the *interactive-input* path; it does not turn
-    /// the agent delegated, so ordinary tool confirmations still apply.
+    /// Note: this only governs the *input-supervision* path; it does not turn
+    /// the agent unattended, so ordinary tool confirmations still apply.
     pub skip_interactive_input: bool,
     /// ADR-0141: how an autonomous session (no human channel attached —
     /// piped headless, CI, cron) settles an `ask_user` question. Wire

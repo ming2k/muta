@@ -3,7 +3,6 @@
 //! ([`ProviderStreamEvent`]).
 
 use crate::tool_access::ToolAccesses;
-use crate::tool_output::StdinPolicy;
 use crate::usage::TokenUsage;
 use crate::{Message, SubagentEvent, ToolOutput, ToolStream};
 use async_trait::async_trait;
@@ -495,6 +494,38 @@ pub trait Provider: Send + Sync {
     }
 }
 
+/// Runtime input supervisor for a supervised command invocation. Implemented
+/// by the agent layer (which owns the human-input channel) and handed to the
+/// command tool through [`Tool::input_handler`]. Kept as a trait so
+/// `muta-contracts` stays free of agent/async-runtime coupling: the command
+/// tool's examiner calls it, the agent fulfils it.
+#[async_trait]
+pub trait InputHandler: Send + Sync {
+    /// Resolve one runtime input prompt. `Ok(Some(line))` — the operator's
+    /// answer, written into the reported channel. `Ok(None)` — no answer
+    /// (declined, or no reachable human channel); the caller kills the child
+    /// with [`ShellTermination::InputUnanswered`](crate::ShellTermination::InputUnanswered).
+    async fn resolve(&self, prompt: crate::tool_output::InputPrompt) -> Option<String>;
+}
+
+/// Everything a tool needs for one invocation beyond its own state: the call
+/// identity, the raw arguments, the input-execution contract, and the runtime
+/// input supervisor (when the dispatch layer supplied one). Bundled so the
+/// trait method stays stable as per-call context grows.
+pub struct ToolInvocation<'a> {
+    /// The dispatch-generated call id (keys live streams and subagent views).
+    pub call_id: &'a str,
+    /// Raw JSON tool arguments exactly as the model emitted them.
+    pub arguments: &'a str,
+    /// How the child's input channels are provisioned (command tool only;
+    /// other tools ignore it).
+    pub input: crate::tool_output::InputContract,
+    /// Runtime input supervisor for a supervised child. The dispatch layer
+    /// builds it per invocation (it captures the live event channel), so it is
+    /// borrowed rather than owned for the tool's lifetime.
+    pub input_handler: Option<&'a dyn InputHandler>,
+}
+
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
@@ -730,24 +761,31 @@ pub trait Tool: Send + Sync {
     /// that spawn subagents (e.g. `task`) override this to forward child
     /// events while still returning a [`ToolOutput`] (typically [`ToolOutput::Text`]).
     ///
-    /// `stdin` is the **execution contract** for the child process's stdin
-    /// ([`StdinPolicy`]). It is decided *before* spawn by the agent dispatch
-    /// layer (never from the model's arguments) and threaded in here, so a
-    /// tool like `bash` can provision `/dev/null`, a pre-filled pipe of human
-    /// or model-supplied bytes, etc. The default [`StdinPolicy::Closed`]
-    /// keeps tools that ignore stdin correct: a child that blocks on
-    /// `read(stdin)` gets instant EOF instead of hanging silently until the
-    /// wall-clock timeout.
+    /// [`ToolInvocation::input`] is the **execution contract** for how a child's
+    /// input channels are provisioned ([`InputContract`]). It is decided
+    /// *before* spawn by the agent dispatch layer (never from the model's
+    /// arguments). The default [`InputContract::Sealed`] keeps tools that
+    /// ignore input correct: a child that blocks on `read(stdin)` gets instant
+    /// EOF instead of hanging silently until the wall-clock timeout.
     async fn call_structured_with_events<'a>(
         &self,
-        _call_id: &str,
-        arguments: &str,
+        invocation: ToolInvocation<'a>,
         _on_event: Box<dyn FnMut(SubagentEvent) + Send + 'a>,
         _on_stream: &mut (dyn FnMut(ToolStream) + Send + 'a),
-        _stdin: StdinPolicy,
     ) -> Result<ToolOutput, String> {
-        let _ = _stdin;
-        self.call_structured(arguments).await
+        self.call_structured(invocation.arguments).await
+    }
+
+    /// Whether this tool can execute a **supervised** command
+    /// ([`InputContract::Supervised`]): one that owns a controlling terminal
+    /// for a child that reads `/dev/tty`, with output still captured on clean
+    /// pipes. Default `false`. The agent dispatch layer consults this before
+    /// choosing `Supervised`; when `false`, it falls back to
+    /// [`Sealed`](InputContract::Sealed) — clean immediate-EOF semantics with
+    /// the classifier's pre-spawn refusal, and no risk of inducing interactive
+    /// behaviour the platform cannot service.
+    fn interactive_input_supported(&self) -> bool {
+        false
     }
 
     /// Execute the tool while optionally emitting events (e.g. subagent steps).

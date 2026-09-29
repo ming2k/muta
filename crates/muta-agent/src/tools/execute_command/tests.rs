@@ -82,9 +82,9 @@ async fn execute_command_captures_stdout_and_exits() {
     }
 }
 
-/// The default stdin policy is Closed (`/dev/null`), so a command that
+/// The default input contract is `Sealed` (`/dev/null`), so a command that
 /// reads stdin gets instant EOF and fails fast instead of hanging. This
-/// is the L1 hard floor: `cat` with no input and closed stdin exits 0
+/// is the hard floor: `cat` with no input and sealed stdin exits 0
 /// immediately.
 #[tokio::test]
 async fn execute_command_closed_stdin_means_eof_not_hang() {
@@ -106,24 +106,27 @@ async fn execute_command_closed_stdin_means_eof_not_hang() {
     }
 }
 
-/// A prefilled stdin policy pipes the bytes into the child: `cat` echoes
-/// them back. This is the L3.5 seam (human/model input injection).
+/// A prefilled input contract pipes the bytes into the child: `cat` echoes
+/// them back. This is the model/human pre-spawn injection seam.
 #[tokio::test]
 async fn execute_command_prefilled_stdin_feeds_the_child() {
     let tool = ExecuteCommandTool::new(None);
     let mut on_stream = |_: muta_contracts::ToolStream| ();
     let out = tool
         .call_structured_with_events(
-            "",
-            &arguments(native_command(
-                "cat",
-                "[Console]::Out.Write([Console]::In.ReadToEnd())",
-            )),
+            muta_contracts::ToolInvocation {
+                call_id: "",
+                arguments: &arguments(native_command(
+                    "cat",
+                    "[Console]::Out.Write([Console]::In.ReadToEnd())",
+                )),
+                input: muta_contracts::InputContract::Prefilled {
+                    data: "injected\n".into(),
+                },
+                input_handler: None,
+            },
             Box::new(|_| {}),
             &mut on_stream,
-            muta_contracts::StdinPolicy::Prefilled {
-                data: "injected\n".into(),
-            },
         )
         .await
         .expect("ok");
@@ -217,15 +220,59 @@ async fn execute_command_git_tag_fails_fast_when_gpgsign_enabled() {
     }
 }
 
-/// ADR-0286: An uncooperative process that stalls in zero-CPU sleeping state
-/// with zero output is killed early with `InteractiveBlocked` rather than waiting 8 minutes.
+/// A `sleep` is legitimate quiet computation (`wchan=hrtimer_nanosleep`), NOT
+/// an input wait, so it must NOT be fast-failed as an interactive stall. It
+/// falls through to the ordinary idle budget. This is the correction the
+/// semantic detector makes to the former `state=='S'` heuristic, which
+/// false-positived on `sleep`/`wait`/`flock`.
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn execute_command_interactive_stall_circuit_breaker_trips_early() {
+async fn execute_command_sleep_is_not_mistaken_for_an_input_wait() {
     let tool = ExecuteCommandTool::new(None);
     let start = std::time::Instant::now();
     let out = tool
-        .call_structured(r#"{"command":"sleep 60", "timeout": 60}"#)
+        .call_structured(r#"{"command":"sleep 60", "timeout": 30}"#)
+        .await
+        .expect("ok");
+    let elapsed = start.elapsed();
+    match out {
+        muta_contracts::ToolOutput::Shell { termination, .. } => {
+            assert_ne!(
+                termination,
+                muta_contracts::tool_output::ShellTermination::InputUnanswered,
+                "a sleep must not be classified as an input wait"
+            );
+            assert_eq!(
+                termination,
+                muta_contracts::tool_output::ShellTermination::IdleBlocked
+            );
+            assert!(elapsed.as_secs() < 25, "took too long: {elapsed:?}");
+        }
+        other => panic!("expected Shell, got {other:?}"),
+    }
+}
+
+/// A real stdin prompt (harness-held pipe, blocked read, zero CPU) IS detected
+/// from kernel evidence and fast-failed when no supervisor answers: a held-open
+/// pipe makes `read` block, and with no handler the wait is killed in seconds
+/// with `InputUnanswered` rather than lingering for the idle budget.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn execute_command_detected_input_wait_fast_fails_without_a_supervisor() {
+    let tool = ExecuteCommandTool::new(None);
+    let start = std::time::Instant::now();
+    let mut on_stream = |_: muta_contracts::ToolStream| ();
+    let out = tool
+        .call_structured_with_events(
+            muta_contracts::ToolInvocation {
+                call_id: "",
+                arguments: r#"{"command":"read x; echo never", "timeout": 120}"#,
+                input: muta_contracts::InputContract::Supervised { expectation: None },
+                input_handler: None,
+            },
+            Box::new(|_| {}),
+            &mut on_stream,
+        )
         .await
         .expect("ok");
     let elapsed = start.elapsed();
@@ -233,13 +280,238 @@ async fn execute_command_interactive_stall_circuit_breaker_trips_early() {
         muta_contracts::ToolOutput::Shell { termination, .. } => {
             assert_eq!(
                 termination,
-                muta_contracts::tool_output::ShellTermination::InteractiveBlocked
+                muta_contracts::tool_output::ShellTermination::InputUnanswered,
+                "a genuine stdin read must be detected and fast-failed"
             );
-            // Must have tripped well below the 20s idle budget (1/3 of 60s) or 60s timeout, around ~7s.
-            assert!(elapsed.as_secs() < 15, "took too long: {:?}", elapsed);
+            // ~5s examiner floor + 2s stability, well under the 40s idle budget.
+            assert!(elapsed.as_secs() < 20, "took too long: {elapsed:?}");
         }
-        other => panic!("expected Shell, got {:?}", other),
+        other => panic!("expected Shell, got {other:?}"),
     }
+}
+
+/// A test [`InputHandler`](muta_contracts::InputHandler) that always answers
+/// with a fixed line, counting how many prompts it served.
+struct ScriptedHandler {
+    answer: String,
+    served: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl muta_contracts::InputHandler for ScriptedHandler {
+    async fn resolve(&self, _prompt: muta_contracts::InputPrompt) -> Option<String> {
+        self.served
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(self.answer.clone())
+    }
+}
+
+/// A supervised stdin prompt is detected and answered: the injected line
+/// reaches the child, which then completes on its own. This is the full
+/// runtime-injection path the classifier alone could not provide.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn supervised_command_receives_injected_stdin() {
+    let tool = ExecuteCommandTool::new(None);
+    let handler = ScriptedHandler {
+        answer: "injected-value".to_string(),
+        served: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let mut on_stream = |_: muta_contracts::ToolStream| ();
+    let out = tool
+        .call_structured_with_events(
+            muta_contracts::ToolInvocation {
+                call_id: "",
+                arguments: &arguments("read x; printf 'GOT:%s' \"$x\""),
+                input: muta_contracts::InputContract::Supervised { expectation: None },
+                input_handler: Some(&handler),
+            },
+            Box::new(|_| {}),
+            &mut on_stream,
+        )
+        .await
+        .expect("ok");
+    assert_eq!(
+        handler.served.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the runtime examiner must have parked exactly one prompt"
+    );
+    match out {
+        muta_contracts::ToolOutput::Shell {
+            stdout,
+            exit,
+            termination,
+            ..
+        } => {
+            assert_eq!(
+                termination,
+                muta_contracts::tool_output::ShellTermination::Exited
+            );
+            assert_eq!(exit, Some(0));
+            assert_eq!(stdout, "GOT:injected-value\n");
+        }
+        other => panic!("expected Shell, got {other:?}"),
+    }
+}
+
+/// A supervised child that prompts on its **controlling terminal** (`/dev/tty`,
+/// the `sudo`/`gpg` shape) is answered through the pty master, while stdout
+/// stays a clean pipe.
+#[cfg(unix)]
+#[tokio::test]
+async fn supervised_command_receives_injected_controlling_tty_input() {
+    let tool = ExecuteCommandTool::new(None);
+    let handler = ScriptedHandler {
+        answer: "tty-secret".to_string(),
+        served: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let mut on_stream = |_: muta_contracts::ToolStream| ();
+    let out = tool
+        .call_structured_with_events(
+            muta_contracts::ToolInvocation {
+                call_id: "",
+                arguments: &arguments("read x < /dev/tty; printf 'GOT:%s' \"$x\""),
+                input: muta_contracts::InputContract::Supervised { expectation: None },
+                input_handler: Some(&handler),
+            },
+            Box::new(|_| {}),
+            &mut on_stream,
+        )
+        .await
+        .expect("ok");
+    match out {
+        muta_contracts::ToolOutput::Shell {
+            stdout,
+            termination,
+            ..
+        } => {
+            assert_ne!(
+                termination,
+                muta_contracts::tool_output::ShellTermination::InputUnanswered,
+                "the /dev/tty prompt must have been answered, not refused"
+            );
+            assert_eq!(stdout, "GOT:tty-secret\n");
+        }
+        other => panic!("expected Shell, got {other:?}"),
+    }
+}
+
+/// A supervised child whose prompt the operator declines (handler returns
+/// `None`) is killed with `InputUnanswered` — the supervised analogue of the
+/// sealed fast-fail.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn supervised_command_declined_input_is_unanswered() {
+    struct DecliningHandler;
+    #[async_trait::async_trait]
+    impl muta_contracts::InputHandler for DecliningHandler {
+        async fn resolve(&self, _prompt: muta_contracts::InputPrompt) -> Option<String> {
+            None
+        }
+    }
+    let tool = ExecuteCommandTool::new(None);
+    let handler = DecliningHandler;
+    let mut on_stream = |_: muta_contracts::ToolStream| ();
+    let out = tool
+        .call_structured_with_events(
+            muta_contracts::ToolInvocation {
+                call_id: "",
+                arguments: &arguments("read x; echo never"),
+                input: muta_contracts::InputContract::Supervised { expectation: None },
+                input_handler: Some(&handler),
+            },
+            Box::new(|_| {}),
+            &mut on_stream,
+        )
+        .await
+        .expect("ok");
+    match out {
+        muta_contracts::ToolOutput::Shell { termination, .. } => assert_eq!(
+            termination,
+            muta_contracts::tool_output::ShellTermination::InputUnanswered
+        ),
+        other => panic!("expected Shell, got {other:?}"),
+    }
+}
+
+/// The design-critical case: a program that opens `/dev/tty` on a **separate**
+/// file descriptor while fd 0 is an unrelated *pipe* — exactly the
+/// `sudo`/`gpg`/`pinentry` shape. The wait must still be classified as an input
+/// wait and answered through the terminal, not misread as a pipe read. (A
+/// `read x < /dev/tty` in `sh` is not sufficient: `sh` dup2's the redirect onto
+/// fd 0, hiding the bug.)
+#[cfg(unix)]
+#[tokio::test]
+async fn supervised_separate_fd_tty_prompt_is_detected_and_answered() {
+    let tool = ExecuteCommandTool::new(None);
+    let handler = ScriptedHandler {
+        answer: "separate-fd-secret".to_string(),
+        served: std::sync::atomic::AtomicUsize::new(0),
+    };
+    // python3 opens /dev/tty as a new fd; fd 0 stays whatever the harness gave.
+    let script = "python3 -c \"import sys; f=open('/dev/tty'); print('GOT:'+f.readline().strip())\"";
+    let mut on_stream = |_: muta_contracts::ToolStream| ();
+    let out = tool
+        .call_structured_with_events(
+            muta_contracts::ToolInvocation {
+                call_id: "",
+                arguments: &arguments(script),
+                input: muta_contracts::InputContract::Supervised { expectation: None },
+                input_handler: Some(&handler),
+            },
+            Box::new(|_| {}),
+            &mut on_stream,
+        )
+        .await
+        .expect("ok");
+    match out {
+        muta_contracts::ToolOutput::Shell {
+            stdout,
+            termination,
+            ..
+        } => {
+            assert_ne!(
+                termination,
+                muta_contracts::tool_output::ShellTermination::InputUnanswered,
+                "a separate-fd /dev/tty prompt must be answered, not refused"
+            );
+            assert!(
+                stdout.contains("GOT:separate-fd-secret"),
+                "expected the /dev/tty answer to reach the child; got {stdout:?}"
+            );
+        }
+        other => panic!("expected Shell, got {other:?}"),
+    }
+}
+
+/// Regression guard: processing a command's output lines must not do per-line
+/// work proportional to the host's process count. The examiner samples `/proc`
+/// only on the quiet path, never per line, so a 900-line command completes in
+/// milliseconds rather than seconds. The threshold is deliberately loose
+/// (1s vs. the ~4ms observed) so it flags a real regression — a return to
+/// per-line `/proc` sampling took ~2s here — without being timing-flaky.
+#[tokio::test]
+async fn execute_command_many_lines_do_not_incur_per_line_proc_scans() {
+    let tool = ExecuteCommandTool::new(None);
+    let start = std::time::Instant::now();
+    let out = tool
+        .call_structured(&arguments(native_command(
+            "seq 1 900",
+            "1..900 | ForEach-Object { $_ }",
+        )))
+        .await
+        .expect("ok");
+    let elapsed = start.elapsed();
+    match out {
+        muta_contracts::ToolOutput::Shell { lines, .. } => {
+            assert_eq!(lines.len(), 900, "all lines must be captured");
+        }
+        other => panic!("expected Shell, got {other:?}"),
+    }
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "900 lines took {elapsed:?}; output processing must not sample /proc per line"
+    );
 }
 
 /// A timed-out command's whole process group is killed.
@@ -329,15 +601,19 @@ async fn execute_command_timeout_kills_grandchildren() {
     panic!("grandchild pid {pid} survived the Job Object termination");
 }
 
-/// A huge multi-line output command is capped in memory.
+/// A huge multi-line output command is capped in memory. The command emits
+/// ~90 KB (well over the 64 KB collection cap, but under the 128 KB /
+/// 1000-line stream-flood thresholds), so it *completes* — letting the head,
+/// the cap marker, and the tail all be observed deterministically, rather than
+/// racing a StreamGuard kill that may cut the tail off.
 #[tokio::test]
 async fn execute_command_caps_huge_output_in_memory() {
     let tool = ExecuteCommandTool::new(None);
     let out = tool
         .call_structured(&arguments(native_command(
-            "for i in $(seq 1 8000); do echo 'abcdefghij'; done; echo TAIL-MARKER",
-            "1..8000 | ForEach-Object { [Console]::Out.WriteLine('abcdefghij') }; \
-             [Console]::Out.WriteLine('TAIL-MARKER')",
+            "awk 'BEGIN{ s=\"\"; for(i=0;i<900;i++) s=s \"x\"; \
+             for(i=0;i<100;i++) print s; print \"TAIL-MARKER\" }'",
+            "$s='x'*900; 1..100 | ForEach-Object { $s }; 'TAIL-MARKER'",
         )))
         .await
         .expect("ok");
@@ -355,7 +631,7 @@ async fn execute_command_caps_huge_output_in_memory() {
                 "payload bounded near the 64k cap, got {}",
                 stdout.len()
             );
-            assert!(stdout.starts_with("abcdefghij"), "head kept");
+            assert!(stdout.starts_with("xxx"), "head kept");
             assert!(stdout.contains("TAIL-MARKER"), "tail kept");
         }
         other => panic!("expected Shell, got {other:?}"),
@@ -732,7 +1008,7 @@ async fn execute_command_suppresses_long_minified_line() {
     let args = serde_json::json!({
         "command": native_command(
             &format!("echo '{minified_line}'"),
-            &format!("Write-Output ('a' * 10000)"),
+            "Write-Output ('a' * 10000)",
         ),
         "timeout": 10,
     })
@@ -752,3 +1028,6 @@ async fn execute_command_suppresses_long_minified_line() {
         other => panic!("expected Shell output, got {:?}", other),
     }
 }
+
+
+
