@@ -180,12 +180,7 @@ impl SubAgentProfile {
 }
 
 /// Tools a skill-discovery subagent may use: workspace inspection without AST or web dependencies.
-pub const SKILL_TOOLS: &[&str] = &[
-    "read_text",
-    "find_files",
-    "list_dir",
-    "search_text",
-];
+pub const SKILL_TOOLS: &[&str] = &["read_text", "find_files", "list_dir", "search_text"];
 
 /// Tools a read-only subagent may use: pure
 /// inspection with no side effects. Listed by name so adding a new
@@ -336,12 +331,8 @@ questions of the user; focus strictly on skill discovery and instruction synthes
     };
 
     /// Static catalog of all built-in subagent profiles.
-    pub const ALL: &'static [&'static SubAgentProfile] = &[
-        &Self::EXPLORE,
-        &Self::TITLE,
-        &Self::DEBUG,
-        &Self::SKILL,
-    ];
+    pub const ALL: &'static [&'static SubAgentProfile] =
+        &[&Self::EXPLORE, &Self::TITLE, &Self::DEBUG, &Self::SKILL];
 
     /// Find a subagent profile by name.
     pub fn find(name: &str) -> Option<&'static SubAgentProfile> {
@@ -438,15 +429,27 @@ mod tests {
 
     #[test]
     fn explore_admits_a_whitelisted_read_tool() {
-        assert!(SubAgentProfile::EXPLORE.tool_policy.admits(&make("read_text")));
-        assert!(SubAgentProfile::EXPLORE.tool_policy.admits(&make("search_text")));
+        assert!(
+            SubAgentProfile::EXPLORE
+                .tool_policy
+                .admits(&make("read_text"))
+        );
+        assert!(
+            SubAgentProfile::EXPLORE
+                .tool_policy
+                .admits(&make("search_text"))
+        );
     }
 
     #[test]
     fn explore_rejects_a_non_whitelisted_tool() {
         // write_file is not in READ_ONLY_TOOLS — a research explorer must not
         // mutate files.
-        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("write_file")));
+        assert!(
+            !SubAgentProfile::EXPLORE
+                .tool_policy
+                .admits(&make("write_file"))
+        );
         // Command execution is also not whitelisted.
         assert!(
             !SubAgentProfile::EXPLORE
@@ -518,8 +521,11 @@ mod tests {
             Arc::new(make("execute_command")) as Arc<dyn Tool>,
             Arc::new(with_spawn(make("read_text"))) as Arc<dyn Tool>,
         ]);
-        let selected =
-            SubAgentProfile::EXPLORE.resolve_tools(&toolset, &test_model(), &ToolSelection::unrestricted());
+        let selected = SubAgentProfile::EXPLORE.resolve_tools(
+            &toolset,
+            &test_model(),
+            &ToolSelection::unrestricted(),
+        );
         let names: Vec<&str> = selected.iter().map(|t| t.name()).collect();
         assert_eq!(names, vec!["search_text"]);
     }
@@ -537,26 +543,78 @@ mod tests {
 
     #[test]
     fn explore_profile_excludes_unlisted_tools() {
-        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("market_data")));
-        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("backtest")));
-        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("place_order")));
-        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("cancel_order")));
-        assert!(!SubAgentProfile::EXPLORE.tool_policy.admits(&make("list_positions")));
+        assert!(
+            !SubAgentProfile::EXPLORE
+                .tool_policy
+                .admits(&make("market_data"))
+        );
+        assert!(
+            !SubAgentProfile::EXPLORE
+                .tool_policy
+                .admits(&make("backtest"))
+        );
+        assert!(
+            !SubAgentProfile::EXPLORE
+                .tool_policy
+                .admits(&make("place_order"))
+        );
+        assert!(
+            !SubAgentProfile::EXPLORE
+                .tool_policy
+                .admits(&make("cancel_order"))
+        );
+        assert!(
+            !SubAgentProfile::EXPLORE
+                .tool_policy
+                .admits(&make("list_positions"))
+        );
     }
 
     #[test]
     fn debug_profile_admits_read_and_command_but_excludes_writes_and_recursion() {
-        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("read_text")));
-        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("search_text")));
-        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("code_query")));
-        assert!(SubAgentProfile::DEBUG.tool_policy.admits(&make("run_command")));
+        assert!(
+            SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&make("read_text"))
+        );
+        assert!(
+            SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&make("search_text"))
+        );
+        assert!(
+            SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&make("code_query"))
+        );
+        assert!(
+            SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&make("run_command"))
+        );
 
-        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("edit_text")));
-        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("write_file")));
+        assert!(
+            !SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&make("edit_text"))
+        );
+        assert!(
+            !SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&make("write_file"))
+        );
         assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("todo")));
 
-        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("some_new_tool")));
-        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make("market_data")));
+        assert!(
+            !SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&make("some_new_tool"))
+        );
+        assert!(
+            !SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&make("market_data"))
+        );
 
         assert!(
             !SubAgentProfile::DEBUG
@@ -565,7 +623,11 @@ mod tests {
         );
         assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&make_control()));
 
-        assert!(!SubAgentProfile::DEBUG.tool_policy.admits(&with_user(make("ask_user"))));
+        assert!(
+            !SubAgentProfile::DEBUG
+                .tool_policy
+                .admits(&with_user(make("ask_user")))
+        );
     }
 
     #[allow(clippy::assertions_on_constants)]

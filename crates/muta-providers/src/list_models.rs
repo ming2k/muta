@@ -496,7 +496,7 @@ pub async fn fetch_remote_catalog(
         CatalogShape::GoogleCloudCode => {
             let mut request = crate::http::Request::new(netune::Method::POST, &endpoint)
                 .header("user-agent", user_agent)
-                .header("x-goog-api-client", "gl-go/1.23.2 gdcl/0.1")
+                .header("x-goog-api-client", muta_contracts::client_identity::ANTIGRAVITY_API_CLIENT_HEADER)
                 .json(&serde_json::json!({ "project": "" }));
             if !req.api_key.expose_secret().trim().is_empty() {
                 request = request.header(

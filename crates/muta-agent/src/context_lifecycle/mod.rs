@@ -195,7 +195,6 @@ pub struct ContextPlanner {
     budget: Budget,
     /// Per-item observation preview ceiling.
     observation_preview_tokens: u64,
-
 }
 
 impl ContextPlanner {
@@ -227,36 +226,63 @@ impl ContextPlanner {
         // Keep structured messages byte-exact. Without an explicit closed-group
         // projection, the entire tail is mandatory: role-based slicing would
         // separate calls/results or erase images and reasoning signatures.
-        let tail = serde_json::to_string(&ctx.tail).map_err(|e| PlanError::Encoding(e.to_string()))?;
+        let tail =
+            serde_json::to_string(&ctx.tail).map_err(|e| PlanError::Encoding(e.to_string()))?;
         let mut contents = vec![
             ("system_instructions", ctx.system_instructions.clone(), true),
             ("tool_schemas", ctx.tool_schemas.clone(), true),
             ("task_state", ctx.task_state.clone(), true),
-            ("checkpoint_summary", ctx.checkpoint_summary.clone().unwrap_or_default(), true),
+            (
+                "checkpoint_summary",
+                ctx.checkpoint_summary.clone().unwrap_or_default(),
+                true,
+            ),
             ("tail", tail, true),
             ("observations", String::new(), false),
             ("images", String::new(), true),
             ("temporary_context", ctx.temporary_context.join("\n"), true),
             ("current_user_input", ctx.current_user_input.clone(), true),
         ];
-        let mandatory: Vec<_> = contents.iter().filter(|(_, _, mandatory)| *mandatory)
-            .map(|(name, text, _)| BudgetComponent { name: (*name).into(), tokens: tokens_of(text) })
+        let mandatory: Vec<_> = contents
+            .iter()
+            .filter(|(_, _, mandatory)| *mandatory)
+            .map(|(name, text, _)| BudgetComponent {
+                name: (*name).into(),
+                tokens: tokens_of(text),
+            })
             .collect();
-        self.budget.admit(&mandatory).map_err(PlanError::Admission)?;
+        self.budget
+            .admit(&mandatory)
+            .map_err(PlanError::Admission)?;
         let mandatory_total = mandatory.iter().map(|c| c.tokens).sum::<u64>();
         let remaining = self.budget.input_ceiling - mandatory_total;
         let mut observations = String::new();
         let mut items = Vec::new();
         for obs in &ctx.observations {
-            let preview = tokenizer::truncate_str_to_tokens(&obs.preview,
-                self.observation_preview_tokens.min(usize::MAX as u64) as usize);
-            let rendered = format!("[observation {}; {:?}]\n{}\n", obs.fact_id.as_str(), obs.validity, preview);
+            let preview = tokenizer::truncate_str_to_tokens(
+                &obs.preview,
+                self.observation_preview_tokens.min(usize::MAX as u64) as usize,
+            );
+            let rendered = format!(
+                "[observation {}; {:?}]\n{}\n",
+                obs.fact_id.as_str(),
+                obs.validity,
+                preview
+            );
             let candidate = format!("{observations}{rendered}");
-            if tokens_of(&candidate) > remaining { break; }
+            if tokens_of(&candidate) > remaining {
+                break;
+            }
             items.push(PlannedItem {
-                fact_id: obs.fact_id.clone(), block: "observations",
-                representation: if preview.len() == obs.preview.len() { Representation::Full } else { Representation::Excerpt },
-                validity: obs.validity, tokens: tokens_of(preview),
+                fact_id: obs.fact_id.clone(),
+                block: "observations",
+                representation: if preview.len() == obs.preview.len() {
+                    Representation::Full
+                } else {
+                    Representation::Excerpt
+                },
+                validity: obs.validity,
+                tokens: tokens_of(preview),
             });
             observations = candidate;
         }
@@ -265,12 +291,26 @@ impl ContextPlanner {
         let mut blocks = Vec::with_capacity(contents.len());
         for (role, content, mandatory) in contents {
             let tokens = tokens_of(&content);
-            allocations.push(ComponentAllocation { block: role, tokens, mandatory });
+            allocations.push(ComponentAllocation {
+                block: role,
+                tokens,
+                mandatory,
+            });
             blocks.push(CompiledBlock {
-                role: role.into(), hash: format!("{:x}", Sha256::digest(content.as_bytes())), content, tokens,
+                role: role.into(),
+                hash: format!("{:x}", Sha256::digest(content.as_bytes())),
+                content,
+                tokens,
             });
         }
-        Ok(ContextPlan { budget: self.budget, blocks, allocations, items, scope, iterations: 1 })
+        Ok(ContextPlan {
+            budget: self.budget,
+            blocks,
+            allocations,
+            items,
+            scope,
+            iterations: 1,
+        })
     }
 }
 
@@ -317,11 +357,7 @@ impl RequestCompiler {
     /// Blocks are emitted in the canonical [`BLOCK_ORDER`] and hashed over
     /// their serialized bytes, so identical inputs yield byte-identical output
     /// (`INV-ADMIT-03`).
-    pub fn compile(
-        &self,
-        plan: &ContextPlan,
-        request_id: &RequestId,
-    ) -> RequestSnapshot {
+    pub fn compile(&self, plan: &ContextPlan, request_id: &RequestId) -> RequestSnapshot {
         let blocks = plan.blocks.clone();
 
         let manifest = RequestManifest {
@@ -353,7 +389,10 @@ mod tests {
     fn budget(window: u64, visible: u64, reasoning: u64, framing: u64) -> Budget {
         Budget::resolve(
             ModelWindow::tokens(window),
-            OutputReserve::Additive { visible_tokens: visible, reasoning_tokens: reasoning },
+            OutputReserve::Additive {
+                visible_tokens: visible,
+                reasoning_tokens: reasoning,
+            },
             FramingReserve::tokens(framing),
         )
         .unwrap()
@@ -379,26 +418,56 @@ mod tests {
     fn compilation_emits_only_admitted_bytes_and_counts_actual_content() {
         let planner = ContextPlanner::new(budget(8_000, 1_000, 0, 1_000));
         let mut ctx = assembled();
-        ctx.observations = (0..30).map(|i| ObservationPreview {
-            fact_id: format!("f{i}").into(), preview: "日本語😀secret-detail ".repeat(1_000), validity: Validity::Current,
-        }).collect();
+        ctx.observations = (0..30)
+            .map(|i| ObservationPreview {
+                fact_id: format!("f{i}").into(),
+                preview: "日本語😀secret-detail ".repeat(1_000),
+                validity: Validity::Current,
+            })
+            .collect();
         let plan = planner.plan(&ctx, RequestScope::Conversational).unwrap();
         // Mutating source material after admission cannot alter the snapshot.
         ctx.system_instructions = "unadmitted replacement".into();
         let compiled = RequestCompiler::new().compile(&plan, &RequestId::from("r"));
-        assert!(compiled.blocks.iter().all(|b| b.tokens == tokens_of(&b.content)));
+        assert!(
+            compiled
+                .blocks
+                .iter()
+                .all(|b| b.tokens == tokens_of(&b.content))
+        );
         assert!(compiled.blocks.iter().map(|b| b.tokens).sum::<u64>() <= plan.budget.input_ceiling);
-        assert!(!compiled.blocks.iter().any(|b| b.content.contains("unadmitted replacement")));
-        assert!(compiled.blocks.iter().find(|b| b.role == "observations").unwrap().content.len()
-            < ctx.observations.iter().map(|o| o.preview.len()).sum::<usize>());
+        assert!(
+            !compiled
+                .blocks
+                .iter()
+                .any(|b| b.content.contains("unadmitted replacement"))
+        );
+        assert!(
+            compiled
+                .blocks
+                .iter()
+                .find(|b| b.role == "observations")
+                .unwrap()
+                .content
+                .len()
+                < ctx
+                    .observations
+                    .iter()
+                    .map(|o| o.preview.len())
+                    .sum::<usize>()
+        );
     }
 
     #[test]
     fn oversized_structured_tail_is_refused_without_partial_tool_groups() {
         let planner = ContextPlanner::new(budget(8_000, 1_000, 0, 1_000));
         let mut ctx = assembled();
-        ctx.tail.push(Message::new(Role::Tool, "result ".repeat(20_000)));
-        assert!(matches!(planner.plan(&ctx, RequestScope::Conversational), Err(PlanError::Admission(_))));
+        ctx.tail
+            .push(Message::new(Role::Tool, "result ".repeat(20_000)));
+        assert!(matches!(
+            planner.plan(&ctx, RequestScope::Conversational),
+            Err(PlanError::Admission(_))
+        ));
     }
 
     #[test]

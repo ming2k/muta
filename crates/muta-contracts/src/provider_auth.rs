@@ -126,7 +126,8 @@ pub struct OAuthConfig {
     pub extra_refresh_params: Vec<(Cow<'static, str>, Cow<'static, str>)>,
     /// Extra HTTP headers sent to token/device endpoints.
     pub extra_headers: Vec<(Cow<'static, str>, Cow<'static, str>)>,
-    /// Custom User-Agent header (e.g. "antigravity/1.23.2 windows/amd64").
+    /// Custom User-Agent header (e.g. "antigravity/cli/1.2.12 (aidev_client;
+    /// os_type=windows; arch=amd64; cl=0; auth_method=consumer)").
     pub user_agent: Option<Cow<'static, str>>,
     /// Whether this client registration accepts a localhost browser callback.
     /// Some OAuth applications expose an authorize endpoint but only register
@@ -457,7 +458,10 @@ mod tests {
 
         assert_eq!(cfg.provider_id, "custom-provider");
         assert_eq!(cfg.client_id, "client-123");
-        assert_eq!(cfg.authorize_url, "https://auth.example.com/oauth/authorize");
+        assert_eq!(
+            cfg.authorize_url,
+            "https://auth.example.com/oauth/authorize"
+        );
         assert_eq!(cfg.token_url, "https://auth.example.com/oauth/token");
         assert_eq!(cfg.scope, "openid profile");
         assert_eq!(cfg.device_flow, DeviceFlowMode::Rfc8628);
@@ -470,6 +474,9 @@ mod tests {
             .oauth_path("/callback")
             .build();
 
-        assert_eq!(cfg.redirect_uri(Some(56121)), "http://127.0.0.1:56121/callback");
+        assert_eq!(
+            cfg.redirect_uri(Some(56121)),
+            "http://127.0.0.1:56121/callback"
+        );
     }
 }

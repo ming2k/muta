@@ -145,18 +145,83 @@ pub const ANTIGRAVITY_BRAND_NAME: &str = "Antigravity CLI";
 /// Google Jetski fallback brand name.
 pub const ANTIGRAVITY_JETSKI_BRAND_NAME: &str = "Jetski CLI";
 
-/// Google Antigravity version emulated by muta.
-pub const ANTIGRAVITY_VERSION: &str = "1.23.2";
+/// Google Antigravity CLI product version emulated by muta.
+///
+/// This is the *standalone CLI* (`agy`) version, not an IDE build number: the
+/// Cloud Code inference backend admits requests only from the `antigravity/cli/`
+/// product brand with a numeric version of at least
+/// [`ANTIGRAVITY_CLI_MIN_PRODUCT_VERSION`]. Verified live against
+/// `v1internal:generateContent` — see ADR-0289.
+pub const ANTIGRAVITY_VERSION: &str = "1.2.12";
+
+/// Lowest Antigravity CLI version the Cloud Code backend routes to inference.
+///
+/// Empirically derived (ADR-0289): the backend returns HTTP `404 NOT_FOUND` for
+/// `antigravity/cli/<v>` below `1.2`, and admits (`200`/`429`) at or above it.
+/// Pinning the emulated version at or above this floor keeps the request inside
+/// the admitted band even as Google advances the real client.
+pub const ANTIGRAVITY_CLI_MIN_PRODUCT_VERSION: &str = "1.2";
+
+/// Product brand segment the Cloud Code backend requires in the User-Agent.
+///
+/// The current `agy` identifies as `antigravity/cli/…`; the older
+/// `antigravity/<version>` form (no brand segment) is now rejected with
+/// `404 NOT_FOUND` before inference routing.
+pub const ANTIGRAVITY_CLI_BRAND: &str = "cli";
+
+/// Google Antigravity client kind reported inside the User-Agent comment.
+pub const ANTIGRAVITY_CLIENT_KIND: &str = "aidev_client";
+
+/// Authentication surface the User-Agent comment advertises for subscription
+/// (Google One / personal consumer) accounts.
+pub const ANTIGRAVITY_AUTH_METHOD_CONSUMER: &str = "consumer";
 
 /// User-Agent header value sent for Google Antigravity client profile.
-pub const ANTIGRAVITY_USER_AGENT: &str = "antigravity/1.23.2 linux/amd64";
+///
+/// Faithful to the identity the current `agy` CLI emits on every Cloud Code
+/// request: `antigravity/cli/<version> (<kind>; os_type=…; arch=…; cl=…;
+/// auth_method=…)`. The `cl=` build number is a build-internal counter the
+/// backend does not discriminate on (ADR-0289), so muta carries a stable
+/// placeholder rather than tracking Google's build numbering.
+pub const ANTIGRAVITY_USER_AGENT: &str = "antigravity/cli/1.2.12 \
+     (aidev_client; os_type=linux; arch=amd64; cl=0; auth_method=consumer)";
 
-/// Construct an Antigravity User-Agent string formatted for the target OS and CPU architecture.
+/// Build number placeholder carried in the User-Agent `cl=` field.
+pub const ANTIGRAVITY_BUILD_NUMBER: &str = "0";
+
+/// Construct an Antigravity CLI User-Agent string for the target OS and CPU
+/// architecture, matching the `agy` CLI wire format.
 pub fn antigravity_user_agent(version: &str, os: &str, arch: &str) -> String {
-    format!("antigravity/{version} {os}/{arch}")
+    antigravity_cli_user_agent(
+        version,
+        os,
+        arch,
+        ANTIGRAVITY_CLIENT_KIND,
+        ANTIGRAVITY_BUILD_NUMBER,
+        ANTIGRAVITY_AUTH_METHOD_CONSUMER,
+    )
 }
 
-/// Google API client attribution header value sent by Antigravity CLI.
+/// Construct a fully specified Antigravity CLI User-Agent string.
+///
+/// `auth_method` is the `AuthMethod` the client advertises (`consumer` for a
+/// personal Google One subscription, `business` for enterprise surfaces).
+pub fn antigravity_cli_user_agent(
+    version: &str,
+    os: &str,
+    arch: &str,
+    client_kind: &str,
+    build_number: &str,
+    auth_method: &str,
+) -> String {
+    format!(
+        "antigravity/{ANTIGRAVITY_CLI_BRAND}/{version} \
+         ({client_kind}; os_type={os}; arch={arch}; \
+         cl={build_number}; auth_method={auth_method})"
+    )
+}
+
+/// Google API client attribution header value sent by the Antigravity client.
 pub const ANTIGRAVITY_API_CLIENT_HEADER: &str = "gl-go/1.23.2 gdcl/0.1";
 
 /// Remote control proxy identification header: `X-Jetski-Via-Remote-Control`.
@@ -909,7 +974,7 @@ mod tests {
         assert!(
             agy.headers()
                 .iter()
-                .any(|(k, v)| *k == "x-goog-api-client" && *v == "gl-go/1.23.2 gdcl/0.1")
+                .any(|(k, v)| *k == "x-goog-api-client" && *v == ANTIGRAVITY_API_CLIENT_HEADER)
         );
 
         let cline = ClientProfile::Cline;
@@ -1000,6 +1065,7 @@ mod tests {
         assert_eq!(meta.device_fingerprint, "fp-abcd-5678");
         assert_eq!(meta.runtime_environment, "SSH session");
         assert!(meta.user_agent().starts_with("antigravity/"));
+        assert!(meta.user_agent().starts_with("antigravity/cli/"));
 
         let remote = ClientProfile::antigravity_remote_control("webchannel");
         let headers = remote.headers();
@@ -1018,6 +1084,74 @@ mod tests {
             headers
                 .iter()
                 .any(|(k, v)| *k == "x-goog-api-client" && *v == ANTIGRAVITY_API_CLIENT_HEADER)
+        );
+    }
+
+    /// The Cloud Code backend admits inference only from the `antigravity/cli/`
+    /// brand with a numeric version at or above the pinned floor (ADR-0289).
+    /// This test freezes that wire identity so it cannot silently regress to the
+    /// rejected `antigravity/<version>` form.
+    #[test]
+    fn antigravity_user_agent_matches_cli_admitted_form() {
+        assert_eq!(
+            ANTIGRAVITY_USER_AGENT,
+            format!(
+                "antigravity/cli/1.2.12 \
+                 (aidev_client; os_type=linux; arch=amd64; cl=0; auth_method=consumer)"
+            )
+        );
+        assert!(ANTIGRAVITY_USER_AGENT.starts_with("antigravity/cli/1.2.12 ("));
+
+        // Every component the backend keys on is present and correctly named.
+        assert!(ANTIGRAVITY_USER_AGENT.contains("os_type=linux"));
+        assert!(ANTIGRAVITY_USER_AGENT.contains("arch=amd64"));
+        assert!(ANTIGRAVITY_USER_AGENT.contains("cl=0"));
+        assert!(ANTIGRAVITY_USER_AGENT.contains("auth_method=consumer"));
+
+        // The brand segment is what separates an admitted request from a 404.
+        assert!(!ANTIGRAVITY_USER_AGENT.starts_with("antigravity/1."));
+        assert!(
+            ANTIGRAVITY_USER_AGENT.starts_with(&format!("antigravity/{}/", ANTIGRAVITY_CLI_BRAND))
+        );
+
+        // The pinned emulated version satisfies the derived admission floor.
+        let pinned: Vec<u32> = ANTIGRAVITY_VERSION
+            .split('.')
+            .filter_map(|p| p.parse().ok())
+            .collect();
+        let floor: Vec<u32> = ANTIGRAVITY_CLI_MIN_PRODUCT_VERSION
+            .split('.')
+            .filter_map(|p| p.parse().ok())
+            .collect();
+        assert!(
+            pinned >= floor,
+            "pinned version {ANTIGRAVITY_VERSION} is below the admission floor \
+             {ANTIGRAVITY_CLI_MIN_PRODUCT_VERSION}"
+        );
+
+        // The builder reproduces the constant for the native platform triple.
+        assert!(
+            antigravity_user_agent(
+                ANTIGRAVITY_VERSION,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            )
+            .starts_with("antigravity/cli/1.2.12 (aidev_client;")
+        );
+    }
+
+    /// A profile parsed from an older or foreign Antigravity User-Agent must
+    /// still resolve to the Antigravity preset (route parity, not wire echo).
+    #[test]
+    fn antigravity_user_agent_round_trips_through_preset_detection() {
+        assert_eq!(
+            ClientProfile::from_user_agent(ANTIGRAVITY_USER_AGENT),
+            ClientProfile::Antigravity
+        );
+        // Legacy form still recognised for inbound profile parsing.
+        assert_eq!(
+            ClientProfile::from_user_agent("antigravity/1.23.2 linux/amd64"),
+            ClientProfile::Antigravity
         );
     }
 }

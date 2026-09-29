@@ -123,8 +123,7 @@ impl AgentRoleProfile {
              verify results post-action, and proactively seek confirmation via `ask_user` before executing high-risk, destructive, \
              or potentially connectivity-breaking operations.",
         );
-        Self::with_identity("ops", identity)
-            .with_tools(MainAgentRole::Ops.tool_selection())
+        Self::with_identity("ops", identity).with_tools(MainAgentRole::Ops.tool_selection())
     }
 
     /// Narrow the capability scope. Builder-style.
@@ -450,12 +449,8 @@ impl MainAgentRole {
     ];
 
     /// Built-in tools admitted for philosophist sessions.
-    pub const PHILOSOPHIST_TOOLS: &'static [&'static str] = &[
-        "read_url",
-        "search_web",
-        "ask_user",
-        "recall_memory",
-    ];
+    pub const PHILOSOPHIST_TOOLS: &'static [&'static str] =
+        &["read_url", "search_web", "ask_user", "recall_memory"];
 
     /// Built-in tools admitted for ops sessions.
     pub const OPS_TOOLS: &'static [&'static str] = &[
@@ -496,9 +491,7 @@ impl AgentRole for MainAgentRole {
             MainAgentRole::Philosophist => {
                 ToolSelection::only(MainAgentRole::PHILOSOPHIST_TOOLS.iter().copied())
             }
-            MainAgentRole::Ops => {
-                ToolSelection::only(MainAgentRole::OPS_TOOLS.iter().copied())
-            }
+            MainAgentRole::Ops => ToolSelection::only(MainAgentRole::OPS_TOOLS.iter().copied()),
         }
     }
 }
@@ -583,10 +576,7 @@ impl AgentRoleDelegation {
     /// The developer agent role delegation policy: native toolchain authority.
     pub const DEVELOPER: AgentRoleDelegation = AgentRoleDelegation {
         role_id: "developer",
-        subagent_roles: &[
-            SubAgentProfile::EXPLORE.name,
-            SubAgentProfile::DEBUG.name,
-        ],
+        subagent_roles: &[SubAgentProfile::EXPLORE.name, SubAgentProfile::DEBUG.name],
     };
 
     /// The philosophist agent role delegation policy: workspace-free philosophical exploration.
@@ -611,11 +601,8 @@ impl AgentRoleDelegation {
     }
 
     /// All shipping agent role delegations, developer first.
-    pub const ALL: &'static [AgentRoleDelegation] = &[
-        Self::DEVELOPER,
-        Self::PHILOSOPHIST,
-        Self::OPS,
-    ];
+    pub const ALL: &'static [AgentRoleDelegation] =
+        &[Self::DEVELOPER, Self::PHILOSOPHIST, Self::OPS];
 
     pub fn declared_tools(&self) -> Option<&'static [&'static str]> {
         match self.role_id {

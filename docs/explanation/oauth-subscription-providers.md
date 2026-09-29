@@ -104,13 +104,19 @@ endpoints (`https://cloudcode-pa.googleapis.com` and
 
 ### Client Fingerprint and Request Headers
 
-The CodeAssist gateway requires specific client headers matching official
-internal toolchains:
+The CodeAssist gateway admits inference only for requests carrying the
+Antigravity CLI's product brand. muta mirrors the identity the current `agy`
+CLI emits:
 
-- `User-Agent: Antigravity/1.23.2 (Linux; x86_64)`
+- `User-Agent: antigravity/cli/1.2.12 (aidev_client; os_type=linux; arch=amd64; cl=0; auth_method=consumer)`
 - `x-goog-api-client: gl-go/1.23.2 gdcl/0.1`
 
-Requests lacking these headers receive `403 Forbidden` or generic gateway errors.
+The `/cli/` brand segment is load-bearing: `v1internal:generateContent`
+answers `404 NOT_FOUND` for the legacy brand-less form
+(`antigravity/1.23.2 linux/amd64`) and admits `antigravity/cli/<v>` for
+numeric `v >= 1.2`. See
+[ADR-0289](../adr/0289-antigravity-cli-brand-identity-and-admitted-version-band.md)
+for the measured admission band and the captured wire identity.
 
 ### Project Onboarding and Discovery
 

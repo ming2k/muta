@@ -506,8 +506,12 @@ fn plan_prune(messages: &[Message], protect_recent_tokens: usize) -> Vec<PrunePl
             continue;
         }
         let msg = &messages[i];
-        let Some(images) = &msg.images else { continue; };
-        if images.is_empty() { continue; }
+        let Some(images) = &msg.images else {
+            continue;
+        };
+        if images.is_empty() {
+            continue;
+        }
 
         let mut invoices = Vec::new();
         for img in images {
@@ -803,7 +807,9 @@ fn cleared_placeholder_with_reason(meta: &ToolMeta, content: &str, reason: Optio
         None => String::new(),
     };
     if let Some(call_id) = &meta.call_id {
-        format!("{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens){reason_clause} — inspect with handle \"call:{call_id}\"]")
+        format!(
+            "{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens){reason_clause} — inspect with handle \"call:{call_id}\"]"
+        )
     } else {
         format!("{CLEARED_TOOL_PREFIX} {label} ({lines} lines, {tokens} tokens){reason_clause}]")
     }
@@ -825,7 +831,9 @@ fn truncate_middle(content: &str, call_id: Option<&str>) -> String {
     let tail: String = tail_rev.chars().rev().collect();
     let dropped = total - head_tokens - tokenizer::count_tokens(&tail);
     if let Some(id) = call_id {
-        format!("{head}\n[... {dropped}{ELIDED_MARKER} — inspect with handle \"call:{id}\"]\n{tail}")
+        format!(
+            "{head}\n[... {dropped}{ELIDED_MARKER} — inspect with handle \"call:{id}\"]\n{tail}"
+        )
     } else {
         format!("{head}\n[... {dropped}{ELIDED_MARKER}\n{tail}")
     }
@@ -1657,11 +1665,12 @@ mod tests {
 
     #[test]
     fn user_uploaded_image_is_evicted_with_artifact_invoice() {
-        let user_msg = Message::new(Role::User, "User prompt with visual")
-            .with_images(vec![crate::ImagePart {
+        let user_msg = Message::new(Role::User, "User prompt with visual").with_images(vec![
+            crate::ImagePart {
                 mime: "image/png".into(),
                 data: "very_large_base64_data".into(),
-            }]);
+            },
+        ]);
         let assistant_msg = Message::new(Role::Assistant, "I will analyze this.");
         let mut messages = vec![user_msg, assistant_msg];
 
@@ -1669,6 +1678,8 @@ mod tests {
         assert!(out.cleared_count >= 1);
         assert!(messages[0].images.is_none());
         assert!(messages[0].content.starts_with("User prompt with visual"));
-        assert!(messages[0].content.contains("[cleared image payload (image/png) — rehydrate with inspect handle \"artifact:"));
+        assert!(messages[0].content.contains(
+            "[cleared image payload (image/png) — rehydrate with inspect handle \"artifact:"
+        ));
     }
 }

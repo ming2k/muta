@@ -393,7 +393,8 @@ mod tests {
         assert!(
             agy.headers()
                 .iter()
-                .any(|(k, v)| *k == "x-goog-api-client" && *v == "gl-go/1.23.2 gdcl/0.1")
+                .any(|(k, v)| *k == "x-goog-api-client"
+                    && *v == muta_contracts::client_identity::ANTIGRAVITY_API_CLIENT_HEADER)
         );
 
         let opencode = ClientProfile::OpenCode;

@@ -33,10 +33,10 @@ pub use axes::{
     Capture, Deletion, Representation, Retention, Sensitivity, SourceAuthority, Validity,
 };
 pub use budget::{
-    AdmissionError, Budget, BudgetComponent, BudgetProvenance, ModelBudgetContract, CAS_MAX_ATTEMPTS, FramingReserve, ModelWindow,
-    OutputReserve, PLANNING_MAX_ITERATIONS, WatermarkPolicy,
+    AdmissionError, Budget, BudgetComponent, BudgetProvenance, CAS_MAX_ATTEMPTS, FramingReserve,
+    ModelBudgetContract, ModelWindow, OutputReserve, PLANNING_MAX_ITERATIONS, WatermarkPolicy,
 };
-pub use group::{ResultAcceptance, ExternalExecution, ExecutionGroup, GroupCall};
+pub use group::{ExecutionGroup, ExternalExecution, GroupCall, ResultAcceptance};
 pub use ids::{
     ArtifactId, AttemptId, BranchId, CheckpointId, ExecutionId, FactId, RequestId, RoundId, TaskId,
     TurnId, ViewId,
@@ -47,8 +47,8 @@ pub use model::{
     RequirementRevision, SourceInterval, SourceManifest, TaskState, Tombstone,
 };
 pub use policy::{
-    CONTEXT_POLICY_SCHEMA_VERSION, ContextPolicy, LegacyKeyRejected,
-    PolicyError, reject_legacy_runtime_key,
+    CONTEXT_POLICY_SCHEMA_VERSION, ContextPolicy, LegacyKeyRejected, PolicyError,
+    reject_legacy_runtime_key,
 };
 pub use retrieval::{
     AuthScope, CursorBinding, HandleScheme, HandleScope, InspectError, InspectHandle,

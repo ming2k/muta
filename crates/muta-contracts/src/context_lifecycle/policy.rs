@@ -181,19 +181,39 @@ impl ContextPolicy {
         }
         for (name, value) in [
             ("capture_queue_chunks", self.capture_queue_chunks),
-            ("capture_bytes_per_execution", self.capture_bytes_per_execution),
-            ("session_artifact_quota_bytes", self.session_artifact_quota_bytes),
-            ("checkpoint_call_timeout_ms", self.checkpoint_call_timeout_ms),
+            (
+                "capture_bytes_per_execution",
+                self.capture_bytes_per_execution,
+            ),
+            (
+                "session_artifact_quota_bytes",
+                self.session_artifact_quota_bytes,
+            ),
+            (
+                "checkpoint_call_timeout_ms",
+                self.checkpoint_call_timeout_ms,
+            ),
             ("checkpoint_max_calls", self.checkpoint_max_calls as u64),
-            ("checkpoint_max_reduction_depth", self.checkpoint_max_reduction_depth as u64),
+            (
+                "checkpoint_max_reduction_depth",
+                self.checkpoint_max_reduction_depth as u64,
+            ),
             ("gc_batch_objects", self.gc_batch_objects as u64),
             ("gc_batch_ms", self.gc_batch_ms),
             ("fallback_window_tokens", self.fallback_window_tokens),
         ] {
-            if value == 0 { return Err(PolicyError::InvalidLimit { name: name.into() }); }
+            if value == 0 {
+                return Err(PolicyError::InvalidLimit { name: name.into() });
+            }
         }
-        if self.capture_chunk_bytes.checked_mul(self.capture_queue_chunks).is_none() {
-            return Err(PolicyError::InvalidLimit { name: "capture queue capacity".into() });
+        if self
+            .capture_chunk_bytes
+            .checked_mul(self.capture_queue_chunks)
+            .is_none()
+        {
+            return Err(PolicyError::InvalidLimit {
+                name: "capture queue capacity".into(),
+            });
         }
         self.watermarks
             .validate()

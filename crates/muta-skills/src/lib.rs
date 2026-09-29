@@ -465,6 +465,9 @@ mod tests {
                 break;
             }
         }
-        assert!(loaded, "empty registry must be populated automatically on watcher startup");
+        assert!(
+            loaded,
+            "empty registry must be populated automatically on watcher startup"
+        );
     }
 }

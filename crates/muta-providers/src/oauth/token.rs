@@ -13,10 +13,11 @@ use muta_contracts::provider_auth::{ClientAuthMethod, OAuthConfig, PkceMode, Tok
 /// Refresh the access token ahead of expiry so long-running calls don't hit a 401.
 pub const ACCESS_TOKEN_REFRESH_SKEW_MS: i64 = 120_000;
 
-/// Standard Antigravity User-Agent matching official Google Cloud Code / Antigravity CLI.
+/// Standard Antigravity User-Agent matching the official Antigravity CLI.
 pub const ANTIGRAVITY_USER_AGENT: &str = muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT;
 /// Antigravity Google API client header.
-pub const ANTIGRAVITY_API_CLIENT_HEADER: &str = "gl-go/1.23.2 gdcl/0.1";
+pub const ANTIGRAVITY_API_CLIENT_HEADER: &str =
+    muta_contracts::client_identity::ANTIGRAVITY_API_CLIENT_HEADER;
 /// Endpoint for Antigravity loadCodeAssist account metadata.
 pub const ANTIGRAVITY_LOAD_CODE_ASSIST_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
@@ -31,6 +32,13 @@ pub const ANTIGRAVITY_FETCH_AVAILABLE_MODELS_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels";
 /// Google UserInfo endpoint.
 pub const GOOGLE_USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
+
+/// IDE platform enum the Cloud Code `ClientMetadata` accepts for a Linux x86_64
+/// client. The current `agy` CLI sends only `{"ideType":"ANTIGRAVITY"}` on
+/// `loadCodeAssist` (captured live, ADR-0289) — the additional fields below are
+/// optional and retained because the backend honours them when present, which
+/// keeps the onboarding path working against stricter deployments.
+pub const ANTIGRAVITY_IDE_PLATFORM: &str = "LINUX_AMD64";
 
 /// A successful token response from any grant type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -462,9 +470,9 @@ pub async fn resolve_antigravity_project(
     let load_body = serde_json::json!({
         "metadata": {
             "ideType": "ANTIGRAVITY",
-            "ideVersion": "1.23.2",
-            "ideName": "antigravity",
-            "platform": "LINUX_AMD64",
+            "ideVersion": muta_contracts::client_identity::ANTIGRAVITY_VERSION,
+            "ideName": muta_contracts::client_identity::ANTIGRAVITY_APP_NAME,
+            "platform": ANTIGRAVITY_IDE_PLATFORM,
             "pluginType": "GEMINI"
         }
     });
@@ -512,9 +520,9 @@ pub async fn resolve_antigravity_project(
             "tierId": tier_id,
             "metadata": {
                 "ideType": "ANTIGRAVITY",
-                "ideVersion": "1.23.2",
-                "ideName": "antigravity",
-                "platform": "LINUX_AMD64",
+                "ideVersion": muta_contracts::client_identity::ANTIGRAVITY_VERSION,
+                "ideName": muta_contracts::client_identity::ANTIGRAVITY_APP_NAME,
+                "platform": ANTIGRAVITY_IDE_PLATFORM,
                 "pluginType": "GEMINI"
             }
         });

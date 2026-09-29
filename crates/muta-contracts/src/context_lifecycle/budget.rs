@@ -35,7 +35,10 @@ pub enum OutputReserve {
     /// A generation cap including both visible and reasoning output.
     Inclusive { total_tokens: u64 },
     /// Independently bounded components which consume a shared window.
-    Additive { visible_tokens: u64, reasoning_tokens: u64 },
+    Additive {
+        visible_tokens: u64,
+        reasoning_tokens: u64,
+    },
 }
 
 impl OutputReserve {
@@ -43,8 +46,12 @@ impl OutputReserve {
     pub fn total(self) -> Result<u64, AdmissionError> {
         match self {
             Self::Inclusive { total_tokens } => Ok(total_tokens),
-            Self::Additive { visible_tokens, reasoning_tokens } => visible_tokens
-                .checked_add(reasoning_tokens).ok_or(AdmissionError::ArithmeticOverflow),
+            Self::Additive {
+                visible_tokens,
+                reasoning_tokens,
+            } => visible_tokens
+                .checked_add(reasoning_tokens)
+                .ok_or(AdmissionError::ArithmeticOverflow),
         }
     }
 }
@@ -53,9 +60,17 @@ impl OutputReserve {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BudgetProvenance {
-    Declared { source: String, revision: String },
-    Configured { policy_revision: u32 },
-    Estimated { source: String, calibration_revision: u64 },
+    Declared {
+        source: String,
+        revision: String,
+    },
+    Configured {
+        policy_revision: u32,
+    },
+    Estimated {
+        source: String,
+        calibration_revision: u64,
+    },
 }
 
 /// Versioned accounting for a model/route. Absence of a shared window never
@@ -79,26 +94,41 @@ impl ModelBudgetContract {
         }
         let mut ceilings = Vec::with_capacity(2);
         if let Some(window) = self.shared_window {
-            let ceiling = window.checked_sub(output)
+            let ceiling = window
+                .checked_sub(output)
                 .and_then(|v| v.checked_sub(self.shared_margin))
                 .filter(|v| *v > 0)
                 .ok_or(AdmissionError::ZeroInputCeiling {
-                    window, output, framing: self.shared_margin,
+                    window,
+                    output,
+                    framing: self.shared_margin,
                 })?;
             ceilings.push(ceiling);
         }
         if let Some(window) = self.input_limit {
-            ceilings.push(window.checked_sub(self.input_margin).filter(|v| *v > 0)
-                .ok_or(AdmissionError::ZeroInputCeiling {
-                    window, output: 0, framing: self.input_margin,
-                })?);
+            ceilings.push(
+                window
+                    .checked_sub(self.input_margin)
+                    .filter(|v| *v > 0)
+                    .ok_or(AdmissionError::ZeroInputCeiling {
+                        window,
+                        output: 0,
+                        framing: self.input_margin,
+                    })?,
+            );
         }
-        let input_ceiling = ceilings.into_iter().min()
+        let input_ceiling = ceilings
+            .into_iter()
+            .min()
             .ok_or(AdmissionError::BudgetContractUnavailable)?;
         Ok(Budget {
             window: self.shared_window.or(self.input_limit).unwrap_or(0),
             output,
-            framing: if self.shared_window.is_some() { self.shared_margin } else { self.input_margin },
+            framing: if self.shared_window.is_some() {
+                self.shared_margin
+            } else {
+                self.input_margin
+            },
             input_ceiling,
         })
     }
@@ -246,12 +276,15 @@ impl Budget {
             shared_margin: framing.tokens,
             input_margin: 0,
             provenance: BudgetProvenance::Configured { policy_revision: 1 },
-        }.resolve()
+        }
+        .resolve()
     }
 
     /// Refuse when the mandatory blocks alone exceed the input ceiling.
     pub fn admit(&self, mandatory: &[BudgetComponent]) -> Result<(), AdmissionError> {
-        let total = mandatory.iter().try_fold(0u64, |total, c| total.checked_add(c.tokens))
+        let total = mandatory
+            .iter()
+            .try_fold(0u64, |total, c| total.checked_add(c.tokens))
             .ok_or(AdmissionError::ArithmeticOverflow)?;
         if total > self.input_ceiling {
             return Err(AdmissionError::ContextAdmissionExceeded {
@@ -358,7 +391,10 @@ mod tests {
     fn budget(window: u64, visible: u64, reasoning: u64, framing: u64) -> Budget {
         Budget::resolve(
             ModelWindow::tokens(window),
-            OutputReserve::Additive { visible_tokens: visible, reasoning_tokens: reasoning },
+            OutputReserve::Additive {
+                visible_tokens: visible,
+                reasoning_tokens: reasoning,
+            },
             FramingReserve::tokens(framing),
         )
         .unwrap()
@@ -367,30 +403,62 @@ mod tests {
     #[test]
     fn model_contract_distinguishes_inclusive_additive_and_independent_limits() {
         let mut contract = ModelBudgetContract {
-            shared_window: Some(100_000), input_limit: Some(90_000),
-            output: OutputReserve::Inclusive { total_tokens: 20_000 },
-            output_limit: Some(40_000), shared_margin: 1_000, input_margin: 2_000,
-            provenance: BudgetProvenance::Declared { source: "fixture".into(), revision: "1".into() },
+            shared_window: Some(100_000),
+            input_limit: Some(90_000),
+            output: OutputReserve::Inclusive {
+                total_tokens: 20_000,
+            },
+            output_limit: Some(40_000),
+            shared_margin: 1_000,
+            input_margin: 2_000,
+            provenance: BudgetProvenance::Declared {
+                source: "fixture".into(),
+                revision: "1".into(),
+            },
         };
         assert_eq!(contract.resolve().unwrap().input_ceiling, 79_000);
-        contract.output = OutputReserve::Additive { visible_tokens: 20_000, reasoning_tokens: 10_000 };
+        contract.output = OutputReserve::Additive {
+            visible_tokens: 20_000,
+            reasoning_tokens: 10_000,
+        };
         assert_eq!(contract.resolve().unwrap().input_ceiling, 69_000);
         contract.shared_window = None;
         assert_eq!(contract.resolve().unwrap().input_ceiling, 88_000);
         contract.input_limit = None;
-        assert_eq!(contract.resolve(), Err(AdmissionError::BudgetContractUnavailable));
+        assert_eq!(
+            contract.resolve(),
+            Err(AdmissionError::BudgetContractUnavailable)
+        );
     }
 
     #[test]
     fn overflowing_budgets_fail_closed_and_large_watermarks_remain_exact() {
-        assert_eq!(OutputReserve::Additive { visible_tokens: u64::MAX, reasoning_tokens: 1 }.total(),
-            Err(AdmissionError::ArithmeticOverflow));
-        assert_eq!(WatermarkPolicy::DEFAULT.tokens_at(u64::MAX, 10_000), u64::MAX);
+        assert_eq!(
+            OutputReserve::Additive {
+                visible_tokens: u64::MAX,
+                reasoning_tokens: 1
+            }
+            .total(),
+            Err(AdmissionError::ArithmeticOverflow)
+        );
+        assert_eq!(
+            WatermarkPolicy::DEFAULT.tokens_at(u64::MAX, 10_000),
+            u64::MAX
+        );
         let b = budget(100, 1, 0, 1);
-        assert_eq!(b.admit(&[
-            BudgetComponent { name: "a".into(), tokens: u64::MAX },
-            BudgetComponent { name: "b".into(), tokens: 1 },
-        ]), Err(AdmissionError::ArithmeticOverflow));
+        assert_eq!(
+            b.admit(&[
+                BudgetComponent {
+                    name: "a".into(),
+                    tokens: u64::MAX
+                },
+                BudgetComponent {
+                    name: "b".into(),
+                    tokens: 1
+                },
+            ]),
+            Err(AdmissionError::ArithmeticOverflow)
+        );
     }
 
     #[test]
@@ -419,7 +487,9 @@ mod tests {
     fn zero_or_negative_ceiling_is_a_typed_error() {
         let err = Budget::resolve(
             ModelWindow::tokens(4_000),
-            OutputReserve::Inclusive { total_tokens: 4_000 },
+            OutputReserve::Inclusive {
+                total_tokens: 4_000,
+            },
             FramingReserve::tokens(1024),
         )
         .unwrap_err();
@@ -494,8 +564,6 @@ mod tests {
             FramingReserve::for_window(ModelWindow::tokens(100_000)).tokens,
             3_000
         );
-
-
     }
 
     #[test]

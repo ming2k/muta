@@ -609,7 +609,9 @@ impl GoogleProvider {
 
             headers.insert(
                 http::header::HeaderName::from_static("x-goog-api-client"),
-                http::header::HeaderValue::from_static("gl-go/1.23.2 gdcl/0.1"),
+                http::header::HeaderValue::from_static(
+                    muta_contracts::client_identity::ANTIGRAVITY_API_CLIENT_HEADER,
+                ),
             );
 
             let project = auth

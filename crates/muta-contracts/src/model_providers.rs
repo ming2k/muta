@@ -71,20 +71,12 @@ pub const OPENCODE_GO_MODELS: &[&str] = &[
     "deepseek-v4.1-flash",
 ];
 
-pub const OPENCODE_CONSOLE_MODELS: &[&str] = &[
-    "claude-sonnet-4-6",
-    "deepseek-v4-flash",
-    "glm-5.2",
-];
+pub const OPENCODE_CONSOLE_MODELS: &[&str] = &["claude-sonnet-4-6", "deepseek-v4-flash", "glm-5.2"];
 
 /// OpenCode Zen relay seeds. The key-authenticated `/zen/v1` surface publishes
 /// a public `/zen/v1/models` catalog, which is authoritative; this is the
 /// offline seed before the first refresh.
-pub const OPENCODE_ZEN_MODELS: &[&str] = &[
-    "claude-sonnet-4-6",
-    "deepseek-v4-flash",
-    "glm-5.2",
-];
+pub const OPENCODE_ZEN_MODELS: &[&str] = &["claude-sonnet-4-6", "deepseek-v4-flash", "glm-5.2"];
 
 pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.3", "glm-5.3-flash", "glm-5.2"];
 
@@ -95,11 +87,7 @@ pub const ZAI_CODE_MODELS: &[&str] = &["glm-5.3", "glm-5.3-flash", "glm-5.2"];
 /// DeepSeek / Kimi third-party rows are not seeded — their capability
 /// baselines are owned by their home providers and the live catalog serves
 /// them (see `muta-providers::registry::qianwen`).
-pub const QIANWEN_BUILTIN_MODELS: &[&str] = &[
-    "qwen3.8-max",
-    "qwen3.8-flash",
-    "qwen3.6-flash",
-];
+pub const QIANWEN_BUILTIN_MODELS: &[&str] = &["qwen3.8-max", "qwen3.8-flash", "qwen3.6-flash"];
 
 pub const XAI_BUILTIN_MODELS: &[&str] = &["grok-4.5", "grok-4.20", "grok-4.3", "grok-build-0.1"];
 
@@ -234,7 +222,13 @@ mod provider_id_tests {
             let label = model_provider_label(id);
             assert!(!label.is_empty(), "provider {id} has empty label");
         }
-        assert_eq!(model_provider_label("google-antigravity"), "Google Antigravity");
-        assert_eq!(model_provider_label("openai-subscription"), "ChatGPT Subscription");
+        assert_eq!(
+            model_provider_label("google-antigravity"),
+            "Google Antigravity"
+        );
+        assert_eq!(
+            model_provider_label("openai-subscription"),
+            "ChatGPT Subscription"
+        );
     }
 }

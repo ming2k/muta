@@ -442,7 +442,10 @@ impl Transcript {
         let mut frozen: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
         for directive in &self.directives {
             match &directive.payload {
-                DirectivePayload::Prune { elided: removed, pruned_media: media_removed } => {
+                DirectivePayload::Prune {
+                    elided: removed,
+                    pruned_media: media_removed,
+                } => {
                     for item in removed {
                         elided.insert(item.tool_call_id.clone(), item.placeholder.clone());
                     }
@@ -844,11 +847,12 @@ mod tests {
     #[test]
     fn prune_replaces_user_media_with_invoice_placeholder() {
         let mut transcript = Transcript::new();
-        let user_msg = Message::new(Role::User, "User prompt with image")
-            .with_images(vec![crate::ImagePart {
+        let user_msg = Message::new(Role::User, "User prompt with image").with_images(vec![
+            crate::ImagePart {
                 mime: "image/png".into(),
                 data: "base64data".into(),
-            }]);
+            },
+        ]);
         transcript.push(TranscriptEntry::from_message(0, &user_msg));
         transcript.push(message_entry(1, Role::Assistant, "I see the image"));
 

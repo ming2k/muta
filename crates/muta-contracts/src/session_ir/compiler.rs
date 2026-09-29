@@ -171,10 +171,7 @@ fn pass2_context_budgeting(
                 let mut msg = message.clone();
                 // Apply tool result budget folding if output exceeds threshold (ADR-0262, ADR-0264)
                 if msg.role == Role::Tool && msg.content.len() > max_tool_chars {
-                    let call_id = msg
-                        .tool_call_id
-                        .as_deref()
-                        .unwrap_or(node.id.as_str());
+                    let call_id = msg.tool_call_id.as_deref().unwrap_or(node.id.as_str());
                     let truncated_text = format!(
                         "{}...\n[Tool output truncated by Session IR compiler: {} bytes omitted]\n[Epistemic virtual memory: inspect full output with handle \"call:{call_id}\"]",
                         &msg.content[..max_tool_chars],
@@ -416,9 +413,9 @@ mod tests {
                 .contains("Tool output truncated by Session IR compiler")
         );
         assert!(
-            tool_msg
-                .content
-                .contains("[Epistemic virtual memory: inspect full output with handle \"call:t1\"]")
+            tool_msg.content.contains(
+                "[Epistemic virtual memory: inspect full output with handle \"call:t1\"]"
+            )
         );
 
         // Interrupted turn must yield synthetic notification

@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never the output channel) and ADR-0286's `state == 'S'` heuristic.
 
 ### Fixed
+
 - **Per-output-line `/proc` scan made multi-line commands crawl (ADR-0292).**
   The supervised drain loop called `sample_activity()` — a full scan of `/proc`
   costing O(host processes), ~2 ms on a 450-process host — once for *every*
@@ -50,6 +51,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fast-fail routing, so unattended non-Linux sessions fail fast on a stall
   instead of hanging.
 
+- **Google Antigravity inference returned HTTP 404 for every request (ADR-0289).**
+  The updated Antigravity CLI changed its self-identification to
+  `antigravity/cli/<version> (<kind>; os_type=…; arch=…; cl=…; auth_method=…)`,
+  and the Cloud Code backend now admits inference **only** for that brand: a
+  controlled User-Agent matrix against `v1internal:generateContent` showed the
+  legacy `antigravity/1.23.2 linux/amd64` form — and every other brand-less
+  variant — returning `404 NOT_FOUND`, while `antigravity/cli/<v>` with numeric
+  `v >= 1.2` was admitted (`200`/`429`). Metadata endpoints
+  (`loadCodeAssist`, `fetchAvailableModels`, `retrieveUserQuotaSummary`,
+  `listExperiments`) were unaffected, so the defect masqueraded as a quota or
+  entitlement failure. `ANTIGRAVITY_USER_AGENT` now carries the brand-bearing
+  form pinned to `1.2.12`, the measured admissions floor is recorded as
+  `ANTIGRAVITY_CLI_MIN_PRODUCT_VERSION` and asserted by a regression test, the
+  `x-goog-api-client` literal is defined once and shared by the catalog and
+  protocol drivers, and the consent scope gains the `aicode` scope that every
+  stored Antigravity token already carries. No re-login is required.
+
+- **The bundled `antigravity-cli` OAuth preset could never authenticate.**
+  Its `client_id` (`670498708453-…`) answers `invalid_client` — *"The OAuth
+  client was not found."* The preset now carries the client id and secret
+  actually shipped in the current CLI (`884354919052-…` /
+  `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`), verified live against
+  `oauth2.googleapis.com/token` (`invalid_grant` for a dummy refresh token,
+  rather than a client rejection). The default `google-antigravity` channel
+  deliberately keeps its existing client: refresh tokens are client-bound, so
+  switching would invalidate stored connections and force a re-login while doing
+  nothing about the `404`. A unit test pins both pairings so a crossed
+  id/secret cannot regress silently.
+
+### Changed
+
+- **Single-Owner `@`-Reference Grammar Kernel (ADR-0291).**
+  - All `@`-reference lexical logic now lives once in `muta-contracts::mention`: code-span masking, the delimiter alphabets, the word-boundary/escape guard (`reference_start`), the `@`/`skill://` scanner (`scan_references`, yielding typed `Reference{namespace, form, target, span, escaped}`), and the cursor token-range (`mention_range_at`).
+  - Deleted the duplicated scanners and helpers: `at_mention_names`/`skill_uris`/local `mask_code_spans`/`is_name_char` in `muta-skills`, `parse_file_refs`'s inline scan in `muta-agent`, and the byte-identical `mention_range_at` copies in `muta-runtime` and `mutx`. Every extractor is now a filter over the one scanner.
+  - Removed the triplicated word-boundary guard; the decision is computed only by `mention::reference_start`. Admission to `muta-contracts` justified under ADR-0057 (shared by four layers, cycle-breaking, stable vocabulary).
+
+- **Two-Stage `@` Completion Is Namespace-Gated (ADR-0290).**
+  - A bare `@query` now offers only the namespaces it prefixes (`@file:` / `@skill:`); a query that prefixes no namespace (`@xyz`) yields **nothing**. Files and skills are reachable only after a namespace is committed.
+  - Removed ADR-0256's "fuzzy-at-mention" content pass-through, which let a bare `@query` reach Stage-2 files/skills via an unbounded substring match without ever committing a namespace.
+  - The daemon engine and the frontend-test mirror now share one Stage-1 helper so the two cannot drift.
+
+- **Entity References Are Asset References (ADR-0288).**
+  - `@` is now defined as a *reference operator*, never content: every `@file:` / `@skill:` mention resolves to exactly one canonical envelope and no unresolved `@`-literal reaches the provider.
+  - File injection emits `<file path="…" ref="@file:…" bytes="…">…</file>`, with `status="rejected"` / `status="deferred"` + `reason` and `truncated` / `total` as machine-readable attributes instead of prose.
+  - Skill injection's `<skill …>` envelope gains `ref="@skill:{name}"`, matching the file envelope.
+  - The request projection canonicalizes the visible address (`@files:`/`@skills:`, bare `@name`, `skill://…` → one spelling) and consumes `\@` escapes; the durable transcript stays verbatim (ADR-0050).
+  - Dedup recognizes legacy `[File '…' loaded]` / `[Skill '…' loaded]` markers so pre-upgrade sessions are not re-injected.
 
 ## [0.50.17] - 2026-09-28
 

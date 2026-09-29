@@ -425,18 +425,8 @@ mod tests {
         Effort::Max,
     ];
     const TEST_GAPPED: &[Effort] = &[Effort::Low, Effort::High, Effort::Max];
-    const TEST_LEVEL: &[Effort] = &[
-        Effort::Minimal,
-        Effort::Low,
-        Effort::Medium,
-        Effort::High,
-    ];
-    const TEST_GLM: &[Effort] = &[
-        Effort::Low,
-        Effort::High,
-        Effort::Xhigh,
-        Effort::Max,
-    ];
+    const TEST_LEVEL: &[Effort] = &[Effort::Minimal, Effort::Low, Effort::Medium, Effort::High];
+    const TEST_GLM: &[Effort] = &[Effort::Low, Effort::High, Effort::Xhigh, Effort::Max];
 
     #[test]
     fn parse_round_trips() {

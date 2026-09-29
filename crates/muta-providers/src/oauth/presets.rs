@@ -18,14 +18,20 @@ pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID: &str = concat!(
 pub const GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET: &str =
     concat!("GOCSPX-", "K58FWR486LdLJ1mLB8sXC4z6qDAf");
 
+/// Google Antigravity standalone CLI (`agy`) OAuth client ID.
+///
+/// Extracted from the shipped `agy` binary and confirmed live against
+/// `oauth2.googleapis.com/token`: this id pairs with
+/// [`GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET`] (the endpoint answers
+/// `invalid_grant` for a dummy refresh token rather than `invalid_client`).
 pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID: &str = concat!(
-    "670498708453-",
-    "kgn8ok56m62g1hh8smlf5geh4ck4oq0s",
+    "884354919052-",
+    "36trc1jjb3tguiac32ov6cod268c5blh",
     ".apps.googleusercontent.com"
 );
 
 pub const GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET: &str =
-    concat!("GOCSPX-", "m-p1-s6mkmWz_a_iUqUo2E7J3qY9");
+    concat!("GOCSPX-", "9YQWpF7RWDC0QTdj-YxKMwR0ZtsX");
 
 pub const XAI_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 pub const CHATGPT_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -47,7 +53,7 @@ pub fn google_antigravity_preset() -> OAuthConfig {
         device_authorization_url: Cow::Borrowed("https://oauth2.googleapis.com/device/code"),
         grant_type_device: Cow::Borrowed("urn:ietf:params:oauth:grant-type:device_code"),
         scope: Cow::Borrowed(
-            "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs openid",
+            "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs https://www.googleapis.com/auth/aicode openid",
         ),
         extra_authorize_params: vec![
             (Cow::Borrowed("access_type"), Cow::Borrowed("offline")),
@@ -319,6 +325,65 @@ pub fn is_qoder(config: &OAuthConfig) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bundled Antigravity presets must ship *matched* client-id/secret
+    /// pairs. Google rejects a crossed pair with `invalid_client` at the token
+    /// endpoint, and muta's own google-antigravity channel would then fail every
+    /// token exchange. Verified live against `oauth2.googleapis.com/token`
+    /// (ADR-0289).
+    #[test]
+    fn antigravity_presets_ship_matched_credential_pairs() {
+        let main = google_antigravity_preset();
+        assert_eq!(main.client_id, GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_ID);
+        assert_eq!(
+            main.client_secret.as_deref(),
+            Some(GOOGLE_ANTIGRAVITY_CLOUD_CODE_CLIENT_SECRET)
+        );
+        assert!(main.client_id.starts_with("1071006060591-"));
+        assert_eq!(
+            main.client_secret.as_deref(),
+            Some("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")
+        );
+
+        let cli = google_antigravity_cli_preset();
+        assert_eq!(cli.client_id, GOOGLE_ANTIGRAVITY_CLI_CLIENT_ID);
+        assert_eq!(
+            cli.client_secret.as_deref(),
+            Some(GOOGLE_ANTIGRAVITY_CLI_CLIENT_SECRET)
+        );
+        assert!(cli.client_id.starts_with("884354919052-"));
+        assert_eq!(
+            cli.client_secret.as_deref(),
+            Some("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")
+        );
+
+        // The two Antigravity surfaces must never share a secret: each Google
+        // client id is paired one-to-one with its own secret.
+        assert_ne!(main.client_secret, cli.client_secret);
+        assert_ne!(main.client_id, cli.client_id);
+    }
+
+    /// The preset carries the CLI-brand User-Agent mirroring the `agy` wire
+    /// identity, not the rejected legacy `antigravity/<version>` form.
+    #[test]
+    fn antigravity_preset_advertises_cli_brand_user_agent() {
+        let cfg = google_antigravity_preset();
+        let ua = cfg.user_agent.expect("antigravity preset declares a User-Agent");
+        assert!(ua.starts_with("antigravity/cli/"));
+        assert_eq!(ua, muta_contracts::client_identity::ANTIGRAVITY_USER_AGENT);
+    }
+
+    /// The consent scope must include `aicode`: every stored Antigravity token
+    /// set in the wild carries it, and it is the scope that authorises the
+    /// Cloud Code inference surface.
+    #[test]
+    fn antigravity_scope_requests_aicode() {
+        let cfg = google_antigravity_preset();
+        assert!(cfg.scope.contains("https://www.googleapis.com/auth/aicode"));
+        assert!(cfg.scope.contains("https://www.googleapis.com/auth/cloud-platform"));
+        assert!(cfg.scope.contains("https://www.googleapis.com/auth/cclog"));
+        assert!(cfg.scope.contains("https://www.googleapis.com/auth/experimentsandconfigs"));
+    }
 
     #[test]
     fn opencode_preset_is_device_only_json() {

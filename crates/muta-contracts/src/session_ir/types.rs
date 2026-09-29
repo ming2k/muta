@@ -495,9 +495,7 @@ pub struct ObservationMetrics {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum ObservationLifecycle {
     /// State 1: Raw payload retained in working context (within token admission budget).
-    Raw {
-        content: String,
-    },
+    Raw { content: String },
     /// State 2: Active Truncated (oversized at ingestion).
     /// Retains a bounded head and tail preview with elision metrics, plus the invariant invoice handle.
     ActiveTruncated {
@@ -557,9 +555,7 @@ pub enum InvalidationReason {
         mutator_node_id: String,
     },
     /// Diagnostic/test execution invalidated by a subsequent run.
-    SupersededByExecution {
-        successor_node_id: String,
-    },
+    SupersededByExecution { successor_node_id: String },
     /// Reclaimed under quantum budget pressure after recency quarantine expiration.
     BudgetRelief,
 }
