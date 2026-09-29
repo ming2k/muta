@@ -3,6 +3,7 @@
 
 pub mod base;
 pub mod command;
+pub mod compacted;
 pub mod payloads;
 pub mod reasoning;
 pub mod sticky;
@@ -14,6 +15,7 @@ mod tests;
 
 pub(crate) use base::RenderCtx;
 pub use command::draw_command_result;
+pub use compacted::draw_compacted_card;
 pub use reasoning::draw_reasoning_trace;
 pub use sticky::{StickyStep, draw_sticky_summary_if_needed};
 pub use subagent::draw_subagent_inline_step;

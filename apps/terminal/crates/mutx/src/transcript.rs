@@ -16,7 +16,27 @@ use crate::model::document::{TranscriptMessage, UserMessageOrigin};
 use crate::step_interaction;
 
 pub(super) fn transcript_message_from_core(message: Message) -> Option<TranscriptMessage> {
-    if message.hidden || message.role == Role::System {
+    if message.hidden {
+        return None;
+    }
+    if message.role == Role::System {
+        if message.content.starts_with("[Conversation Summary Checkpoint") {
+            let mut card = TranscriptMessage::compacted_card(
+                0,
+                0,
+                0,
+                Some(message.content),
+                Vec::new(),
+            );
+            card.provider = message.provider;
+            card.model = message.model;
+            card.sent_at_ms = message.sent_at_ms.or_else(|| {
+                message
+                    .timestamp
+                    .map(|seconds| seconds.saturating_mul(1000))
+            });
+            return Some(card);
+        }
         return None;
     }
     let provider = message.provider.clone();

@@ -1378,11 +1378,15 @@ pub enum RoundEvent {
     #[serde(alias = "InputRequest")]
     StdinRequest(StdinRequest),
     /// A context projection (compaction or prune) was committed. Token
-    /// samples of the active window around the projection (ADR-0120).
+    /// samples of the active window around the projection (ADR-0120, ADR-0296).
     Compacted {
         archived_messages: usize,
         window_tokens_before: usize,
         window_tokens_after: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tracked_files: Vec<String>,
     },
     HarnessState(HarnessSnapshot),
     /// The task list changed (full-replace via `todo`, surgical update via

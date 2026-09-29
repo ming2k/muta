@@ -623,6 +623,30 @@ impl<'a, 'f> Stream<'a, 'f> {
                 hovered,
                 focused_command,
             );
+        } else if msg.is_compacted_card() {
+            let focused_compacted =
+                self.focused_target == Some(crate::model::layout::InteractiveTarget::compacted_card(mi));
+            let mut ctx = RenderCtx::from_cursor(
+                self.frame,
+                self.band,
+                self.band.width as usize,
+                self.theme,
+                self.layout_map,
+                &mut self.skip_rows,
+                &mut self.current_y,
+                &mut self.content_lines,
+                &mut self.height_cache.wrap,
+            )
+            .with_workspace_root(self.workspace_root);
+            super::disclosure::draw_compacted_card(
+                &mut ctx,
+                msg,
+                mi,
+                self.selection,
+                self.cell_selection,
+                hovered,
+                focused_compacted,
+            );
         } else {
             super::draw_message_body(
                 self.frame,

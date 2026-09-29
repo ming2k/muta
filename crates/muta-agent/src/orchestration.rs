@@ -155,6 +155,13 @@ impl Provider for ProxyProvider {
             .model()
     }
 
+    fn wire_protocol(&self) -> Option<muta_contracts::WireProtocol> {
+        self.holder
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .wire_protocol()
+    }
+
     fn effort(&self) -> Option<muta_contracts::effort::Effort> {
         self.holder
             .read()
@@ -2035,14 +2042,37 @@ pub async fn compact_round_history(
     provider: Option<Arc<dyn Provider>>,
     extra_context: Vec<String>,
 ) -> Result<Option<ContextProjectionCheckpoint>, String> {
+    // ADR-0296 Universal Causal Compaction:
+    // Preserves the latest complete user round (Round N) as volatile tail,
+    // and folds all completed prior rounds [0..N-1].
+    let preserve_rounds = settings.preserve_rounds.max(1);
+    compact_round_history_with_mode(
+        history,
+        session,
+        settings,
+        provider,
+        crate::compaction::CompactionCutMode::PreserveTailRounds(preserve_rounds),
+        extra_context,
+    )
+    .await
+}
+
+pub async fn compact_round_history_with_mode(
+    history: &mut Vec<Message>,
+    session: &SessionStore,
+    settings: &ContextProjectionSettings,
+    provider: Option<Arc<dyn Provider>>,
+    mode: crate::compaction::CompactionCutMode,
+    extra_context: Vec<String>,
+) -> Result<Option<ContextProjectionCheckpoint>, String> {
     let provider = if settings.summarize { provider } else { None };
 
-    // Canonical path: Session IR Native Causal Compaction (ADR-0255)
+    // Canonical path: Session IR Native Causal Compaction (ADR-0255 / ADR-0296)
     let mut ir = session.session_ir().await;
     if let Some(outcome) = crate::compaction::CausalCompactor::compact_session_ir(
         &mut ir,
         provider,
-        settings.budget.target_tokens,
+        mode,
         extra_context,
     )
     .await?
@@ -2056,6 +2086,8 @@ pub async fn compact_round_history(
             active_messages: active_msgs.len(),
             window_tokens_before: outcome.tokens_before,
             window_tokens_after: tokens_after,
+            summary: Some(outcome.summary),
+            tracked_files: outcome.tracked_files,
         };
         *history = active_msgs;
         Ok(Some(checkpoint))
@@ -2097,6 +2129,8 @@ pub async fn prune_and_commit(
         active_messages: history.len(),
         window_tokens_before,
         window_tokens_after,
+        summary: None,
+        tracked_files: Vec::new(),
     };
     tracing::debug!(
         pruned_tool_results = checkpoint.archived_messages,
@@ -2125,6 +2159,8 @@ pub fn send_compaction(
             archived_messages: checkpoint.archived_messages,
             window_tokens_before: checkpoint.window_tokens_before,
             window_tokens_after: checkpoint.window_tokens_after,
+            summary: checkpoint.summary.clone(),
+            tracked_files: checkpoint.tracked_files.clone(),
         },
     ));
 }

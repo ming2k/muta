@@ -90,6 +90,8 @@ impl SessionStore {
             window_tokens_after: estimate_tokens(
                 &window.iter().map(|(_, m)| m).cloned().collect::<Vec<_>>(),
             ),
+            summary: None,
+            tracked_files: Vec::new(),
         })
     }
 

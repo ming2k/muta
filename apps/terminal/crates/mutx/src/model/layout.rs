@@ -15,6 +15,8 @@ pub const PROVIDER_RETRY_BLOCK_IDX: usize = usize::MAX - 2;
 pub const COMMAND_RESULT_BLOCK_IDX: usize = usize::MAX - 3;
 /// Expandable notice header rows (e.g. provider error with formatted JSON).
 pub const NOTICE_BLOCK_IDX: usize = usize::MAX - 4;
+/// Expandable compaction checkpoint card header rows (ADR-0296).
+pub const COMPACTED_CARD_BLOCK_IDX: usize = usize::MAX - 6;
 /// Sentinel message index for text regions inside modal overlays.
 /// Sentinel message index for live composer input regions.
 pub const INPUT_MSG_IDX: usize = usize::MAX - 2;
@@ -59,6 +61,7 @@ pub enum InteractiveTargetKind {
     ProviderRetry,
     CommandResult,
     Notice,
+    CompactedCard,
 }
 
 impl InteractiveTarget {
@@ -99,6 +102,14 @@ impl InteractiveTarget {
             message_idx,
             block_idx: NOTICE_BLOCK_IDX,
             kind: InteractiveTargetKind::Notice,
+        }
+    }
+
+    pub fn compacted_card(message_idx: usize) -> Self {
+        Self {
+            message_idx,
+            block_idx: COMPACTED_CARD_BLOCK_IDX,
+            kind: InteractiveTargetKind::CompactedCard,
         }
     }
 }
@@ -488,6 +499,7 @@ impl LayoutMap {
                         | PROVIDER_RETRY_BLOCK_IDX
                         | COMMAND_RESULT_BLOCK_IDX
                         | NOTICE_BLOCK_IDX
+                        | COMPACTED_CARD_BLOCK_IDX
                 )
             })
             .collect();
@@ -501,6 +513,7 @@ impl LayoutMap {
                 PROVIDER_RETRY_BLOCK_IDX => InteractiveTarget::provider_retry(region.message_idx),
                 COMMAND_RESULT_BLOCK_IDX => InteractiveTarget::command_result(region.message_idx),
                 NOTICE_BLOCK_IDX => InteractiveTarget::notice(region.message_idx),
+                COMPACTED_CARD_BLOCK_IDX => InteractiveTarget::compacted_card(region.message_idx),
                 _ => continue,
             };
             if !targets.contains(&target) {

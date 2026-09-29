@@ -254,6 +254,16 @@ pub enum MessageKind {
         /// User-pinned flag — see [`MessageKind::ToolStep::user_pinned`].
         user_pinned: bool,
     },
+    /// A structured, inspectable compaction checkpoint card (ADR-0296).
+    CompactedCard {
+        archived_messages: usize,
+        window_tokens_before: usize,
+        window_tokens_after: usize,
+        summary: Option<String>,
+        tracked_files: Vec<String>,
+        expanded: bool,
+        user_pinned: bool,
+    },
 }
 
 /// Lifecycle of a command component (ADR-0108). Commands are synchronous
@@ -1016,6 +1026,73 @@ impl TranscriptMessage {
             rev: 0,
             resume_byte: 0,
             live_blocks: 0,
+        }
+    }
+
+    /// Construct a structured, inspectable compaction checkpoint card (ADR-0296).
+    pub fn compacted_card(
+        archived_messages: usize,
+        window_tokens_before: usize,
+        window_tokens_after: usize,
+        summary: Option<String>,
+        tracked_files: Vec<String>,
+    ) -> Self {
+        let summary_text = summary.clone().unwrap_or_default();
+        Self {
+            id: next_message_id(),
+            role: Role::System,
+            blocks: parse_blocks(&summary_text),
+            raw: summary_text,
+            kind: MessageKind::CompactedCard {
+                archived_messages,
+                window_tokens_before,
+                window_tokens_after,
+                summary,
+                tracked_files,
+                expanded: false,
+                user_pinned: false,
+            },
+            delivery: DeliveryStatus::default(),
+            insert_id: None,
+            origin: UserMessageOrigin::Chat,
+            provider: None,
+            model: None,
+            effort: None,
+            round: None,
+            turn: None,
+            sent_at_ms: None,
+            injection_origin: None,
+            rev: 0,
+            resume_byte: 0,
+            live_blocks: 0,
+        }
+    }
+
+    pub fn is_compacted_card(&self) -> bool {
+        matches!(self.kind, MessageKind::CompactedCard { .. })
+    }
+
+    pub fn compacted_card_data(
+        &self,
+    ) -> Option<(usize, usize, usize, Option<&str>, &[String], bool)> {
+        match &self.kind {
+            MessageKind::CompactedCard {
+                archived_messages,
+                window_tokens_before,
+                window_tokens_after,
+                summary,
+                tracked_files,
+                expanded,
+                ..
+            } => Some((
+                *archived_messages,
+                *window_tokens_before,
+                *window_tokens_after,
+                summary.as_deref(),
+                tracked_files.as_slice(),
+                *expanded,
+            )),
+            _ => None,
         }
     }
 

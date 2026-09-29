@@ -1268,15 +1268,15 @@ pub async fn run_tui(
                                 archived_messages,
                                 window_tokens_before,
                                 window_tokens_after,
+                                summary,
+                                tracked_files,
                             } => {
-                                let message = TranscriptMessage::notice(
-                                    NoticeSeverity::Info,
-                                    format!(
-                                        "Compacted {} messages: {} -> {} tokens.",
-                                        archived_messages,
-                                        window_tokens_before,
-                                        window_tokens_after
-                                    ),
+                                let message = TranscriptMessage::compacted_card(
+                                    archived_messages,
+                                    window_tokens_before,
+                                    window_tokens_after,
+                                    summary,
+                                    tracked_files,
                                 )
                                 .with_sent_at_ms(now_ms!());
                                 transcript!(E::Append { message });

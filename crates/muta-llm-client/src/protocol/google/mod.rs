@@ -660,6 +660,10 @@ impl Provider for GoogleProvider {
         self.endpoint.model.clone()
     }
 
+    fn wire_protocol(&self) -> Option<muta_contracts::WireProtocol> {
+        Some(muta_contracts::WireProtocol::GoogleGemini)
+    }
+
     // `effort()` keeps its default (`None`): the Gemini `thinkingLevel` /
     // `thinkingBudget` mapping has no user-facing depth vocabulary that
     // matches the shared `Effort` tiers one-to-one, so the transcript stays

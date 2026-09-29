@@ -421,6 +421,11 @@ pub trait Provider: Send + Sync {
         String::new()
     }
 
+    /// The baseline wire protocol this provider communicates over (ADR-0161, ADR-0297).
+    fn wire_protocol(&self) -> Option<crate::WireProtocol> {
+        None
+    }
+
     /// The resolved reasoning effort (depth) this channel runs its model
     /// requests with, as the wire string (`"high"`, `"max"`, …). Companion to
     /// [`Provider::provider_id`]/[`Provider::model`]: the harness stamps it

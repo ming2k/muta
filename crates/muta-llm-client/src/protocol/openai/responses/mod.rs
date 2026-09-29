@@ -513,6 +513,10 @@ impl Provider for OpenAiResponsesProvider {
         self.endpoint.model.clone()
     }
 
+    fn wire_protocol(&self) -> Option<muta_contracts::WireProtocol> {
+        Some(muta_contracts::WireProtocol::Responses)
+    }
+
     fn effort(&self) -> Option<Effort> {
         self.reasoning_effort
     }

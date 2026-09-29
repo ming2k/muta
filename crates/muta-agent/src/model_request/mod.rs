@@ -77,6 +77,7 @@ impl ModelRequestAssembler {
         temporary_context: Vec<Message>,
         tools: &[Arc<dyn Tool>],
         dialect: Option<String>,
+        protocol: Option<muta_contracts::WireProtocol>,
     ) -> Result<muta_contracts::CompilationArtifact, muta_contracts::CompilerError> {
         let tool_specs = tools
             .iter()
@@ -87,6 +88,7 @@ impl ModelRequestAssembler {
             temporary_context,
             ephemeral_instruction: None,
             target_dialect: dialect,
+            target_protocol: protocol,
         };
         muta_contracts::compile_session_request(ir, options)
     }
@@ -152,7 +154,13 @@ mod tests {
         ir.append_message("node-1", 1001, Message::new(Role::User, "compile this"));
 
         let artifact = assembler
-            .compile_from_ir(&ir, vec![], &[tool], Some("anthropic".into()))
+            .compile_from_ir(
+                &ir,
+                vec![],
+                &[tool],
+                Some("anthropic".into()),
+                Some(muta_contracts::WireProtocol::AnthropicMessages),
+            )
             .expect("SessionIR compilation must succeed");
 
         assert_eq!(artifact.request.messages.len(), 1);

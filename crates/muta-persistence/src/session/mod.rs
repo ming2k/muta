@@ -84,6 +84,12 @@ pub struct ContextProjectionCheckpoint {
     /// projection. Same point-in-time caveat; the difference to
     /// [`Self::window_tokens_before`] is what the projection reclaimed.
     pub window_tokens_after: usize,
+    /// Generative summary produced during compaction (ADR-0296).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Artifact file paths touched across the compacted lineage (ADR-0296).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tracked_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -875,6 +881,8 @@ pub fn build_compaction_result(
             active_messages: model_window.len(),
             window_tokens_before,
             window_tokens_after,
+            summary: Some(summary),
+            tracked_files: Vec::new(),
         },
         model_window,
         archived_originals: archived,

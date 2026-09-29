@@ -1059,6 +1059,8 @@ mod tests {
                 active_messages: 3,
                 window_tokens_before: 2000,
                 window_tokens_after: 400,
+                summary: None,
+                tracked_files: Vec::new(),
             },
         };
 
@@ -1100,6 +1102,8 @@ mod tests {
                 active_messages: 2,
                 window_tokens_before: 2000,
                 window_tokens_after: 400,
+                summary: None,
+                tracked_files: Vec::new(),
             },
         };
 

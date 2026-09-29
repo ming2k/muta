@@ -238,6 +238,9 @@ impl App {
                     InteractiveTarget::command_result(message_idx)
                 }
                 InteractiveTargetKind::Notice => InteractiveTarget::notice(message_idx),
+                InteractiveTargetKind::CompactedCard => {
+                    InteractiveTarget::compacted_card(message_idx)
+                }
             };
             if !targets.contains(&target) {
                 targets.insert(0, target);

@@ -166,6 +166,8 @@ async fn compaction_commit_hides_range_and_keeps_originals() {
             active_messages: 2,
             window_tokens_before: 10,
             window_tokens_after: 5,
+            summary: Some("summary of old rounds".to_string()),
+            tracked_files: Vec::new(),
         },
     };
     store.commit_context_projection(result).await.unwrap();
@@ -196,6 +198,8 @@ async fn compaction_commit_hides_range_and_keeps_originals() {
                     active_messages: 2,
                     window_tokens_before: 10,
                     window_tokens_after: 5,
+                    summary: Some("summary of old rounds".to_string()),
+                    tracked_files: Vec::new(),
                 },
             })
             .await
@@ -232,6 +236,8 @@ async fn prune_commit_appends_directive_not_rewrite() {
                 active_messages: 3,
                 window_tokens_before: 9,
                 window_tokens_after: 3,
+                summary: None,
+                tracked_files: Vec::new(),
             },
         })
         .await
@@ -296,6 +302,8 @@ async fn prune_commit_after_new_user_turn_with_unsynced_timestamp_succeeds() {
                 active_messages: 4,
                 window_tokens_before: 10,
                 window_tokens_after: 5,
+                summary: None,
+                tracked_files: Vec::new(),
             },
         })
         .await
@@ -973,6 +981,7 @@ async fn test_session_store_ir_and_compile_request() {
         temporary_context: vec![],
         ephemeral_instruction: Some("Focus on correctness".into()),
         target_dialect: Some("anthropic".into()),
+        target_protocol: Some(muta_contracts::WireProtocol::AnthropicMessages),
     };
 
     let compiled = store.compile_request(options).await.unwrap();

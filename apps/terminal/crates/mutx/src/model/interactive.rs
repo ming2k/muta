@@ -53,7 +53,8 @@ impl InteractiveEntry for TranscriptMessage {
             | MessageKind::Reasoning { .. }
             | MessageKind::CommandResult { .. }
             | MessageKind::ProviderRetry { .. }
-            | MessageKind::Notice { .. } => true,
+            | MessageKind::Notice { .. }
+            | MessageKind::CompactedCard { .. } => true,
             MessageKind::Text => false,
         }
     }
@@ -65,6 +66,7 @@ impl InteractiveEntry for TranscriptMessage {
             MessageKind::CommandResult { .. } => Some(InteractiveTargetKind::CommandResult),
             MessageKind::ProviderRetry { .. } => Some(InteractiveTargetKind::ProviderRetry),
             MessageKind::Notice { .. } => Some(InteractiveTargetKind::Notice),
+            MessageKind::CompactedCard { .. } => Some(InteractiveTargetKind::CompactedCard),
             MessageKind::Text => None,
         }
     }
@@ -103,6 +105,9 @@ impl InteractiveEntry for TranscriptMessage {
                     }
                 })
                 .unwrap_or_else(|| self.raw.clone()),
+            MessageKind::CompactedCard { summary, .. } => summary
+                .clone()
+                .unwrap_or_else(|| self.raw.clone()),
             MessageKind::Text => self.raw.clone(),
         };
         Some(text)
@@ -114,7 +119,8 @@ impl InteractiveEntry for TranscriptMessage {
             | MessageKind::Reasoning { expanded, .. }
             | MessageKind::CommandResult { expanded, .. }
             | MessageKind::ProviderRetry { expanded, .. }
-            | MessageKind::Notice { expanded, .. } => Some(*expanded),
+            | MessageKind::Notice { expanded, .. }
+            | MessageKind::CompactedCard { expanded, .. } => Some(*expanded),
             MessageKind::Text => None,
         }
     }
@@ -147,6 +153,11 @@ impl InteractiveEntry for TranscriptMessage {
                 ..
             }
             | MessageKind::Notice {
+                expanded,
+                user_pinned,
+                ..
+            }
+            | MessageKind::CompactedCard {
                 expanded,
                 user_pinned,
                 ..
@@ -191,6 +202,11 @@ impl InteractiveEntry for TranscriptMessage {
                 ..
             }
             | MessageKind::Notice {
+                expanded: cur,
+                user_pinned,
+                ..
+            }
+            | MessageKind::CompactedCard {
                 expanded: cur,
                 user_pinned,
                 ..

@@ -31,7 +31,7 @@ use crate::slash_handler::SlashContext;
 use crate::startup::BuiltinCmd;
 
 use muta_agent::orchestration::{
-    ContextProjectionSettings, RoundInput, compact_round_history, round_response, send_compaction,
+    ContextProjectionSettings, RoundInput, round_response, send_compaction,
     send_harness_state_for_session,
 };
 use muta_contracts::{
@@ -833,15 +833,28 @@ pub(crate) async fn compact(env: SlashEnv<'_>, name: &str, args: &str, _parts: &
     let mut current = session.model_window().await;
     let settings = ContextProjectionSettings::from_config(config, active_context_window(agent))
         .for_request(agent.estimate_next_request_tokens(&current));
-    // No `RoundEvent::Activity` here: a slash command is a
-    // control-plane operation outside the round state machine
-    // (ADR-0110), and the TUI's activity-bar listener arms
-    // `is_responding` on every Activity event — a command must not
-    // be able to light the round liveness surface (or overwrite a
-    // live round's label). The typed result below ("Compacted N
-    // messages …") is the feedback.
-    let extra = agent.fire_pre_compact().await;
-    match compact_round_history(
+
+    let _ = resp_tx.send(round_response(
+        &session.id().await,
+        muta_contracts::RoundEvent::Notice(
+            muta_contracts::AgentNotice::new(
+                muta_contracts::NoticeKind::CommandAck,
+                muta_contracts::NoticeSeverity::Info,
+                "Compacting Context",
+                muta_contracts::NoticeSource::Harness,
+            )
+            .with_body("Synthesizing completed rounds into structured checkpoint..."),
+        ),
+    ));
+
+    let mut extra = agent.fire_pre_compact().await;
+    let trimmed = args.trim();
+    if !trimmed.is_empty() {
+        extra.push(format!("User Focus / Instructions for Compaction: {}", trimmed));
+    }
+
+    // ADR-0296: Universal Causal Compaction folds [0..N-1] and preserves round N
+    match muta_agent::compact_round_history(
         &mut current,
         session,
         &settings,
@@ -860,7 +873,7 @@ pub(crate) async fn compact(env: SlashEnv<'_>, name: &str, args: &str, _parts: &
                 resp_tx,
                 name,
                 args,
-                CommandResult::Text("Not enough complete rounds to compact.".to_string()),
+                CommandResult::Text("No completed dialogue history to compact yet.".to_string()),
             )
             .await;
         }

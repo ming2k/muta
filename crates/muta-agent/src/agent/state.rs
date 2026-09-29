@@ -447,8 +447,9 @@ impl Agent {
 
         let tools = self.visible_tools();
         let dialect = Some(self.provider.provider_id().to_string());
+        let protocol = self.provider.wire_protocol();
         self.model_request_assembler
-            .compile_from_ir(ir, temporary_context, &tools, dialect)
+            .compile_from_ir(ir, temporary_context, &tools, dialect, protocol)
             .map(|mut artifact| {
                 artifact.request = artifact.request.with_route_state(
                     &self.provider.route_fingerprint(),

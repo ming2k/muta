@@ -144,6 +144,7 @@ fn body_inner(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
     }
     let mut contents: Vec<Value> = Vec::new();
     let mut call_names: HashMap<String, String> = HashMap::new();
+    let mut signed_calls: HashSet<String> = HashSet::new();
     let messages = reconcile_tool_history(messages);
 
     for message in messages {
@@ -157,7 +158,7 @@ fn body_inner(messages: Vec<Message>, input: BodyInput<'_>) -> Value {
         } else {
             "user"
         };
-        let new_parts = message_parts(message, &mut call_names);
+        let new_parts = message_parts(message, &mut call_names, &mut signed_calls);
 
         // Coalesce consecutive same-role turns into one `contents` entry:
         // Google rejects two adjacent `user` objects, so a tool-result-then-user
@@ -262,10 +263,14 @@ fn assistant_is_empty(message: &Message) -> bool {
         && message.tool_calls.as_ref().is_none_or(Vec::is_empty)
 }
 
-fn message_parts(message: Message, call_names: &mut HashMap<String, String>) -> Vec<Value> {
+fn message_parts(
+    message: Message,
+    call_names: &mut HashMap<String, String>,
+    signed_calls: &mut HashSet<String>,
+) -> Vec<Value> {
     match message.role {
-        Role::Assistant => assistant_parts(message, call_names),
-        Role::Tool => tool_result_parts(message, call_names),
+        Role::Assistant => assistant_parts(message, call_names, signed_calls),
+        Role::Tool => tool_result_parts(message, call_names, signed_calls),
         _ => user_parts(message),
     }
 }
@@ -278,14 +283,14 @@ fn user_parts(message: Message) -> Vec<Value> {
     parts
 }
 
-fn assistant_parts(message: Message, call_names: &mut HashMap<String, String>) -> Vec<Value> {
+fn assistant_parts(
+    message: Message,
+    call_names: &mut HashMap<String, String>,
+    signed_calls: &mut HashSet<String>,
+) -> Vec<Value> {
     let thought_signatures = thought_signatures_by_call(&message);
     let text_thought_sig = text_thought_signature(&message);
-    let fallback_signature = thought_signatures
-        .values()
-        .next()
-        .cloned()
-        .or_else(|| text_thought_sig.clone());
+    let fallback_signature = text_thought_sig.clone();
 
     let sanitized_content = sanitize_assistant_content(&message.content);
     let mut parts =
@@ -300,22 +305,40 @@ fn assistant_parts(message: Message, call_names: &mut HashMap<String, String>) -
     if let Some(calls) = message.tool_calls {
         for call in calls {
             call_names.insert(call.id.clone(), call.name.clone());
-            let mut function_call = json!({
-                "name": call.name,
-                "args": parse_json_object(&call.arguments),
-            });
-            if !call.id.is_empty() {
-                function_call["id"] = json!(call.id);
-            }
-            let mut part = json!({ "functionCall": function_call });
             let sig = thought_signatures
                 .get(&call.id)
                 .or_else(|| thought_signatures.get(&call.name))
                 .or(fallback_signature.as_ref());
             if let Some(signature) = sig {
+                signed_calls.insert(call.id.clone());
+                if !call.name.is_empty() {
+                    signed_calls.insert(call.name.clone());
+                }
+                let mut function_call = json!({
+                    "name": call.name,
+                    "args": parse_json_object(&call.arguments),
+                });
+                if !call.id.is_empty() {
+                    function_call["id"] = json!(call.id);
+                }
+                let mut part = json!({ "functionCall": function_call });
                 part["thoughtSignature"] = json!(signature);
+                parts.push(part);
+            } else {
+                // ADR-0297: Unsigned tool call lacking a valid Google thought signature
+                // (e.g. from Claude/GPT or foreign completion format). Emitting an unsigned
+                // `functionCall` triggers Google HTTP 400 INVALID_ARGUMENT. Degrade to
+                // objective natural language dialogue fact to preserve causal truth
+                // while strictly honoring Google's cryptographic validation boundary.
+                let args_str = if call.arguments.trim().is_empty() {
+                    "{}"
+                } else {
+                    call.arguments.trim()
+                };
+                parts.push(json!({
+                    "text": format!("[Executed tool \"{}\" with arguments: {}]", call.name, args_str)
+                }));
             }
-            parts.push(part);
         }
     }
     if parts.is_empty() {
@@ -371,17 +394,37 @@ fn thought_signatures_by_call(message: &Message) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
-fn tool_result_parts(message: Message, call_names: &HashMap<String, String>) -> Vec<Value> {
+fn tool_result_parts(
+    message: Message,
+    call_names: &HashMap<String, String>,
+    signed_calls: &HashSet<String>,
+) -> Vec<Value> {
     let id = message.tool_call_id.unwrap_or_default();
     let name = call_names.get(&id).cloned().unwrap_or_default();
-    let mut function_response = json!({
-        "name": name,
-        "response": tool_response_payload(&message.content),
-    });
-    if !id.is_empty() {
-        function_response["id"] = json!(id);
+    let is_signed = (!id.is_empty() && signed_calls.contains(&id))
+        || (!name.is_empty() && signed_calls.contains(&name));
+
+    if is_signed {
+        let mut function_response = json!({
+            "name": name,
+            "response": tool_response_payload(&message.content),
+        });
+        if !id.is_empty() {
+            function_response["id"] = json!(id);
+        }
+        vec![json!({ "functionResponse": function_response })]
+    } else {
+        // ADR-0297: Degraded tool result for unsigned / cross-provider tool calls.
+        // Google's alternating role constraint expects text in the user role.
+        let label = if !name.is_empty() {
+            format!("[Tool result for \"{name}\"]:\n{}", message.content)
+        } else if !id.is_empty() {
+            format!("[Tool result for call \"{id}\"]:\n{}", message.content)
+        } else {
+            format!("[Tool result]:\n{}", message.content)
+        };
+        vec![json!({ "text": label })]
     }
-    vec![json!({ "functionResponse": function_response })]
 }
 
 fn text_and_image_parts(
@@ -1025,13 +1068,13 @@ mod tests {
     }
 
     #[test]
-    fn preserves_unsigned_tool_calls_as_structured_function_calls() {
+    fn degrades_unsigned_foreign_tool_calls_to_safe_dialogue_facts() {
         let call = muta_contracts::ToolCall {
             id: "call_foreign".to_string(),
             name: "write_todos".to_string(),
             arguments: r#"{"items":[{"content":"design","status":"in_progress"}]}"#.to_string(),
         };
-        // Unsigned assistant message (e.g. from Claude/GPT or text-fallback, no provider_meta)
+        // Unsigned assistant message (e.g. from Claude/GPT or foreign completion format, no provider_meta)
         let body = body(
             vec![
                 Message::new(Role::User, "create tasks"),
@@ -1046,20 +1089,81 @@ mod tests {
             test_body_input(None, false, None),
         );
 
-        // Assistant turn preserves structured functionCall even without thought signature
+        // ADR-0297: Assistant turn degrades unsigned tool calls to safe natural language text facts,
+        // preventing Google HTTP 400 INVALID_ARGUMENT ("Function call is missing a thought_signature").
         let model_parts = body["contents"][1]["parts"].as_array().unwrap();
         assert_eq!(model_parts.len(), 2);
         assert_eq!(model_parts[0]["text"], "Planning tasks");
-        assert_eq!(model_parts[1]["functionCall"]["name"], "write_todos");
-        assert_eq!(model_parts[1]["functionCall"]["id"], "call_foreign");
-        assert!(model_parts[1].get("thoughtSignature").is_none());
+        assert_eq!(
+            model_parts[1]["text"],
+            r#"[Executed tool "write_todos" with arguments: {"items":[{"content":"design","status":"in_progress"}]}]"#
+        );
+        assert!(model_parts[1].get("functionCall").is_none());
 
-        // Tool result is a structured functionResponse, coalesced with the following user prompt
+        // Tool result is degraded to user text fact, coalesced with the following user prompt
         assert_eq!(body["contents"][2]["role"], "user");
         let user_parts = body["contents"][2]["parts"].as_array().unwrap();
-        assert_eq!(user_parts[0]["functionResponse"]["name"], "write_todos");
-        assert_eq!(user_parts[0]["functionResponse"]["id"], "call_foreign");
+        assert_eq!(
+            user_parts[0]["text"],
+            "[Tool result for \"write_todos\"]:\nTodo list updated"
+        );
+        assert!(user_parts[0].get("functionResponse").is_none());
         assert_eq!(user_parts[1]["text"], "proceed");
+    }
+
+    #[test]
+    fn mixed_signed_and_unsigned_tool_calls_degrade_granularly() {
+        let signed_call = muta_contracts::ToolCall {
+            id: "call_signed".to_string(),
+            name: "list_dir".to_string(),
+            arguments: r#"{"path":"."}"#.to_string(),
+        };
+        let unsigned_call = muta_contracts::ToolCall {
+            id: "call_unsigned".to_string(),
+            name: "default_api:run_command".to_string(),
+            arguments: r#"{"command":"cargo test"}"#.to_string(),
+        };
+        let mut provider_meta = serde_json::Map::new();
+        provider_meta.insert(
+            THOUGHT_SIGNATURES_META_KEY.to_string(),
+            json!({ "call_signed": "sig-signed-call" }),
+        );
+
+        let body = body(
+            vec![
+                Message::new(Role::User, "run task"),
+                Message {
+                    tool_calls: Some(vec![signed_call.clone(), unsigned_call.clone()]),
+                    provider_meta: Some(provider_meta),
+                    ..Message::new(Role::Assistant, "Running tools")
+                },
+                Message::tool_result(&signed_call, "Cargo.toml"),
+                Message::tool_result(&unsigned_call, "tests passed"),
+            ],
+            test_body_input(None, false, None),
+        );
+
+        let model_parts = body["contents"][1]["parts"].as_array().unwrap();
+        assert_eq!(model_parts.len(), 3);
+        assert_eq!(model_parts[0]["text"], "Running tools");
+        // Signed call remains native functionCall with signature
+        assert_eq!(model_parts[1]["functionCall"]["name"], "list_dir");
+        assert_eq!(model_parts[1]["thoughtSignature"], "sig-signed-call");
+        // Unsigned call is degraded to text fact
+        assert_eq!(
+            model_parts[2]["text"],
+            r#"[Executed tool "default_api:run_command" with arguments: {"command":"cargo test"}]"#
+        );
+
+        let user_parts = body["contents"][2]["parts"].as_array().unwrap();
+        assert_eq!(user_parts.len(), 2);
+        // Signed result is native functionResponse
+        assert_eq!(user_parts[0]["functionResponse"]["name"], "list_dir");
+        // Unsigned result is degraded to text fact
+        assert_eq!(
+            user_parts[1]["text"],
+            "[Tool result for \"default_api:run_command\"]:\ntests passed"
+        );
     }
 
     #[test]

@@ -10,9 +10,20 @@
 //! - Direct horizon advancement on `SessionState.compaction_horizon`.
 
 use super::file_tracker::FileOperations;
-use super::split_compaction::{compact_causal_nodes, find_cut_point_nodes};
+use super::split_compaction::{
+    compact_causal_nodes, find_cut_point_nodes, find_tail_preserving_cut_point,
+};
 use muta_contracts::{CausalNode, NodePayload, Provider, Role, SessionIR};
 use std::sync::Arc;
+
+/// Strategy determining where the compaction boundary cuts the active lineage (ADR-0296).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactionCutMode {
+    /// Token budget preserving mode: preserves ~target_tokens of recent context (used for auto-compaction backstops).
+    TargetTokens(usize),
+    /// Tail rounds preserving mode: preserves the last N complete user rounds (used for manual /compact).
+    PreserveTailRounds(usize),
+}
 
 /// Outcome of a successful causal compaction on Session IR.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +36,10 @@ pub struct CausalCompactionOutcome {
     pub nodes_folded: usize,
     /// Estimated tokens before compaction.
     pub tokens_before: usize,
+    /// Generated structured summary (ADR-0296).
+    pub summary: String,
+    /// Artifact file paths touched across the compacted lineage (ADR-0296).
+    pub tracked_files: Vec<String>,
 }
 
 /// Native engine executing causal graph compaction on Session IR.
@@ -35,7 +50,7 @@ impl CausalCompactor {
     pub async fn compact_session_ir(
         ir: &mut SessionIR,
         provider: Option<Arc<dyn Provider>>,
-        target_tokens: usize,
+        cut_mode: CompactionCutMode,
         extra_context: Vec<String>,
     ) -> Result<Option<CausalCompactionOutcome>, String> {
         let Some(leaf_id) = ir.state.active_leaf.clone() else {
@@ -48,9 +63,21 @@ impl CausalCompactor {
                 return Ok(None);
             }
 
-            // 1. Find atomic cut point preserving ~target_tokens of newest context
-            let Some(cut_point) = find_cut_point_nodes(&active_nodes, target_tokens) else {
-                return Ok(None); // Context fits inside target_tokens; no compaction needed
+            // 1. Find atomic cut point according to chosen mode (ADR-0296)
+            let cut_point = match cut_mode {
+                CompactionCutMode::TargetTokens(target_tokens) => {
+                    find_cut_point_nodes(&active_nodes, target_tokens)
+                }
+                CompactionCutMode::PreserveTailRounds(rounds) => {
+                    find_tail_preserving_cut_point(&active_nodes, rounds).or_else(|| {
+                        // When only 1 round exists, fallback to intra-round token cut if pressure exceeds 4,000 tokens
+                        find_cut_point_nodes(&active_nodes, 4000)
+                    })
+                }
+            };
+
+            let Some(cut_point) = cut_point else {
+                return Ok(None); // Context fits criteria; no compaction needed
             };
 
             if cut_point.first_kept_index == 0 {
@@ -139,11 +166,22 @@ impl CausalCompactor {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
+        let tracked_files = {
+            let mut set = std::collections::BTreeSet::new();
+            for f in &read_files {
+                set.insert(f.clone());
+            }
+            for f in &modified_files {
+                set.insert(f.clone());
+            }
+            set.into_iter().collect::<Vec<_>>()
+        };
+
         ir.append_compaction(
             &compaction_node_id,
             split_parent,
             now_ms,
-            summary,
+            summary.clone(),
             cut_point.first_kept_entry_id.clone(),
             cut_point.tokens_before,
             read_files,
@@ -159,6 +197,8 @@ impl CausalCompactor {
             first_kept_node_id: cut_point.first_kept_entry_id,
             nodes_folded,
             tokens_before: cut_point.tokens_before,
+            summary,
+            tracked_files,
         }))
     }
 }
@@ -232,13 +272,19 @@ mod tests {
 
         // Run CausalCompactor with provider = None (deterministic excerpt fallback)
         // target_tokens small so it cuts early nodes
-        let outcome = CausalCompactor::compact_session_ir(&mut ir, None, 10, Vec::new())
-            .await
-            .unwrap();
+        let outcome = CausalCompactor::compact_session_ir(
+            &mut ir,
+            None,
+            CompactionCutMode::TargetTokens(10),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
 
         assert!(outcome.is_some());
         let outcome = outcome.unwrap();
         assert!(outcome.nodes_folded > 0);
+        assert!(!outcome.summary.is_empty());
         assert!(ir.state.compaction_horizon.is_some());
         assert_eq!(
             ir.state.compaction_horizon.as_deref(),
@@ -252,5 +298,39 @@ mod tests {
         );
         // The compiled path contains the Compaction node at its head, followed only by kept tail nodes
         assert_eq!(compiled[0].kind, NodeKind::Compaction);
+    }
+
+    #[tokio::test]
+    async fn test_causal_compactor_preserve_tail_rounds() {
+        let mut ir = SessionIR::new("test_manual_session", SessionPolicy::default(), 1000);
+
+        // Add 3 complete rounds (u1/a1, u2/a2, u3/a3)
+        for i in 1..=3 {
+            ir.append_message(
+                format!("u{i}"),
+                1000 + i * 10,
+                Message::new(Role::User, format!("User message {i}")),
+            );
+            ir.append_message(
+                format!("a{i}"),
+                1000 + i * 10 + 5,
+                Message::new(Role::Assistant, format!("Assistant response {i}")),
+            );
+        }
+
+        // Compact with manual mode: preserve 1 tail round (u3/a3)
+        let outcome = CausalCompactor::compact_session_ir(
+            &mut ir,
+            None,
+            CompactionCutMode::PreserveTailRounds(1),
+            vec!["User note".to_string()],
+        )
+        .await
+        .unwrap()
+        .expect("Should compact successfully with 3 rounds when preserving 1");
+
+        assert_eq!(outcome.first_kept_node_id, "u3");
+        assert_eq!(outcome.nodes_folded, 4); // u1, a1, u2, a2
+        assert!(!outcome.summary.is_empty());
     }
 }

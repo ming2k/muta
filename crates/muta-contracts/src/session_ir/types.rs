@@ -6,6 +6,7 @@
 //! - [`SessionPolicy`]: declarative governance rules, capabilities, and budgets (`policy`)
 
 use crate::message::Message;
+use crate::Role;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -287,6 +288,27 @@ impl SessionIR {
                     lifecycle,
                     ..
                 } => Some(lifecycle.lower_to_message(call_id, tool_name)),
+                NodePayload::Compaction {
+                    summary,
+                    read_files,
+                    modified_files,
+                    ..
+                } => {
+                    let mut content = format!(
+                        "[Conversation Summary Checkpoint — inspect with handle \"fold:{}\"]:\n{summary}",
+                        node.id
+                    );
+                    if !read_files.is_empty() || !modified_files.is_empty() {
+                        content.push_str("\n\n### Tracked Files:\n");
+                        if !modified_files.is_empty() {
+                            content.push_str(&format!("- Modified: {}\n", modified_files.join(", ")));
+                        }
+                        if !read_files.is_empty() {
+                            content.push_str(&format!("- Consulted: {}\n", read_files.join(", ")));
+                        }
+                    }
+                    Some(Message::new(Role::System, content))
+                }
                 _ => None,
             })
             .collect()

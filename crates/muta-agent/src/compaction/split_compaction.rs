@@ -150,6 +150,78 @@ pub fn find_cut_point_nodes(
     })
 }
 
+/// Find a cut point on CausalNodes preserving the last `preserve_rounds` user rounds (ADR-0296).
+/// Folds rounds [0..N-preserve_rounds] and preserves the volatile tail verbatim.
+/// Returns None if there are fewer than `preserve_rounds + 1` complete rounds (meaning no past rounds to fold).
+pub fn find_tail_preserving_cut_point(
+    nodes: &[&CausalNode],
+    preserve_rounds: usize,
+) -> Option<CutPointResult> {
+    if nodes.is_empty() || preserve_rounds == 0 {
+        return None;
+    }
+
+    let token_counts: Vec<usize> = nodes
+        .iter()
+        .map(|n| estimate_causal_node_tokens(n))
+        .collect();
+
+    let mut user_rounds_seen = 0;
+    let mut cut_index = None;
+
+    // Scan backwards from newest entry to find the start of the preserved tail
+    for (i, node) in nodes.iter().enumerate().rev() {
+        let is_user_prompt = match &node.payload {
+            NodePayload::Message { message } => message.role == Role::User,
+            _ => false,
+        };
+        if is_user_prompt {
+            user_rounds_seen += 1;
+            if user_rounds_seen == preserve_rounds {
+                cut_index = Some(i);
+                break;
+            }
+        }
+    }
+
+    let mut cut_index = cut_index?;
+    if cut_index == 0 {
+        // All dialogue is within the preserved tail; no earlier rounds to fold.
+        return None;
+    }
+
+    // Adjust cut_index so we never cut in the middle of a ToolResult chain (ADR-0255 / ADR-0296)
+    while cut_index > 0 {
+        if let NodePayload::Message { ref message } = nodes[cut_index].payload
+            && message.role == Role::Tool
+        {
+            cut_index -= 1;
+            continue;
+        }
+        break;
+    }
+
+    if cut_index == 0 || cut_index >= nodes.len() {
+        return None;
+    }
+
+    let first_kept_entry_id = nodes[cut_index].id.clone();
+    let is_split_turn = if let NodePayload::Message { ref message } = nodes[cut_index].payload {
+        message.role == Role::Assistant
+    } else {
+        false
+    };
+
+    let tokens_before: usize = token_counts[..cut_index].iter().sum();
+
+    Some(CutPointResult {
+        first_kept_index: cut_index,
+        first_kept_entry_id,
+        is_split_turn,
+        tokens_before,
+    })
+}
+
 /// Serialize CausalNodes to clean text representation for LLM summarization (ADR-0255).
 pub fn serialize_nodes_for_summary(nodes: &[&CausalNode]) -> String {
     let mut out = String::new();
@@ -321,5 +393,61 @@ mod tests {
 
         let cut = find_cut_point_nodes(&nodes, 5).unwrap();
         assert_ne!(cut.first_kept_index, 2);
+    }
+
+    #[test]
+    fn find_tail_preserving_cut_point_folds_prior_rounds_and_preserves_tail() {
+        // Round 1: user1 -> assistant1
+        let n1 = CausalNode {
+            id: "1".into(),
+            parent_id: None,
+            seq: 1,
+            timestamp_ms: 100,
+            kind: muta_contracts::NodeKind::Dialogue,
+            payload: NodePayload::Message {
+                message: Message::new(Role::User, "round 1 question"),
+            },
+        };
+        let n2 = CausalNode {
+            id: "2".into(),
+            parent_id: Some("1".into()),
+            seq: 2,
+            timestamp_ms: 101,
+            kind: muta_contracts::NodeKind::Dialogue,
+            payload: NodePayload::Message {
+                message: Message::new(Role::Assistant, "round 1 answer"),
+            },
+        };
+        // Round 2: user2 -> assistant2 (current tail)
+        let n3 = CausalNode {
+            id: "3".into(),
+            parent_id: Some("2".into()),
+            seq: 3,
+            timestamp_ms: 102,
+            kind: muta_contracts::NodeKind::Dialogue,
+            payload: NodePayload::Message {
+                message: Message::new(Role::User, "round 2 question"),
+            },
+        };
+        let n4 = CausalNode {
+            id: "4".into(),
+            parent_id: Some("3".into()),
+            seq: 4,
+            timestamp_ms: 103,
+            kind: muta_contracts::NodeKind::Dialogue,
+            payload: NodePayload::Message {
+                message: Message::new(Role::Assistant, "round 2 answer"),
+            },
+        };
+
+        // When only 1 round exists, cannot fold because no prior completed rounds exist
+        let one_round = vec![&n1, &n2];
+        assert!(find_tail_preserving_cut_point(&one_round, 1).is_none());
+
+        // When 2 rounds exist, preserving 1 round cuts at round 2 start (n3)
+        let two_rounds = vec![&n1, &n2, &n3, &n4];
+        let cut = find_tail_preserving_cut_point(&two_rounds, 1).unwrap();
+        assert_eq!(cut.first_kept_index, 2);
+        assert_eq!(cut.first_kept_entry_id, "3");
     }
 }

@@ -140,6 +140,10 @@ pub use guard::{GuardAction, RoundGuardState};
 mod model_request;
 pub mod no_provider;
 pub mod orchestration;
+pub use orchestration::{
+    compact_round_history, compact_round_history_with_mode, round_response, send_compaction,
+    ContextProjectionSettings,
+};
 mod permission_policy;
 mod permission_store;
 pub mod round_lifecycle;

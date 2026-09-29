@@ -256,6 +256,10 @@ impl Provider for AnthropicMessagesProvider {
         self.endpoint.model.clone()
     }
 
+    fn wire_protocol(&self) -> Option<muta_contracts::WireProtocol> {
+        Some(muta_contracts::WireProtocol::AnthropicMessages)
+    }
+
     fn effort(&self) -> Option<Effort> {
         // Effort is only live while thinking is actually on: an opted-out
         // channel must not stamp a depth onto its turns (ADR-0046).
