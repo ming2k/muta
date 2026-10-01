@@ -1,3 +1,5 @@
+# This project has been migrated to [this repo](https://github.com/ming2k/nuo).
+
 <p align="center">
   <img src="./assets/logo.png" alt="muta logo" width="256">
 </p>
